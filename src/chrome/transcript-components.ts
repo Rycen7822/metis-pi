@@ -147,7 +147,7 @@ export class CodexWriteCallComponent implements Component {
 
 /** Narrow static rail left of a thinking run. Wraps the host's thinking
  * component (Markdown inside MouseRegion) so clicks keep working. */
-export class CodexThinkingRailComponent implements Component {
+export class ThinkingRailComponent implements Component {
   readonly #child: TranscriptChild;
   readonly #level: ColorLevel;
   #lastWidth = -1;
@@ -233,7 +233,7 @@ function childHandleMouse(child: unknown, event: TranscriptMouseEvent): Transcri
  * back to the child's rows one-to-one (the hint row stays unmapped, so a copy
  * of it falls back to native extraction of the visible text).
  */
-export class CodexThinkingPeekComponent implements Component {
+export class ThinkingPeekComponent implements Component {
   readonly #child: TranscriptChild;
   readonly #control: ThinkingViewControl;
   readonly #windowLines: number;
@@ -327,7 +327,7 @@ export class CodexThinkingPeekComponent implements Component {
  * control applies left/right gestures immediately, with the same rules while
  * streaming and after completion. Renders nothing of its own.
  */
-export class CodexThinkingClickableComponent implements Component {
+export class ThinkingClickableComponent implements Component {
   readonly #child: TranscriptChild;
   readonly #control: ThinkingViewControl;
   readonly #fallback: ThinkingView;

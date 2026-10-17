@@ -94,7 +94,7 @@ OUTSTANDING = output(
     {"runs": ARR(RUN), "total": INT, "omitted": INT}, ["runs", "total", "omitted"]
 )
 MODEL = output({"id": S, "provider": NULLABLE}, ["id"])
-NOTIFICATIONS = output({"enabled": BOOL, "failed": INT}, ["enabled"])
+NOTIFICATIONS = output({"enabled": BOOL, "failed": INT, "transport": {"type": "string", "enum": ["pi_native"]}}, ["enabled"])
 OUTPUTS = {
     "scope_open": output(
         {
@@ -279,7 +279,7 @@ TOOLS = [
             **REQ,
             "cwd": {
                 **S,
-                "description": "Absolute child directory; defaults to scope cwd. SUBAGENT-PI.md comes from scope cwd.",
+                "description": "Absolute child directory; defaults to scope cwd.",
             },
             "task": {
                 **TEXT,
@@ -465,7 +465,7 @@ TOOLS = [
 
 
 def native_tools():
-    """Pi supplies scope and durable invocation IDs; backend/CLI contracts stay explicit."""
+    """Pi supplies scope and durable invocation IDs; private IPC remains explicit."""
     result = []
     for definition in TOOLS:
         schema = definition["inputSchema"]
@@ -503,7 +503,7 @@ def native_tools():
 NATIVE_TOOLS = native_tools()
 NATIVE_BY_NAME = {t["name"]: t for t in NATIVE_TOOLS}
 
-# Explicit recovery/legacy calls stay callable without discovery.
+# Private IPC operations for lifecycle and recovery.
 MANAGEMENT = [
     tool(
         "pi_context",
@@ -520,14 +520,6 @@ MANAGEMENT = [
             },
             "scope": ID,
             "label": S,
-            "inheritance": {
-                "type": "boolean",
-                "description": "Explicitly enable or disable Codex skill/MCP inheritance for this scope.",
-            },
-            "codex_home": {
-                **S,
-                "description": "Explicit trusted Codex home directory; rebinds this scope as a management action.",
-            },
         },
         ["cwd"],
     ),

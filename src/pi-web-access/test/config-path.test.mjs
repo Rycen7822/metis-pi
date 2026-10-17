@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { stringify } from "smol-toml";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-const utilsUrl = new URL("../utils.ts", import.meta.url).href;
-const perplexityUrl = new URL("../perplexity.ts", import.meta.url).href;
 const geminiApiUrl = new URL("../gemini-api.ts", import.meta.url).href;
 
 function runChild(script, env) {
@@ -29,50 +28,14 @@ function runChild(script, env) {
 	});
 }
 
-test("web init keeps credentials beside Metis TOML and preserves legacy cache paths", async (t) => {
-	for (const source of ["explicit", "agent", "legacy", "xdg", "absent"]) {
-		const root = await mkdtemp(join(tmpdir(), "pi-web-access-config-"));
-		t.after(() => rm(root, { recursive: true, force: true }));
-		const home = join(root, "home"), xdg = join(root, "xdg");
-		const agent = source === "explicit" ? join(root, "custom") : join(home, ".pi", "agent");
-		const origin = source === "xdg" ? join(xdg, "pi") : source === "legacy" ? join(home, ".pi") : agent;
-		await mkdir(origin, { recursive: true });
-		if (source !== "absent") await writeFile(join(origin, "web-search.json"), JSON.stringify({
-			perplexityApiKey: "synthetic-key", workflow: "none",
-		}));
-		const child = runChild(`
-			import { readFileSync, existsSync } from "node:fs";
-			const utils = await import(${JSON.stringify(utilsUrl)});
-			const { getFetchCacheDir } = await import(${JSON.stringify(new URL("../storage.ts", import.meta.url).href)});
-			const { initializeMetisConfig } = await import(${JSON.stringify(new URL("../../metis-config.ts", import.meta.url).href)});
-			const { isPerplexityAvailable } = await import(${JSON.stringify(perplexityUrl)});
-			const dir = utils.getWebSearchConfigDir(), available = isPerplexityAvailable();
-			initializeMetisConfig(dir);
-			const path = utils.getWebSearchConfigPath();
-			console.log(JSON.stringify({ dir, path, available,
-				keys: existsSync(path) ? Object.keys(JSON.parse(readFileSync(path, "utf8"))) : [],
-				workflow: utils.loadWebAccessConfig().workflow,
-				cache: getFetchCacheDir(),
-				originKept: existsSync(${JSON.stringify(join(origin, "web-search.json"))}),
-			}));
-		`, { PI_CODING_AGENT_DIR: source === "explicit" ? agent : undefined,
-			XDG_CONFIG_HOME: xdg, HOME: home, USERPROFILE: home });
-		assert.equal(child.status, 0, child.stderr);
-		assert.deepEqual(JSON.parse(child.stdout), { dir: agent, path: join(agent, "web-search.json"),
-			available: source !== "absent", keys: source === "absent" ? [] : ["perplexityApiKey"],
-			cache: join(source === "legacy" || source === "xdg" ? origin : agent, "web-search-cache"),
-			...(source === "absent" ? {} : { workflow: "none" }), originKept: source !== "absent" });
-	}
-});
-
 test("Gemini base URL and Cloudflare auth use env before config", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-base-url-"));
 	const agentDir = join(root, "agent-dir");
 	await mkdir(agentDir, { recursive: true });
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({
+	await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: {
 		geminiBaseUrl: "https://config.example.com/gemini/",
-		cloudflareApiKey: "config-cf-key",
-	}) + "\n", "utf8");
+	} }), "utf8");
+	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ cloudflareApiKey: "config-cf-key" }), "utf8");
 
 	const child = runChild(`
 		const {

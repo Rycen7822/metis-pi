@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -12,7 +14,11 @@ const indexUrl = new URL("../index.ts", import.meta.url).href;
 function runWebSearchThenRetrieve(config) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-response-id-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ toolActivation: "eager", ...config }));
+		{
+			const { preferences, credentials } = splitWebAccessConfig({ toolActivation: "eager", ...config });
+			writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+			writeFileSync(join(dir, "web-search.json"), JSON.stringify(credentials));
+		}
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			globalThis.fetch = async (url) => {

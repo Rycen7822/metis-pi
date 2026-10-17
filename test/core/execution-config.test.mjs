@@ -18,7 +18,6 @@ test("execution is global only and section writes preserve other values", t => {
   mkdirSync(join(cwd, ".pi"), { recursive: true });
   writeFileSync(global, '[appearance]\nenabled=false\n[future]\nvalue=7\n[execution.tools]\ncustomRustBinariesDir="/global/bin"\nfuture="keep"\n');
   writeFileSync(join(cwd, ".pi", "metis-pi.toml"), '[execution.tools]\ncustomRustBinariesDir="/project/bin"\nautoReasoning=true\n');
-  writeFileSync(join(cwd, ".pi", "metis-pi.json"), JSON.stringify({ execution: { tools: { customRustBinariesDir: "/legacy/project/bin" } } }));
   assert.equal(readExecutionConfig().tools.customRustBinariesDir, "/global/bin");
   assert.equal(readExecutionConfig().tools.autoReasoning, false);
   writeExecutionConfig({ ui: { toolRenaming: true } });

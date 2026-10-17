@@ -2321,7 +2321,7 @@ function getBrowserCookieSelectionFromConfig() {
   return { ...loadConfig3().browserCookies };
 }
 function isBrowserCookieAccessAllowed() {
-  if (process.env.PI_ALLOW_BROWSER_COOKIES === "1" || process.env.FEYNMAN_ALLOW_BROWSER_COOKIES === "1") return true;
+  if (process.env.PI_ALLOW_BROWSER_COOKIES === "1") return true;
   const raw = loadWebAccessConfig();
   return raw.allowBrowserCookies === true;
 }
@@ -4819,7 +4819,7 @@ async function resolveRemoteUrl(rawUrl, options = {}) {
     addresses = await (options.lookup ?? defaultLookup)(hostname2);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const hint = route.proxy && route.operatorControlled && route.remoteDns ? ". If your configured proxy resolves hostnames, set ssrf.trustEnvProxy to true in web-search.json." : "";
+    const hint = route.proxy && route.operatorControlled && route.remoteDns ? ". If your configured proxy resolves hostnames, set webAccess.ssrf.trustEnvProxy to true in metis-pi.toml." : "";
     throw new Error(`Failed to resolve ${hostname2}: ${message}${hint}`);
   }
   if (addresses.length === 0) throw new Error(`Failed to resolve ${hostname2}: no addresses returned`);
@@ -4899,7 +4899,7 @@ function assertPublicAddress(address, hostname2, allowRanges = []) {
   if (ipVersion === 0) throw new Error(`Resolved non-IP address for ${hostname2}: ${address}`);
   if (isInAllowedRange(normalized, ipVersion, allowRanges)) return;
   if (ipVersion === 4 && isBlockedIPv4(normalized)) {
-    const hint = isFakeIpProxyAddress(normalized) ? '. This address is in 198.18.0.0/15, commonly used by TUN/fake-IP proxies. If that matches your setup, configure ssrf.allowRanges with ["198.18.0.0/15"] in web-search.json.' : "";
+    const hint = isFakeIpProxyAddress(normalized) ? '. This address is in 198.18.0.0/15, commonly used by TUN/fake-IP proxies. If that matches your setup, configure webAccess.ssrf.allowRanges with ["198.18.0.0/15"] in metis-pi.toml.' : "";
     throw new Error(`Blocked internal address for ${hostname2}: ${normalized}${hint}`);
   }
   if (ipVersion === 6 && isBlockedIPv6(normalized)) {
@@ -12915,7 +12915,7 @@ init_activity();
 init_ssrf_protection();
 init_search_result_count_normalization();
 init_credential_source();
-var CONFIG_PATH20 = getWebSearchConfigPath();
+var CONFIG_PATH20 = getWebAccessConfigPath();
 var SEARCH_TIMEOUT_MS16 = 3e4;
 var cachedConfig22 = null;
 function loadConfig21() {
@@ -12943,7 +12943,7 @@ function requireBaseUrl2() {
   if (!baseUrl) {
     throw new Error(
       `SearXNG base URL is invalid or missing. Either:
-  1. Create ${CONFIG_PATH20} with { "searxngBaseUrl": "https://search.example.com" }
+  1. Set webAccess.searxngBaseUrl = "https://search.example.com" in ${CONFIG_PATH20}
   2. Set SEARXNG_BASE_URL to an HTTP(S) URL`
     );
   }
@@ -13068,7 +13068,7 @@ function requireBaseUrl3() {
   if (!baseUrl) {
     throw new Error(
       `degoog base URL is invalid or missing. Either:
-  1. Create ${CONFIG_PATH21} with { "degoogBaseUrl": "https://degoog.example.com" }
+  1. Set webAccess.degoogBaseUrl = "https://degoog.example.com" in ${getWebAccessConfigPath()}
   2. Set DEGOOG_URL to an HTTP(S) URL
   3. Remove the override to use the public instance at https://degoog.org`
     );
@@ -13876,7 +13876,7 @@ Create or rename one at https://brightdata.com/cp/zones`
   }
   throw new Error(
     `Bright Data SERP zone is invalid or missing. Either:
-  1. Create ${CONFIG_PATH24} with { "brightdataSerpZone": "your_serp_zone" }
+  1. Set webAccess.brightdataSerpZone = "your_serp_zone" in ${getWebAccessConfigPath()}
   2. Set BRIGHTDATA_SERP_ZONE environment variable
 The zone must be of Bright Data type \`serp\`; a Web Unlocker zone is a different product and does not return SERP JSON.
 Create one at https://brightdata.com/cp/zones`
@@ -15727,7 +15727,7 @@ async function searchWithResolvedProvider(provider, query, options, useCurrentMo
       `Gemini search unavailable. Either:
   1. Configure geminiApiKey in ${CONFIG_PATH32} or set GEMINI_API_KEY
   2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing
-  3. Set geminiAuth to "adc" in web-search.json with a Google Cloud ADC + project/location
+  3. Set webAccess.geminiAuth to "adc" in metis-pi.toml with a Google Cloud ADC + project/location
   4. Sign into gemini.google.com in a supported Chromium-based browser`
     );
   }
@@ -24059,7 +24059,7 @@ Open manually: ${handle.url}` }],
         })
       ),
       proxy: Type2.Optional(Type2.String({
-        description: "http(s) or socks proxy URL (e.g. http://host:port or socks5h://host:port) used for every outbound request in this call (search APIs and content fetches). Node fetch ignores HTTP(S)_PROXY env vars, so set this (or `proxy` in web-search.json) when direct access is blocked; empty string forces direct access."
+        description: "http(s) or socks proxy URL (e.g. http://host:port or socks5h://host:port) used for every outbound request in this call (search APIs and content fetches). Node fetch ignores HTTP(S)_PROXY env vars, so set this (or `webAccess.proxy` in metis-pi.toml) when direct access is blocked; empty string forces direct access."
       }))
     }),
     outputSchema: webSearchOutputSchema,

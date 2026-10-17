@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Private native host/daemon launcher, not a delegation CLI."""
+import argparse
+import asyncio
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--home',type=Path,required=True)
+    parser.add_argument('mode',choices=('pi-host','daemon'))
+    args = parser.parse_args()
+    home = args.home.expanduser().resolve()
+    if args.mode == 'pi-host':
+        from metis_subagent.pi_host import serve_pi
+        asyncio.run(serve_pi(home))
+    else:
+        from metis_subagent.daemon import serve
+        asyncio.run(serve(home))
+
+
+if __name__ == '__main__':
+    main()

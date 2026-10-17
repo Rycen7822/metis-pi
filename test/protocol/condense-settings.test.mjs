@@ -7,6 +7,7 @@ import { registerCommands, setPruneStatusWidget } from "../../src/condense/comma
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../../src/condense/config.ts";
 import { displayValue, parseScalar, scalarRow, writeScalar } from "../../src/condense/setting-fields.ts";
 import { parseMetisConfig } from "../../src/metis-config.ts";
+import { stringify } from "smol-toml";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -18,45 +19,44 @@ test("partial chain settings keep defaults, accept zero window and reject invali
   try {
     for (const [given, expected] of [[{ enabled: true }, { enabled: true }],
       [{ rollingWindow: 0, fuseRangeSummary: false }, { rollingWindow: 0, fuseRangeSummary: false }],
-      [{ enabled: "yes", rollingWindow: -1 }, {}], [null, {}]]) {
-      writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { chainCompression: given } }));
+      [{ enabled: "yes", rollingWindow: -1 }, {}], [undefined, {}]]) {
+      writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: { chainCompression: given } }));
       assert.deepEqual((await loadConfig()).chainCompression, { ...DEFAULT_CONFIG.chainCompression, ...expected });
     }
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: {
-      minBatchChars: 17.9, pruneOn: "arbitrary", batchingMode: "legacy-mode",
+    writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: {
+      minBatchChars: 17.9, pruneOn: "arbitrary", batchingMode: "custom-mode",
       purgeErrors: { cooldownTurns: 0, minArgChars: 8.9 },
     } }));
-    const legacy = await loadConfig();
-    assert.equal(legacy.minBatchChars, 17);
-    assert.equal(legacy.purgeErrors.cooldownTurns, 0);
-    assert.equal(legacy.purgeErrors.minArgChars, 8);
-    assert.equal(legacy.pruneOn, DEFAULT_CONFIG.pruneOn);
-    assert.equal(legacy.batchingMode, "legacy-mode");
+    const loaded = await loadConfig();
+    assert.equal(loaded.minBatchChars, 17);
+    assert.equal(loaded.purgeErrors.cooldownTurns, 0);
+    assert.equal(loaded.purgeErrors.minArgChars, 8);
+    assert.equal(loaded.pruneOn, DEFAULT_CONFIG.pruneOn);
+    assert.equal(loaded.batchingMode, "custom-mode");
     assert.equal(DEFAULT_CONFIG.minBatchChars, 5000);
     assert.equal(DEFAULT_CONFIG.autoBudgetThreshold, 0.7);
     assert.equal(DEFAULT_CONFIG.enabled, false);
     assert.equal(DEFAULT_CONFIG.opportunisticCompaction, false);
     for (const [value, expected] of [
       [undefined, 0.7],
-      [null, null],
+      [false, null],
       [0.5, 0.5],
       [2, 0.7],
       ["bad", 0.7],
     ]) {
-      writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { autoBudgetThreshold: value } }));
+      writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: { autoBudgetThreshold: value } }));
       assert.equal((await loadConfig()).autoBudgetThreshold, expected);
     }
-    for (const value of [0, 8192, -1, 1.5, "8192", null, Number.MAX_SAFE_INTEGER + 1]) {
+    for (const value of [0, 8192, -1, 1.5, "8192", false, Number.MAX_SAFE_INTEGER + 1]) {
       writeFileSync(
-        join(dir, "settings.json"),
-        JSON.stringify({ contextPrune: { compactionSummaryMaxTokens: value } }),
+        join(dir, "metis-pi.toml"),
+        stringify({ contextPrune: { compactionSummaryMaxTokens: value } }),
       );
       assert.equal(
         (await loadConfig()).compactionSummaryMaxTokens,
         Number.isSafeInteger(value) && value >= 0 ? value : 0,
       );
     }
-    const before = readFileSync(join(dir, "settings.json"), "utf8");
     const path = join(dir, "metis-pi.toml");
     writeFileSync(
       path,
@@ -74,7 +74,6 @@ test("partial chain settings keep defaults, accept zero window and reject invali
     await saveConfig(config);
     assert.equal(parseMetisConfig(readFileSync(path, "utf8")).contextPrune.autoBudgetThreshold, false);
     assert.equal((await loadConfig()).autoBudgetThreshold, null);
-    assert.equal(readFileSync(join(dir, "settings.json"), "utf8"), before);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -203,7 +202,7 @@ test("pruner settings cycles enum and number rows, refreshes their text, and def
   assert.match(row("compactionSummaryMaxTokens").description, /Current limit: 4096/);
 
   // A value the row's cycle can still produce but the field rejects (hand-edited
-  // settings.json can put one in the cycle) falls back to the configured default.
+  // metis-pi.toml can put one in the cycle) falls back to the configured default.
   row("minBatchChars").values = [String(cycled), "not-a-number"];
   row("minBatchChars").currentValue = String(cycled);
   list.selectItem("minBatchChars");

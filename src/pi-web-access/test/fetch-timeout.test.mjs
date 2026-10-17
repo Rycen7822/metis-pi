@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stringify } from "smol-toml";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,7 +19,7 @@ function cleanEnv(root) {
 
 async function writeConfig(root, config) {
 	if (config === undefined) return;
-	await writeFile(join(root, "web-search.json"), typeof config === "string" ? config : JSON.stringify(config), "utf8");
+	await writeFile(join(root, "metis-pi.toml"), typeof config === "string" ? config : stringify({ webAccess: config }), "utf8");
 }
 
 async function runResolver(config, options) {
@@ -100,7 +101,7 @@ test("fetch.timeout accepts seconds and rounds fractional milliseconds up", asyn
 });
 
 test("invalid fetch.timeout values fail closed with the config path", async () => {
-	for (const timeout of [0, -1, null, "2", {}]) {
+	for (const timeout of [0, -1, false, "2", {}]) {
 		const output = await runResolver({ fetch: { timeout } });
 		assert.match(output.error, /Invalid fetch\.timeout .*metis-pi\.toml/);
 	}
@@ -116,9 +117,9 @@ test("fetch.timeout rejects seconds that overflow safe millisecond conversion", 
 	}
 });
 
-test("malformed web-search.json fails closed with the config path", async () => {
-	const output = await runResolver("{");
-	assert.match(output.error, /Failed to parse .*web-search\.json/);
+test("malformed TOML fails closed with the config path", async () => {
+	const output = await runResolver("[broken");
+	assert.match(output.error, /Failed to parse .*metis-pi\.toml/);
 });
 
 test("Jina receives the resolved configured timeout budget", async () => {

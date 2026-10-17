@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from subagent_pi.common import atomic_json, live_identity, process_identity
+from metis_subagent.common import atomic_json, live_identity, process_identity
 
 def stop_children():
     """The kernel adopts orphan descendants here, including detached groups.
@@ -63,14 +63,6 @@ def main():
     env = os.environ.copy()
     env.update(spec.get('env',{}))
     env['PI_AGENTS_MANAGED_CHILD']='1'
-    # fd numbers travel in env; pipes never touch disk. close_fds stays on, but
-    # pass_fds preserves the numbers across the guard->Pi hop.
-    fds=[]
-    for name in ('PI_AGENTS_BOOTSTRAP_FD','PI_AGENTS_BRIDGE_RECEIPT_FD'):
-        value=os.environ.get(name)
-        if value and value.isdigit():
-            fds.append(int(value))
-    pass_fds=tuple(fds)
     proc=None; stopping=None
     def force_stop(sig,frame):
         if proc and proc.poll() is None:
@@ -86,9 +78,7 @@ def main():
     try:
         if stopping: raise SystemExit(128+stopping)
         # Pi shares the guard's group; tools may create independent groups.
-        proc = subprocess.Popen(spec['argv'],cwd=spec['cwd'],env=env,stdin=0,stdout=1,stderr=2,close_fds=True,pass_fds=pass_fds)
-        for fd in pass_fds:
-            with contextlib.suppress(OSError): os.close(fd)
+        proc = subprocess.Popen(spec['argv'],cwd=spec['cwd'],env=env,stdin=0,stdout=1,stderr=2,close_fds=True)
         owner.update(pi_pid=proc.pid,pi_identity=process_identity(proc.pid),spawning=False)
         atomic_json(owner_path,owner)
         if stopping: stop(stopping,None)
@@ -103,5 +93,5 @@ def main():
 if __name__=='__main__':
     try: main()
     except Exception as exc:
-        print('subagent-pi worker guard: '+str(exc),file=sys.stderr)
+        print('metis-subagent worker guard: '+str(exc),file=sys.stderr)
         sys.exit(75)

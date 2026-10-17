@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -40,7 +41,7 @@ const hostRedirectHook = `
 
 function run({ messages = [], hook = "" } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-version-"));
-	writeFileSync(join(root, "web-search.json"), JSON.stringify({ toolActivation: "dynamic" }), "utf8");
+	writeFileSync(join(root, "metis-pi.toml"), stringify({ webAccess: { toolActivation: "dynamic" } }), "utf8");
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			${hook}

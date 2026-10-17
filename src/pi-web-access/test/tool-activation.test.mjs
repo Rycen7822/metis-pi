@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -11,7 +13,11 @@ const nativeAdditions = { api: "anthropic-messages", compat: { supportsMidConvoS
 
 function run(config = {}, options = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-activation-"));
-	writeFileSync(join(root, "web-search.json"), JSON.stringify(config), "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		writeFileSync(join(root, "metis-pi.toml"), stringify({ webAccess: preferences }), "utf8");
+		writeFileSync(join(root, "web-search.json"), JSON.stringify(credentials), "utf8");
+	}
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});

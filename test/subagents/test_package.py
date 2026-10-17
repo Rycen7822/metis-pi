@@ -6,8 +6,8 @@ import sys
 import tempfile
 import unittest
 from paths import ROOT, TEST_ROOT, REPO_ROOT
-from subagent_pi.common import AgentError, live_identity, crop
-from subagent_pi.client import call_timeout, boot_budget
+from metis_subagent.common import AgentError, live_identity, crop
+from metis_subagent.client import call_timeout, boot_budget
 from unittest.mock import patch
 
 class ClientTimeoutBudget(unittest.TestCase):
@@ -18,7 +18,7 @@ class ClientTimeoutBudget(unittest.TestCase):
         self.assertGreaterEqual(call_timeout('spawn',{},None),budget)
         self.assertGreaterEqual(call_timeout('respawn',{},None),budget)
         self.assertGreaterEqual(call_timeout('close',{},None),budget)
-        for op in ('soft_interrupt','message','followup','send'):
+        for op in ('soft_interrupt','message','followup'):
             self.assertGreaterEqual(call_timeout(op,{},None),budget)
         self.assertGreater(budget,45)                  # the old flat 45s was the bug
     def test_boot_timeout_ignores_model_inactivity_limit(self):
@@ -26,22 +26,20 @@ class ClientTimeoutBudget(unittest.TestCase):
                          call_timeout('spawn',{},None))
 
     def test_spawn_exposes_inactivity_not_total_timeout(self):
-        from subagent_pi.schema import validate_op
-        from subagent_pi.cli import parser
-        from subagent_pi.config import load_config
+        from metis_subagent.schema import validate_op
+        from metis_subagent.config import load_config
         validate_op('spawn',{'scope':'scope','request_id':'new','task':'long work','idle_timeout_seconds':60})
         with self.assertRaises(AgentError):
             validate_op('spawn',{'scope':'scope','request_id':'old','task':'long work','timeout_seconds':60})
-        args=parser().parse_args(['spawn','--task','work','--idle-timeout-seconds','60'])
-        self.assertEqual(args.idle_timeout_seconds,60)
         with tempfile.TemporaryDirectory() as path:
             home=Path(path)
-            (home/'config.toml').write_text('default_run_timeout_seconds=900\n')
-            config=load_config(home)
+            native=home/'metis-pi.toml'
+            native.write_text('[subagents]\ndefaultIdleTimeoutSeconds=900\n')
+            with patch.dict(os.environ, {'METIS_PI_CONFIG':str(native)}):
+                config=load_config(home)
             self.assertEqual(config['default_idle_timeout_seconds'],900)
-            self.assertNotIn('default_run_timeout_seconds',config)
     def test_wait_scales_with_its_own_timeout(self):
-        from subagent_pi.common import DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS
+        from metis_subagent.common import DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS
         self.assertEqual(call_timeout('wait',{},None),DEFAULT_WAIT_SECONDS+10)
         self.assertEqual(call_timeout('wait',{'timeout_seconds':MAX_WAIT_SECONDS},None),MAX_WAIT_SECONDS+10)
         self.assertGreater(call_timeout('wait',{'timeout_seconds':120},None),
@@ -49,11 +47,10 @@ class ClientTimeoutBudget(unittest.TestCase):
         self.assertEqual(call_timeout('list',{},None),45)
 
 
-    def test_wait_schema_and_cli_expose_seconds_only(self):
-        from subagent_pi.schema import BY_NAME, validate_op
-        from subagent_pi.cli import parser
-        from subagent_pi.common import AgentError
-        props=BY_NAME['pi_wait_agent']['inputSchema']['properties']
+    def test_wait_schema_exposes_seconds_only(self):
+        from metis_subagent.schema import NATIVE_BY_NAME, validate_op
+        from metis_subagent.common import AgentError
+        props=NATIVE_BY_NAME['pi_wait_agent']['inputSchema']['properties']
         self.assertNotIn('timeout_ms',props)
         self.assertEqual(props['mode'],{'type':'string','enum':['any','all'],'default':'any'})
         self.assertEqual((props['timeout_seconds']['default'],props['timeout_seconds']['maximum']),(600,3600))
@@ -61,17 +58,14 @@ class ClientTimeoutBudget(unittest.TestCase):
             validate_op('wait',{'scope':'scope','timeout_seconds':seconds})
         for args in ({'timeout_ms':600000},{'timeout_seconds':3601},{'timeout_seconds':-1},{'timeout_seconds':True}):
             with self.subTest(args=args),self.assertRaises(AgentError): validate_op('wait',{'scope':'scope',**args})
-        self.assertEqual(parser().parse_args(['wait','--timeout-seconds','3600']).timeout_seconds,3600)
-        self.assertIsNone(parser().parse_args(['wait']).timeout_seconds)
-        self.assertEqual(parser().parse_args(['wait','--mode','all']).mode,'all')
         validate_op('wait',{'scope':'scope','mode':'all','timeout_seconds':0})
 
 class ProcessIdentity(unittest.TestCase):
     def test_pid_reuse_is_not_live_owner(self):
-        with patch('subagent_pi.common.process_identity',return_value='boot:new-tick'):
+        with patch('metis_subagent.common.process_identity',return_value='boot:new-tick'):
             self.assertFalse(live_identity(123,'boot:old-tick'))
             self.assertTrue(live_identity(123,'boot:new-tick'))
-        with patch('subagent_pi.common.process_identity',return_value='unknown'):
+        with patch('metis_subagent.common.process_identity',return_value='unknown'):
             self.assertIsNone(live_identity(123,'boot:old-tick'))
     def test_utf8_crop(self):
         self.assertEqual(crop('🙂字',4),'🙂')
@@ -79,24 +73,23 @@ class ProcessIdentity(unittest.TestCase):
 
 class ProfileDefaultsOrder(unittest.TestCase):
     def test_table_order_keeps_custom_profile_launch_settings(self):
-        from subagent_pi.config import load_config, launch_spec
-        for native in (True, False):
-            with self.subTest(native=native), tempfile.TemporaryDirectory(prefix='profile-order-') as tmp:
-                root = Path(tmp)
-                prefix = 'subagents.profiles' if native else 'profiles'
-                default = f'[{prefix}.default]\ntools=["read"]\nmodel="mock"\nprovider="offline"\n'
-                custom = f'[{prefix}.review]\nskills=[]\n'
-                observations = []
-                for text in (custom + default, default + custom):
-                    path = root / ('metis-pi.toml' if native else 'config.toml')
-                    path.write_text(text)
-                    with patch.dict(os.environ, {'METIS_PI_CONFIG': str(root / 'metis-pi.toml')}):
-                        config = load_config(root)
-                    config['pi_command'] = [sys.executable]
-                    spec = launch_spec(config, 'review', None, tmp, 'write')
-                    observations.append((spec['builtins'], spec['model'], spec['argv'][spec['argv'].index('--provider') + 1]))
-                    self.assertEqual(config['profiles']['reader']['tools'], ['read', 'grep', 'find', 'ls'])
-                self.assertEqual(observations, [(['read'], 'mock', 'offline')] * 2)
+        from metis_subagent.config import load_config, launch_spec
+        with tempfile.TemporaryDirectory(prefix='profile-order-') as tmp:
+            root = Path(tmp)
+            default = '[subagents.profiles.default]\ntools=["read"]\nmodel="mock"\nprovider="offline"\n'
+            custom = '[subagents.profiles.review]\nskills=[]\n'
+            host = {'kind':'pi','sdk_path':str(root/'index.js'),'node_path':sys.executable,
+                    'model':{'provider':'parent','id':'parent-model'}}
+            observations = []
+            for text in (custom + default, default + custom):
+                path = root/'metis-pi.toml'
+                path.write_text(text)
+                with patch.dict(os.environ, {'METIS_PI_CONFIG':str(path)}):
+                    config = load_config(root)
+                spec = launch_spec(config,'review',None,tmp,'write',host=host)
+                observations.append((spec['builtins'],spec['model'],spec['argv'][spec['argv'].index('--provider')+1]))
+                self.assertEqual(config['profiles']['reader']['tools'],['read','grep','find','ls'])
+            self.assertEqual(observations,[(['read'],'mock','offline')]*2)
 
 class SdkTransport(unittest.TestCase):
     def test_managed_explicit_allowlist_bounds_mcp_registration(self):
@@ -183,8 +176,8 @@ class SdkTransport(unittest.TestCase):
                 self.assertNotIn('call-received',stages)
                 self.assertNotIn('resource-read-received',stages)
 
-    def test_stock_pi_command_resolves_only_to_plugin_files(self):
-        from subagent_pi.worker import managed_command
+    def test_native_sdk_command_resolves_only_to_plugin_files(self):
+        from metis_subagent.worker import managed_command
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
             node=str(root/'node'); Path(node).touch(); Path(node).chmod(0o755)
@@ -192,16 +185,12 @@ class SdkTransport(unittest.TestCase):
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli'); cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
-            with patch('shutil.which',return_value=node):
-                for sdk_path in (None, str(sdk)):
-                    with self.subTest(sdk_path=sdk_path):
-                        command = [str(cli),'--mode','rpc'] if sdk_path is None else [node,str(cli),'--mode','rpc']
-                        argv=managed_command(command,sdk_path=sdk_path)
-                        self.assertEqual(argv[1:],[str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--mode','rpc'])
+            argv=managed_command([node,str(cli),'--mode','rpc'],sdk_path=str(sdk))
+            self.assertEqual(argv,[node,str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--mode','rpc'])
             self.assertEqual({p:p.read_bytes() for p in before},before)
 
-    def test_stock_pi_command_rejects_old_and_unknown_sdks(self):
-        from subagent_pi.worker import managed_command
+    def test_native_sdk_command_rejects_old_and_unknown_sdks(self):
+        from metis_subagent.worker import managed_command
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
             manifest=root/'package.json'
@@ -212,8 +201,7 @@ class SdkTransport(unittest.TestCase):
                 None, 'unknown', '1.0.0', '1.0.4', '1.1.0', '1.1.9', '1.2.0', '1.2.9', '1.4.0-alpha.1',
             ):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
-                for sdk_path in (None, str(sdk)):
-                    with self.subTest(version=version, sdk_path=sdk_path):
-                        with self.assertRaises(AgentError) as error:
-                            managed_command([str(cli),'--mode','rpc'], sdk_path=sdk_path)
-                        self.assertEqual(error.exception.code,'unsupported_pi_version')
+                with self.subTest(version=version):
+                    with self.assertRaises(AgentError) as error:
+                        managed_command([sys.executable,str(cli),'--mode','rpc'],sdk_path=str(sdk))
+                    self.assertEqual(error.exception.code,'unsupported_pi_version')

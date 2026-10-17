@@ -18,8 +18,8 @@ Local compatibility changes:
 - Ordinary preferences are maintained in the existing global `metis-pi.toml`
   under `[webAccess]`. Credentials, authentication headers and authenticated
   proxies retain JSON/env/command sources; `web-search.json` shares the TOML
-  directory. Metis initialization/migration backs up legacy mixed JSON and
-  relocates credentials without removing external originals.
+  agent directory. Initialization creates default TOML preferences without
+  changing the credential file.
 - Pi tools, provider adapters and standalone MCP share the Metis configuration
   owner. Bundles retain external imports of the shared TS modules so packaged
   template paths stay correct; the Metis Node >=22.19 engine supports them.
@@ -45,4 +45,4 @@ When adopting a new upstream version, compare it against the pinned commit,
 preserve these compatibility changes, update the entrypoint provenance comment,
 and run the relevant upstream tests plus the Metis package/loader checks before
 rebuilding the bundles. Preserve Metis preferences and authentication sources;
-migration preserves legacy cache locations via cacheRoot without moving cached data.
+`cacheRoot` explicitly selects an existing cache parent without moving cached data.

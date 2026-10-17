@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -17,7 +19,11 @@ async function createHome(config) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-credential-source-"));
 	const agentDir = join(home, "agent");
 	await mkdir(agentDir, { recursive: true });
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		await writeFile(join(agentDir, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	return { home, agentDir };
 }
 

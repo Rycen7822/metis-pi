@@ -33,7 +33,7 @@ async def serve_pi(home):
                     raise AgentError(
                         "version_mismatch",
                         "Running subagent daemon has older or different source code. Reload cannot upgrade it. "
-                        "Let work finish, close resident children, stop the daemon without --force, then reload. "
+                        "Let work finish and wait for verified idle shutdown, then reload. "
                         "Background work has not been interrupted.",
                     )
                 return await request(
@@ -74,7 +74,7 @@ async def serve_pi(home):
                 ):
                     raise AgentError("invalid_parent", "Trusted Pi initialization is required")
                 config = load_config(home)
-                extra = {k: os.environ[k] for k in config["inheritance"].get("child_env", []) if k in os.environ}
+                extra = {k: os.environ[k] for k in config["child_env"] if k in os.environ}
                 reconnect = msg.get("reconnect", False)
                 if not isinstance(reconnect, bool):
                     raise AgentError("invalid_argument", "reconnect must be a boolean")

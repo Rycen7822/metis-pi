@@ -11,7 +11,7 @@ const MAX_STORED_RESULTS = 50;
 const STANDALONE_DIRECT_IMAGE_ERROR = "Direct image fetch is not supported over MCP; fetch_content returns text there. Fetch images from the Pi extension instead.";
 
 export interface StandaloneWebToolCore extends WebToolCore {
-	/** Default names of the tools web-search.json enables; hosts list only these. */
+	/** Default names of the tools webAccess enables; hosts list only these. */
 	enabledToolNames: string[];
 }
 

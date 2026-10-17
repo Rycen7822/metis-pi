@@ -25,7 +25,8 @@ for (const scenario of ["import-timer", "import-elapsed", "html-processing", "im
 		`;
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			encoding: "utf8", timeout: 10_000,
-			input: `
+			input: `import { stringify } from "smol-toml";
+
 				import assert from "node:assert/strict";
 				import { register } from "node:module";
 				import { mock } from "node:test";
@@ -35,7 +36,7 @@ for (const scenario of ["import-timer", "import-elapsed", "html-processing", "im
 				register("data:text/javascript," + encodeURIComponent(${JSON.stringify(loader)}), import.meta.url);
 				const root = await mkdtemp(join(tmpdir(), "extract-cold-deadline-"));
 				process.env.PI_CODING_AGENT_DIR = root;
-				await writeFile(join(root, "web-search.json"), JSON.stringify({ fetch: { timeout: 0.1 }, fetchRouting: { providers: ["http"] } }));
+				await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { fetch: { timeout: 0.1 }, fetchRouting: { providers: ["http"] } } }));
 				const scenario = ${JSON.stringify(scenario)};
 				const image = scenario === "image-processing" || scenario === "caller-abort";
 				globalThis.fetch = async () => new Response(image ? "image" : '<html><head><title>Article</title></head><body><article><h1>Article</h1><p>' + 'A useful article with enough readable text for successful extraction. '.repeat(30) + '</p></article></body></html>', { headers: { "content-type": image ? "image/png" : "text/html" } });

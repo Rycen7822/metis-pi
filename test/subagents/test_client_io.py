@@ -7,8 +7,8 @@ import unittest
 from unittest import mock
 
 from paths import ROOT
-from subagent_pi.client import request
-from subagent_pi.common import AgentError, dumps, read_frame, socket_path
+from metis_subagent.client import request
+from metis_subagent.common import AgentError, dumps, read_frame, socket_path
 
 class ClientIO(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -29,7 +29,10 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
     def blocked_request(self,timeout):
         # Legal env snapshot size, enough to exceed a Unix socket's send buffer.
         return asyncio.create_task(request(self.home,'scope_open',{},timeout=timeout,autostart=False,
-            source={'env':{f'TEST_{i}':'x'*16000 for i in range(40)}}))
+            source={'env':{f'TEST_{i}':'x'*16000 for i in range(40)}, 'parent':{
+                'kind':'pi','session_id':'client-io','agent_dir':str(self.home),'session_file':'',
+                'sdk_path':str(self.home/'index.js'),'node_path':sys.executable,'lease':'client_io',
+                'model':{'provider':'offline','id':'mock'}}}))
     async def finish_task(self,task):
         for peer in self.peers: peer.transport.abort()
         task.cancel(); await asyncio.gather(task,return_exceptions=True)
@@ -84,7 +87,7 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
             writer.drain=blocked_receipt
             return reader,writer
         async def deliver(value): delivered.append(value)
-        with mock.patch('subagent_pi.client.asyncio.open_unix_connection',wrapped_connect):
+        with mock.patch('metis_subagent.client.asyncio.open_unix_connection',wrapped_connect):
             task=asyncio.create_task(request(self.home,'wait',{},timeout=.1,autostart=False,on_result=deliver))
             try:
                 done,_=await asyncio.wait({task},timeout=1.5)
@@ -100,7 +103,7 @@ class DaemonReplyIO(unittest.IsolatedAsyncioTestCase):
         script="""
 import asyncio,sys
 from pathlib import Path
-from subagent_pi import daemon
+from metis_subagent import daemon
 original_dispatch=daemon.Runtime.dispatch
 async def dispatch(self,op,p,source=None):
     if op=='doctor': return {'blob':'x'*(1024*1024)}
@@ -126,7 +129,7 @@ asyncio.run(daemon.serve(Path(sys.argv[1])))
                         if asyncio.get_running_loop().time()>=end: raise
                         await asyncio.sleep(.01)
                 writer.transport.pause_reading()
-                from subagent_pi import PROTOCOL_VERSION
+                from metis_subagent import PROTOCOL_VERSION
                 writer.write((dumps({'v':PROTOCOL_VERSION,'op':'doctor','params':{}})+'\n').encode())
                 await writer.drain()
                 self.assertEqual(await asyncio.wait_for(proc.stdout.readline(),14),b'REPLY_CLOSED\n')

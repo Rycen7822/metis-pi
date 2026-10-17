@@ -27,11 +27,11 @@ editor 已被占用或宿主能力缺失时按组件规则退避。全屏历史�
 
 Pi 1.3.0 默认 fullscreen；需要终端原生 scrollback 时设置 Pi 的 `tuiMode: "regular"` 或使用 `--tui-mode regular`。`quietStartup: "header"` 也由 Pi 处理。
 
-Pi 1.2 的独立 renderer 不会改变工具来源；适配器在解析前快照实际注册的函数身份，因此普通对象、spread、原地修改和仅覆盖 shell 都不会被误认成本包显示。此校验仍依赖受守卫的宿主 lookup，不能证明未来未知版本兼容。
+当前支持的 Pi 宿主中，独立 renderer 不会改变工具来源；适配器在解析前快照实际注册的函数身份，因此普通对象、spread、原地修改和仅覆盖 shell 都不会被误认成本包显示。此校验仍依赖受守卫的宿主 lookup，不能证明未来未知版本兼容。
 
 ## 托管工具授权
 
-Pi 1.2 的普通非空 `tools` 白名单若没有 `mcp__` selector，会保留 MCP 注册供 codemode/tool_search 使用。managed 子代理维持显式白名单的严格边界：排除未列出的 MCP 与资源工具，保留原 excludes；明确的 MCP 名称或 `mcp__` glob 通过宿主筛选。默认选择和纯 modifier 仍遵循 Pi；普通 wildcard 白名单因无法安全表达其 MCP 补集，在服务启动前拒绝而不是静默扩大权限，见[子代理 CLI](subagents/cli.md)。本包不改写主宿主自身的工具筛选政策。
+当前支持的 Pi 宿主中，普通非空 `tools` 白名单若没有 `mcp__` selector，会保留 MCP 注册供 codemode/tool_search 使用。managed 子代理维持显式白名单的严格边界：排除未列出的 MCP 与资源工具，保留原 excludes；明确的 MCP 名称或 `mcp__` glob 通过宿主筛选。默认选择和纯 modifier 仍遵循 Pi；普通 wildcard 白名单因无法安全表达其 MCP 补集，在服务启动前拒绝而不是静默扩大权限，见[原生子代理](subagents/native.md)。本包不改写主宿主自身的工具筛选政策。
 
 ## 请求、恢复与旧会话
 

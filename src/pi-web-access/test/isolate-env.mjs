@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +18,7 @@ for (const name of [
   "PI_WEB_ACCESS_CACHE_ROOT", "GOOGLE_APPLICATION_CREDENTIALS",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
   "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-  "PI_ALLOW_BROWSER_COOKIES", "FEYNMAN_ALLOW_BROWSER_COOKIES",
+  "PI_ALLOW_BROWSER_COOKIES",
 ]) delete process.env[name];
 
 const root = mkdtempSync(join(tmpdir(), "pi-web-access-test-"));
@@ -30,5 +31,5 @@ process.env.APPDATA = join(home, "AppData", "Roaming");
 process.env.LOCALAPPDATA = join(home, "AppData", "Local");
 process.env.XDG_CONFIG_HOME = join(home, ".config");
 process.env.PI_CODING_AGENT_DIR = agentDir;
-writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ toolActivation: "eager" }));
+writeFileSync(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { toolActivation: "eager" } }));
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));

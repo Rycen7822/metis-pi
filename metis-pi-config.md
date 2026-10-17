@@ -2,18 +2,18 @@
 
 ## 唯一配置文件与初始化
 
-所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。不再读取项目 `.pi/metis-pi.json` / `.pi/metis-pi.toml`，也不再使用显示层单独的 `PI_AGENT_DIR` 覆盖。
+所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。只使用这一份全局文件，不叠加项目配置覆盖。
 
-包内同目录的 `metis-pi.toml` 是默认值来源；网页选项不预填，继续采用各功能的原有默认值，见下文 `[webAccess]`。不要直接用默认模板覆盖已有个性配置。尚无全局 TOML 时运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项、`subagent-pi/config.toml`、`session-recall.json` 的查询模型及 `web-search.json` 的普通选项，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，外部旧文件不删除；同目录网页混合 JSON 拆分前备份，便于回退旧版代码。
+包内同目录的 `metis-pi.toml` 是默认值来源；网页选项不预填，继续采用各功能的原有默认值，见下文 `[webAccess]`。不要直接用默认模板覆盖已有个性配置。尚无全局 TOML 时运行 **`/metis-config init`**：从包内默认值写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖；初始化不导入、改写或备份其他配置文件。
 
 已有 TOML 直接编辑需要修改的字段；未填写的选项沿用包内默认值。
 `/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有 TOML。
 
-读取本身不写文件。提供兼容桥的模块在 TOML 不存在时兼容读取旧全局配置；LSP 与结构化提问除外，始终只读 TOML 与内置默认值。TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
+读取本身不写文件。所有偏好始终只读全局 TOML 与包内默认值；没有 TOML 时也使用默认值。网页凭据从同目录 JSON 或环境变量读取。命令只保存 TOML，首次保存也从默认值开始合并字段。损坏或无权限的文件不会被保存覆盖。需要保留的个性偏好请自行整理到对应 TOML 字段；**不要删除 Pi 的整个 settings.json**。
 
-Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`subagent-pi/` 只保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。另行安装的 Codex 插件及 `@ff-labs/pi-fff` 等其他插件配置不归本包所有，不迁移；`.codex/config.toml` 是可选的外部继承来源，不是 Metis 参数文件。
+Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`<agentDir>/metis/subagent/` 保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。`@ff-labs/pi-fff` 等其他插件配置不归本包所有。
 
-修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，LSP 在每次工具或 `/lsp` 调用时重读，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件，同一进程写操作串行；多个 Pi 进程同时保存仍是最后写入者胜出。
+修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，LSP 在每次工具或 `/lsp` 调用时重读，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件；Metis 命令通过跨进程锁串行化读取、合并与发布，互不重叠的字段 patch 会保留双方修改；同一字段或重叠的完整配置快照仍由后一次更新覆盖。手动编辑或绕过此锁的外部写入不受该保护。
 
 TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapThresholdTokens` 用 `false` 关闭；`maxImagesPerRequest = false` 表示采用 API 默认。这是配置语法，不是字符串 `"false"`。其他字段用正确的 boolean/string/number/array/table；错误值按所属模块的校验回退或报错，不会修复你的文件。
 
@@ -34,7 +34,7 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `working.animation` | `true` | 真彩终端的工作动画。 |
 | `working.animationIntervalMs` | `32` | 帧间隔毫秒，32–1000；越界钳制。 |
 | `footer.enabled` / `details` | 均 `true` | Footer、累计 I/O/cache 明细。 |
-| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、已完成响应均速 `… tok/s`（含等待/TTFT 与推理；生成中保留上次完成样本）。 |
+| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、已完成响应的非推理生成速率 `gen(last)` / `gen(avg2/avg3)`（`tok/s`）。只计非推理输出，窗口为首个文字/工具名产物至末尾增量，不含首输出前的等待；短输出最多合并三条有效样本，生成中保留上次完成值，详见 [统计口径](docs/features/interface.md#统计口径)。 |
 | `footer.locationExpanded` / `pruneExpanded` | 均 `false` | 目录/分支、prune 详情的默认展开状态；重载/重启后生效，界面点击不写回 TOML。 |
 | `summary.enabled` / `persist` | 均 `true` | 结束摘要、会话持久化；关闭 persist 时仅临时显示。 |
 | `selectionCopy.enabled` / `ctrlC` | 均 `true` | fullscreen 精确复制、Ctrl+C 复制选区；无选区保留原行为。 |
@@ -206,11 +206,11 @@ exclude = []
 
 这些是用户可调策略，不是所有算法内部常量的配置化。局部 o200k proxy 不等同 provider `maxTokens`、native 容量信用或账单，不能保证语义质量或经济回本；所有备用模型受同一最终消息校验，输出预算拒绝不继续换模型。完整行为与恢复边界见包内 `docs/features/condense.md`。
 
-## `[subagents]`（native Pi / 本包 CLI 后端）
+## `[subagents]`（native Pi）
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `enabled` | `true` | 是否注册 native Pi 子代理入口；关闭不终止已运行任务，CLI 仍可管理状态。 |
+| `enabled` | `true` | 是否注册 native Pi 子代理入口；关闭不终止已运行任务。 |
 | `maxResidentAgents` | `4` | 每个 daemon 同时驻留的 worker 上限，含前/后台任务。 |
 | `maxAgentsPerScope` | `16` | 每个父会话 scope 的活跃/清理未验证 worker 上限；历史不占容量。 |
 | `rpcTimeoutSeconds` | `20` | worker RPC 请求秒数。 |
@@ -219,29 +219,15 @@ exclude = []
 | `maxWaitSeconds` | `3600` | 后端 wait 轮询上限秒数；不扩大工具 schema 本身的上限。 |
 | `residentIdleTimeoutSeconds` | `1800` | 已结束/空闲的驻留 worker 回收时间秒数。 |
 | `eventMaxCountPerAgent` | `20000` | 单代理最多保留的事件数。 |
-| `piCommand` | `["pi"]` | 本包 CLI 的启动 argv；native Pi 使用父进程 SDK/Node，此值不覆写父模型或 Pi 安装。 |
+| `childEnv` | `[]` | 额外允许传给子代理的环境变量名；凭据值来自父环境，不写入 TOML。 |
 
-容量、超时和事件数均为整数 1–10000000，不接受 0/false/文本。后端在启动时载入配置；更改后先等待工作结束、关闭驻留 children，再用管理 CLI 正常停止 daemon，重新连接。`/reload` 不终止旧 daemon，也不会修改它已加载的参数。不要强停后台工作；源码指纹不一致会明确报 `version_mismatch`。`--home` / `PI_AGENTS_HOME` 选择状态目录，**不选择另一份偏好文件**；本包 CLI 仍使用 Pi 全局 agentDir 的 TOML。
+容量、超时和事件数均为整数 1–10000000，不接受 0/false/文本。后端在启动时载入配置；更改后先等待工作结束、关闭驻留 children，再安全停止 daemon，重新连接。`/reload` 不终止旧 daemon，也不会修改它已加载的参数。不要强停后台工作；源码指纹不一致会明确报 `version_mismatch`。状态目录为 `<agentDir>/metis/subagent/`；偏好仍在全局 `metis-pi.toml`。
 
-### `[subagents.inheritance]`
-
-`enabled=true`、`skills=true`、`mcp=true`、`codexHome=""`、`mcpProtocolMode="auto"` 是本包 Codex CLI/MCP 兼容入口的继承设置；`codexHome` 非空时须为存在目录，空字符串自动选择；协议模式为 `auto` / `legacy_2025_06_18` / `modern_2026_07_28`。**native Pi 不使用这些 Codex 开关**，ambient skills/扩展使用 profile/Pi 设置，MCP 及凭据仍由 Pi 管理。
-
-`childEnv=[]` 是额外允许传给子代理的环境变量名（native Pi 也使用），凭据值来自父环境，不应直接写入 TOML。基本进程环境及 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 和对应小写名自动继承；代理值仅绑定在 scope 内存中，不落盘，daemon 重启后需父会话重新绑定。profile 的 `env` 可覆写代理变量。子代理 SDK 初始化代理感知的 HTTP/WebSocket，沿用 Pi 全局 `httpProxy` 和 HTTP 空闲超时；运行绑定、租约、bootstrap FD 等内部环境变量是协议状态，不是另一份用户配置。
+`subagents.childEnv=[]` 是额外允许传给子代理的环境变量名，凭据值来自父环境，不应直接写入 TOML。基本进程环境及 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 和对应小写名自动继承；代理值仅绑定在 scope 内存中，不落盘，daemon 重启后需父会话重新绑定。profile 的 `env` 可覆写代理变量。子代理 SDK 初始化代理感知的 HTTP/WebSocket，沿用 Pi 全局 `httpProxy` 和 HTTP 空闲超时；运行绑定、租约、bootstrap FD 等内部环境变量是协议状态，不是另一份用户配置。
 
 ### `[subagents.profiles.<name>]`
 
 默认 `default`/`reader` 都使用 `extensions=[]`、`skills=[]`、`ambientExtensions=true`、`ambientSkills=true`。default 的 `tools=["read","bash","edit","write","grep","find","ls"]`；reader 为 `["read","grep","find","ls"]`。自定义 profile 继承 default，再覆写自己的字段；可添加 `model`、`provider`、`thinking`（不写表示继承现有模型/思考设置），或非秘密字符串 `env` 表。`tools` 只能填 Pi 内置名称，read access 仍额外禁止写入、shell 和递归子代理，不是操作系统沙箱。
-
-### 旧插件字段不是当前 native 配置
-
-`subagents.json.maxConcurrent` 迁为 `maxResidentAgents`；原生后端 `subagent-pi/config.toml` 的已有值更优先。其他旧字段明确提示、保留于备份，但不生成无效开关：
-
-- `maxConcurrentForeground`：native 无前/后台容量分池，统一受驻留上限约束。
-- `maxSubagentDepth`：managed child 固定禁止递归，不能通过配置放开。
-- `workflowsEnabled`、`toolDescriptionMode`、`joinMode`、`outputTranscript`、`widgetMode`：旧独立 provider 的工作流/描述/汇总/输出/widget 选项不适用于 native 的工具、交付回执、历史读取和活跃树契约。
-
-移入备份不等于删去功能数据：策略 Markdown、子代理 SQLite/WAL/SHM、日志、session、归档、MCP cache/auth 仍留原处。不要删除 `subagent-pi/` 或整个 Pi `settings.json`。
 
 ## `[sessionRecall]`
 
@@ -251,9 +237,7 @@ exclude = []
 
 每次查询重读，无需重启；值无效或模型不在 Pi 注册表中时回退当前会话。
 `session_search` 不调用模型。模型定义与认证仍由 Pi 管理。
-尚无 TOML 时，`/metis-config init` 将旧 `session-recall.json` 的
-`queryModel.provider` / `id` 合并为这个字段，并保留原文件。
-已有 TOML 直接编辑本字段；旧 JSON 不再叠加。损坏 TOML 会返回查询配置错误。
+直接编辑本字段；未填写时使用默认值。损坏 TOML 会返回查询配置错误。
 
 ## `[webAccess]`
 
@@ -263,16 +247,16 @@ exclude = []
 
 | 普通字段（相对 webAccess） | 用法 |
 | --- | --- |
-| `provider` / `searchProvider` | provider 名称、名称数组或 `"auto"`；`searchProvider` 优先。 |
+| `provider` / `searchProvider` | provider 名称、名称数组或 `"auto"`；`searchProvider` 优先。显式设置任一字段（包括 `"auto"`）会优先使用旧式 provider 选择，不启用 `searchRouting`。 |
 | `searchModel` | Gemini 搜索模型 ID；其他 provider 使用各自的模型字段。 |
-| `searchRouting.providers` / `useCurrentModel` / `fallbackOn` | 显式 provider 顺序；当前模型搜索开关；允许回退的错误分类。 |
-| `webSearch.enabled` / `allowedProviders` | 搜索总开关、允许的 provider 名称列表。 |
+| `searchRouting.providers` / `useCurrentModel` / `fallbackOn` | 显式 provider 顺序；当前模型搜索开关；允许回退的错误分类。仅在未设置 `provider` / `searchProvider` 时启用。 |
+| `webSearch.enabled` / `allowedProviders` | search/source-check 的兼容开关、允许的 provider 名称列表；不关闭 fetch/content。单工具 `tools.<name>.enabled` 优先于此兼容开关。 |
 | `workflow` | `"none"` / `"summary-review"` / `"auto-summary"`；默认 none。 |
 | `summaryModel` / `summaryInstructions` | 摘要模型完整 `provider/model-id` 选择器与额外指令；未指定时使用首个可用的首选模型。若同一模型有多个可用路由则提示歧义并要求明确选择，不按注册顺序默选；例如 `summaryModel = "openrouter/anthropic/claude-haiku-4-5"`。支持 `:low` 等 thinking 后缀，仍受 Pi 的模型范围及认证约束。 |
 | `summaryGenerationDeadlineMs` | 摘要期限，毫秒；默认 30000，最大 600000。 |
 | `curatorTimeoutSeconds` / `autoOpenBrowser` / `curatorRemote` | 等待秒数、是否自动打开浏览器、远程绑定开关或 `{ host, bind }`。 |
-| `toolActivation` | `"auto"` / `"dynamic"` / `"eager"`；默认 auto。 |
-| `tools.<name>.enabled` / `toolNames.<name>` | name 为 webSearch、sourceCheck、fetchContent、getSearchContent；启用开关与工具名称。 |
+| `toolActivation` | 上游独立入口的 `"auto"` / `"dynamic"` / `"eager"`，默认 auto；Metis 入口固定注册 deferred 分组工具 `web_access`，不以此字段改变暴露方式。 |
+| `tools.<name>.enabled` / `toolNames.<name>` | name 为 webSearch、sourceCheck、fetchContent、getSearchContent；单工具启用开关在 Metis 与独立入口都有效，名称覆写用于独立入口；Metis 分组名称固定为 `web_access`。 |
 | `commands.<name>.enabled` | name 为 websearch、curator、search、google-account。 |
 | `shortcuts.curate` / `shortcuts.activity` | Pi 快捷键字符串；默认 ctrl+shift+s / ctrl+shift+w。 |
 | `fetch.defaultMode` / `allowedModes` | readable、raw、answer；模式必须在允许列表中，默认 readable。 |
@@ -284,7 +268,7 @@ exclude = []
 | `cacheRoot` | 缓存父目录，始终另建 web-search-cache 子目录；PI_WEB_ACCESS_CACHE_ROOT 可覆盖。 |
 | `ssrf.allowRanges` / `trustEnvProxy` | CIDR 例外；默认固定校验后的 DNS 地址，非信任 HTTP 代理须支持 CONNECT。true 将环境/已配置代理的远端 DNS 安全交给代理。 |
 | `fetchContent.domainPolicy.allow` / `deny` | 抓取域名允许和拒绝列表。 |
-| `allowBrowserCookies` / `browserCookies.browser` / `profile` | Cookie 读取许可、浏览器 preset 和 profile 目录名；不是 Cookie 值。 |
+| `allowBrowserCookies` / `browserCookies.browser` / `profile` | Cookie 读取许可、浏览器 preset 和 profile 目录名；不是 Cookie 值。环境变量 `PI_ALLOW_BROWSER_COOKIES=1` 也可授权读取。 |
 | `authFetch.<profile>.hosts` / `chromeProfile` / `redirects` / `cache` | 认证抓取的域名范围、profile、same-origin 重定向和 session/off 缓存策略。 |
 | `pdf.enabled` / `maxSizeMB` / `maxPages` / `provider` | PDF 开关、大小/页数限制和提取器。 |
 | `pdf.datalabMode` / `datalabTimeoutMs` | fast/balanced/accurate 与 Datalab 超时毫秒。 |
@@ -306,14 +290,11 @@ API key/token 字段、自定义 `searxngHeaders` / `degoogHeaders`（可能含�
 及带认证的 proxy 保存在 **`<agentDir>/web-search.json`**，与现有 TOML 同目录。
 密钥仍支持原字符串、`$ENV`、`!command` 及 provider 环境变量；Google ADC、
 Pi 登录和浏览器 Cookie 值由原认证系统保存。TOML 中误写密钥字段会报错。
-JSON 中的普通字段在 TOML 存在后失效；凭据 JSON 中的认证代理优先于 TOML proxy。
+JSON 仅提供凭据，普通字段始终不参与偏好解析；凭据 JSON 中的认证代理优先于 TOML proxy。
 
-尚无 TOML 时用 `/metis-config init` 导入旧设置，已有 TOML 直接编辑。
-初始化优先 agent 目录 JSON，然后是旧 XDG/pi 和 ~/.pi；显式指定 agent 目录
-时不读取别处的 JSON。外部旧文件原样保留；同目录混合
-JSON 在备份后拆为仅凭据的 JSON，新写入文件的权限为 0600。读取不写文件、不执行密钥命令。
+尚无 TOML 时用 `/metis-config init` 创建默认设置，已有 TOML 直接编辑。
+只读取 agentDir 内的 `web-search.json`；凭据文件由用户或原认证系统管理，初始化与偏好保存不会改写它。读取不写文件、不执行密钥命令。
 `/websearch` 和 `/curator` 保存到现有 TOML。手动修改后的工具注册、快捷键、
 provider 缓存用 `/reload` 刷新；独立 MCP 需重启。普通环境变量覆盖继续有效。
 
-从旧 ~/.pi 或 XDG 目录迁移时，原缓存父目录写入 `webAccess.cacheRoot`，
-旧会话的缓存引用继续有效；不会搬动或删除缓存数据。
+需要沿用已有缓存父目录时显式设置 `webAccess.cacheRoot`；不会搬动或删除缓存数据。

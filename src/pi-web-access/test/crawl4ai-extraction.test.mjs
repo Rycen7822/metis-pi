@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -12,7 +14,11 @@ const activityModuleUrl = new URL("../activity.ts", import.meta.url).href;
 // Each child gets its own empty config home so a developer's real web-search.json never leaks into a test.
 function runChild(script, env = {}, config = null) {
 	const home = mkdtempSync(join(tmpdir(), "pi-web-access-crawl4ai-"));
-	if (config) writeFileSync(join(home, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	if (config) {
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		writeFileSync(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		writeFileSync(join(home, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	const childEnv = { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home };
 	for (const key of [
 		"XDG_CONFIG_HOME", "CRAWL4AI_BASE_URL", "CRAWL4AI_API_TOKEN",

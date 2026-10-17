@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -385,9 +386,7 @@ test('"all" is a Curator provider but remains invalid inside sequential searchRo
 	assert.match(geminiWebOnlyPage, /data-provider="gemini"/);
 
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-all-routing-"));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		searchRouting: { providers: ["all"], fallbackOn: ["network"] },
-	}));
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { searchRouting: { providers: ["all"], fallbackOn: ["network"] } } }));
 	const child = runChild(`
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
 		try {

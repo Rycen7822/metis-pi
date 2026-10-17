@@ -160,9 +160,9 @@ groups = []
 # 可选示例：使用前删除上面的 groups = []，再取消以下行的注释。
 # file 相对本配置所在目录；裸 glob 匹配模型名，带 / 的 glob 匹配 provider/model-id。
 # [[dynamicAgents.groups]]
-# id = "codex"
-# file = "AGENTS-codex.md"
-# include = ["openai-codex/*"]
+# id = "openai"
+# file = "AGENTS-OPENAI.md"
+# include = ["openai/*"]
 # exclude = ["*-mini"]
 
 
@@ -280,7 +280,7 @@ nativeTargetTokens = 16384
 # =============================================================================
 # 6. 子代理 / Native subagents
 # =============================================================================
-# Metis 原生 Pi 子代理的唯一配置入口；数据库/日志/会话仍在 subagent-pi/。
+# Metis 原生 Pi 子代理的唯一配置入口；状态位于 <agentDir>/metis/subagent/。
 # 后端在启动时读取；修改后先等待任务结束、关闭驻留子代理，再正常停止 daemon。
 # 不要 --force 停止正在运行的任务。managed child 固定禁止递归创建子代理。
 [subagents]
@@ -297,22 +297,10 @@ maxWaitSeconds = 3600
 # 驻留空闲回收时间（秒），以及每个代理最多保留的事件数量。
 residentIdleTimeoutSeconds = 1800
 eventMaxCountPerAgent = 20000
-# 本包 CLI 的 Pi argv；native Pi 使用父进程 SDK/Node，不使用此启动路径。
-piCommand = ["pi"]
-
-# 本包 Codex CLI/MCP 兼容入口的继承控制；native Pi 仅使用 childEnv。
-# native skills/扩展由 profile 控制，MCP/凭据由 Pi 管理，不使用下面的 Codex 开关。
-[subagents.inheritance]
-enabled = true
-skills = true
-mcp = true
-# Codex CLI 兼容来源目录；空字符串自动选择。native Pi 不使用此目录。
-codexHome = ""
 # 额外允许传递到 child 的环境变量名，禁止把令牌直接写入 TOML。
 # 基本环境及 HTTP(S)/ALL/NO_PROXY（含小写）自动继承；代理值不落盘。
+# skills/扩展由 profile 控制；模型、MCP 与凭据使用父 Pi SDK。
 childEnv = []
-# Codex 兼容 MCP：auto / legacy_2025_06_18 / modern_2026_07_28。
-mcpProtocolMode = "auto"
 
 # profiles 定义子代理的工具表面、扩展和 skills；任务可按名称选择 profile。
 # extensions/skills 路径使用现有执行器规则；read 权限仍执行额外只读限制。

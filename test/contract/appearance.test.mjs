@@ -8,7 +8,7 @@ import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import * as Tui from "@earendil-works/pi-tui";
 import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
-import { CodexThinkingRailComponent } from "../../src/chrome/transcript-components.ts";
+import { ThinkingRailComponent } from "../../src/chrome/transcript-components.ts";
 import { stringify } from "smol-toml";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -174,7 +174,7 @@ for (const rail of [false, true]) {
       assistantPrototype: Assistant.prototype,
       makeSeparator: () => new Text("separator", 0, 0),
       makeSpacer: () => new Spacer(1),
-      makeRail: child => { rails++; return new CodexThinkingRailComponent(child, { kind: "none" }); },
+      makeRail: child => { rails++; return new ThinkingRailComponent(child, { kind: "none" }); },
       api: { registerCommand: (name, command) => commands.set(name, command) },
     });
     handlers.get("agent_start")();

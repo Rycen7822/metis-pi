@@ -111,7 +111,9 @@ function readConfigSequence(configs) {
 	const configDir = mkdtempSync(join(tmpdir(), "pi-web-access-pdf-config-"));
 	try {
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
-			input: `
+			input: `import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from ${JSON.stringify(new URL("../../web-access-config.ts", import.meta.url).href)};
+
 				import { writeFileSync } from "node:fs";
 				import { join } from "node:path";
 				process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(configDir)};
@@ -120,7 +122,11 @@ function readConfigSequence(configs) {
 				const { loadPDFConfig } = await import(${JSON.stringify(pdfModuleUrl)});
 				const values = [];
 				for (const config of configs) {
-					if (config !== null) writeFileSync(join(${JSON.stringify(configDir)}, "web-search.json"), JSON.stringify(config));
+					if (config !== null) {
+						const { preferences, credentials } = splitWebAccessConfig(config);
+						writeFileSync(join(${JSON.stringify(configDir)}, "metis-pi.toml"), stringify({ webAccess: preferences }));
+						writeFileSync(join(${JSON.stringify(configDir)}, "web-search.json"), JSON.stringify(credentials));
+					}
 					values.push(loadPDFConfig());
 				}
 				console.log(JSON.stringify(configs.length === 1 ? values[0] : values.map(value => value.enabled)));

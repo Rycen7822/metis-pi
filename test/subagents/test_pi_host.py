@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from paths import ROOT
-from subagent_pi import RUNTIME_REVISION
-from subagent_pi.common import dumps, read_frame, socket_path
+from metis_subagent import RUNTIME_REVISION
+from metis_subagent.common import dumps, read_frame, socket_path
 
 class PiHostContracts(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.tmp=tempfile.TemporaryDirectory(prefix='subagent-pi-host-')
+        self.tmp=tempfile.TemporaryDirectory(prefix='metis-subagent-host-')
         self.home=Path(self.tmp.name); self.revision=RUNTIME_REVISION; self.calls=[]; self.peers=[]; self.jobs=[]; self.spawn_mode=None
         self.sock=socket_path(self.home)
         async def handle(reader,writer):
@@ -35,7 +35,7 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
                 writer.close(); await writer.wait_closed()
         def connected(reader,writer): self.jobs.append(asyncio.create_task(handle(reader,writer)))
         self.server=await asyncio.start_unix_server(connected,str(self.sock))
-        self.proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/subagent-pi'),'--home',str(self.home),'pi-host',
+        self.proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/metis-subagent'),'--home',str(self.home),'pi-host',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         self.rid=0
         self.addAsyncCleanup(self.cleanup)

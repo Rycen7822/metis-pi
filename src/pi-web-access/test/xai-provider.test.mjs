@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -11,7 +13,11 @@ const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href
 
 async function createHome(config) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-xai-"));
-	await writeFile(join(home, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		await writeFile(join(home, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	return home;
 }
 
@@ -215,7 +221,7 @@ test("xaiSearchTools is validated and may opt into X-only search", async () => {
 	assert.deepEqual(captured.tools, [{ type: "x_search" }]);
 	assert.match(captured.input, /^Search X and answer/);
 
-	for (const bad of [null, "x_search", [], ["x_search", "x_search"], ["x_search", "unknown"], ["web_search", 42]]) {
+	for (const bad of [false, "x_search", [], ["x_search", "x_search"], ["x_search", "unknown"], ["web_search", 42]]) {
 		const badHome = await createHome({ xaiApiKey: "xai-key", xaiSearchTools: bad });
 		const badChild = runChild(`
 			globalThis.fetch = async () => { throw new Error("must not reach the network"); };

@@ -1,6 +1,6 @@
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, getWebAccessConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
@@ -71,7 +71,7 @@ function requireBaseUrl(): string {
 	if (!baseUrl) {
 		throw new Error(
 			"degoog base URL is invalid or missing. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "degoogBaseUrl": "https://degoog.example.com" }\n` +
+			`  1. Set webAccess.degoogBaseUrl = "https://degoog.example.com" in ${getWebAccessConfigPath()}\n` +
 			"  2. Set DEGOOG_URL to an HTTP(S) URL\n" +
 			"  3. Remove the override to use the public instance at https://degoog.org",
 		);

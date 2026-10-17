@@ -21,7 +21,7 @@ TUI 下方 prune 状态行保留开关、上下文变化和额外模型用量；
 | `showPruneStatusLine` / `showOccStatusLine` | `true` | 单行精简比例及摘要 token 用量 / 最近 OCC 状态。 |
 | `compactionSummaryMaxTokens` | `0` | Pi 原生压缩摘要的额外输出 token 上限；0 沿用 Pi，正整数自定义，仍受 Pi 和模型上限约束。 |
 
-未填写字段采用包内默认值；迁移保留已有合法值（旧 JSON 的 `autoBudgetThreshold: null` 转为 TOML `false`）。总开关和 OCC 仍默认关闭。TOML 存在后不再叠加旧 JSON，项目 metis 覆盖不生效。完整默认值和参数说明见包根目录 `metis-pi.toml` / `metis-pi-config.md`。
+未填写字段或缺少 TOML 时采用包内默认值；`autoBudgetThreshold = false` 关闭自动付费摘要。总开关和 OCC 仍默认关闭。偏好只来自全局 TOML，项目 metis 覆盖不生效。完整默认值和参数说明见包根目录 `metis-pi.toml` / `metis-pi-config.md`。
 
 精简状态与摘要用量合并为一行，例如 `│ prune: ON · 242.1k->87.9k (-64%) · usage: 23039 tokens`。用量为本次会话/分支加载后的摘要输入与输出 token 合计，不含恢复的历史用量；不统计或显示美元费用。
 

@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,7 +19,7 @@ before(async () => {
 	home = await mkdtemp(join(tmpdir(), "pi-web-baizhi-"));
 	process.env.PI_CODING_AGENT_DIR = home;
 	process.env.BAIZHI_API_KEY = key;
-	await writeFile(join(home, "web-search.json"), JSON.stringify({ webSearch: { allowedProviders: ["baizhi"] } }));
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { webSearch: { allowedProviders: ["baizhi"] } } }));
 	server = createServer(async (req, res) => {
 		let body = "";
 		for await (const chunk of req) body += chunk;
@@ -137,7 +138,8 @@ test("malformed credentials fail locally with a fixed message and never reach HT
 
 test("Baizhi supports shared credential source rules without credential-resolution side effects at availability time", async () => {
 	reset();
-	await writeFile(join(home, "web-search.json"), JSON.stringify({ baizhiApiKey: "$SYNTHETIC_BAIZHI_NAMED", webSearch: { allowedProviders: ["baizhi"] } }));
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { webSearch: { allowedProviders: ["baizhi"] } } }));
+	await writeFile(join(home, "web-search.json"), JSON.stringify({ baizhiApiKey: "$SYNTHETIC_BAIZHI_NAMED" }));
 	process.env.SYNTHETIC_BAIZHI_NAMED = key;
 	process.env.BAIZHI_API_KEY = "wrong-fallback";
 	assert.equal(isBaizhiAvailable(), true);
@@ -145,7 +147,8 @@ test("Baizhi supports shared credential source rules without credential-resoluti
 	assert.ok(calls.every(c => c.authCorrect));
 	delete process.env.SYNTHETIC_BAIZHI_NAMED; process.env.BAIZHI_API_KEY = key;
 	await assert.rejects(searchWithBaizhi("q"), /environment-empty/);
-	await writeFile(join(home, "web-search.json"), JSON.stringify({ webSearch: { allowedProviders: ["baizhi"] } }));
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { webSearch: { allowedProviders: ["baizhi"] } } }));
+	await writeFile(join(home, "web-search.json"), "{}\n");
 });
 test("Baizhi is explicit-only, available to provider arrays, labels and the Curator", async () => {
 	reset();
@@ -229,7 +232,7 @@ test("routing keeps safe HTTP/network classifications and never falls back after
 	for (const failure of ["http401", "http429", "http503", "network", "invalid-json", "abort"]) {
 		const dir = await mkdtemp(join(tmpdir(), "pi-baizhi-routing-"));
 		try {
-			await writeFile(join(dir, "web-search.json"), JSON.stringify({ searchRouting: { providers: ["baizhi", "brave"], fallbackOn: ["network", "transient", "quota", "invalid-response"] } }));
+			await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { searchRouting: { providers: ["baizhi", "brave"], fallbackOn: ["network", "transient", "quota", "invalid-response"] } } }));
 			const env = { ...process.env, PI_CODING_AGENT_DIR: dir, BAIZHI_API_KEY: key, BRAVE_API_KEY: "synthetic-brave" };
 			const child = spawnSync(process.execPath, ["--input-type=module"], { env, encoding: "utf8", timeout: 15_000, input: `
 				const failure = ${JSON.stringify(failure)}, calls = [], controller = new AbortController();

@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { captureBody, disableNetwork, FAKE_API_KEY } from "../helpers/native-provider.mjs";
 import { METIS_EVENTS } from "../../src/collaboration.ts";
+import { stringify } from "smol-toml";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = {
@@ -36,14 +37,15 @@ async function host(t, converted, reverse = false, wholePackage = false, lifecyc
   const config = { version: 1, notify: false, groups: [
     { id: "a", file: "A.md", include: ["a"] }, { id: "b", file: "B.md", include: ["b"] },
   ] };
-  writeFileSync(join(agentDir, "dynamic-agents.json"), JSON.stringify(config));
+  writeFileSync(join(agentDir, "metis-pi.toml"), stringify({ dynamicAgents: { ...config, enabled: true },
+    ...(lifecycle.web ? { webAccess: {
+      workflow: "summary-review", autoOpenBrowser: false, webSearch: { allowedProviders: ["exa"] },
+    } } : {}),
+  }));
   writeFileSync(join(agentDir, "AGENTS.md"), "NATIVE_GLOBAL_SENTINEL");
   writeFileSync(join(agentDir, "A.md"), "POLICY_A_SENTINEL");
   writeFileSync(join(agentDir, "B.md"), "POLICY_B_SENTINEL");
   writeFileSync(join(cwd, "AGENTS.md"), "PROJECT_SENTINEL");
-  if (lifecycle.web) writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({
-    workflow: "summary-review", autoOpenBrowser: false, webSearch: { allowedProviders: ["exa"] },
-  }));
   const settingsManager = SettingsManager.inMemory({
     packages: wholePackage ? [root] : [],
     compaction: { enabled: false },
@@ -503,16 +505,16 @@ test("editing an inactive policy affects only the next run that selects it", asy
 test("bad config, disabling, and reload restore native rules without inheriting the last policy", async t => {
   const h = await host(t, false);
   await h.run();
-  writeFileSync(join(h.agentDir, "dynamic-agents.json"), "{");
+  writeFileSync(join(h.agentDir, "metis-pi.toml"), "[broken");
   assert.match(JSON.stringify((await h.run()).context), /NATIVE_GLOBAL_SENTINEL/);
-  writeFileSync(join(h.agentDir, "dynamic-agents.json"), JSON.stringify(h.config));
+  writeFileSync(join(h.agentDir, "metis-pi.toml"), stringify({ dynamicAgents: { ...h.config, enabled: true } }));
   assert.match(JSON.stringify((await h.run()).context), /POLICY_A_SENTINEL/);
-  writeFileSync(join(h.agentDir, "dynamic-agents.json"), JSON.stringify({ ...h.config, groups: [h.config.groups[1]] }));
+  writeFileSync(join(h.agentDir, "metis-pi.toml"), stringify({ dynamicAgents: { ...h.config, enabled: true, groups: [h.config.groups[1]] } }));
   await h.session.setModel(h.model("b"));
   await h.session.reload();
   const restored = JSON.stringify((await h.run()).context);
   assert.match(restored, /POLICY_B_SENTINEL/); assert.doesNotMatch(restored, /POLICY_A_SENTINEL/);
-  writeFileSync(join(h.agentDir, "dynamic-agents.json"), JSON.stringify({ ...h.config, enabled: false }));
+  writeFileSync(join(h.agentDir, "metis-pi.toml"), stringify({ dynamicAgents: { ...h.config, enabled: false } }));
   const result = JSON.stringify((await h.run()).context);
   assert.match(result, /NATIVE_GLOBAL_SENTINEL/); assert.doesNotMatch(result, /POLICY_[AB]_SENTINEL/);
 });

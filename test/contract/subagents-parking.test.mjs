@@ -7,28 +7,24 @@ import { fileURLToPath } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isDaemonIdle, RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 import { SubagentSession } from "../../src/subagents/session.ts";
+import { subagentAdmin } from "../helpers/subagent-admin.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function status(runtime, state) {
   try {
-    return JSON.parse(
-      execFileSync("python3", [join(runtime.root, "bin/subagent-pi"), "--home", state, "daemon", "status"], {
-        encoding: "utf8",
-      }),
-    );
+    return subagentAdmin(runtime, state, "ping");
   } catch (error) {
-    const result = JSON.parse(String(error.stdout));
-    assert.equal(result.error.code, "daemon_unavailable");
+    assert.equal(error.code, "daemon_unavailable");
     return undefined;
   }
 }
 async function fixture(t) {
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work/metis-subagent-parking-")),
-    state = join(dir, "subagent-pi"),
+    state = join(dir, "metis", "subagent"),
     runtime = runtimePackage();
-  mkdirSync(state);
+  mkdirSync(state, { recursive: true });
   writeFileSync(
     join(dir, "settings.json"),
     JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }),
@@ -49,9 +45,7 @@ async function fixture(t) {
     try {
       for (const client of clients) await client.close();
       if (status(runtime, state))
-        execFileSync("python3", [join(runtime.root, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], {
-          timeout: 20000,
-        });
+        subagentAdmin(runtime, state, "shutdown", { force: true });
       if (clients.some((client) => client.scope))
         execFileSync(
           "python3",

@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -56,7 +58,11 @@ globalThis.fetch = async (input) => {
 function runStandalone(body, { config = {}, env = {} } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-core-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify(config));
+		{
+			const { preferences, credentials } = splitWebAccessConfig(config);
+			writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+			writeFileSync(join(dir, "web-search.json"), JSON.stringify(credentials));
+		}
 		const logPath = join(dir, "modules.log");
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `

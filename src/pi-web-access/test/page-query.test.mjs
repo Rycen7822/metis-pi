@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stringify } from "smol-toml";
 import { after, test } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +8,7 @@ import { join } from "node:path";
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const agentDir = await mkdtemp(join(tmpdir(), "pi-page-query-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
-const configPath = join(agentDir, "web-search.json");
+const configPath = join(agentDir, "metis-pi.toml");
 after(() => {
 	if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -54,7 +55,7 @@ test("answerFromPage grounds the model call in supplied page content", async () 
 });
 
 async function writeFetchConfig(fetch) {
-	await writeFile(configPath, JSON.stringify({ fetch }) + "\n", "utf8");
+	await writeFile(configPath, stringify({ webAccess: { fetch } }), "utf8");
 }
 
 function pageModel(id, input = ["text"]) {

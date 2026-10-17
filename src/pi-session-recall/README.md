@@ -75,11 +75,9 @@ unregistered model selections also fall back to that model. The setting is read
 at each query; `session_search` does not call a model. Model definitions and
 authentication remain managed by Pi.
 
-`/metis-config init` imports the upstream `session-recall.json` when no TOML
-exists. If you already have a TOML file, edit `[sessionRecall].queryModel`
-directly. The old
-JSON is left intact; once TOML exists it is not read during queries. Malformed
-TOML is reported as a configuration error, without falling back to old JSON.
+`/metis-config init` creates package defaults when no TOML exists. Edit
+`[sessionRecall].queryModel` directly to select a dedicated model. Missing
+TOML uses defaults; malformed TOML is reported as a configuration error.
 
 ## Requirements
 

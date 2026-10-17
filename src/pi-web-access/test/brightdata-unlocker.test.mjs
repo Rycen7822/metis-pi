@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -56,11 +58,19 @@ const PUBLIC_LOOKUP = `async () => [{ address: "93.184.216.34", family: 4 }]`;
 
 async function configHome(config) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brightdata-"));
-	await writeFile(
-		join(home, "web-search.json"),
-		JSON.stringify(config) + "\n",
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(
+		join(home, "metis-pi.toml"),
+		stringify({ webAccess: preferences }) + "\n",
 		"utf8",
 	);
+		await writeFile(
+		join(home, "web-search.json"),
+		JSON.stringify(credentials) + "\n",
+		"utf8",
+	);
+	}
 	return home;
 }
 
@@ -424,11 +434,13 @@ test("Bright Data Web Unlocker resolves the credential at request time, after th
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brightdata-"));
 	const marker = join(home, "resolver-ran");
 	await writeFile(
+		join(home, "metis-pi.toml"),
+		stringify({ webAccess: { brightdataUnlockerZone: "pi_unlocker" } }) + "\n",
+		"utf8",
+	);
+	await writeFile(
 		join(home, "web-search.json"),
-		JSON.stringify({
-			brightdataApiKey: `!touch ${marker} && printf bd-command-key`,
-			brightdataUnlockerZone: "pi_unlocker",
-		}) + "\n",
+		JSON.stringify({ brightdataApiKey: `!touch ${marker} && printf bd-command-key` }) + "\n",
 		"utf8",
 	);
 	const child = runChild(

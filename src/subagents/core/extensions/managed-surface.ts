@@ -16,7 +16,7 @@
  * the surface is left as Pi computed it. The variable is deleted before any
  * child of this process can see it.
  *
- * Evidence: one `subagent-pi-surface applied ok=... allowed=... builtins=...
+ * Evidence: one `metis-subagent-surface applied ok=... allowed=... builtins=...
  * expected=... unidentified=...` line on stderr, where `builtins` and `ok` are
  * read back from Pi's live registry after the change. The daemon requires that
  * line for every profile that restricts the built-in surface and fails the
@@ -44,7 +44,7 @@ export default async function (pi: ExtensionAPI) {
   const raw = process.env.PI_AGENTS_CHILD_BUILTINS;
   delete process.env.PI_AGENTS_CHILD_BUILTINS;
   if (raw === undefined) {
-    process.stderr.write("subagent-pi-surface no-plan (surface left to Pi)\n");
+    process.stderr.write("metis-subagent-surface no-plan (surface left to Pi)\n");
     return;
   }
   const allowed = [...new Set(raw.split(",").map((name) => name.trim()).filter((name) => name.length > 0))].sort();
@@ -65,7 +65,7 @@ export default async function (pi: ExtensionAPI) {
     const safeBuiltin = tool && isBuiltin(tool) && ["read", "grep", "find", "ls", "codemode", "tool_search"].includes(tool.name);
     const fffSearch = path && /[\\/]@ff-labs[\\/]pi-fff[\\/]src[\\/]index\.(?:ts|js)$/.test(path) &&
       ["ffgrep", "fffind", "fff-multi-grep", "grep", "find", "multi_grep"].includes(event.toolName);
-    const managedQuestion = event.toolName === "ask_parent" && path === "<inline:subagent-pi>";
+    const managedQuestion = event.toolName === "ask_parent" && path === "<inline:metis-subagent>";
     const readonlyMcp = tool?.namespace?.name.startsWith("mcp_") && tool.annotations?.readOnlyHint === true;
     if (!safeBuiltin && !fffSearch && !managedQuestion && !readonlyMcp) return { block: true,
       reason: event.toolName === "mcp" ? "Read-only subagent: generic MCP gateway can invoke writes; use an individual MCP tool marked read-only" :
@@ -88,7 +88,7 @@ export default async function (pi: ExtensionAPI) {
     const applied = failure ? [] : pi.getActiveTools().filter((name) => builtinNames.has(name)).sort();
     const ok = failure === "" && applied.join(",") === expected.join(",");
     process.stderr.write(
-      `subagent-pi-surface applied ok=${ok ? "true" : "false"} allowed=${allowed.join(",")}` +
+      `metis-subagent-surface applied ok=${ok ? "true" : "false"} allowed=${allowed.join(",")}` +
       ` builtins=${applied.join(",")} expected=${expected.join(",")} unidentified=${unidentified.join(",")}` +
       (failure ? ` error=${failure.replace(/\s+/g, " ")}` : "") + "\n");
   };

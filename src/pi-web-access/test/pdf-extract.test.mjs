@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -32,7 +33,7 @@ test("extractPDFToMarkdown works on Node 22 without native Promise.try", () => {
 
 test("default PDF artifacts keep source/content identity and preserve explicit filenames", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-pdf-identity-"));
-	writeFileSync(join(root, "web-search.json"), JSON.stringify({ pdf: { provider: "unpdf" } }));
+	writeFileSync(join(root, "metis-pi.toml"), stringify({ webAccess: { pdf: { provider: "unpdf" } } }));
 	try {
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
@@ -208,7 +209,8 @@ function buildChildScript(
 	datalabMode = "none",
 	provider = null,
 ) {
-	return `
+	return `import { stringify } from "smol-toml";
+
         import { mkdtemp, readFile, writeFile } from "node:fs/promises";
         import { tmpdir } from "node:os";
         import { join } from "node:path";
@@ -237,8 +239,8 @@ function buildChildScript(
 
         if (provider) {
           await writeFile(
-            join(configDir, "web-search.json"),
-            JSON.stringify({ pdf: { provider } }),
+            join(configDir, "metis-pi.toml"),
+            stringify({ webAccess: { pdf: { provider } } }),
           );
         }
 

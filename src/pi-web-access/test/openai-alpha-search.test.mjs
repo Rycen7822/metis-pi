@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -19,12 +21,16 @@ const legacyPayload = { output: [
 async function runScenario(t, scenario = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "pi-openai-alpha-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify({
+	{
+		const { preferences, credentials } = splitWebAccessConfig({
 		toolActivation: "eager",
 		openaiApiKey: "alpha-test-key",
 		openaiUseAlphaSearch: true,
 		...scenario.config,
-	}));
+	});
+		await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+		await writeFile(join(dir, "web-search.json"), JSON.stringify(credentials));
+	}
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		encoding: "utf8",
 		timeout: 15_000,
@@ -192,7 +198,7 @@ test("alpha does not weaken custom-baseURL credential or current-model guards", 
 	}
 });
 
-for (const value of ["true", 1, null, {}]) {
+for (const value of ["true", 1, {}]) {
 	test(`alpha flag rejects non-boolean ${JSON.stringify(value)}`, async (t) => {
 		const out = await runScenario(t, { config: { openaiUseAlphaSearch: value } });
 		assert.deepEqual(out.requests, []);
@@ -478,7 +484,7 @@ for (const flag of [undefined, false]) {
 
 for (const alpha of [false, true]) {
 	test(`explicit endpoint ignores provider URL switch entirely (alpha: ${alpha})`, async (t) => {
-		for (const flag of [true, false, "ignored", null]) {
+		for (const flag of [true, false, "ignored"]) {
 			const out = await runScenario(t, { registry: true, model: { baseUrl: "invalid provider URL" }, config: { openaiResponsesUrl: "https://explicit.example/prefix/responses", openaiUseProviderBaseUrl: flag, openaiUseAlphaSearch: alpha }, payload: alpha ? payload : legacyPayload });
 			assert.equal(out.error, undefined);
 			assert.equal(out.requests[0].url, "https://explicit.example/prefix/" + (alpha ? "alpha/search" : "responses"));
@@ -498,7 +504,7 @@ test("provider URL reuse follows updated model registry URLs without caching the
 	assert.deepEqual(out.requests.map(request => request.url), ["https://first.example/v1/alpha/search", "https://second.example/team/alpha/search"]);
 });
 
-for (const value of ["true", 1, null]) {
+for (const value of ["true", 1]) {
 	test(`provider URL reuse validates ${JSON.stringify(value)} when not overridden`, async (t) => {
 		const out = await runScenario(t, { config: { openaiUseProviderBaseUrl: value } });
 		assert.deepEqual(out.requests, []);
@@ -561,7 +567,7 @@ test("provider URL reuse does not broaden current-model eligibility", async (t) 
 });
 
 
-for (const endpoint of ["", "not a URL", null]) {
+for (const endpoint of ["", "not a URL", false]) {
 	test(`provider URL reuse cannot rescue invalid explicit endpoint ${JSON.stringify(endpoint)}`, async (t) => {
 		const out = await runScenario(t, { registry: true, model: { baseUrl: "https://gateway.example/v1" }, config: { openaiResponsesUrl: endpoint, openaiUseProviderBaseUrl: true } });
 		assert.deepEqual(out.requests, []);

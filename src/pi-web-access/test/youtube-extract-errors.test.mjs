@@ -17,7 +17,6 @@ test("YouTube extraction surfaces Gemini API errors", async () => {
 		PERPLEXITY_API_KEY: "",
 	};
 	delete env.PI_ALLOW_BROWSER_COOKIES;
-	delete env.FEYNMAN_ALLOW_BROWSER_COOKIES;
 
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: buildChildScript(extractorUrl),

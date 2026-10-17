@@ -18,6 +18,7 @@ import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 import { subagentWidget } from "../../src/subagents/widget.ts";
 import { makeSubagentTheme, subagentTheme } from "../helpers/subagent-theme.mjs";
+import { subagentAdmin } from "../helpers/subagent-admin.mjs";
 
 function enableAnimation(t) {
   const previous = process.env.NO_COLOR;
@@ -120,7 +121,7 @@ test("native subagent registration honors the global switch without starting bac
 });
 
 function stopDaemon(core, state) {
-  execFileSync("python3", [join(core, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { timeout: 20000 });
+  subagentAdmin({ root: core }, state, "shutdown", { force: true });
   // Shutdown is accepted before guards finish writing their cleanup receipts.
   execFileSync("python3", ["-c", `import fcntl,sys,time
 with open(sys.argv[1], 'rb') as lock:
@@ -144,15 +145,14 @@ test(
     const root = fileURLToPath(new URL("../../", import.meta.url));
     mkdirSync(join(root, ".work"), { recursive: true });
     const dir = mkdtempSync(join(root, ".work/metis-subagent-contract-")),
-      state = join(dir, "subagent-pi");
+      state = join(dir, "metis", "subagent");
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
-    mkdirSync(state);
+    mkdirSync(state, { recursive: true });
     writeFileSync(
       join(dir, "settings.json"),
       JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }),
     );
-    writeFileSync(join(state, "config.toml"), "[broken legacy file must be ignored");
     // Keep the first child active beyond the viewer's one-second poll so its live conversation is observable.
     writeFileSync(
       join(dir, "metis-pi.toml"),
@@ -673,10 +673,10 @@ test(
       runtime = runtimePackage();
     mkdirSync(join(root, ".work"), { recursive: true });
     const dir = mkdtempSync(join(root, ".work/metis-subagent-config-")),
-      state = join(dir, "subagent-pi");
+      state = join(dir, "metis", "subagent");
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
-    mkdirSync(state);
+    mkdirSync(state, { recursive: true });
     writeFileSync(
       join(dir, "settings.json"),
       JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }),

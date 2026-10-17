@@ -67,7 +67,7 @@ export function getBrowserCookieSelectionFromConfig(): BrowserCookieSelection {
 }
 
 export function isBrowserCookieAccessAllowed(): boolean {
-	if (process.env.PI_ALLOW_BROWSER_COOKIES === "1" || process.env.FEYNMAN_ALLOW_BROWSER_COOKIES === "1") return true;
+	if (process.env.PI_ALLOW_BROWSER_COOKIES === "1") return true;
 	const raw = loadWebAccessConfig();
 	return raw.allowBrowserCookies === true;
 }

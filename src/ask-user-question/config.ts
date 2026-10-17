@@ -112,7 +112,7 @@ export function formatKeySpecForDisplay(spec: CollapseKeySpec): string {
 }
 
 export function loadConfig(): AskUserQuestionConfig {
-	const section = readMetisConfig(getAgentDir(), undefined, { legacy: false }).config.askUserQuestion;
+	const section = readMetisConfig(getAgentDir()).config.askUserQuestion;
 	if (!isMetisConfigTable(section)) throw new Error("askUserQuestion must be a TOML table");
 	if (typeof section.enabled !== "boolean") throw new Error("askUserQuestion.enabled must be a boolean");
 	return {

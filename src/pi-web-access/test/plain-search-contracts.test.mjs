@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,11 +40,8 @@ before(async () => {
 		TAVILY_BASE_URL: "https://api.tavily.com",
 	});
 	for (const [, , variable] of jsonProviders) process.env[variable] = syntheticKey;
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({
-		ssrf: { allowRanges: ["127.0.0.1"] },
-		searxngHeaders: { "X-Proxy-Key": `  ${proxySecret}  `, "CF-Access-Client-Secret": longProxySecret },
-		searchRouting: { providers: ["xcrawl", "brave"], fallbackOn: ["transient", "quota"] },
-	}));
+	await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { ssrf: { allowRanges: ["127.0.0.1"] }, searchRouting: { providers: ["xcrawl", "brave"], fallbackOn: ["transient", "quota"] } } }));
+	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ searxngHeaders: { "X-Proxy-Key": `  ${proxySecret}  `, "CF-Access-Client-Secret": longProxySecret } }));
 	globalThis.fetch = async () => { throw new Error("Fixture did not provide a response"); };
 	({ activityMonitor } = await import("../activity.ts"));
 	({ searchWithSearXNG } = await import("../searxng.ts"));

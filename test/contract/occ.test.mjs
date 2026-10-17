@@ -8,6 +8,8 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stringify } from "smol-toml";
+import { encodePruneConfig } from "../../src/metis-config.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -55,14 +57,15 @@ async function host(
   const installed = process.env.METIS_OCC_INSTALLED_PROFILE;
   const installedSettings = installed ? JSON.parse(readFileSync(join(installed, "settings.json"), "utf8")) : {};
   if (installed) installedSettings.packages = installedSettings.packages.map(source => resolve(installed, source));
-  writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...installedSettings, contextPrune: {
+  writeFileSync(join(dir, "settings.json"), JSON.stringify(installedSettings));
+  writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: encodePruneConfig({
     enabled: true, opportunisticCompaction: true, minBatchChars: 5000, pruneOn,
     // Isolate native/OCC ownership unless this fixture explicitly supplies a
     // local-summary provider; the shipped pressure default now admits it.
     autoBudgetThreshold: localSummary ? 0.7 : null,
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
     ...pruneOverrides,
-  } }));
+  }) }));
   const sm = SessionManager.create(dir, dir);
   const compaction = { enabled: auto && !autoAfterLocal, reserveTokens: 500, keepRecentTokens: 1000, ...compactionOverrides };
   {

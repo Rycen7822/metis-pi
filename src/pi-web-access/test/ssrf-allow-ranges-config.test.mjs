@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stringify } from "smol-toml";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -42,7 +43,7 @@ async function makeConfigDir(prefix) {
 	const root = await mkdtemp(join(tmpdir(), prefix));
 	const agentDir = join(root, "agent-dir");
 	await mkdir(agentDir, { recursive: true });
-	return { root, agentDir, configPath: join(agentDir, "web-search.json") };
+	return { root, agentDir, configPath: join(agentDir, "metis-pi.toml") };
 }
 
 function envFor(root, agentDir) {
@@ -55,7 +56,7 @@ function envFor(root, agentDir) {
 
 test("loadSsrfConfig defaults trustEnvProxy to false", async () => {
 	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-proxy-default-");
-	await writeFile(configPath, JSON.stringify({ ssrf: { allowRanges: ["198.18.0.0/15"] } }), "utf8");
+	await writeFile(configPath, stringify({ webAccess: { ssrf: { allowRanges: ["198.18.0.0/15"] } } }), "utf8");
 
 	const result = runLoadConfig(envFor(root, agentDir));
 	assert.equal(result.ok, true, result.error);
@@ -64,7 +65,7 @@ test("loadSsrfConfig defaults trustEnvProxy to false", async () => {
 
 test("loadFetchContentDomainPolicy reads normalized allow and deny hostnames", async () => {
 	const { root, agentDir, configPath } = await makeConfigDir("pi-domain-policy-valid-");
-	await writeFile(configPath, JSON.stringify({ fetchContent: { domainPolicy: { allow: [" Example.COM. "], deny: ["blocked.example.com"] } } }), "utf8");
+	await writeFile(configPath, stringify({ webAccess: { fetchContent: { domainPolicy: { allow: [" Example.COM. "], deny: ["blocked.example.com"] } } } }), "utf8");
 
 	const childEnv = envFor(root, agentDir);
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
@@ -86,7 +87,7 @@ test("loadFetchContentDomainPolicy rejects malformed policy values", async () =>
 		{ allow: ["example.com", 42] },
 	]) {
 		const { root, agentDir, configPath } = await makeConfigDir("pi-domain-policy-invalid-");
-		await writeFile(configPath, JSON.stringify({ fetchContent: { domainPolicy } }), "utf8");
+		await writeFile(configPath, stringify({ webAccess: { fetchContent: { domainPolicy } } }), "utf8");
 		const childEnv = envFor(root, agentDir);
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
@@ -106,7 +107,7 @@ test("loadFetchContentDomainPolicy rejects malformed policy values", async () =>
 
 test("loadSsrfConfig accepts an explicit trustEnvProxy opt-in", async () => {
 	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-proxy-enabled-");
-	await writeFile(configPath, JSON.stringify({ ssrf: { trustEnvProxy: true } }), "utf8");
+	await writeFile(configPath, stringify({ webAccess: { ssrf: { trustEnvProxy: true } } }), "utf8");
 
 	const result = runLoadConfig(envFor(root, agentDir));
 	assert.equal(result.ok, true, result.error);
@@ -115,7 +116,7 @@ test("loadSsrfConfig accepts an explicit trustEnvProxy opt-in", async () => {
 
 test("loadSsrfConfig rejects a non-boolean trustEnvProxy value", async () => {
 	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-proxy-invalid-");
-	await writeFile(configPath, JSON.stringify({ ssrf: { trustEnvProxy: "yes" } }), "utf8");
+	await writeFile(configPath, stringify({ webAccess: { ssrf: { trustEnvProxy: "yes" } } }), "utf8");
 
 	const result = runLoadConfig(envFor(root, agentDir));
 	assert.equal(result.ok, false);
@@ -127,7 +128,7 @@ test("loadSsrfAllowRanges throws when ssrf.allowRanges is not an array", async (
 	// fail loudly instead of being silently ignored as "no exemptions".
 	for (const allowRanges of ["198.18.0.0/15", { "198.18.0.0/15": true }, 42]) {
 		const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-nonarray-");
-		await writeFile(configPath, JSON.stringify({ ssrf: { allowRanges } }), "utf8");
+		await writeFile(configPath, stringify({ webAccess: { ssrf: { allowRanges } } }), "utf8");
 
 		const result = runLoad(envFor(root, agentDir));
 		assert.equal(result.ok, false, `expected throw for ${JSON.stringify(allowRanges)}`);
@@ -137,7 +138,7 @@ test("loadSsrfAllowRanges throws when ssrf.allowRanges is not an array", async (
 
 test("loadSsrfAllowRanges throws when an ssrf.allowRanges entry is not a string", async () => {
 	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-entry-type-");
-	await writeFile(configPath, JSON.stringify({ ssrf: { allowRanges: ["198.18.0.0/15", 123] } }), "utf8");
+	await writeFile(configPath, stringify({ webAccess: { ssrf: { allowRanges: ["198.18.0.0/15", 123] } } }), "utf8");
 
 	const result = runLoad(envFor(root, agentDir));
 	assert.equal(result.ok, false);
@@ -148,7 +149,7 @@ test("loadSsrfAllowRanges returns trimmed, non-empty CIDR strings for a valid ar
 	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-valid-");
 	await writeFile(
 		configPath,
-		JSON.stringify({ ssrf: { allowRanges: ["198.18.0.0/15", "  fd00::/8  ", "", "   "] } }),
+		stringify({ webAccess: { ssrf: { allowRanges: ["198.18.0.0/15", "  fd00::/8  ", "", "   "] } } }),
 		"utf8",
 	);
 
@@ -159,7 +160,7 @@ test("loadSsrfAllowRanges returns trimmed, non-empty CIDR strings for a valid ar
 
 test("loadSsrfAllowRanges returns [] when the config file is missing", async () => {
 	const { root, agentDir } = await makeConfigDir("pi-ssrf-missing-");
-	// Intentionally do not write web-search.json.
+	// Intentionally do not write metis-pi.toml.
 	const result = runLoad(envFor(root, agentDir));
 	assert.equal(result.ok, true, result.error);
 	assert.deepEqual(result.ranges, []);
@@ -167,18 +168,18 @@ test("loadSsrfAllowRanges returns [] when the config file is missing", async () 
 
 test("loadSsrfAllowRanges returns [] when ssrf.allowRanges is unset", async () => {
 	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-unset-");
-	await writeFile(configPath, JSON.stringify({ perplexityApiKey: "pplx-x" }), "utf8");
+	await writeFile(configPath, stringify({ webAccess: {} }), "utf8");
 
 	const result = runLoad(envFor(root, agentDir));
 	assert.equal(result.ok, true, result.error);
 	assert.deepEqual(result.ranges, []);
 });
 
-test("loadSsrfAllowRanges reports malformed config JSON", async () => {
-	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-badjson-");
-	await writeFile(configPath, "{ not valid json", "utf8");
+test("loadSsrfAllowRanges reports malformed TOML", async () => {
+	const { root, agentDir, configPath } = await makeConfigDir("pi-ssrf-badtoml-");
+	await writeFile(configPath, "[broken", "utf8");
 
 	const result = runLoad(envFor(root, agentDir));
 	assert.equal(result.ok, false);
-	assert.match(result.error, /Failed to parse .*web-search\.json/);
+	assert.match(result.error, /Failed to parse .*metis-pi\.toml/);
 });

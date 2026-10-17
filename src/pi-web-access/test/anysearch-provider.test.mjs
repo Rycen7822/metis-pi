@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -10,7 +12,11 @@ const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
 async function createHome(config) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-anysearch-"));
-	await writeFile(join(home, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		await writeFile(join(home, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	return home;
 }
 
@@ -168,7 +174,8 @@ test("AnySearch malformed envelopes fail loudly", async () => {
 });
 
 test("AnySearch malformed config root fails explicitly", async () => {
-	const home = await createHome(null);
+	const home = await createHome({});
+	await writeFile(join(home, "metis-pi.toml"), "webAccess=[]\n", "utf8");
 	const child = runChild(`
 		const { searchWithAnySearch } = await import(${JSON.stringify(anysearchModuleUrl)});
 		try { await searchWithAnySearch("malformed config"); console.log(JSON.stringify({ ok: true })); }
@@ -177,7 +184,7 @@ test("AnySearch malformed config root fails explicitly", async () => {
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.ok, false);
-	assert.match(output.error, /Invalid config in .*web-search\.json: expected a JSON object/);
+	assert.match(output.error, /webAccess must be a table/);
 });
 
 test("AnySearch aborts without falling through", async () => {

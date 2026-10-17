@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -10,7 +12,11 @@ const searchUrl = new URL("../search-router.ts", import.meta.url).href;
 
 function homeWith(config) {
   const home = mkdtempSync(join(tmpdir(), "pi-web-access-allowed-"));
-  if (config !== undefined) writeFileSync(join(home, "web-search.json"), JSON.stringify(config) + "\n");
+  if (config !== undefined) {
+    const { preferences, credentials } = splitWebAccessConfig(config);
+    writeFileSync(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n");
+    writeFileSync(join(home, "web-search.json"), JSON.stringify(credentials) + "\n");
+  }
   return home;
 }
 

@@ -17,24 +17,14 @@ import weakref
 from unittest import mock as m
 
 from paths import TEST_ROOT
-from subagent_pi.common import AgentError, dumps, group_members, process_identity
-from subagent_pi import worker
-from subagent_pi import views
-from subagent_pi.pi_parent import PiNotifications, bind
-from subagent_pi.runtime import Runtime
-from subagent_pi.worker import read_receipt
-from subagent_pi.schema import TOOLS, validate_op
-from subagent_pi.store import Store
-from test_inheritance import make_codex_home
+from metis_subagent.common import AgentError, dumps, group_members, process_identity
+from metis_subagent import worker
+from metis_subagent import views
+from metis_subagent.pi_parent import PiNotifications, bind
+from metis_subagent.runtime import Runtime
+from metis_subagent.schema import TOOLS, validate_op
+from metis_subagent.store import Store
 from runtime_harness import RuntimeHarness
-
-# No env_vars: the receipt-failure receipt must not depend on client env resolution.
-RECEIPT_TOML = """
-[mcp_servers.filesrv]
-command = "cat"
-cwd = "servers/dir with space"
-"""
-
 
 class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     async def test_readiness_wait_releases_admission_without_losing_reservations(self):
@@ -83,7 +73,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             return []
 
         stopping = None
-        with m.patch("subagent_pi.worker.group_members", blocked_scan):
+        with m.patch("metis_subagent.worker.group_members", blocked_scan):
             try:
                 stopping = asyncio.create_task(worker.stop_group(999999))
                 await self.until(entered.is_set)
@@ -115,9 +105,9 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         w.run.active_tools["test"] = {"name": "test"}
         self.assertFalse(self.rt.can_idle_shutdown())
         w.run.active_tools.clear()
-        self.rt.parent_notifications.deliveries["test"] = object()
+        self.rt.parent_notifications.waits["test"] = object()
         self.assertFalse(self.rt.can_idle_shutdown())
-        self.rt.parent_notifications.deliveries.clear()
+        self.rt.parent_notifications.waits.clear()
         await self.mutation("close", a["agent_id"])
         self.assertTrue(self.rt.can_idle_shutdown())
         self.rt.store.execute("UPDATE agents SET cleanup='unknown' WHERE id=?", (a["agent_id"],))
@@ -130,9 +120,9 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.rt.can_idle_shutdown())
 
     async def test_native_reconnect_restores_only_authorized_memory_after_lease_validation(self):
-        from subagent_pi.binding import ScopeBindings
+        from metis_subagent.binding import ScopeBindings
 
-        self.rt.config["inheritance"]["child_env"] = ["IDLE_TEST_AUTH"]
+        self.rt.config["child_env"] = ["IDLE_TEST_AUTH"]
         source = {
             "env": {
                 "PATH": "/bin",
@@ -181,8 +171,8 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"idle-test-secret", (self.home / "registry.sqlite").read_bytes())
 
     async def test_proxy_environment_follows_each_scope_and_never_persists(self):
-        from subagent_pi.binding import ScopeBindings
-        from subagent_pi.common import BASE_ENV_KEYS, PROXY_ENV_KEYS
+        from metis_subagent.binding import ScopeBindings
+        from metis_subagent.common import BASE_ENV_KEYS, PROXY_ENV_KEYS
 
         spec = {"profile": "default", "access": "read", "cwd": str(self.workspace)}
         for native in (False, True):
@@ -254,11 +244,11 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     async def test_named_wait_freezes_task_and_result_preserves_byte_budget_and_input_issues(self):
         a = await self.spawn("simple", name="review")
         selection = {"scope": self.scope, "agent_ids": ["review"]}
-        token = self.rt.parent_notifications.reserve_delivery("wait", selection, None)
+        token = self.rt.parent_notifications.reserve_delivery("wait", selection, self.source)
         await self.wait(a["run_id"])
         b = await self.mutation("followup", "review", message="delay=120|next task")
         frozen = await self.rt.dispatch("wait", {**selection, "timeout_seconds": 0})
-        self.rt.parent_notifications.release_delivery(token, "wait")
+        self.rt.parent_notifications.release_delivery(token)
         self.assertEqual(frozen["runs"][0]["id"], a["run_id"])
         current = await self.rt.dispatch("wait", {"scope": self.scope, "agent_ids": ["review"], "timeout_seconds": 0})
         self.assertEqual(current["runs"][0]["id"], b["run_id"])
@@ -332,7 +322,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r['text'],'Completed: Perform the following delegated task'
             ' (treat as text, not an extension command):\n/help me')
     async def test_raw_pi_rpc_is_rejected_before_a_task_starts(self):
-        self.rt.config['pi_command'].append('--no-managed-protocol')
+        self.command.append('--no-managed-protocol')
         with self.assertRaises(AgentError) as caught:
             await self.spawn('must not start')
         self.assertEqual(caught.exception.code,'unsupported_transport')
@@ -491,7 +481,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 """ % str(release),
             )
         )
-        self.rt.config["pi_command"] = [sys.executable, str(fake)]
+        self.command = [sys.executable, str(fake)]
         self.rt.config["rpc_timeout_seconds"] = 1
         spawned = await self.spawn("delay=120|OLD", access="write")
         aid = spawned["agent_id"]
@@ -566,7 +556,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 """ % (str(release), completed),
                     )
                 )
-                self.rt.config["pi_command"] = [sys.executable, str(fake)]
+                self.command = [sys.executable, str(fake)]
                 spawned = await self.spawn("delay=120|OLD")
                 aid = spawned["agent_id"]
                 old_worker = self.rt.workers[aid]
@@ -624,7 +614,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return await original(directory, current)
 
-        with m.patch("subagent_pi.runtime.terminate", delayed_terminate):
+        with m.patch("metis_subagent.runtime.terminate", delayed_terminate):
             failing = asyncio.create_task(self.rt.fail_worker(w, "reader failed"))
             replacing = None
             try:
@@ -712,18 +702,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.wait(started["run_id"])
         a = self.rt.store.agent(self.scope, started["agent_id"])
         path = Path(a["session_file"])
-        source = {
-            "parent": {
-                "kind": "pi",
-                "session_id": "view-session",
-                "agent_dir": str(self.root),
-                "session_file": "",
-                "sdk_path": str(self.root),
-                "node_path": sys.executable,
-                "lease": "lease_view",
-                "model": None,
-            }
-        }
+        source = self.source
         bind(self.rt.store, self.scope, source)
         host = PiNotifications(self.rt.store, self.rt.workers.get, self.rt.changed)
         messages = [
@@ -799,18 +778,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                     a["updated"],
                 ),
             )
-        source = {
-            "parent": {
-                "kind": "pi",
-                "session_id": "test-session",
-                "agent_dir": str(self.root),
-                "session_file": "",
-                "sdk_path": str(self.root),
-                "node_path": sys.executable,
-                "lease": "lease_test",
-                "model": None,
-            }
-        }
+        source = self.source
         bind(self.rt.store, self.scope, source)
         host = PiNotifications(self.rt.store, self.rt.workers.get, self.rt.changed)
         snapshot = await host.dispatch("pi_watch", {"scope": self.scope}, source)
@@ -885,7 +853,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             cleanup = await original(directory, current)
             return "unknown" if current.agent["id"] == first["agent_id"] else cleanup
 
-        with m.patch("subagent_pi.runtime.terminate", unknown):
+        with m.patch("metis_subagent.runtime.terminate", unknown):
             third = await self.spawn("simple")
         await self.wait(third["run_id"])
         event = json.loads(self.events(first["agent_id"], "evicted")[0]["payload"])
@@ -1063,7 +1031,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             self.rt.store.scope("scope_missing")
         self.assertEqual(cm.exception.code, "scope_not_found")
         self.assertIn(str(self.home), cm.exception.message)
-        self.assertIn("--home", cm.exception.message)
+        self.assertIn("reload", cm.exception.message)
 
     async def test_spawn_outside_scope_uses_explicit_cwd(self):
         other = self.root / "other-workspace"
@@ -1161,23 +1129,6 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual({r["name"] for r in listing["runs"]}, {"query-agent"})
         self.assertFalse(waited["timed_out"])
 
-    async def test_legacy_mutation_digest_still_replays_without_spawning_again(self):
-        p = {
-            "scope": self.scope,
-            "request_id": "old-digest",
-            "cwd": str(self.workspace),
-            "task": "simple",
-            "access": "read",
-        }
-        created = await self.rt.dispatch("spawn", p)
-        legacy = hashlib.sha256(dumps({"op": "spawn", "params": p}).encode()).hexdigest()
-        self.rt.store.execute(
-            "UPDATE requests SET digest=? WHERE scope=? AND key=?", (legacy, self.scope, p["request_id"])
-        )
-        replay = await self.rt.dispatch("spawn", p)
-        self.assertTrue(replay["replayed"])
-        self.assertEqual(replay["run_id"], created["run_id"])
-        self.assertEqual(len(self.rt.workers), 1)
 
     async def test_bounded_inspection_and_stable_cursor(self):
         s = await self.spawn("BIG")
@@ -1400,7 +1351,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await original(directory, current)
             return "unknown"
 
-        with m.patch("subagent_pi.runtime.terminate", unknown):
+        with m.patch("metis_subagent.runtime.terminate", unknown):
             stopped = await self.mutation("interrupt", s["agent_id"])
         self.assertEqual(stopped["cleanup"], "unknown")
         with self.assertRaises(AgentError) as cm:
@@ -1422,7 +1373,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     async def test_prompt_handled_without_a_run_is_reported_as_a_failed_run(self):
         # A handled input still gets a failed managed completion; the next task
         # can run without an empty success or a missing completion boundary.
-        self.rt.config["pi_command"].append("--handle-prompt")
+        self.command.append("--handle-prompt")
         s = await self.spawn("PI_MOCK_OUTCOME first")
         await self.wait(s["run_id"])
         q = await self.mutation("send", s["agent_id"], mode="follow_up", message="second")
@@ -1453,7 +1404,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     async def test_unacknowledged_prompt_is_stopped_without_replay(self):
         # A lost/delayed acceptance reply leaves execution uncertain. Stop the
         # owned process; neither resend the mutation nor trust a reported idle.
-        self.rt.config["pi_command"].append("--hold-prompt-ms=60000")
+        self.command.append("--hold-prompt-ms=60000")
         self.rt.config["rpc_timeout_seconds"] = 1
         with self.assertRaises(AgentError) as caught:
             await self.rt.dispatch(
@@ -1753,34 +1704,6 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.rt.check_idle()
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "timed_out")
 
-    async def test_v4_ledger_keeps_results_and_does_not_reuse_old_deadlines(self):
-        s = await self.spawn("persisted result")
-        await self.wait(s["run_id"])
-        before = await self.result(s["run_id"])
-        await self.mutation("close", s["agent_id"])
-        await self.rt.shutdown()
-        import sqlite3
-
-        with sqlite3.connect(self.home / "registry.sqlite") as db:
-            db.execute("ALTER TABLE runs DROP COLUMN idle_timeout_seconds")
-            db.execute("UPDATE meta SET value='4' WHERE key='schema'")
-            db.execute("UPDATE runs SET deadline=1")
-        self.rt = Runtime(self.home)
-        after = await self.result(s["run_id"])
-        self.assertEqual((after["text"], after["result_sha256"]), (before["text"], before["result_sha256"]))
-        row = self.rt.store.run(self.scope, s["run_id"])
-        self.assertEqual(row["deadline"], 1)  # history retained, not reused
-        self.assertIsNone(row["idle_timeout_seconds"])
-        await self.mutation("respawn", s["agent_id"])
-        queued = await self.mutation("send", s["agent_id"], mode="follow_up", message="new work")
-        self.assertEqual((await self.wait(queued["run_id"]))["runs"][0]["state"], "completed")
-        self.assertEqual(self.rt.store.run(self.scope, queued["run_id"])["idle_timeout_seconds"], 1800)
-
-    async def test_missing_pi_reports_startup_failure(self):
-        self.rt.config["pi_command"] = ["/definitely/missing/pi"]
-        with self.assertRaises(AgentError) as cm:
-            await self.spawn()
-        self.assertEqual(cm.exception.code, "pi_not_found")
 
     async def test_failed_worker_registration_only_stops_its_verified_guard(self):
         with m.patch.object(self.rt, "make_worker", side_effect=RuntimeError("registration refused")):
@@ -1792,10 +1715,10 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(agent["id"], self.rt.workers)
 
     async def test_unverified_boot_process_group_is_never_signalled(self):
-        with m.patch("subagent_pi.worker.live_identity", return_value=None), m.patch(
-            "subagent_pi.worker.ownership", return_value={"status": "unknown"}
-        ), m.patch("subagent_pi.worker.group_members", return_value=[123]), m.patch(
-            "subagent_pi.worker.stop_group"
+        with m.patch("metis_subagent.worker.live_identity", return_value=None), m.patch(
+            "metis_subagent.worker.ownership", return_value={"status": "unknown"}
+        ), m.patch("metis_subagent.worker.group_members", return_value=[123]), m.patch(
+            "metis_subagent.worker.stop_group"
         ) as stop:
             self.assertEqual(
                 await worker.stop_owned_process(self.home, {"identity": "old"}, m.Mock(pid=123)), ("unknown", False)
@@ -1860,144 +1783,6 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await self.rt.dispatch("spawn", params)
         self.assertEqual(cm.exception.code, "request_uncertain")
 
-
-class ReceiptFdOwnership(unittest.IsolatedAsyncioTestCase):
-    """P1 (0.2.2): the receipt read end must have exactly ONE closer.
-
-    When the receipt reports a failed required server, read_receipt raises
-    after its transport already closed the fd. The old caller kept its own
-    reference across `await terminate(rt, w)` and closed the same number
-    again in `finally` — by then the freed number could belong to another
-    connection (another agent's RPC pipe, a CLI/MCP IPC socket), and
-    suppress(OSError) does not protect a reused-but-valid fd.
-    """
-
-    async def asyncSetUp(self):
-        self.tmp=tempfile.TemporaryDirectory(prefix='subagent-pi-fd-')
-        self.root=Path(self.tmp.name); self.home=self.root/'state'; self.home.mkdir()
-        self.workspace=self.root/'workspace'; self.workspace.mkdir()
-        codex=make_codex_home(self.root/'src',config=RECEIPT_TOML)
-        (codex/'servers'/'dir with space').mkdir(parents=True)
-        (self.home/'config.toml').write_text(
-            'pi_command = '+json.dumps([sys.executable,str(TEST_ROOT/'fake_pi.py')])+
-            '\nrpc_timeout_seconds = 8\nstartup_timeout_seconds = 10\n\n[inheritance]\nenabled = true\n'
-            'child_env = ["PI_TEST_RECEIPT_STATUS"]\n')
-        self.rt=Runtime(self.home)
-        opened=await self.rt.dispatch('scope_open',{'cwd':str(self.workspace)},
-            {'env':{'PATH':os.environ.get('PATH',''),'CODEX_HOME':str(codex),'PI_TEST_RECEIPT_STATUS':'failed_required'}})
-        self.scope=opened['scope']
-        self.pipes=[]
-        self._real_pipe=os.pipe
-
-    async def asyncTearDown(self):
-        for pair in getattr(self,'spares',[])+([self.pair] if getattr(self,'pair',None) else []):
-            for s in pair:
-                # Close only if the number still refers to the socket we created;
-                # after a red double-close the number may have been freed again.
-                try:
-                    st=os.fstat(s.fileno())
-                    if statmod.S_ISSOCK(st.st_mode): s.close()
-                except OSError: pass
-        await self.rt.shutdown()
-        self.tmp.cleanup()
-
-    def recording_pipe(self):
-        r=self._real_pipe(); self.pipes.append(r); return r
-
-    async def test_boot_failure_does_not_close_reused_receipt_fd(self):
-        # Spy on os.pipe: boot_worker creates bootstrap pipe then receipt pipe,
-        # synchronously and before any await, so the second recorded pipe is
-        # the receipt channel.
-        with m.patch("os.pipe", self.recording_pipe):
-            real_terminate = worker.terminate
-
-            async def parked_terminate(directory, w):
-                target = self.pipes[1][0]  # receipt read end
-                # Ordering evidence: read_receipt's transport already closed it.
-                for _ in range(200):
-                    try:
-                        os.fstat(target)
-                        await asyncio.sleep(0.01)
-                    except OSError:
-                        break
-                else:
-                    self.fail("receipt fd still open when terminate started")
-                # Re-occupy the freed number with a live connection. No awaits
-                # inside this loop, so the event loop cannot steal the number.
-                self.spares = []
-                self.pair = None
-                for _ in range(128):
-                    a, b = socket.socketpair()
-                    if a.fileno() == target:
-                        self.pair = (a, b)
-                        break
-                    if b.fileno() == target:
-                        self.pair = (b, a)
-                        break
-                    self.spares.append((a, b))
-                self.assertIsNotNone(self.pair, "could not reoccupy receipt fd %d" % target)
-                return await real_terminate(directory, w)
-
-            with m.patch("subagent_pi.runtime.terminate", parked_terminate):
-                with self.assertRaises(AgentError) as cm:
-                    await self.rt.dispatch(
-                        "spawn",
-                        {
-                            "scope": self.scope,
-                            "request_id": "fd-reuse",
-                            "cwd": str(self.workspace),
-                            "task": "simple",
-                            "access": "read",
-                        },
-                    )
-        self.assertEqual(cm.exception.code, "inheritance_required_server_failed")
-        # The socket that reclaimed the receipt fd number during the cleanup
-        # window must be untouched by the failure path.
-        holder, peer = self.pair
-        target = holder.fileno()
-        self.assertEqual(target, self.pipes[1][0])
-        os.write(target, b"ping")  # raises OSError (EBADF) on the old double-close
-        self.assertEqual(peer.recv(4), b"ping")
-
-    async def test_read_receipt_closes_fd_on_timeout(self):
-        r, w = os.pipe()
-        try:
-            with self.assertRaises(AgentError) as cm:
-                await read_receipt(r, "a", 1, 0.05)
-            self.assertEqual(cm.exception.code, "bridge_unavailable")
-            for _ in range(10):
-                await asyncio.sleep(0)  # transport close is loop-scheduled
-            with self.assertRaises(OSError):
-                os.fstat(r)  # closed exactly once
-        finally:
-            os.close(w)
-
-    async def test_read_receipt_closes_fd_on_cancellation(self):
-        r, w = os.pipe()
-        try:
-            t = asyncio.create_task(read_receipt(r, "a", 1, 5))
-            await asyncio.sleep(0.05)
-            t.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await t
-            for _ in range(10):
-                await asyncio.sleep(0)
-            with self.assertRaises(OSError):
-                os.fstat(r)
-        finally:
-            os.close(w)
-
-    async def test_read_receipt_closes_fd_when_transport_creation_fails(self):
-        r, w = os.pipe()
-        try:
-            loop = asyncio.get_running_loop()
-            with m.patch.object(loop, "connect_read_pipe", side_effect=OSError("transport refused")):
-                with self.assertRaises(OSError):
-                    await read_receipt(r, "a", 1, 1)
-            with self.assertRaises(OSError):
-                os.fstat(r)
-        finally:
-            os.close(w)
 
 
 def seed_owner_row(owner=None, *, pid=None, identity=None, state="running", cleanup="pending"):

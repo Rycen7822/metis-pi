@@ -10,8 +10,8 @@ import { makeSurfaceOps } from "../src/surface.ts";
 import { loadConfig } from "../src/config.ts";
 import { thoughtSummaryText } from "../src/thinking-summary.ts";
 import {
-  CodexSeparatorComponent, CodexWriteCallComponent, CodexThinkingRailComponent,
-  CodexThinkingPeekComponent, CodexThinkingClickableComponent,
+  CodexSeparatorComponent, CodexWriteCallComponent, ThinkingRailComponent,
+  ThinkingPeekComponent, ThinkingClickableComponent,
 } from "../src/chrome/transcript-components.ts";
 
 function layoutOps(): LayoutOps {
@@ -101,15 +101,15 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     interactivePrototype: Pi.InteractiveMode?.prototype,
     makeSeparator: () => new CodexSeparatorComponent(colorLevel),
     makeSpacer: () => new Tui.Spacer(1),
-    makeRail: (child) => new CodexThinkingRailComponent(child as Tui.Component, colorLevel),
-    makePeek: (input) => new CodexThinkingPeekComponent(
+    makeRail: (child) => new ThinkingRailComponent(child as Tui.Component, colorLevel),
+    makePeek: (input) => new ThinkingPeekComponent(
       input.inner as Tui.Component,
       input.control,
       input.windowLines,
       (text) => surface.paintGlyph(text, "dim"),
       input.onScroll,
     ),
-    makeClickable: (input) => new CodexThinkingClickableComponent(
+    makeClickable: (input) => new ThinkingClickableComponent(
       input.inner as Tui.Component,
       input.control,
       input.fallback,

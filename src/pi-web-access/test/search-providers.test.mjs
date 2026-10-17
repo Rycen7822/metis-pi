@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -246,14 +247,8 @@ test("Tavily search uses bearer auth and maps filters/content", async (t) => {
 test("Brave, keyed Exa, and Tavily honor base URL overrides without leaking credentials across origins", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-provider-base-url-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		braveApiKey: "brave-config-key",
-		braveBaseUrl: "https://gateway.example.com/brave/res/v1/",
-		exaApiKey: "exa-config-key",
-		exaBaseUrl: "https://gateway.example.com/exa/",
-		tavilyApiKey: "tavily-config-key",
-		tavilyBaseUrl: "https://gateway.example.com/tavily/",
-	}) + "\n");
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { braveBaseUrl: "https://gateway.example.com/brave/res/v1/", exaBaseUrl: "https://gateway.example.com/exa/", tavilyBaseUrl: "https://gateway.example.com/tavily/" } }) + "\n");
+	await writeFile(join(home, "web-search.json"), JSON.stringify({ braveApiKey: "brave-config-key", exaApiKey: "exa-config-key", tavilyApiKey: "tavily-config-key" }) + "\n");
 
 	const child = runChild(`
 		const calls = [];
@@ -448,12 +443,10 @@ test("provider base URLs allow HTTP only on exact loopback hosts", async (t) => 
 test("SearXNG search is SSRF-guarded and preferred first when configured", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const child = runChild(`
+	const child = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
-			searxngBaseUrl: "http://127.0.0.1:8443/",
-			ssrf: { allowRanges: ["127.0.0.1"] },
-		}));
+		writeFileSync(${JSON.stringify(home)} + "/metis-pi.toml", stringify({ webAccess: { searxngBaseUrl: "http://127.0.0.1:8443/", ssrf: { allowRanges: ["127.0.0.1"] } } }));
 		const calls = [];
 		globalThis.fetch = async (url, init = {}) => {
 			calls.push({ url: String(url), redirect: init.redirect });
@@ -488,19 +481,17 @@ test("SearXNG search is SSRF-guarded and preferred first when configured", async
 test("SearXNG search merges configured custom headers", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-headers-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const child = runChild(`
+	const child = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
-			searxngBaseUrl: "http://127.0.0.1:8443/",
-			searxngHeaders: {
+		writeFileSync(${JSON.stringify(home)} + "/metis-pi.toml", stringify({ webAccess: { searxngBaseUrl: "http://127.0.0.1:8443/", ssrf: { allowRanges: ["127.0.0.1"] } } }));
+		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({ searxngHeaders: {
 				"CF-Access-Client-Id": "client-id.access",
 				"CF-Access-Client-Secret": "client-secret",
 				"X-Empty-Skip": 123,
 				"X-Bad-Value": "bad\\r\\nvalue",
 				"Bad Name": "nope",
-			},
-			ssrf: { allowRanges: ["127.0.0.1"] },
-		}));
+			} }));
 		let capturedHeaders = null;
 		globalThis.fetch = async (_url, init = {}) => {
 			capturedHeaders = init.headers ?? null;
@@ -527,13 +518,11 @@ test("SearXNG search merges configured custom headers", async (t) => {
 
 	const overrideHome = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-headers-override-"));
 	t.after(() => rm(overrideHome, { recursive: true, force: true }));
-	const overrideChild = runChild(`
+	const overrideChild = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(${JSON.stringify(overrideHome)} + "/web-search.json", JSON.stringify({
-			searxngBaseUrl: "http://127.0.0.1:8443/",
-			searxngHeaders: { accept: "application/custom-json" },
-			ssrf: { allowRanges: ["127.0.0.1"] },
-		}));
+		writeFileSync(${JSON.stringify(overrideHome)} + "/metis-pi.toml", stringify({ webAccess: { searxngBaseUrl: "http://127.0.0.1:8443/", ssrf: { allowRanges: ["127.0.0.1"] } } }));
+		writeFileSync(${JSON.stringify(overrideHome)} + "/web-search.json", JSON.stringify({ searxngHeaders: { accept: "application/custom-json" } }));
 		let capturedHeaders = null;
 		globalThis.fetch = async (_url, init = {}) => {
 			capturedHeaders = init.headers ?? null;
@@ -555,16 +544,14 @@ test("SearXNG search merges configured custom headers", async (t) => {
 test("SearXNG search strips configured headers on cross-origin redirects", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-headers-redirect-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const child = runChild(`
+	const child = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
-			searxngBaseUrl: "http://127.0.0.1:8443/",
-			searxngHeaders: {
+		writeFileSync(${JSON.stringify(home)} + "/metis-pi.toml", stringify({ webAccess: { searxngBaseUrl: "http://127.0.0.1:8443/", ssrf: { allowRanges: ["127.0.0.1"] } } }));
+		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({ searxngHeaders: {
 				"CF-Access-Client-Id": "client-id.access",
 				"CF-Access-Client-Secret": "client-secret",
-			},
-			ssrf: { allowRanges: ["127.0.0.1"] },
-		}));
+			} }));
 		const calls = [];
 		globalThis.fetch = async (url, init = {}) => {
 			calls.push({ url: String(url), headers: init.headers ?? null });
@@ -597,12 +584,10 @@ test("SearXNG search strips configured headers on cross-origin redirects", async
 test("SearXNG redirect validation rejects an unapproved private target", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-redirect-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const child = runChild(`
+	const child = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
-			searxngBaseUrl: "http://127.0.0.1:8443/",
-			ssrf: { allowRanges: ["127.0.0.1"] },
-		}));
+		writeFileSync(${JSON.stringify(home)} + "/metis-pi.toml", stringify({ webAccess: { searxngBaseUrl: "http://127.0.0.1:8443/", ssrf: { allowRanges: ["127.0.0.1"] } } }));
 		globalThis.fetch = async () => new Response(null, {
 			status: 302,
 			headers: { location: "http://127.0.0.2:8443/search" },
@@ -629,12 +614,10 @@ test("SearXNG redirect validation rejects an unapproved private target", async (
 test("malformed SearXNG SSRF config fails before hosted auto fallback", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-config-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const child = runChild(`
+	const child = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
-			searxngBaseUrl: "https://search.example.com",
-			ssrf: { allowRanges: ["127.0.0.0/33"] },
-		}));
+		writeFileSync(${JSON.stringify(home)} + "/metis-pi.toml", stringify({ webAccess: { searxngBaseUrl: "https://search.example.com", ssrf: { allowRanges: ["127.0.0.0/33"] } } }));
 		globalThis.fetch = async () => new Response(JSON.stringify({
 			results: [{ title: "Hosted fallback", url: "https://example.com", content: "should not be used" }],
 		}), { status: 200, headers: { "content-type": "application/json" } });
@@ -1059,10 +1042,8 @@ test("OpenAI search requires web_search and maps domain filters", async (t) => {
 test("OpenAI search uses configured Responses endpoint", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-url-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		openaiApiKey: "sk-config-key",
-		openaiResponsesUrl: "https://gateway.example.com/v1/responses",
-	}) + "\n");
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { openaiResponsesUrl: "https://gateway.example.com/v1/responses" } }) + "\n");
+	await writeFile(join(home, "web-search.json"), JSON.stringify({ openaiApiKey: "sk-config-key" }) + "\n");
 	const child = runChild(`
 		let capturedUrl = "";
 		let capturedAuthorization = "";
@@ -1394,9 +1375,7 @@ test("OpenAI search falls back to API key when model registry cannot enumerate",
 test("OpenAI search uses configured model with selected registry auth", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-model-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		openaiSearchModel: "gateway-search-model",
-	}) + "\n");
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { openaiSearchModel: "gateway-search-model" } }) + "\n");
 	const child = runChild(`
 		let capturedBody = null;
 		let selectedModel = null;
@@ -1482,9 +1461,7 @@ test("OpenAI search picks the newest Luna model from the registry", async (t) =>
 test("OpenAI search honors configured provider priority", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-providers-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		openaiSearchProviders: ["unregistered-provider", "openai-codex-work", "openai-codex"],
-	}) + "\n");
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { openaiSearchProviders: ["unregistered-provider", "openai-codex-work", "openai-codex"] } }) + "\n");
 	const child = runChild(`
 		let capturedAuthorization = "";
 		globalThis.fetch = async (url, init) => {
@@ -1526,9 +1503,7 @@ test("OpenAI search honors configured provider priority", async (t) => {
 test("OpenAI search rejects invalid openaiSearchProviders", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-providers-invalid-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		openaiSearchProviders: ["openai-codex", ""],
-	}) + "\n");
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { openaiSearchProviders: ["openai-codex", ""] } }) + "\n");
 	const child = runChild(`
 		const ctx = {
 			modelRegistry: {
@@ -1607,9 +1582,10 @@ test("Gemini API search uses its search-only default model", async (t) => {
 test("Gemini API search preserves the configured searchModel", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-configured-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const child = runChild(`
+	const child = runChild(`import { stringify } from "smol-toml";
+
 		const { writeFile } = await import("node:fs/promises");
-		await writeFile(process.env.PI_CODING_AGENT_DIR + "/web-search.json", JSON.stringify({ searchModel: "custom-gemini-model" }));
+		await writeFile(process.env.PI_CODING_AGENT_DIR + "/metis-pi.toml", stringify({ webAccess: { searchModel: "custom-gemini-model" } }));
 
 		let capturedUrl = "";
 		let capturedHeaders = null;

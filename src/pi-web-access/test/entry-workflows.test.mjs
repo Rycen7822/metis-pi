@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -14,12 +16,16 @@ const configUrl = new URL("../utils.ts", import.meta.url).href;
 function run(script, config = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-entry-workflow-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({
+		{
+			const { preferences, credentials } = splitWebAccessConfig({
 			webSearch: { allowedProviders: ["brave", "kagi"] },
 			braveApiKey: "entry-test-brave", kagiApiKey: "entry-test-kagi",
 			autoOpenBrowser: false, curatorTimeoutSeconds: 30, toolActivation: "eager",
 			...config,
-		}));
+		});
+			writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+			writeFileSync(join(dir, "web-search.json"), JSON.stringify(credentials));
+		}
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: script,
 			encoding: "utf8",

@@ -130,7 +130,7 @@ export class SubagentClient {
     if (!this.bridge) {
       const child = spawn(
         "python3",
-        [join(this.runtime.root, "bin/subagent-pi"), "--home", join(this.agentDir, "subagent-pi"), "pi-host"],
+        [join(this.runtime.root, "bin/metis-subagent"), "--home", join(this.agentDir, "metis", "subagent"), "pi-host"],
         { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
       );
       const bridge = (this.bridge = { child, buffer: Buffer.alloc(0), stderr: "" });

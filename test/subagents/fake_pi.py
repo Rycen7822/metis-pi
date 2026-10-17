@@ -4,7 +4,7 @@
 It also stands in for Pi's own skill loader (get_commands returns the registry
 built by skill_registry() from PI_TEST_AMBIENT_SKILL_DIRS plus --skill paths) and
 for the shipped managed-surface extension: with PI_AGENTS_CHILD_BUILTINS set it
-writes the same `subagent-pi-surface applied ...` stderr report the daemon gates
+writes the same `metis-subagent-surface applied ...` stderr report the daemon gates
 a restricted launch on. PI_TEST_SURFACE='missing'|'mismatch'|'malformed' breaks
 that report so the daemon-side verification can be tested without real Pi."""
 from __future__ import annotations
@@ -36,7 +36,7 @@ p.add_argument("--no-managed-protocol", action="store_true")
 p.add_argument("--reject-abort", action="store_true")
 a, _ = p.parse_known_args()
 if a.no_context_files and any(Path(path).name == "managed-context.ts" for path in a.extension or []):
-    print("subagent-pi-context ready", file=sys.stderr, flush=True)
+    print("metis-subagent-context ready", file=sys.stderr, flush=True)
 MARK_OUTCOME = "PI_MOCK_OUTCOME"
 path = Path(a.session) if a.session else Path(a.session_dir) / "test-session.jsonl"
 current = None
@@ -54,9 +54,9 @@ def surface_report():
     mode=os.environ.get('PI_TEST_SURFACE','ok')
     if mode=='missing': return
     if mode=='malformed':
-        print('subagent-pi-surface applied',file=sys.stderr,flush=True); return
+        print('metis-subagent-surface applied',file=sys.stderr,flush=True); return
     applied=allowed if mode!='mismatch' else [n for n in allowed if n!='read']
-    print('subagent-pi-surface applied ok=%s allowed=%s builtins=%s expected=%s unidentified=' % (
+    print('metis-subagent-surface applied ok=%s allowed=%s builtins=%s expected=%s unidentified=' % (
         'true' if applied==allowed else 'false',','.join(allowed),','.join(applied),','.join(allowed)),
         file=sys.stderr,flush=True)
 
@@ -77,18 +77,18 @@ def read_bootstrap():
         payload=json.loads(b''.join(chunks))
         servers=payload.get('mcp',{}).get('servers',[])
         names=','.join(s['name'] for s in servers)
-        print(f'subagent-pi-bridge ready servers={len(servers)} names={names}',file=sys.stderr,flush=True)
+        print(f'metis-subagent-bridge ready servers={len(servers)} names={names}',file=sys.stderr,flush=True)
         for s in servers:
             if 'FAKE_TEST_ECHO' in s.get('env',{}):
                 print(f'bridge-env {s["name"]}={s["env"]["FAKE_TEST_ECHO"]}',file=sys.stderr,flush=True)
-        receipt={'kind':'subagent-pi-bridge-receipt','v':1,
+        receipt={'kind':'metis-subagent-bridge-receipt','v':1,
                  'agent':payload.get('agent',{}).get('id'),'generation':payload.get('agent',{}).get('generation'),
                  'state':'ready','servers':[{'name':s['name'],'status':'lazy','required':bool(s.get('required'))} for s in servers]}
         if os.environ.get('PI_TEST_RECEIPT_STATUS')=='failed_required' and receipt['servers']:
             receipt={**receipt,'state':'ready','servers':[{**s,'status':'failed','required':True} for s in receipt['servers']]}
     except Exception:
-        print('subagent-pi-bridge ready servers=0 error=malformed',file=sys.stderr,flush=True)
-        receipt={'kind':'subagent-pi-bridge-receipt','v':1,'agent':None,'generation':None,'state':'failed','servers':[]}
+        print('metis-subagent-bridge ready servers=0 error=malformed',file=sys.stderr,flush=True)
+        receipt={'kind':'metis-subagent-bridge-receipt','v':1,'agent':None,'generation':None,'state':'failed','servers':[]}
     rraw=os.environ.get('PI_AGENTS_BRIDGE_RECEIPT_FD')
     if rraw and rraw.isdigit():
         rfd=int(rraw)
@@ -459,7 +459,7 @@ async def main():
             queue.append(r["message"])
             response(r)
         elif kind == "store_message":
-            msg("custom", r["message"], customType="subagent-pi-message")
+            msg("custom", r["message"], customType="metis-subagent-message")
             response(r, data={"stored": True})
         elif kind == "abort":
             if a.reject_abort:

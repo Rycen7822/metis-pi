@@ -14,16 +14,15 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 | MCP 策略 | `[mcp]` | 默认关闭；`/mcp reload` 刷新。服务器和凭据仍由 Pi 管理。 |
 | condense / OCC | `[contextPrune]` 及子表 | `/pruner settings`、相关命令写全局；手动编辑后 `/reload`；见 [condense](features/condense.md)。 |
 | 动态全局指令 | `[dynamicAgents]` / `[[dynamicAgents.groups]]` | 策略 Markdown 相对全局配置目录；下一正式 run 读取，见 [动态指令](features/dynamic-agents.md)。 |
-| 子代理 | `[subagents]` / `inheritance` / `profiles` | native 入口启用开关、后端容量/超时/profile；后端启动读取，须安全 drain/stop 后重新连接。 |
+| 子代理 | `[subagents]` / `profiles` | native 入口启用开关、childEnv、后端容量/超时/profile；后端启动读取，须安全 drain/stop 后重新连接。 |
 | 会话回忆 | `[sessionRecall]` | `queryModel="default"` 跟随当前会话，或填已注册的 `provider/model-id`；每次 `session_recall` 的 `query` 操作重读。 |
 | 网页访问 | `[webAccess]` 及子表 | 搜索/抓取/摘要/工具普通选项；`/websearch`、`/curator` 写 TOML；凭据使用同目录 `web-search.json` 或环境变量。 |
 | goal / 结束摘要 | Pi session custom entries | 会话状态不是配置；摘要持久化由 `appearance.summary.persist` 控制。 |
 | 原文、命令日志 | 会话旁 `<sessionId>-blobs/` | 恢复数据不搬入 TOML，复制或清理会话时一并处理。 |
 
-尚无全局 TOML 时运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项及 `subagent-pi/config.toml`，生成完整配置和同目录说明。
-`session-recall.json` 的独立查询模型也迁为 `[sessionRecall].queryModel`。
-`web-search.json` 的普通字段迁为 `[webAccess]`，API key/token、认证请求头和带密码的代理保留 JSON，并归到 TOML 同目录；旧混合 JSON 拆分前备份，外部旧文件不删除。
-不覆盖已有 TOML/说明。其他支持迁移桥的模块在新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧偏好，网页 JSON 仅提供凭据。LSP 始终只读 TOML 与内置默认值，旧 LSP JSON 须手动复制，init 不导入。不要直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
+尚无全局 TOML 时运行 **`/metis-config init`**，从包内默认值生成完整配置和同目录说明；已有 TOML/说明不覆盖。读取仅使用全局 TOML 与包内默认值，缺少 TOML 就使用默认值。初始化和首次保存不会导入、改写或备份其他配置文件；需要保留的个性偏好请自行整理到对应 TOML 字段，不要直接用默认模板覆盖已有文件。
+
+网页 API key/token、认证请求头和带认证的代理仍由 **`<agentDir>/web-search.json`** 或环境变量提供；JSON 中的普通字段不作为偏好读取，只读取 agentDir 内这一份凭据文件。密钥命令仍延迟到实际请求时执行。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
 
 已有 TOML 直接编辑需要修改的字段，未填写的选项沿用包内默认值。
 `/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有文件。
@@ -32,7 +31,7 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 
 归属审计边界：Metis 自有显示、执行、LSP、MCP 策略、动态指令、condense/OCC、子代理、网页访问与会话回忆偏好都在 TOML。`pi-fff.json`/其他独立插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
 
-TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。损坏 TOML 不回退旧 JSON，也不允许保存覆盖；显示层记录 problem 并回退，condense 使用默认关闭值，执行/LSP/MCP 按自身错误边界报错。初始化和命令保存按包内模板回填分区/参数注释，并保留未知字段；个人自定义注释不保留，可写在旁边说明中。原子 rename 避免半文件，多进程同时保存仍是最后写入者胜出。
+TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。损坏 TOML 不回退旧 JSON，也不允许保存覆盖；显示层记录 problem 并回退，condense 使用默认关闭值，执行/LSP/MCP 按自身错误边界报错。初始化和命令保存按包内模板回填分区/参数注释，并保留未知字段；个人自定义注释不保留，可写在旁边说明中。原子 rename 避免半文件；Metis 命令的读取、合并与发布由跨进程锁串行化，互不重叠的字段 patch 会保留双方修改；同一字段或重叠的完整配置快照仍由后一次更新覆盖。手动编辑或不使用此锁的外部写入不在该保护内。
 
 ## 显示字段
 
@@ -135,7 +134,7 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 
 | 功能 | 排除项 |
 | --- | --- |
-| 配置路径/迁移命令 | `-extensions/config.ts`；禁用仅移除命令，不阻止其他模块读取配置。 |
+| 配置路径/初始化命令 | `-extensions/config.ts`；禁用仅移除命令，不阻止其他模块读取配置。 |
 | 显示层 | `-extensions/appearance.ts` |
 | goal / condense | `-extensions/goal.ts` / `-extensions/condense.ts` |
 | 动态指令 | `-extensions/dynamic-agents.ts`；卸载前先恢复原生策略。 |

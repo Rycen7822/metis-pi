@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createThinkingViewControl, PeekScroll } from "../../src/thinking-view.ts";
 import type { ThinkingView } from "../../src/thinking-view.ts";
-import { CodexThinkingClickableComponent } from "../../src/chrome/transcript-components.ts";
+import { ThinkingClickableComponent } from "../../src/chrome/transcript-components.ts";
 
 function clicks() {
   const control = createThinkingViewControl();
@@ -10,7 +10,7 @@ function clicks() {
   return {
     control, applied,
     click: (button: "left" | "right", visible: ThinkingView) =>
-      new CodexThinkingClickableComponent({ render: () => [], invalidate() {} }, control, visible, (v) => applied.push(v))
+      new ThinkingClickableComponent({ render: () => [], invalidate() {} }, control, visible, (v) => applied.push(v))
         .handleMouse({ type: "click", button, x: 10, y: 5, screenX: 10, screenY: 5 }),
   };
 }
@@ -37,7 +37,7 @@ test("left toggles collapsed/peek immediately and leaves full unchanged; right t
 test("right press claims the host gesture without applying it before the eventual click", () => {
   const control = createThinkingViewControl();
   const applied: ThinkingView[] = [];
-  const component = new CodexThinkingClickableComponent({ render: () => [], invalidate() {} }, control, "collapsed", v => applied.push(v));
+  const component = new ThinkingClickableComponent({ render: () => [], invalidate() {} }, control, "collapsed", v => applied.push(v));
   const pointer = { button: "right" as const, x: 3, y: 0, screenX: 3, screenY: 0 };
   assert.equal(component.handleMouse({ type: "press", ...pointer })?.handled, true, "Pi only synthesizes right click after a handled press");
   assert.deepEqual(applied, [], "press must not rebuild the click target");

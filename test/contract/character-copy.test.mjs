@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { tokenizeBashLine, highlightBashScript } from "../../src/bash-lexer.ts";
 import { createDiffComponent, createShellFactories } from "../../src/chrome/tool-components.ts";
-import { CodexThinkingClickableComponent, CodexThinkingPeekComponent, CodexThinkingRailComponent, CodexWriteCallComponent } from "../../src/chrome/transcript-components.ts";
+import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent, CodexWriteCallComponent } from "../../src/chrome/transcript-components.ts";
 import { createThinkingViewControl } from "../../src/thinking-view.ts";
 import { createWorkingComponent } from "../../src/chrome/working.ts";
 import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
@@ -47,12 +47,12 @@ test("long shell command caps keep complete graphemes and OSC8 sequences", () =>
 test("thinking rail recognizes an existing prefix through SGR and OSC8 while keeping its copy source", () => {
   const osc = "\x1b]8;;https://example.test\x1b\\", endOsc = "\x1b]8;;\x1b\\";
   for (const source of [`\x1b[36m▏\x1b[39m existing`, `${osc}▏${endOsc} existing`]) {
-    const rail = new CodexThinkingRailComponent(new Tui.Text(source, 0, 0), { kind: "truecolor" });
+    const rail = new ThinkingRailComponent(new Tui.Text(source, 0, 0), { kind: "truecolor" });
     const frame = copyFrame(rail, 40);
     assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "▏ existing");
     assert.equal(select(frame).text, "▏ existing");
   }
-  const rail = new CodexThinkingRailComponent(new Tui.Text(`${osc}普通é😀${endOsc}`, 0, 0), { kind: "truecolor" });
+  const rail = new ThinkingRailComponent(new Tui.Text(`${osc}普通é😀${endOsc}`, 0, 0), { kind: "truecolor" });
   const frame = copyFrame(rail, 40);
   assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "▏ 普通é😀");
   assert.equal(select(frame).text, "普通é😀");
@@ -130,9 +130,9 @@ test("Container consumes the rows published by actual transcript leaves without 
   const text = new Tui.Text("one\ntwo\nthree", 0, 0);
   const render = t.mock.method(text, "render");
   const control = createThinkingViewControl();
-  const peek = new CodexThinkingPeekComponent(text, control, 2, value => value, () => {});
-  const rail = new CodexThinkingRailComponent(peek, { kind: "none" });
-  const clickable = new CodexThinkingClickableComponent(rail, control, "peek", () => {});
+  const peek = new ThinkingPeekComponent(text, control, 2, value => value, () => {});
+  const rail = new ThinkingRailComponent(peek, { kind: "none" });
+  const clickable = new ThinkingClickableComponent(rail, control, "peek", () => {});
   const parent = new Tui.Container();
   parent.addChild(clickable);
   const frame = copyFrame(parent, 40);

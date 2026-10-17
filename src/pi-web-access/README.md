@@ -454,25 +454,151 @@ Toggle with **Ctrl+Shift+W** to see live request/response activity:
 
 ## Configuration
 
-Ordinary preferences are stored in `[webAccess]` in the global `metis-pi.toml`, under Pi's agent directory (`PI_CODING_AGENT_DIR` when set). Credentials use `web-search.json` in the same directory or their existing env/command sources. Legacy JSON preferences are read only when the TOML is absent; existing credential and legacy cache locations remain supported. Every field is optional. The following JSON shows the field structure and legacy format; put ordinary preferences in TOML as described above.
+Ordinary preferences are stored in `[webAccess]` in the global `metis-pi.toml`, under Pi's agent directory (`PI_CODING_AGENT_DIR` when set). Missing TOML uses package defaults; `/metis-config init` creates default preferences and the parameter guide without importing or rewriting other files. Credentials use only `<agentDir>/web-search.json` or their existing env/command sources. JSON ordinary fields are ignored. Every field is optional. To reuse an existing cache parent, set `webAccess.cacheRoot` explicitly; cached data is not moved or removed.
+
+Preferences in `<agentDir>/metis-pi.toml`:
+
+```toml
+[webAccess]
+openaiResponsesUrl = "https://gateway.example.com/v1/responses"
+braveBaseUrl = "https://gateway.example.com/brave/res/v1"
+exaBaseUrl = "https://gateway.example.com/exa"
+tavilyBaseUrl = "https://gateway.example.com/tavily"
+serpdiveModel = "krill"
+brightdataSerpZone = "pi_serp"
+xaiSearchTools = [ "web_search" ]
+mistralSearchModel = "mistral-small-latest"
+mistralSearchTool = "web_search"
+searxngBaseUrl = "https://search.example.com"
+degoogBaseUrl = "https://degoog.example.com"
+degoogEngines = [ "degoog-org-official-extensions-brave-engine" ]
+firecrawlBaseUrl = "https://crawl.example.com"
+firecrawlApiVersion = "v2"
+firecrawlFreshScrape = false
+firecrawlPdfMaxPages = 50
+crawl4aiBaseUrl = "https://crawl4ai.example.com"
+brightdataUnlockerZone = "pi_unlocker"
+geminiBaseUrl = "https://my-gateway.example.com/gemini"
+geminiAuth = "adc"
+geminiProject = "my-gcp-project"
+geminiLocation = "us-central1"
+provider = "openai"
+toolActivation = "auto"
+allowBrowserCookies = false
+searchModel = "gemini-3.6-flash"
+summaryModel = "anthropic/claude-haiku-4-5"
+summaryGenerationDeadlineMs = 30000
+summaryInstructions = "- Preserve concrete figures verbatim: prices, limits, versions, dates.\n- Name the product version each claim applies to."
+maxInlineContentChars = 30000
+workflow = "summary-review"
+curatorTimeoutSeconds = 20
+autoOpenBrowser = true
+
+[webAccess.searchRouting]
+providers = [ "openai", "brave", "exa" ]
+useCurrentModel = false
+fallbackOn = [ "transient", "quota", "network", "invalid-response" ]
+
+[webAccess.fetchRouting]
+providers = [ "http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "brightdata", "gemini" ]
+allowRemoteHostedProviders = false
+
+[webAccess.fetch]
+timeout = 30
+defaultMode = "readable"
+allowedModes = [ "readable", "raw", "answer" ]
+answerProvider = "openai"
+answerModel = "gpt-5.6"
+
+[webAccess.webSearch]
+enabled = true
+allowedProviders = [ "openai", "brave", "exa" ]
+
+[webAccess.tools.webSearch]
+enabled = true
+
+[webAccess.tools.sourceCheck]
+enabled = true
+
+[webAccess.tools.fetchContent]
+enabled = true
+
+[webAccess.tools.getSearchContent]
+enabled = true
+
+[webAccess.commands.websearch]
+enabled = true
+
+[webAccess.commands.curator]
+enabled = true
+
+[webAccess.commands.search]
+enabled = true
+
+[webAccess.commands.google-account]
+enabled = true
+
+[webAccess.image]
+enabled = true
+
+[webAccess.browserCookies]
+browser = "helium"
+profile = "Profile 2"
+
+[webAccess.curatorRemote]
+host = "my-box.tailnet.ts.net"
+bind = "100.101.102.103"
+
+[webAccess.githubClone]
+enabled = true
+maxRepoSizeMB = 350
+cloneTimeoutSeconds = 30
+clonePath = "/tmp/pi-github-repos"
+
+[webAccess.githubPrIssue]
+enabled = true
+
+[webAccess.youtube]
+enabled = true
+preferredModel = "gemini-3.6-flash"
+
+[webAccess.video]
+enabled = true
+preferredModel = "gemini-3.6-flash"
+maxSizeMB = 50
+
+[webAccess.pdf]
+enabled = true
+maxSizeMB = 20
+provider = "auto"
+
+[webAccess.fetchContent.domainPolicy]
+allow = [ "example.com" ]
+deny = [ "blocked.example.com" ]
+
+[webAccess.shortcuts]
+curate = "ctrl+shift+s"
+activity = "ctrl+shift+w"
+
+[webAccess.ssrf]
+allowRanges = [ "198.18.0.0/15" ]
+trustEnvProxy = false
+```
+
+Credentials in `<agentDir>/web-search.json`:
 
 ```json
 {
   "openaiApiKey": "sk-...",
-  "openaiResponsesUrl": "https://gateway.example.com/v1/responses",
   "braveApiKey": "BSA_...",
-  "braveBaseUrl": "https://gateway.example.com/brave/res/v1",
   "exaApiKey": "exa-...",
-  "exaBaseUrl": "https://gateway.example.com/exa",
   "parallelApiKey": "...",
   "tinyfishApiKey": "sk-tinyfish-...",
   "search1apiApiKey": "...",
   "tavilyApiKey": "tvly-...",
-  "tavilyBaseUrl": "https://gateway.example.com/tavily",
   "youApiKey": "your-ydc-api-key",
   "jinaApiKey": "$JINA_API_KEY",
   "serpdiveApiKey": "sd_live_...",
-  "serpdiveModel": "krill",
   "kagiApiKey": "$KAGI_API_KEY",
   "ollamaApiKey": "$OLLAMA_API_KEY",
   "valyuApiKey": "$VALYU_API_KEY",
@@ -485,126 +611,18 @@ Ordinary preferences are stored in `[webAccess]` in the global `metis-pi.toml`, 
   "baizhiApiKey": "$BAIZHI_API_KEY",
   "zaiApiKey": "$ZAI_API_KEY",
   "brightdataApiKey": "$BRIGHTDATA_API_KEY",
-  "brightdataSerpZone": "pi_serp",
   "xaiApiKey": "xai-...",
-  "xaiSearchTools": ["web_search"],
   "mistralApiKey": "$MISTRAL_API_KEY",
-  "mistralSearchModel": "mistral-small-latest",
-  "mistralSearchTool": "web_search",
-  "searxngBaseUrl": "https://search.example.com",
   "searxngHeaders": {
     "CF-Access-Client-Id": "xxxxxxxx.access",
     "CF-Access-Client-Secret": "xxxxxxxx"
   },
-  "degoogBaseUrl": "https://degoog.example.com",
   "degoogApiKey": "$DEGOOG_API_KEY",
-  "degoogEngines": ["degoog-org-official-extensions-brave-engine"],
-  "firecrawlBaseUrl": "https://crawl.example.com",
   "firecrawlApiKey": "fc-...",
-  "firecrawlApiVersion": "v2",
-  "firecrawlFreshScrape": false,
-  "firecrawlPdfMaxPages": 50,
-  "crawl4aiBaseUrl": "https://crawl4ai.example.com",
   "crawl4aiApiToken": "$CRAWL4AI_API_TOKEN",
-  "brightdataUnlockerZone": "pi_unlocker",
   "perplexityApiKey": "pplx-...",
   "geminiApiKey": "AIza...",
-  "geminiBaseUrl": "https://my-gateway.example.com/gemini",
-  "cloudflareApiKey": "...",
-  "geminiAuth": "adc",
-  "geminiProject": "my-gcp-project",
-  "geminiLocation": "us-central1",
-  "provider": "openai",
-  "searchRouting": {
-    "providers": ["openai", "brave", "exa"],
-    "useCurrentModel": false,
-    "fallbackOn": ["transient", "quota", "network", "invalid-response"]
-  },
-  "fetchRouting": {
-    "providers": ["http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "brightdata", "gemini"],
-    "allowRemoteHostedProviders": false
-  },
-  "fetch": {
-    "timeout": 30,
-    "defaultMode": "readable",
-    "allowedModes": ["readable", "raw", "answer"],
-    "answerProvider": "openai",
-    "answerModel": "gpt-5.6"
-  },
-  "webSearch": {
-    "enabled": true,
-    "allowedProviders": ["openai", "brave", "exa"]
-  },
-  "tools": {
-    "webSearch": { "enabled": true },
-    "sourceCheck": { "enabled": true },
-    "fetchContent": { "enabled": true },
-    "getSearchContent": { "enabled": true }
-  },
-  "toolActivation": "auto",
-  "commands": {
-    "websearch": { "enabled": true },
-    "curator": { "enabled": true },
-    "search": { "enabled": true },
-    "google-account": { "enabled": true }
-  },
-  "image": {
-    "enabled": true
-  },
-  "browserCookies": {
-    "browser": "helium",
-    "profile": "Profile 2"
-  },
-  "allowBrowserCookies": false,
-  "searchModel": "gemini-3.6-flash",
-  "summaryModel": "anthropic/claude-haiku-4-5",
-  "summaryGenerationDeadlineMs": 30000,
-  "summaryInstructions": "- Preserve concrete figures verbatim: prices, limits, versions, dates.\n- Name the product version each claim applies to.",
-  "maxInlineContentChars": 30000,
-  "workflow": "summary-review",
-  "curatorTimeoutSeconds": 20,
-  "curatorRemote": {
-    "host": "my-box.tailnet.ts.net",
-    "bind": "100.101.102.103"
-  },
-  "autoOpenBrowser": true,
-  "githubClone": {
-    "enabled": true,
-    "maxRepoSizeMB": 350,
-    "cloneTimeoutSeconds": 30,
-    "clonePath": "/tmp/pi-github-repos"
-  },
-  "githubPrIssue": {
-    "enabled": true
-  },
-  "youtube": {
-    "enabled": true,
-    "preferredModel": "gemini-3.6-flash"
-  },
-  "video": {
-    "enabled": true,
-    "preferredModel": "gemini-3.6-flash",
-    "maxSizeMB": 50
-  },
-  "pdf": {
-    "enabled": true,
-    "maxSizeMB": 20,
-    "provider": "auto"
-  },
-  "fetchContent": {
-    "domainPolicy": {
-      "allow": ["example.com"],
-      "deny": ["blocked.example.com"]
-    }
-  },
-  "shortcuts": {
-    "curate": "ctrl+shift+s",
-    "activity": "ctrl+shift+w"
-  },
-  "ssrf": {
-    "allowRanges": ["198.18.0.0/15"],
-    "trustEnvProxy": false
-  }
+  "cloudflareApiKey": "..."
 }
 ```
 
@@ -639,11 +657,11 @@ Set `braveBaseUrl`, `exaBaseUrl`, or `tavilyBaseUrl` to route those providers th
 
 `authFetch` configures named local browser-cookie auth profiles for explicit `fetch_content` calls. A profile can be a host array (`"work": ["docs.company.com"]`) or an object with `hosts`, optional `chromeProfile`, `redirects: "same-origin"`, and `cache: "session" | "off"`.
 
-`browserCookies` selects the Chromium browser preset and profile used for Gemini Web cookies, for example `{ "browserCookies": { "browser": "helium", "profile": "Profile 1" } }`. When `browser` is set, cookie discovery checks only that browser, which avoids unrelated password-store prompts. Supported preset names are `helium`, `chrome`, `brave`, `arc`, `chromium`, and `edge`, subject to platform availability. Omit `browser` to keep automatic browser discovery. `profile` must be a profile directory name. The old top-level `chromeProfile` field is rejected; move it to `browserCookies.profile`. Arbitrary profile paths and `profilePath` are intentionally not supported.
+Browser cookie access requires `webAccess.allowBrowserCookies = true` or `PI_ALLOW_BROWSER_COOKIES=1`. `browserCookies` selects the Chromium browser preset and profile used for Gemini Web cookies, for example `{ "browserCookies": { "browser": "helium", "profile": "Profile 1" } }`. When `browser` is set, cookie discovery checks only that browser, which avoids unrelated password-store prompts. Supported preset names are `helium`, `chrome`, `brave`, `arc`, `chromium`, and `edge`, subject to platform availability. Omit `browser` to keep automatic browser discovery. `profile` must be a profile directory name. The old top-level `chromeProfile` field is rejected; move it to `browserCookies.profile`. Arbitrary profile paths and `profilePath` are intentionally not supported.
 
 `fetchContent.domainPolicy` is an optional hostname allow/deny policy for `fetch_content` target URLs. It is off when omitted. Each bare hostname matches itself and its subdomains; `deny` wins when a hostname matches both lists. The policy is checked before HTTP(S) target handling and before each redirect followed by this extension's own fetch path. Local file paths and non-HTTP sources are not subject to this policy. It is an additional restriction: the existing SSRF guard still blocks private and internal destinations. Remote extraction services can still perform their own DNS, redirects, and egress after this extension preflights the submitted target URL, so third-party hosted HTTP(S) fallbacks stay disabled unless `fetchRouting.allowRemoteHostedProviders` is enabled for separately isolated provider deployments.
 
-`fetch.timeout` is an optional positive finite number of seconds for direct HTTP fetches and the Jina Reader fallback. When omitted, both use a 30-second budget. Fractional values are supported and rounded up to at least 1 millisecond; values that cannot be converted to a finite safe integer delay from 1 through Node's 2,147,483,647 ms timer maximum are rejected. An invalid declared value fails closed with an error naming `web-search.json`. An internal/per-call `timeoutMs` override takes precedence over this setting. Other remote extraction fallbacks keep their own documented budgets.
+`fetch.timeout` is an optional positive finite number of seconds for direct HTTP fetches and the Jina Reader fallback. When omitted, both use a 30-second budget. Fractional values are supported and rounded up to at least 1 millisecond; values that cannot be converted to a finite safe integer delay from 1 through Node's 2,147,483,647 ms timer maximum are rejected. An invalid declared value fails closed with an error naming `metis-pi.toml`. An internal/per-call `timeoutMs` override takes precedence over this setting. Other remote extraction fallbacks keep their own documented budgets.
 
 `fetch.defaultMode` sets the mode used when `fetch_content` omits `mode`, and `fetch.allowedModes` controls which modes the tool exposes and accepts. Valid modes are `readable`, `raw`, and `answer`. By default, the default mode is `readable` and all three modes are allowed. The default must be included in the non-empty, duplicate-free allowed list. An explicitly requested disabled mode fails before fetching or invoking a model and is never replaced with another mode. Raw mode remains direct HTTP-only and never runs readability, specialized source handling, or hosted extraction fallbacks.
 

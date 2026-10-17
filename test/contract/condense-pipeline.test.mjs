@@ -13,6 +13,8 @@ import { toolResultStub } from "../../src/condense/pruner.ts";
 import { projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
 import { loadConfig } from "../../src/condense/config.ts";
+import { encodePruneConfig, parseMetisConfig } from "../../src/metis-config.ts";
+import { stringify } from "smol-toml";
 import { disableNetwork } from "../helpers/native-provider.mjs";
 
 test.beforeEach(disableNetwork);
@@ -91,11 +93,12 @@ async function fixture(
   const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
-  writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 }, contextPrune: {
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 } }));
+  writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: encodePruneConfig({
     enabled: true, opportunisticCompaction: occ, showPruneStatusLine, minBatchChars: 5000, pruneOn, batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
     chainCompression, purgeErrors: { enabled: false }, ...configOverrides,
-  } }));
+  }) }));
   // Spill files use the session directory; inMemory() leaves it empty.
   const sm = SessionManager.create(dir, dir);
   const hooks = new Map(), tools = new Map(), calls = [], commands = new Map(), requests = [], events = createEventBus();
@@ -632,12 +635,12 @@ test("session restore drops the previous queue while a tree switch keeps its own
   assert.equal(f.calls.length, 0);
 
   // session_start reloads config from disk and boots the status + boot widget.
-  const settings = { compaction: { enabled: false, reserveTokens: 500 }, contextPrune: {
+  const settings = { contextPrune: {
     enabled: true, showPruneStatusLine: true, minBatchChars: 5000, pruneOn: "on-demand", batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
   } };
-  writeFileSync(join(f.dir, "settings.json"), JSON.stringify(settings));
+  writeFileSync(join(f.dir, "metis-pi.toml"), stringify(settings));
   await f.emit("session_start");
   assert.deepEqual(f.widgets.filter(([id]) => id === "pruner-boot").map(([, value]) => value.length), [1]);
   assert.match(f.statuses.get("context-prune"), /prune: ON/);
@@ -662,8 +665,8 @@ test("session restore drops the previous queue while a tree switch keeps its own
   // re-arms work that only this branch holds, and (unlike session_start) neither
   // reloads config nor shows the boot widget.
   writeFileSync(
-    join(f.dir, "settings.json"),
-    JSON.stringify({ ...settings, contextPrune: { ...settings.contextPrune, showPruneStatusLine: false } }),
+    join(f.dir, "metis-pi.toml"),
+    stringify({ ...settings, contextPrune: { ...settings.contextPrune, showPruneStatusLine: false } }),
   );
   const afterBody = "later detail\n".repeat(1800);
   f.add(afterBody, "inspect-after-tree");
@@ -1466,10 +1469,10 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   const projected = (await f.emit("context", { messages: raw() })).messages;
   assert.equal(f.calls.length, 0);
   assert.equal(projected.filter((m) => m.metisDerived?.kind === "condense-chain").length, 1);
-  const settingsPath = join(f.dir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const settingsPath = join(f.dir, "metis-pi.toml");
+  const settings = parseMetisConfig(readFileSync(settingsPath, "utf8"));
   settings.contextPrune.chainCompression.enabled = false;
-  writeFileSync(settingsPath, JSON.stringify(settings));
+  writeFileSync(settingsPath, stringify(settings));
   await f.emit("session_start");
   await f.emit("agent_settled"); await f.waitMaintenance();
   assert.deepEqual((await f.emit("context", { messages: raw() })).messages, projected,

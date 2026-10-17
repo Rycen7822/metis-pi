@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stringify } from "smol-toml";
 import { after, beforeEach, test } from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,9 +13,9 @@ const unexpectedFetch = async () => { throw new Error("Unexpected network reques
 const fetchFixture = injectExtractFetch(unexpectedFetch);
 const root = await mkdtemp(join(tmpdir(), "pi-fetch-pdf-answer-"));
 for (const name of envNames) process.env[name] = root;
-const configPath = join(root, "web-search.json");
+const configPath = join(root, "metis-pi.toml");
 const config = { pdf: { provider: "unpdf" }, fetchRouting: { providers: ["http"] } };
-await writeFile(configPath, JSON.stringify(config));
+await writeFile(configPath, stringify({ webAccess: config }));
 
 const { default: initializeExtension } = await import("../index.ts");
 const { clearResults, getResult } = await import("../storage.ts");
@@ -50,7 +51,7 @@ beforeEach(async () => {
 	clearResults();
 	requests.length = 0;
 	contextWindow = 10_000;
-	await writeFile(configPath, JSON.stringify(config));
+	await writeFile(configPath, stringify({ webAccess: config }));
 	fetchFixture.setFetch(unexpectedFetch);
 });
 
@@ -159,10 +160,10 @@ test("HTML answer mode still supplies the extracted page body", async () => {
 
 test("disabled PDF extraction and raw binary fetches do not call an answer model", async () => {
 	fetchFixture.setFetch(async () => pdfResponse("Do not answer this."));
-	await writeFile(configPath, JSON.stringify({ ...config, pdf: { enabled: false, provider: "unpdf" } }));
+	await writeFile(configPath, stringify({ webAccess: { ...config, pdf: { enabled: false, provider: "unpdf" } } }));
 	const disabled = await execute({ url: "https://93.184.216.34/disabled.pdf", mode: "answer", prompt: "Summarize." });
 	assert.match(disabled.details.error, /PDF extraction is disabled/);
-	await writeFile(configPath, JSON.stringify(config));
+	await writeFile(configPath, stringify({ webAccess: config }));
 	const raw = await execute({ url: "https://93.184.216.34/raw.pdf", mode: "raw" });
 	assert.match(raw.details.error, /Unsupported content type in raw mode/);
 	assert.equal(requests.length, 0);

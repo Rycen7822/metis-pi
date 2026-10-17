@@ -5,7 +5,7 @@ import { Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import { TranscriptState } from "../../src/transcript-state.ts";
 import { installTranscriptDecorations } from "../../src/transcript-adapter.ts";
 import { thoughtSummaryText } from "../../src/thinking-summary.ts";
-import { CodexThinkingRailComponent, CodexThinkingPeekComponent, CodexThinkingClickableComponent } from "../../src/chrome/transcript-components.ts";
+import { ThinkingRailComponent, ThinkingPeekComponent, ThinkingClickableComponent } from "../../src/chrome/transcript-components.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 
@@ -25,7 +25,7 @@ function setup(t, state, policy, extra = {}) {
     assistantPrototype: Assistant.prototype,
     makeSeparator: () => new Text("─".repeat(80), 0, 0),
     makeSpacer: () => new Spacer(1),
-    makeRail: (child) => new CodexThinkingRailComponent(child, { kind: "truecolor" }),
+    makeRail: (child) => new ThinkingRailComponent(child, { kind: "truecolor" }),
     thinkingPolicy: policy ? () => ({ ...policy, peekLines: 6 }) : undefined,
     makeThoughtSummary: (input) => new Text(thoughtSummaryText(input.durationMs), 0, 0),
     isCollapsedLabel: (node) => node instanceof Text,
@@ -92,7 +92,7 @@ test("two native runs fold once independently, copy visible content and preserve
   setup(t, state, { streaming: "full", completed: "collapsed" });
   const { component, message, update } = streamingAssistant(state);
   update([{ type: "thinking", thinking: "deep thought" }]);
-  assert.ok(regionsOf(component)[0].child instanceof CodexThinkingRailComponent, "expanded while streaming");
+  assert.ok(regionsOf(component)[0].child instanceof ThinkingRailComponent, "expanded while streaming");
   assert.equal(component.thinkingVisibilityOverrides.size, 0, "full policy needs no override for new runs");
 
   clock = 12_000;
@@ -105,7 +105,7 @@ test("two native runs fold once independently, copy visible content and preserve
   assert.ok(component.contentContainer.children.some((child) => child instanceof Markdown && child.text.includes("Thinking")),
     "ordinary text stays outside the thinking rail");
   assert.equal(regionsOf(component).length, 2, "tool and text barriers preserve distinct runs");
-  assert.ok(regionsOf(component)[1].child instanceof CodexThinkingRailComponent, "second run remains expanded");
+  assert.ok(regionsOf(component)[1].child instanceof ThinkingRailComponent, "second run remains expanded");
   const label = regionsOf(component)[0].child;
   assert.equal(label.text, "Thought for 7s", "collapsed run shows its duration");
   assert.doesNotMatch(component.render(80).join("\n"), /deep thought/, "collapsed body stays hidden");
@@ -128,7 +128,7 @@ test("two native runs fold once independently, copy visible content and preserve
   component.setHideThinkingBlock(false);
   assert.equal(component.thinkingVisibilityOverrides.size, 0, "global show clears the native override map");
   component.updateContent(message);
-  assert.ok(regionsOf(component)[0].child instanceof CodexThinkingRailComponent, "global show restores the native body");
+  assert.ok(regionsOf(component)[0].child instanceof ThinkingRailComponent, "global show restores the native body");
   assert.match(regionText(regionsOf(component)[0]), /deep thought/, "later redraw cannot re-collapse global show");
 });
 
@@ -137,16 +137,16 @@ test("native peek gestures open the body, fold once on completion and survive la
   const state = new TranscriptState(() => Date.now());
   setup(t, state, { streaming: "peek", completed: "collapsed" }, {
     makePeek: ({ inner, control, windowLines, onScroll }) =>
-      new CodexThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
+      new ThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
     makeClickable: ({ inner, control, fallback, apply }) =>
-      new CodexThinkingClickableComponent(inner, control, fallback, apply),
+      new ThinkingClickableComponent(inner, control, fallback, apply),
   });
   const body = Array.from({ length: 12 }, (_, i) => `reasoning row ${i}`).join("\n\n");
   const { component, message, update } = streamingAssistant(state, [{ type: "thinking", thinking: body }]);
   const mouse = (button) => clickRegion({ type: "click", button, x: 4, y: 4, screenX: 4, screenY: 4, width: 80, height: 8 });
   const clickRegion = (event) => {
     const region = regionsOf(component)[0];
-    assert.ok(region.child instanceof CodexThinkingClickableComponent);
+    assert.ok(region.child instanceof ThinkingClickableComponent);
     assert.equal(region.handleMouse(event)?.handled, true, "the native region routes the gesture to the click layer");
   };
   update();
@@ -190,16 +190,16 @@ test("active collapsed thinking routes both buttons and host global toggles keep
   const state = new TranscriptState();
   setup(t, state, { streaming: "collapsed", completed: "collapsed" }, {
     makePeek: ({ inner, control, windowLines, onScroll }) =>
-      new CodexThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
+      new ThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
     makeClickable: ({ inner, control, fallback, apply }) =>
-      new CodexThinkingClickableComponent(inner, control, fallback, apply),
+      new ThinkingClickableComponent(inner, control, fallback, apply),
   });
   const body = Array.from({ length: 12 }, (_, i) => `ACTIVE_${i}`).join("\n\n");
   const { component, message, update } = streamingAssistant(state, [{ type: "thinking", thinking: body }]);
   update();
   const mouse = button => {
     const region = regionsOf(component)[0];
-    assert.ok(region.child instanceof CodexThinkingClickableComponent);
+    assert.ok(region.child instanceof ThinkingClickableComponent);
     assert.equal(region.handleMouse({ type: "click", button, x: 3, y: 0, screenX: 3, screenY: 0 }).handled, true);
   };
   mouse("left");

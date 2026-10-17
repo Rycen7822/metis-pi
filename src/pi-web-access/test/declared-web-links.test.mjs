@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -15,8 +16,8 @@ const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 function runChild(script) {
 	const home = mkdtempSync(join(tmpdir(), "pi-web-access-declared-links-"));
 	writeFileSync(
-		join(home, "web-search.json"),
-		JSON.stringify({ fetchRouting: { allowRemoteHostedProviders: true } }) +
+		join(home, "metis-pi.toml"),
+		stringify({ webAccess: { fetchRouting: { allowRemoteHostedProviders: true } } }) +
 			"\n",
 		"utf8",
 	);

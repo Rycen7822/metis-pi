@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stringify } from "smol-toml";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,12 +14,12 @@ const indexUrl = new URL("../index.ts", import.meta.url).href;
 const readmeSrc = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 function runRegistration(config) {
-	return runRegistrationWithConfig(JSON.stringify(config) + "\n");
+	return runRegistrationWithConfig(stringify({ webAccess: config }));
 }
 
 function runRegistrationWithConfig(configText) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-tool-names-"));
-	writeFileSync(join(root, "web-search.json"), configText, "utf8");
+	writeFileSync(join(root, "metis-pi.toml"), configText, "utf8");
 	return spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
@@ -66,7 +67,7 @@ function registrationError(config) {
 }
 
 test("malformed config falls back during extension registration", () => {
-	const child = runRegistrationWithConfig("{");
+	const child = runRegistrationWithConfig("[broken");
 	assert.equal(child.status, 0, child.stderr);
 	const registered = JSON.parse(child.stdout);
 	assert.deepEqual(registered.tools.map(tool => tool.name), ["web_search", "source_check", "fetch_content", "get_search_content", "web_enable"]);
@@ -74,7 +75,7 @@ test("malformed config falls back during extension registration", () => {
 
 test("default public execution tool definitions retain their compatibility hashes", () => {
 	const expected = {
-		web_search: "eb831762c218c50c43cedf765a984f6b1c46efb47ac9b7289dfbac4854112de4",
+		web_search: "bbf2a700bb8fb6490d621fb6a4eed9968f9b524b24cd1b9796c2799045c847d9",
 		source_check: "48e69c75320f7a844a83bfe032c98b93ef11115e908831e6349915e708b16889",
 		fetch_content: "0082465bae0f184988fd37fe152cad9c7a236e410747ba6770013895a28978d4",
 		get_search_content: "e1c7597fc085a811c0c6fcde365a96571c275c70b93a48206a38be06a7a45a5f",
@@ -199,8 +200,8 @@ test("webSearch.enabled false registers only fetch tools and ignores disabled-na
 });
 
 test("README documents registration gates and toolNames", () => {
-	assert.match(readmeSrc, /"tools": \{/);
-	assert.match(readmeSrc, /"commands": \{/);
+	assert.match(readmeSrc, /\[webAccess\.tools\.webSearch\]/);
+	assert.match(readmeSrc, /\[webAccess\.commands\.websearch\]/);
 	assert.match(readmeSrc, /Pi restart is required for tool and command registration changes/);
 	assert.match(readmeSrc, /`toolNames` can opt into alternate public tool names/);
 });

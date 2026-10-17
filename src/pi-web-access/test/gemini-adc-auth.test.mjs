@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -53,12 +54,8 @@ test("Gemini search uses Vertex AI + ADC bearer auth when geminiAuth is adc", as
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-adc-"));
 	await writeAdc(root);
 	await writeFile(
-		join(root, "web-search.json"),
-		JSON.stringify({
-			geminiAuth: "adc",
-			geminiProject: "ai-eng-sandbox",
-			geminiLocation: "global",
-		}) + "\n",
+		join(root, "metis-pi.toml"),
+		stringify({ webAccess: { geminiAuth: "adc", geminiProject: "ai-eng-sandbox", geminiLocation: "global" } }) + "\n",
 		"utf8",
 	);
 
@@ -108,7 +105,7 @@ test("Gemini search uses Vertex AI + ADC bearer auth when geminiAuth is adc", as
 
 test("Gemini ADC availability requires geminiAuth adc, project, location, and an ADC file", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-adc-avail-"));
-	await writeFile(join(root, "web-search.json"), JSON.stringify({ geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" }) + "\n", "utf8");
+	await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" } }) + "\n", "utf8");
 
 	// ADC file does not exist yet -> not available.
 	const child = runChild(`
@@ -236,8 +233,8 @@ test("Gemini ADC rejects malformed token success responses", async () => {
 test("Gemini ADC never leaks the access token in errors", async () => {	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-adc-redact-"));
 	await writeAdc(root);
 	await writeFile(
-		join(root, "web-search.json"),
-		JSON.stringify({ geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" }) + "\n",
+		join(root, "metis-pi.toml"),
+		stringify({ webAccess: { geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" } }) + "\n",
 		"utf8",
 	);
 
@@ -307,8 +304,8 @@ test("Gemini ADC does not advertise the Files-API (YouTube/video) path", async (
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-adc-video-"));
 	await writeAdc(root);
 	await writeFile(
-		join(root, "web-search.json"),
-		JSON.stringify({ geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" }) + "\n",
+		join(root, "metis-pi.toml"),
+		stringify({ webAccess: { geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" } }) + "\n",
 		"utf8",
 	);
 
@@ -331,8 +328,13 @@ test("Gemini ADC does not advertise the Files-API (YouTube/video) path", async (
 
 	// ADC + API key: the Files-API path becomes available again.
 	await writeFile(
+		join(root, "metis-pi.toml"),
+		stringify({ webAccess: { geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" } }) + "\n",
+		"utf8",
+	);
+	await writeFile(
 		join(root, "web-search.json"),
-		JSON.stringify({ geminiAuth: "adc", geminiProject: "p", geminiLocation: "l", geminiApiKey: "synthetic-key" }) + "\n",
+		JSON.stringify({ geminiApiKey: "synthetic-key" }) + "\n",
 		"utf8",
 	);
 	const withKey = runChild(`

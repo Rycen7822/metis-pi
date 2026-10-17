@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -39,12 +40,8 @@ for (const scenario of cases) {
 	test(`OpenAI origin: ${scenario.name}`, async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-openai-origin-"));
 		try {
-			await writeFile(join(dir, "web-search.json"), JSON.stringify({
-				openaiResponsesUrl: scenario.endpoint,
-				openaiSearchProviders: scenario.provider ? [scenario.provider] : undefined,
-				// A blocked Pi credential must not silently fall through to this key.
-				openaiApiKey: "standalone-test-key",
-			}));
+			await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { openaiResponsesUrl: scenario.endpoint, openaiSearchProviders: scenario.provider ? [scenario.provider] : undefined } }));
+			await writeFile(join(dir, "web-search.json"), JSON.stringify({ openaiApiKey: "standalone-test-key" }));
 			const child = spawnSync(process.execPath, ["--input-type=module"], {
 				encoding: "utf8",
 				env: { ...process.env, PI_CODING_AGENT_DIR: dir, OPENAI_API_KEY: "" },

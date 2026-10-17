@@ -50,7 +50,7 @@ async def connect_daemon(home,autostart):
         log=home/'daemon.log'
         if log.exists() and log.stat().st_size>512*1024:
             log.replace(home/'daemon.previous.log')
-        entry=Path(__file__).resolve().parent.parent/'bin/subagent-pi'
+        entry=Path(__file__).resolve().parent.parent/'bin/metis-subagent'
         env=os.environ.copy(); env['PI_AGENTS_HOME']=str(home)
         until=time.monotonic()+boot_budget(home)
         started=False
@@ -68,7 +68,7 @@ async def connect_daemon(home,autostart):
                         # if the parent is descheduled immediately after spawn.
                         fcntl.flock(fd,fcntl.LOCK_UN)
                         with log.open('ab') as f:
-                            subprocess.Popen([sys.executable,str(entry),'daemon','run'],stdin=subprocess.DEVNULL,
+                            subprocess.Popen([sys.executable,str(entry),'--home',str(home),'daemon'],stdin=subprocess.DEVNULL,
                                              stdout=f,stderr=f,start_new_session=True,env=env,close_fds=True)
                         started=True
                         until=time.monotonic()+8

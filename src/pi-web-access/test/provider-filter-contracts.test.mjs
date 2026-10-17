@@ -14,12 +14,11 @@ function run(script) {
 
 for (const provider of ["brave", "searxng", "brightdata"]) {
 	test(`${provider} applies the query to every included domain branch`, () => {
-		const output = run(`
+		const output = run(`import { stringify } from "smol-toml";
+
 			const { writeFileSync } = await import("node:fs");
 			const { join } = await import("node:path");
-			writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "web-search.json"), JSON.stringify({
-				searxngBaseUrl: "http://127.0.0.1:8443", ssrf: { allowRanges: ["127.0.0.1"] },
-			}));
+			writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "metis-pi.toml"), stringify({ webAccess: { searxngBaseUrl: "http://127.0.0.1:8443", ssrf: { allowRanges: ["127.0.0.1"] } } }));
 			process.env.BRAVE_API_KEY = "synthetic-brave-key";
 			process.env.BRIGHTDATA_API_KEY = "synthetic-brightdata-key";
 			process.env.BRIGHTDATA_SERP_ZONE = "synthetic-serp-zone";
@@ -199,11 +198,12 @@ test("Gemini grounding applies a native paired date window and constrains domain
 });
 
 test("Gemini ADC keeps its supported tool shape and consumes recency as a prompt hint", () => {
-	const output = run(`
+	const output = run(`import { stringify } from "smol-toml";
+
 		const { writeFileSync } = await import("node:fs"); const { join } = await import("node:path");
 		const file = join(process.env.PI_CODING_AGENT_DIR, "synthetic-adc.json");
 		writeFileSync(file, JSON.stringify({ type: "authorized_user", client_id: "synthetic", client_secret: "synthetic", refresh_token: "synthetic" }));
-		writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "web-search.json"), JSON.stringify({ geminiAuth: "adc", geminiProject: "synthetic-project", geminiLocation: "global" }));
+		writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "metis-pi.toml"), stringify({ webAccess: { geminiAuth: "adc", geminiProject: "synthetic-project", geminiLocation: "global" } }));
 		process.env.GOOGLE_APPLICATION_CREDENTIALS = file;
 		const calls = [];
 		globalThis.fetch = async (url, init) => {
@@ -223,11 +223,11 @@ test("Gemini ADC keeps its supported tool shape and consumes recency as a prompt
 
 for (const routing of ["auto", "configured"]) {
 	test(`${routing} routing surfaces unsupported filters without a new paid fallback`, () => {
-		const output = run(`
+		const output = run(`import { stringify } from "smol-toml";
 			const { writeFileSync } = await import("node:fs"); const { join } = await import("node:path");
-			writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "web-search.json"), JSON.stringify(${JSON.stringify(routing === "configured"
+			writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "metis-pi.toml"), stringify({ webAccess: ${JSON.stringify(routing === "configured"
 				? { webSearch: { allowedProviders: ["ollama", "brave"] }, searchRouting: { providers: ["ollama", "brave"], fallbackOn: ["network", "transient"] } }
-				: { webSearch: { allowedProviders: ["ollama", "perplexity"] } })}));
+				: { webSearch: { allowedProviders: ["ollama", "perplexity"] } })} }));
 			process.env.OLLAMA_API_KEY = "synthetic-ollama-key";
 			process.env.BRAVE_API_KEY = "synthetic-brave-key"; process.env.PERPLEXITY_API_KEY = "synthetic-perplexity-key";
 			const calls = [];

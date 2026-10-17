@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -20,7 +22,11 @@ function cleanProviderEnv(root) {
 
 async function runExtract(config, { jinaFails = false } = {}) {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-"));
-	await writeFile(join(root, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		await writeFile(join(root, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	const childEnv = cleanProviderEnv(root);
 
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
@@ -48,7 +54,7 @@ async function runExtract(config, { jinaFails = false } = {}) {
 
 async function runTypedExtract(config, contentType) {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-typed-"));
-	await writeFile(join(root, "web-search.json"), typeof config === "string" ? config : JSON.stringify(config) + "\n", "utf8");
+	await writeFile(join(root, "metis-pi.toml"), typeof config === "string" ? config : stringify({ webAccess: config }), "utf8");
 	const childEnv = cleanProviderEnv(root);
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
@@ -162,9 +168,9 @@ test("PDF direct download size rejection keeps the existing downstream fallback 
 });
 
 test("malformed config returns a parse error without hosted fallback", async () => {
-	const output = await runTypedExtract("{", "image/png");
+	const output = await runTypedExtract("[broken", "image/png");
 	assert.deepEqual(output.calls, []);
-	assert.match(output.result.error, /Failed to parse .*web-search\.json/);
+	assert.match(output.result.error, /Failed to parse .*metis-pi\.toml/);
 });
 
 test("image attachment gate suppresses malformed config", async () => {
@@ -189,7 +195,8 @@ test("image attachment gate suppresses malformed config", async () => {
 
 test("Ollama Web Fetch is disabled for remote URLs without hosted-provider opt-in", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-ollama-"));
-	await writeFile(join(root, "web-search.json"), JSON.stringify({ ollamaApiKey: "test-key", fetchRouting: { providers: ["ollama", "http"] } }) + "\n", "utf8");
+	await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { fetchRouting: { providers: ["ollama", "http"] } } }) + "\n", "utf8");
+	await writeFile(join(root, "web-search.json"), JSON.stringify({ ollamaApiKey: "test-key" }) + "\n", "utf8");
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
 	delete childEnv.OLLAMA_API_KEY;
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
@@ -218,7 +225,7 @@ test("Ollama Web Fetch is disabled for remote URLs without hosted-provider opt-i
 
 test("hosted providers cannot bypass redirect policy validation", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-redirect-"));
-	await writeFile(join(root, "web-search.json"), JSON.stringify({ fetchRouting: { providers: ["jina"], allowRemoteHostedProviders: true } }) + "\n", "utf8");
+	await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { fetchRouting: { providers: ["jina"], allowRemoteHostedProviders: true } } }) + "\n", "utf8");
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
@@ -254,7 +261,11 @@ const cloudflareChallengePage = `<!DOCTYPE html><html lang="en-US"><head><title>
 
 async function runChallengeExtract(config, { body, headers = {}, mode } = {}) {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-challenge-"));
-	await writeFile(join(root, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		await writeFile(join(root, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			const calls = [];

@@ -27,9 +27,7 @@ DELIVERY_OPS = frozenset({'wait','result','inspect','soft_interrupt'})
 # Canonical base environment for a managed worker: enough to find an interpreter,
 # a home, a locale and its own Pi configuration directory, and nothing that
 # carries credentials. PI_CODING_AGENT_DIR is a non-secret LOCATION the child Pi
-# resolves itself (like HOME), so it is forwarded; CODEX_HOME is captured by the
-# scope snapshot too but stays out of this set because the daemon resolves that
-# source itself. The scope snapshot also captures proxy keys and CODEX_HOME.
+# resolves itself (like HOME), so it is forwarded. Proxy keys stay in memory.
 BASE_ENV_KEYS = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR', 'SHELL', 'USER',
                  'LOGNAME', 'PI_CODING_AGENT_DIR')
 # Network routing follows the opening client, not the daemon. Proxy URLs may
@@ -141,21 +139,9 @@ def atomic_write(path: Path, data: bytes):
 def atomic_json(path: Path, value):
     atomic_write(path, dumps(value).encode())
 
-def state_home() -> Path:
-    return (
-        Path(
-            os.environ.get(
-                "PI_AGENTS_HOME",
-                str(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "subagent-pi"),
-            )
-        )
-        .expanduser()
-        .resolve()
-    )
-
 def socket_path(home: Path) -> Path:
     """Use a short private runtime path; AF_UNIX addresses have a small limit."""
-    base = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"subagent-pi-{os.getuid()}"
+    base = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"metis-subagent-{os.getuid()}"
     private_dir(base)
     return base / (hashlib.sha256(str(home).encode()).hexdigest()[:20] + ".sock")
 

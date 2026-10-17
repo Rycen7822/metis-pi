@@ -60,9 +60,8 @@ queryModel = "openai/gpt-6.1-sol"
 
 默认 `"default"` 跟随当前会话；模型不存在或选择值无效时也回退当前模型。
 每次 `session_recall` 的 `query` 操作重读配置，`search` 操作不调用模型。模型定义与认证
-仍由 Pi 管理。新 TOML 不存在时 `/metis-config init` 导入旧
-`session-recall.json`；已有 TOML 直接修改 `[sessionRecall].queryModel`。
-旧 recall JSON 保留，TOML 存在后不再作为查询配置读取。
+仍由 Pi 管理。直接修改 `[sessionRecall].queryModel`；没有 TOML 时使用包内默认值，
+`/metis-config init` 可创建默认 TOML。
 
 网页配置示例（编辑同一份 `metis-pi.toml`）：
 
@@ -80,18 +79,15 @@ defaultMode = "readable"
 timeout = 30
 ```
 
-现有网页 JSON 的字段名保持不变，普通字段加上 `webAccess` 表前缀。
+网页普通字段使用 `webAccess` 表前缀。
 `/websearch` 和 `/curator` 只把选择写回 TOML。其他手动修改建议 `/reload`，
 工具名称、快捷键和启用开关须重载扩展后生效；独立 MCP 需重启进程。
 
-尚无 TOML 时，`/metis-config init` 同时导入网页配置：优先读取 agent 目录的
-旧 JSON，缺失时兼容旧 XDG `pi/web-search.json` 和 `~/.pi/web-search.json`。
-设置了 `PI_CODING_AGENT_DIR` 时只读取指定目录，不借用其他目录的密钥。
-已有 TOML 直接编辑 `[webAccess]`。初始化将凭据 JSON 写到 TOML 同目录，
-新写入文件的权限为 `0600`。外部旧文件不删除；同目录的旧混合 JSON 拆分前有备份。
-读取过程不改文件。TOML 存在后，JSON 里的普通字段不再参与配置，
-API key/token 等凭据仍从 JSON 或环境变量读取。
-旧 ~/.pi/XDG 缓存目录通过 `webAccess.cacheRoot` 保留，历史缓存引用继续有效。
+尚无 TOML 时，`/metis-config init` 创建默认配置；已有 TOML 直接编辑 `[webAccess]`。
+读取过程不改文件。普通偏好只来自 TOML 与包内默认值；API key/token 等凭据
+仍从 agentDir 内的 `web-search.json` 或环境变量读取，不读取其他目录的密钥。
+初始化和偏好保存不会改写凭据文件。需要沿用已有缓存父目录时显式设置
+`webAccess.cacheRoot`，历史缓存引用继续有效。
 
 可分别用 Pi 包入口过滤关闭：
 

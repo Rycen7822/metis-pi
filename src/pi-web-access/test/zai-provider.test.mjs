@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,7 +25,11 @@ const items = [
 ];
 
 async function writeConfig(config) {
-	await writeFile(join(home, "web-search.json"), JSON.stringify({ webSearch: { allowedProviders: ["zai"] }, ...config }));
+	{
+		const { preferences, credentials } = splitWebAccessConfig({ webSearch: { allowedProviders: ["zai"] }, ...config });
+		await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }));
+		await writeFile(join(home, "web-search.json"), JSON.stringify(credentials));
+	}
 }
 
 before(async () => {

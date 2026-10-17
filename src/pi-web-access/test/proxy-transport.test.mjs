@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile, chmod } from "node:fs/promises";
@@ -186,7 +187,7 @@ test("proxy curl redirects strip caller headers across origins", async (t) => {
 
 test("configured proxy is scoped to web operations while empty string forces direct access", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-config-test-"));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify({ proxy: "http://global-proxy.example:8080" }));
+	await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { proxy: "http://global-proxy.example:8080" } }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});
@@ -233,7 +234,7 @@ test("omitted proxy preserves trusted environment proxy routing when no proxy is
 
 test("fetch_content lets a trusted configured proxy resolve hostnames that local DNS cannot", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-trusted-dns-test-"));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify({ proxy: "http://configured-proxy.example:3128", ssrf: { trustEnvProxy: true } }));
+	await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { proxy: "http://configured-proxy.example:3128", ssrf: { trustEnvProxy: true } } }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});
@@ -267,7 +268,7 @@ test("fetch_content lets a trusted configured proxy resolve hostnames that local
 
 test("configured proxy DNS trust never extends to a different per-call proxy", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-trust-scope-test-"));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify({ proxy: "http://configured-proxy.example:3128" }));
+	await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { proxy: "http://configured-proxy.example:3128" } }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});
@@ -290,12 +291,12 @@ test("configured proxy DNS trust never extends to a different per-call proxy", a
 
 	const untrusted = runConfigProbe(dir, probe(false));
 	assert.match(untrusted[0], /Blocked internal address/);
-	assert.match(untrusted[3], /^Failed to resolve internal\.example\.test: getaddrinfo ENOTFOUND\. If your configured proxy resolves hostnames, set ssrf\.trustEnvProxy to true/);
+	assert.match(untrusted[3], /^Failed to resolve internal\.example\.test: getaddrinfo ENOTFOUND\. If your configured proxy resolves hostnames, set webAccess\.ssrf\.trustEnvProxy to true/);
 });
 
 test("invalid configured proxy fails closed instead of direct fetching", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-invalid-config-test-"));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify({ proxy: "ftp://proxy.example:21" }));
+	await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { proxy: "ftp://proxy.example:21" } }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});
@@ -313,8 +314,8 @@ test("invalid configured proxy fails closed instead of direct fetching", async (
 
 test("invalid configured proxy reaches background fetch rejection handling", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-background-config-test-"));
-	const configPath = join(dir, "web-search.json");
-	await writeFile(configPath, JSON.stringify({ provider: "openai", toolActivation: "eager" }));
+	const configPath = join(dir, "metis-pi.toml");
+	await writeFile(configPath, stringify({ webAccess: { provider: "openai", toolActivation: "eager" } }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});
@@ -322,13 +323,14 @@ test("invalid configured proxy reaches background fetch rejection handling", asy
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			const { writeFileSync } = await import("node:fs");
+			const { stringify } = await import("smol-toml");
 			const configPath = ${JSON.stringify(configPath)};
 			const messages = [];
 			globalThis.fetch = async (url) => {
 				if (String(url) !== "https://api.openai.com/v1/responses") {
 					throw new Error("Unexpected fetch: " + url);
 				}
-				writeFileSync(configPath, JSON.stringify({ provider: "openai", proxy: "ftp://proxy.example:21" }));
+				writeFileSync(configPath, stringify({ webAccess: { provider: "openai", proxy: "ftp://proxy.example:21" } }));
 				return new Response(JSON.stringify({ output: [
 					{ type: "web_search_call", action: { sources: [{ title: "Source", url: "https://example.com/source" }] } },
 					{ type: "message", content: [{ type: "output_text", text: "Search answer" }] },
@@ -498,13 +500,8 @@ test("websearch command scopes searches but not model callbacks to configured pr
 		},
 	}, async (logPath) => {
 		const configDir = dirname(logPath);
-		await writeFile(join(configDir, "web-search.json"), JSON.stringify({
-			provider: "xcrawl",
-			xcrawlApiKey: "xc-test-key",
-			proxy: "http://configured-proxy.example:8080",
-			autoOpenBrowser: false,
-			curatorTimeoutSeconds: 5,
-		}) + "\n", "utf8");
+		await writeFile(join(configDir, "metis-pi.toml"), stringify({ webAccess: { provider: "xcrawl", proxy: "http://configured-proxy.example:8080", autoOpenBrowser: false, curatorTimeoutSeconds: 5 } }) + "\n", "utf8");
+		await writeFile(join(configDir, "web-search.json"), JSON.stringify({ xcrawlApiKey: "xc-test-key" }) + "\n", "utf8");
 
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
@@ -610,7 +607,7 @@ test("websearch command scopes searches but not model callbacks to configured pr
 
 test("configured socks5h proxy is accepted and routed to curl", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-socks-config-test-"));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify({ proxy: "socks5h://proxy.example:9050" }));
+	await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: { proxy: "socks5h://proxy.example:9050" } }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});

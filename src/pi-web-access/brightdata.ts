@@ -133,7 +133,7 @@ function requireSerpZone(): string {
 	}
 	throw new Error(
 		"Bright Data SERP zone is invalid or missing. Either:\n" +
-		`  1. Create ${CONFIG_PATH} with { "brightdataSerpZone": "your_serp_zone" }\n` +
+		`  1. Set webAccess.brightdataSerpZone = "your_serp_zone" in ${getWebAccessConfigPath()}\n` +
 		"  2. Set BRIGHTDATA_SERP_ZONE environment variable\n" +
 		"The zone must be of Bright Data type `serp`; a Web Unlocker zone is a different product and does not return SERP JSON.\n" +
 		"Create one at https://brightdata.com/cp/zones",

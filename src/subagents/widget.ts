@@ -13,7 +13,7 @@ const ACTIVE = new Set(["starting", "running", "needs_input", "stopping"]);
 // and cadence: a moving gap among seven lit dots, not changing dot density.
 const SPINNER = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 export const WIDGET_FRAME_MS = 100;
-// Inspired by Codex summary shimmer: short work stays still before animating.
+// Short work stays still before the summary starts animating.
 const ANIMATION_DELAY_MS = 600;
 const ACTIONS: Record<string, string> = {
   read: "reading", bash: "running command", exec_command: "running command", write_stdin: "waiting for command",

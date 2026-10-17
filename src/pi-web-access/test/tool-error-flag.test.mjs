@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -28,7 +29,7 @@ globalThis.fetch = async (input) => {
 async function runTool(toolName, params) {
 	const home = await mkdtemp(join(tmpdir(), "pi-tool-error-flag-"));
 	try {
-		await writeFile(join(home, "web-search.json"), JSON.stringify({ workflow: "none" }));
+		await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { workflow: "none" } }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 				${fetchMock}

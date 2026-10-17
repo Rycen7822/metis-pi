@@ -20,7 +20,7 @@ test("native codemode owns MCP calls, permissions and resource results alongside
     dir = mkdtempSync(join(tmpdir(), "metis-mcp-contract-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
-  writeFileSync(join(dir, "metis-pi.json"), JSON.stringify({ mcp: { enabled: true } }));
+  writeFileSync(join(dir, "metis-pi.toml"), "[mcp]\nenabled=true\n");
   writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: fixture.url } } }));
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });

@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -301,10 +302,8 @@ test("explicit kimi routing dispatches through the Kimi Code search endpoint", a
 
 test("configured routing falls back when Kimi hits its provider timeout", async () => {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-web-access-kimi-timeout-routing-"));
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({
-		braveApiKey: "brave-routing-key",
-		searchRouting: { providers: ["kimi", "brave"], fallbackOn: ["network"] },
-	}) + "\n", "utf8");
+	await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { searchRouting: { providers: ["kimi", "brave"], fallbackOn: ["network"] } } }) + "\n", "utf8");
+	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ braveApiKey: "brave-routing-key" }) + "\n", "utf8");
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			globalThis.calls = [];
@@ -345,10 +344,8 @@ test("configured routing falls back when Kimi hits its provider timeout", async 
 
 test("configured routing does not fall back when the caller cancels Kimi", async () => {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-web-access-kimi-cancel-routing-"));
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({
-		braveApiKey: "brave-routing-key",
-		searchRouting: { providers: ["kimi", "brave"], fallbackOn: ["network"] },
-	}) + "\n", "utf8");
+	await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { searchRouting: { providers: ["kimi", "brave"], fallbackOn: ["network"] } } }) + "\n", "utf8");
+	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ braveApiKey: "brave-routing-key" }) + "\n", "utf8");
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			globalThis.calls = [];

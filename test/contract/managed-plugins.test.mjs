@@ -123,9 +123,6 @@ test("session_recall query reads its model from global TOML at each call", async
   const dir = process.env.PI_CODING_AGENT_DIR, configPath = join(dir, "metis-pi.toml");
   const current = { provider: "openai", id: "current", contextWindow: 32768 };
   const dedicated = { ...current, id: "recall/variant" }, codex = { ...dedicated, provider: "openai-codex" };
-  writeFileSync(join(dir, "session-recall.json"), JSON.stringify({
-    queryModel: { provider: dedicated.provider, id: dedicated.id },
-  }));
   const manager = SessionManager.inMemory(dir), sessionPath = join(dir, "query.jsonl");
   manager.appendMessage({ role: "user", content: "What changed?", timestamp: 0 });
   writeFileSync(sessionPath, [manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n"));

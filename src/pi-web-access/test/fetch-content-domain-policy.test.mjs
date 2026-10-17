@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -9,7 +11,11 @@ const extractUrl = new URL("../extract.ts", import.meta.url).href;
 
 async function runExtract(config, urls, optionsByUrl = []) {
 	const root = await mkdtemp(join(tmpdir(), "pi-domain-policy-extract-"));
-	await writeFile(join(root, "web-search.json"), JSON.stringify(config), "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: preferences }), "utf8");
+		await writeFile(join(root, "web-search.json"), JSON.stringify(credentials), "utf8");
+	}
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
 	for (const key of ["GEMINI_API_KEY", "GOOGLE_GEMINI_API_KEY", "GOOGLE_API_KEY", "CLOUDFLARE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "CRAWL4AI_BASE_URL", "CRAWL4AI_API_TOKEN", "FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY", "BRIGHTDATA_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "BRIGHTDATA_UNLOCKER_ZONE"]) delete childEnv[key];
 	const child = spawnSync(process.execPath, ["--input-type=module"], {

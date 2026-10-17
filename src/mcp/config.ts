@@ -13,7 +13,6 @@ import {
   type RegisteredMcpServer,
 } from "@earendil-works/pi-coding-agent";
 const MCP_EXPOSURES: readonly string[] = ["codemode", "deferred", "direct", "hidden"];
-const MCP_EXPOSURE_ALIASES: Readonly<Record<string, McpExposure>> = { "codemode-deferred": "codemode" };
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
 type McpHttpServerConfig = Extract<McpServerConfig, { url: string }>;
@@ -174,22 +173,6 @@ function isExposure(value: unknown): value is McpExposure {
 	return typeof value === "string" && MCP_EXPOSURES.includes(value);
 }
 
-function resolveExposureAlias(value: unknown): unknown {
-	return typeof value === "string" ? (MCP_EXPOSURE_ALIASES[value] ?? value) : value;
-}
-
-function resolveExposureAliases(value: Record<string, unknown>): Record<string, unknown> {
-	const { exposure, toolExposure } = value;
-	const resolved: Record<string, unknown> = { ...value };
-	if (exposure !== undefined) resolved.exposure = resolveExposureAlias(exposure);
-	if (isRecord(toolExposure)) {
-		resolved.toolExposure = Object.fromEntries(
-			Object.entries(toolExposure).map(([tool, entry]) => [tool, resolveExposureAlias(entry)]),
-		);
-	}
-	return resolved;
-}
-
 function toolPatternRegExp(pattern: string): RegExp {
 	const source = pattern
 		.split("*")
@@ -211,7 +194,7 @@ export function getMcpToolExposure(config: McpServerConfig, toolName: string): M
 export function validateMcpServerConfig(name: string, raw: unknown): McpServerConfig | string {
 	if (!SERVER_NAME.test(name)) return `invalid server name "${name}" (use letters, digits, "_" and "-")`;
 	if (!isRecord(raw)) return `server "${name}" must be an object`;
-	const value = resolveExposureAliases(raw);
+	const value = raw;
 	const { type, exposure, enabled, timeout, toolExposure, description } = value;
 	const exposures = MCP_EXPOSURES.map((value) => `"${value}"`).join(", ");
 	if (exposure !== undefined && !isExposure(exposure)) {

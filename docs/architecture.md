@@ -62,7 +62,7 @@ Web 搜索的公共结果归 `search-types.ts`，provider 身份与标签归 `se
 
 网页请求使用显式 transport，不改写进程全局 fetch；代理和 SSRF 校验使用同一实际路由，默认将已验证的 DNS 地址固定到连接。Curator 的资源与 Cookie 诊断归具体实例或操作；页面使用固定版本和完整性校验的 Markdown parser/sanitizer，结果正文不能提供 UI 身份属性，选择操作只读取页面自身创建的卡片与控件。
 
-子代理核心由 metis 完全维护并随包交付，不依赖独立 subagent-pi 仓库或运行包。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；接收证明校验 session、scope、receipt 和正文 digest。不确定交付保留账本，wait、结果读取和状态检查按已交付票据消费终态通知；列表保留 attention，结果文件支持重复读取。Worker 的进程状态与每次 run 的投影分开，Runtime 仍是任务推进者。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[管理入口](subagents/cli.md)。
+子代理核心由 Metis 维护并随包交付。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；接收证明校验 session、scope、receipt 和正文 digest。不确定交付保留账本，wait、结果读取和状态检查按已交付票据消费终态通知；列表保留 attention，结果文件支持重复读取。Worker 的进程状态与每次 run 的投影分开，Runtime 仍是任务推进者。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[原生入口](subagents/native.md)。
 
 ## 生命周期与交付
 

@@ -7,8 +7,8 @@ import sys
 root = Path(__file__).resolve().parent.parent / "src/subagents/core"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(root))
-from subagent_pi.common import BASE_ENV_KEYS, PROXY_ENV_KEYS, MAX_FRAME
-from subagent_pi.schema import NATIVE_TOOLS
+from metis_subagent.common import BASE_ENV_KEYS, PROXY_ENV_KEYS, MAX_FRAME
+from metis_subagent.schema import NATIVE_TOOLS
 
 (root / "tools.json").write_text(json.dumps({
     "hostProtocol": 1, "baseEnvKeys": BASE_ENV_KEYS,

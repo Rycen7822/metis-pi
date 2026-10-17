@@ -3,6 +3,7 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { stringify } from "smol-toml";
 import { loadPolicy, matches, parseConfig, projectMessages, replaceGlobal } from "../../src/dynamic-agents.ts";
 
 test("provider globs, literal punctuation and cross-provider terminal IDs", () => {
@@ -24,21 +25,21 @@ test("provider globs, literal punctuation and cross-provider terminal IDs", () =
 test("first matching group with local exclusions, atomic fallback and relative paths", t => {
   const work = fileURLToPath(new URL("../../.work/", import.meta.url)); mkdirSync(work, { recursive: true });
   const dir = mkdtempSync(join(work, "dynamic-config-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "dynamic-agents.json");
+  const path = join(dir, "metis-pi.toml");
   const config = { version: 1, notify: false, groups: [
     { id: "ordinary", file: "ordinary.md", include: ["commandcode/*"], exclude: ["deepseek-v4.1-flash"] },
     { id: "flash", file: "flash.md", include: ["deepseek-v4.1-flash"] },
     { id: "fallback", file: "missing.md", include: ["*"] },
   ] };
-  writeFileSync(path, JSON.stringify(config)); writeFileSync(join(dir, "flash.md"), "FLASH"); writeFileSync(join(dir, "ordinary.md"), "ORDINARY");
+  writeFileSync(path, stringify({ dynamicAgents: { ...config, enabled: true } })); writeFileSync(join(dir, "flash.md"), "FLASH"); writeFileSync(join(dir, "ordinary.md"), "ORDINARY");
   const flash = { provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" };
   assert.deepEqual(loadPolicy(path, flash), { group: "flash", file: { path: join(dir, "flash.md"), content: "FLASH" }, notify: false });
   assert.equal(loadPolicy(path, { ...flash, id: "other" }).group, "ordinary");
   assert.ok(loadPolicy(path, { provider: "other", id: "other" }).error);
   writeFileSync(join(dir, "flash.md"), " "); assert.match(loadPolicy(path, flash).error!, /Empty policy/);
   writeFileSync(path, "{"); assert.ok(loadPolicy(path, flash).error); assert.equal(loadPolicy(path, flash).file, undefined);
-  writeFileSync(path, JSON.stringify({ ...config, enabled: false })); assert.equal(loadPolicy(path, flash).file, undefined);
-  assert.equal(loadPolicy(join(dir, "missing.json"), flash).file, undefined);
+  writeFileSync(path, stringify({ dynamicAgents: { ...config, enabled: false } })); assert.equal(loadPolicy(path, flash).file, undefined);
+  assert.equal(loadPolicy(join(dir, "absent", "metis-pi.toml"), flash).file, undefined);
   assert.throws(() => parseConfig({ version: 1, groups: [config.groups[0], config.groups[0]] }), /unique/);
   assert.throws(() => parseConfig({ version: 1, groups: [], enabled: "false" }), /boolean/);
 });

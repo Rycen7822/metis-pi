@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import "./isolate-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -338,7 +340,11 @@ test("unused ambiguous fallback cannot block the first default; reached ambiguit
 async function summaryGenerationDeadline(config) {
 	const configDir = await mkdtemp(join(tmpdir(), "pi-web-access-summary-deadline-config-"));
 	try {
-		if (config !== undefined) await writeFile(join(configDir, "web-search.json"), JSON.stringify(config));
+		if (config !== undefined) {
+			const { preferences, credentials } = splitWebAccessConfig(config);
+			await writeFile(join(configDir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+			await writeFile(join(configDir, "web-search.json"), JSON.stringify(credentials));
+		}
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 				process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(configDir)};
@@ -364,7 +370,7 @@ test("summary generation deadline config defaults, validates, and caps", async (
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 1.5 }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: "150000" }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 600_001 }), 600_000);
-	assert.match(readmeSrc, /"summaryGenerationDeadlineMs": 30000/);
+	assert.match(readmeSrc, /summaryGenerationDeadlineMs = 30000/);
 	assert.match(readmeSrc, /summaryGenerationDeadlineMs.*capped at `600000`/);
 });
 

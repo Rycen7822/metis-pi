@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -40,7 +42,11 @@ function runChild(script, env = {}) {
 }
 
 async function createHome(config) {
-	return createRawHome(JSON.stringify(config) + "\n");
+	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brightdata-"));
+	const { preferences, credentials } = splitWebAccessConfig(config);
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }), "utf8");
+	await writeFile(join(home, "web-search.json"), JSON.stringify(credentials), "utf8");
+	return home;
 }
 
 // A config file that is not valid JSON cannot be produced by createHome().
@@ -576,7 +582,7 @@ test("an empty organic array is a legitimate empty result, not an error", async 
 });
 
 test("a malformed config root fails explicitly on the request path and only there", async () => {
-	const home = await createHome([]);
+	const home = await createRawHome("[]\n");
 	const child = runChild(`
 		const { isBrightDataAvailable, searchWithBrightData } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let available = null;
@@ -629,11 +635,13 @@ test("the key uses the shared credential-source path, resolved at request time",
 	await mkdir(agentDir, { recursive: true });
 	const marker = join(home, "brightdata-resolver-ran");
 	await writeFile(
+		join(agentDir, "metis-pi.toml"),
+		stringify({ webAccess: { brightdataSerpZone: "pi_serp" } }) + "\n",
+		"utf8",
+	);
+	await writeFile(
 		join(agentDir, "web-search.json"),
-		JSON.stringify({
-			brightdataApiKey: `!touch ${marker} && printf bd-command-key`,
-			brightdataSerpZone: "pi_serp",
-		}) + "\n",
+		JSON.stringify({ brightdataApiKey: `!touch ${marker} && printf bd-command-key` }) + "\n",
 		"utf8",
 	);
 

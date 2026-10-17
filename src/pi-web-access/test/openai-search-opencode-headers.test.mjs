@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -19,7 +21,11 @@ const openCodeGoModels = [
 async function runSearch(t, { config, models, sessionId = "session-1", resolvedBaseUrl, resolvedHeaders = { "x-existing": "kept" }, withContext = true, redirectUrl, redirectStatus = 307 }) {
 	const dir = await mkdtemp(join(tmpdir(), "pi-openai-opencode-headers-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
-	await writeFile(join(dir, "web-search.json"), JSON.stringify(config));
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(dir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+		await writeFile(join(dir, "web-search.json"), JSON.stringify(credentials));
+	}
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		encoding: "utf8",
 		timeout: 15_000,

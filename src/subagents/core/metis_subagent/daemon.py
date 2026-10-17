@@ -34,7 +34,7 @@ async def serve(home: Path):
     idle_since = None
     try:
         runtime = Runtime(home)
-        notifications = runtime.parent_notifications.pi  # One idle-drain fact for admission and watchers.
+        notifications = runtime.parent_notifications  # One idle-drain fact for admission and watchers.
         sock.unlink(missing_ok=True)
 
         async def handle(reader, writer):
@@ -94,7 +94,7 @@ async def serve(home: Path):
                         await asyncio.gather(disconnected, return_exceptions=True)
                     value = await asyncio.shield(job)
                     if track_delivery:
-                        await runtime.parent_notifications.settle_delivery(reservation, op, value)
+                        runtime.parent_notifications.prepare_delivery(reservation, op, value)
                     reply = {"ok": True, "result": value}
                 except AgentError as e:
                     reply = {"ok": False, "error": e.as_dict()}
@@ -123,7 +123,7 @@ async def serve(home: Path):
             finally:
                 if disconnected:
                     disconnected.cancel()
-                runtime.parent_notifications.release_delivery(reservation, op, delivered)
+                runtime.parent_notifications.release_delivery(reservation)
                 try:
                     await close_writer(writer)
                 finally:

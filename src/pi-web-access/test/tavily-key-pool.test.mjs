@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -13,7 +15,11 @@ async function search({ config = {}, env, succeedWith, failStatus = 429 }) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-tavily-key-pool-"));
 	const agentDir = join(home, "agent");
 	await mkdir(agentDir, { recursive: true });
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify(config), "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: preferences }), "utf8");
+		await writeFile(join(agentDir, "web-search.json"), JSON.stringify(credentials), "utf8");
+	}
 	const childEnv = { ...process.env };
 	for (const key of Object.keys(childEnv)) if (/^(TAVILY_API_KEY|PI_WEB_ACCESS_TEST_MISSING_TAVILY_KEY)/.test(key)) delete childEnv[key];
 	const child = spawnSync(process.execPath, ["--input-type=module"], {

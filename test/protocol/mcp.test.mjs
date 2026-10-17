@@ -20,7 +20,6 @@ test("MCP policy is global-only while Pi trusted project server definitions stil
   mkdirSync(join(cwd, ".pi"), { recursive: true });
   writeFileSync(join(dir, "metis-pi.toml"), '[mcp]\nenabled=true\nidleTimeoutSeconds=123\nkeepAliveServers=["global"]\n');
   writeFileSync(join(cwd, ".pi", "metis-pi.toml"), '[mcp]\nenabled=false\nidleTimeoutSeconds=1\n');
-  writeFileSync(join(cwd, ".pi", "metis-pi.json"), '{"mcp":{"idleTimeoutSeconds":2}}');
   writeFileSync(join(cwd, ".pi", "mcp.json"), '{"mcpServers":{"project":{"url":"http://localhost:1234/mcp"}}}');
   for (const trusted of [false, true]) {
     const result = readMcpConfiguration(dir, cwd, trusted);

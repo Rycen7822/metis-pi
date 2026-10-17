@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -9,11 +10,8 @@ const indexUrl = new URL("../index.ts", import.meta.url).href;
 
 test("web_search bounds batch concurrency and preserves query order", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-concurrency-"));
-	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		xcrawlApiKey: "xc-test-key",
-		autoOpenBrowser: false,
-		curatorTimeoutSeconds: 1,
-	}) + "\n", "utf8");
+	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: { autoOpenBrowser: false, curatorTimeoutSeconds: 1 } }) + "\n", "utf8");
+	await writeFile(join(home, "web-search.json"), JSON.stringify({ xcrawlApiKey: "xc-test-key" }) + "\n", "utf8");
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: home };
 	for (const key of [
 		"OPENAI_API_KEY", "BRAVE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY",

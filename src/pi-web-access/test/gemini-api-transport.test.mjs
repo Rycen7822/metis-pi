@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -101,7 +102,8 @@ test("Gemini video upload, status, and delete respect a configured geminiBaseUrl
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-relay-"));
 	const mediaPath = join(root, "synthetic.webm");
 	await writeFile(mediaPath, "synthetic media", "utf8");
-	await writeFile(join(root, "web-search.json"), JSON.stringify({ geminiApiKey: "synthetic-gemini-key", geminiBaseUrl: "https://relay.example.com" }) + "\n", "utf8");
+	await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { geminiBaseUrl: "https://relay.example.com" } }) + "\n", "utf8");
+	await writeFile(join(root, "web-search.json"), JSON.stringify({ geminiApiKey: "synthetic-gemini-key" }) + "\n", "utf8");
 
 	const child = runChild(`
 		const requests = [];

@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -11,7 +12,6 @@ const geminiWebUrl = new URL("../gemini-web.ts", import.meta.url).href;
 function runCookieAccessCheck(home, extraEnv = {}) {
 	const env = { ...process.env, HOME: home, USERPROFILE: home };
 	delete env.PI_ALLOW_BROWSER_COOKIES;
-	delete env.FEYNMAN_ALLOW_BROWSER_COOKIES;
 	delete env.PI_CODING_AGENT_DIR;
 	delete env.XDG_CONFIG_HOME;
 	Object.assign(env, extraEnv);
@@ -164,7 +164,7 @@ test("browser cookie access is disabled unless explicitly allowed", async () => 
 	assert.equal(child.stdout.trim(), "false");
 
 	await mkdir(join(home, ".pi", "agent"), { recursive: true });
-	await writeFile(join(home, ".pi", "agent", "web-search.json"), JSON.stringify({ allowBrowserCookies: true }) + "\n", "utf8");
+	await writeFile(join(home, ".pi", "agent", "metis-pi.toml"), stringify({ webAccess: { allowBrowserCookies: true } }) + "\n", "utf8");
 
 	child = runCookieAccessCheck(home);
 	assert.equal(child.status, 0, child.stderr);
@@ -179,7 +179,7 @@ test("browser cookie access is disabled unless explicitly allowed", async () => 
 test("disabled browser cookie access does not validate legacy profile selection", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-cookie-legacy-disabled-"));
 	await mkdir(join(home, ".pi", "agent"), { recursive: true });
-	await writeFile(join(home, ".pi", "agent", "web-search.json"), JSON.stringify({ chromeProfile: "Profile 1" }) + "\n", "utf8");
+	await writeFile(join(home, ".pi", "agent", "metis-pi.toml"), stringify({ webAccess: { chromeProfile: "Profile 1" } }) + "\n", "utf8");
 
 	const child = runCookieAccessCheck(home);
 	assert.equal(child.status, 0, child.stderr);
@@ -189,29 +189,29 @@ test("disabled browser cookie access does not validate legacy profile selection"
 test("browser cookie config validates presets and rejects arbitrary profile paths", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-browser-cookie-config-"));
 	await mkdir(join(home, ".pi", "agent"), { recursive: true });
-	const configPath = join(home, ".pi", "agent", "web-search.json");
-	await writeFile(configPath, JSON.stringify({ browserCookies: { browser: "Helium", profile: "Profile 1" } }) + "\n", "utf8");
+	const configPath = join(home, ".pi", "agent", "metis-pi.toml");
+	await writeFile(configPath, stringify({ webAccess: { browserCookies: { browser: "Helium", profile: "Profile 1" } } }), "utf8");
 
 	let child = runBrowserCookieConfig(home);
 	assert.equal(child.status, 0, child.stderr);
 	assert.deepEqual(JSON.parse(child.stdout), { browser: "helium", profile: "Profile 1" });
 
-	await writeFile(configPath, JSON.stringify({ chromeProfile: "Profile 1", allowBrowserCookies: true }) + "\n", "utf8");
+	await writeFile(configPath, stringify({ webAccess: { chromeProfile: "Profile 1", allowBrowserCookies: true } }) + "\n", "utf8");
 	child = runBrowserCookieConfig(home);
 	assert.notEqual(child.status, 0);
 	assert.match(child.stderr, /chromeProfile.*no longer supported.*browserCookies\.profile/);
 
-	await writeFile(configPath, JSON.stringify({ browserCookies: { browser: "safari", profile: "Profile 1" } }) + "\n", "utf8");
+	await writeFile(configPath, stringify({ webAccess: { browserCookies: { browser: "safari", profile: "Profile 1" } } }) + "\n", "utf8");
 	child = runBrowserCookieConfig(home);
 	assert.notEqual(child.status, 0);
 	assert.match(child.stderr, /Unsupported browserCookies\.browser/);
 
-	await writeFile(configPath, JSON.stringify({ browserCookies: { browser: "helium", profile: 1 } }) + "\n", "utf8");
+	await writeFile(configPath, stringify({ webAccess: { browserCookies: { browser: "helium", profile: 1 } } }) + "\n", "utf8");
 	child = runBrowserCookieConfig(home);
 	assert.notEqual(child.status, 0);
 	assert.match(child.stderr, /browserCookies\.profile.*must be a profile directory name/);
 
-	await writeFile(configPath, JSON.stringify({ browserCookies: { browser: "helium", profilePath: "/tmp/Profile 1" } }) + "\n", "utf8");
+	await writeFile(configPath, stringify({ webAccess: { browserCookies: { browser: "helium", profilePath: "/tmp/Profile 1" } } }) + "\n", "utf8");
 	child = runBrowserCookieConfig(home);
 	assert.notEqual(child.status, 0);
 	assert.match(child.stderr, /profilePath is not supported/);

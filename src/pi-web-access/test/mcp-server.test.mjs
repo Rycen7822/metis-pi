@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { appendFile, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -214,7 +216,11 @@ after(async () => { if (binDir) await rm(binDir, { recursive: true, force: true 
 async function startBin(t, config) {
 	const dir = await builtBinDir();
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-home-"));
-	await writeFile(join(home, "web-search.json"), JSON.stringify(config));
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }));
+		await writeFile(join(home, "web-search.json"), JSON.stringify(credentials));
+	}
 	initializeMetisConfig(home);
 	const requestLog = join(home, "requests.log");
 	await writeFile(requestLog, "");

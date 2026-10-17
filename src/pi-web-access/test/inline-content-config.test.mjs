@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -12,7 +13,7 @@ const extractFetchFixtureUrl = new URL("./extract-fetch-fixture.mjs", import.met
 async function runScenario(maxInlineContentChars) {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-web-access-inline-content-"));
 	if (maxInlineContentChars !== undefined) {
-		await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ maxInlineContentChars }) + "\n", "utf8");
+		await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { maxInlineContentChars } }) + "\n", "utf8");
 	}
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
@@ -81,9 +82,10 @@ test("maxInlineContentChars applies to direct and stored content slices", async 
 
 test("stored content schema and execution keep one registered limit", async () => {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-web-access-inline-content-"));
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ maxInlineContentChars: 40_000 }) + "\n", "utf8");
+	await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { maxInlineContentChars: 40_000 } }) + "\n", "utf8");
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		input: `
+		input: `import { stringify } from "smol-toml";
+
 			import initializeExtension from ${JSON.stringify(indexUrl)};
 			import { storeResult, clearResults } from ${JSON.stringify(storageUrl)};
 			import { writeFile } from "node:fs/promises";
@@ -91,7 +93,7 @@ test("stored content schema and execution keep one registered limit", async () =
 			clearResults();
 			const tools = [];
 			initializeExtension({ registerTool(tool) { tools.push(tool); }, registerCommand() {}, registerShortcut() {}, on() {}, appendEntry() {} });
-			await writeFile(join(process.env.PI_CODING_AGENT_DIR, "web-search.json"), JSON.stringify({ maxInlineContentChars: 20_000 }) + "\\n", "utf8");
+			await writeFile(join(process.env.PI_CODING_AGENT_DIR, "metis-pi.toml"), stringify({ webAccess: { maxInlineContentChars: 20_000 } }) + "\\n", "utf8");
 			storeResult("stored", { id: "stored", type: "fetch", timestamp: Date.now(), urls: [{ url: "https://example.test", title: "Stored", content: "A".repeat(50_000), error: null }] });
 			const contentTool = tools.find(tool => tool.name === "get_search_content");
 			const rejected = await contentTool.execute("call", { responseId: "stored", urlIndex: 0, limit: 40_001 });

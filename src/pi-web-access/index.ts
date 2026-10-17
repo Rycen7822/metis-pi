@@ -826,7 +826,7 @@ export default function (pi: ExtensionAPI, options: {
 				}),
 			),
 			proxy: Type.Optional(Type.String({
-				description: "http(s) or socks proxy URL (e.g. http://host:port or socks5h://host:port) used for every outbound request in this call (search APIs and content fetches). Node fetch ignores HTTP(S)_PROXY env vars, so set this (or `proxy` in web-search.json) when direct access is blocked; empty string forces direct access.",
+				description: "http(s) or socks proxy URL (e.g. http://host:port or socks5h://host:port) used for every outbound request in this call (search APIs and content fetches). Node fetch ignores HTTP(S)_PROXY env vars, so set this (or `webAccess.proxy` in metis-pi.toml) when direct access is blocked; empty string forces direct access.",
 			})),
 		}),
 		outputSchema: webSearchOutputSchema,

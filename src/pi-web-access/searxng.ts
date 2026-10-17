@@ -1,13 +1,13 @@
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
+import { loadWebAccessConfig, getWebAccessConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
 import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { redactCredential } from "./credential-source.ts";
 
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = getWebAccessConfigPath();
 const SEARCH_TIMEOUT_MS = 30_000;
 
 interface WebSearchConfig {
@@ -59,7 +59,7 @@ function requireBaseUrl(): string {
 	if (!baseUrl) {
 		throw new Error(
 			"SearXNG base URL is invalid or missing. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "searxngBaseUrl": "https://search.example.com" }\n` +
+			`  1. Set webAccess.searxngBaseUrl = "https://search.example.com" in ${CONFIG_PATH}\n` +
 			"  2. Set SEARXNG_BASE_URL to an HTTP(S) URL",
 		);
 	}

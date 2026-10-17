@@ -20,7 +20,8 @@ test("registers tool definitions and loads content extraction on first use", () 
 });
 
 function buildChildScript(moduleUrl) {
-	return `
+	return `import { stringify } from "smol-toml";
+
 		import assert from "node:assert/strict";
 		import { existsSync } from "node:fs";
 		import { mkdtemp, writeFile } from "node:fs/promises";
@@ -33,8 +34,8 @@ function buildChildScript(moduleUrl) {
 		const markerPath = join(tempDir, "extract-loaded");
 		process.env.PI_CODING_AGENT_DIR = tempDir;
 		await writeFile(
-			join(tempDir, "web-search.json"),
-			JSON.stringify({ ssrf: { allowRanges: ["127.0.0.0/8"] } }),
+			join(tempDir, "metis-pi.toml"),
+			stringify({ webAccess: { ssrf: { allowRanges: ["127.0.0.0/8"] } } }),
 		);
 
 		const hookSource = \`

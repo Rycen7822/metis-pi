@@ -170,9 +170,7 @@ fs.writeFileSync(path.join(AGENT_DIR, "settings.json"), JSON.stringify({
   packages: [],
 }));
 // Avoid the vendor alt+q/Pi built-in collision, which adds an extension-issues banner.
-fs.writeFileSync(path.join(AGENT_DIR, "metis-pi.json"), JSON.stringify({
-  execution: { ui: { backgroundShellPrevShortcut: "alt+u" } },
-}));
+fs.writeFileSync(path.join(AGENT_DIR, "metis-pi.toml"), '[execution.ui]\nbackgroundShellPrevShortcut="alt+u"\n');
 // Install THIS repo (the code under test), not the published one.
 execFileSync(PI_BIN, ["install", path.resolve(new URL("..", import.meta.url).pathname)], {
   env: ISOLATED_ENV,

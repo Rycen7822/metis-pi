@@ -1,3 +1,4 @@
+import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,11 +14,7 @@ const root = await mkdtemp(join(tmpdir(), "pi-codemode-structured-"));
 process.env.PI_CODING_AGENT_DIR = root;
 process.env.BRAVE_API_KEY = "codemode-structured-key";
 delete process.env.BRAVE_BASE_URL;
-await writeFile(join(root, "web-search.json"), JSON.stringify({
-	workflow: "none",
-	maxInlineContentChars: 1_000,
-	fetchRouting: { providers: ["http"] },
-}));
+await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { workflow: "none", maxInlineContentChars: 1_000, fetchRouting: { providers: ["http"] } } }));
 
 const extractionFixture = injectExtractFetch(originalFetch);
 const { default: initializeExtension } = await import("../index.ts");

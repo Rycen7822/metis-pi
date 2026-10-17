@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -11,7 +13,11 @@ const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href
 
 async function createHome(config) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-mistral-"));
-	await writeFile(join(home, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+	{
+		const { preferences, credentials } = splitWebAccessConfig(config);
+		await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+		await writeFile(join(home, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+	}
 	return home;
 }
 
@@ -165,7 +171,7 @@ test("Mistral rejects invalid model and tool configuration before making a reque
 	for (const config of [
 		{ mistralApiKey: "mistral-key", mistralSearchModel: 42 },
 		{ mistralApiKey: "mistral-key", mistralSearchModel: "   " },
-		{ mistralApiKey: "mistral-key", mistralSearchTool: null },
+		{ mistralApiKey: "mistral-key", mistralSearchTool: false },
 		{ mistralApiKey: "mistral-key", mistralSearchTool: "unknown" },
 	]) {
 		const home = await createHome(config);

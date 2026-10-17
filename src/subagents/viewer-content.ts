@@ -3,7 +3,7 @@ import { Container, Markdown, Text, getCapabilities, visibleWidth, wrapTextWithA
 import { stripVTControlCharacters } from "node:util";
 import { makeRenderers, type ToolName } from "../renderers.ts";
 import { createDiffComponent, createShellFactories } from "../chrome/tool-components.ts";
-import { CodexThinkingClickableComponent, CodexThinkingPeekComponent, CodexThinkingRailComponent } from "../chrome/transcript-components.ts";
+import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent } from "../chrome/transcript-components.ts";
 import { createThinkingViewControl, type ThinkingView } from "../thinking-view.ts";
 import { thoughtSummaryText } from "../thinking-summary.ts";
 import { resolveColorContext } from "../palette.ts";
@@ -48,10 +48,10 @@ class ThinkingBlock implements Component {
   private rebuild() {
     const view = this.control.userView() ?? this.fallback;
     let child: Component = view === "collapsed" ? new Text(this.theme.fg("thinkingText", thoughtSummaryText()), 1, 0) : this.body;
-    if (view === "peek") child = new CodexThinkingPeekComponent(child, this.control, this.config.peekLines,
+    if (view === "peek") child = new ThinkingPeekComponent(child, this.control, this.config.peekLines,
       text => this.theme.fg("dim", text), this.changed);
-    if (view !== "collapsed" && this.config.rail) child = new CodexThinkingRailComponent(child, colorLevel());
-    this.child = new CodexThinkingClickableComponent(child, this.control, view, () => { this.rebuild(); this.changed(); });
+    if (view !== "collapsed" && this.config.rail) child = new ThinkingRailComponent(child, colorLevel());
+    this.child = new ThinkingClickableComponent(child, this.control, view, () => { this.rebuild(); this.changed(); });
   }
   setExpanded(expanded: boolean) {
     this.control = createThinkingViewControl(); this.fallback = expanded ? "full" : "collapsed"; this.rebuild();

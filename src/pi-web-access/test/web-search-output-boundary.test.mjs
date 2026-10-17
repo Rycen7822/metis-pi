@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -13,7 +15,11 @@ const LARGE_ANSWER_LENGTH = 116_000;
 function runBoundaryScenario(config = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-output-boundary-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider: "openai", toolActivation: "eager", ...config }));
+		{
+			const { preferences, credentials } = splitWebAccessConfig({ provider: "openai", toolActivation: "eager", ...config });
+			writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess: preferences }));
+			writeFileSync(join(dir, "web-search.json"), JSON.stringify(credentials));
+		}
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			const answer = "A".repeat(${LARGE_ANSWER_LENGTH} - 11) + "LATE_ANSWER";
@@ -73,7 +79,7 @@ function runIncludeContentScenario(mode) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-output-guidance-"));
 	const provider = mode === "inline" ? "anysearch" : "openai";
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider, toolActivation: "eager", maxInlineContentChars: 1_000 }));
+		writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess: { provider, toolActivation: "eager", maxInlineContentChars: 1_000 } }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			const answer = "A".repeat(${LARGE_ANSWER_LENGTH});
@@ -205,7 +211,7 @@ test(`background includeContent preserves pages and ${mode} availability`, () =>
 	const providedUrl = mode === "failed" ? "http://93.184.216.34/provided" : "https://example.com/provided";
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-partial-inline-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider: "anysearch", toolActivation: "eager" }));
+		writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess: { provider: "anysearch", toolActivation: "eager" } }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			const requests = [];

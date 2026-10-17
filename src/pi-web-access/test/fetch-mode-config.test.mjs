@@ -1,3 +1,5 @@
+import { stringify } from "smol-toml";
+import { splitWebAccessConfig } from "../../web-access-config.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -11,7 +13,11 @@ const extractFetchFixtureUrl = new URL("./extract-fetch-fixture.mjs", import.met
 function runScenario(config, body) {
 	const agentDir = mkdtempSync(join(tmpdir(), "pi-web-access-fetch-modes-"));
 	if (config !== undefined) {
-		writeFileSync(join(agentDir, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
+		{
+			const { preferences, credentials } = splitWebAccessConfig(config);
+			writeFileSync(join(agentDir, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
+			writeFileSync(join(agentDir, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
+		}
 	}
 	return spawnSync(process.execPath, ["--input-type=module"], {
 		input: `

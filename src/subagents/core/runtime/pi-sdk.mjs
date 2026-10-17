@@ -15,14 +15,13 @@ import { createProtocolOutput } from "./protocol-output.mjs";
 // diagnostic data, even when it contains JSON or lacks a trailing newline.
 const output = createProtocolOutput(process.stdout, {
   fail(error) {
-    process.stderr.write(`subagent-pi protocol: ${error.message}\n`);
+    process.stderr.write(`metis-subagent protocol: ${error.message}\n`);
     process.exit(74); // Let the daemon record a crash; never fake delivery or replay.
   },
 });
 process.stdout.write = process.stderr.write.bind(process.stderr);
 const [sdkPath, ...argv] = process.argv.slice(2);
 const sdk = await import(pathToFileURL(sdkPath).href);
-const nativeHost = process.env.PI_AGENTS_HOST === "pi";
 const nativeTrust = process.env.PI_AGENTS_PROJECT_TRUST;
 delete process.env.PI_AGENTS_PROJECT_TRUST;
 // Validate explicit thinking against the loaded model, not parseArgs' global list.
@@ -86,7 +85,7 @@ if (args.offline) process.env.PI_OFFLINE = "1";
 const report = (error) => {
   output({ type: "extension_error", originRunId: queue.context.getStore()?.id, error: String(error?.error ?? error) });
   if (error?.code === "managed_queue_full") {
-    process.stderr.write(`subagent-pi: ${error.message}\n`);
+    process.stderr.write(`metis-subagent: ${error.message}\n`);
     process.exit(74); // The daemon records a crash; no queued input is silently lost.
   }
 };
@@ -178,19 +177,13 @@ const services = await sdk.createAgentSessionServices({
   agentDir,
   settingsManager,
   extensionFlagValues: args.unknownFlags,
-  ...(nativeHost
-    ? {
-        resourceLoaderReloadOptions: {
-          async resolveProjectTrust() {
-            if (nativeTrust !== undefined) return nativeTrust === "1";
-            if (!sdk.hasTrustRequiringProjectResources(cwd)) return true;
-            return (
-              new sdk.ProjectTrustStore(agentDir).get(cwd) ?? settingsManager.getDefaultProjectTrust() === "always"
-            );
-          },
-        },
-      }
-    : {}),
+  resourceLoaderReloadOptions: {
+    async resolveProjectTrust() {
+      if (nativeTrust !== undefined) return nativeTrust === "1";
+      if (!sdk.hasTrustRequiringProjectResources(cwd)) return true;
+      return new sdk.ProjectTrustStore(agentDir).get(cwd) ?? settingsManager.getDefaultProjectTrust() === "always";
+    },
+  },
   resourceLoaderOptions: {
     additionalExtensionPaths: args.extensions,
     additionalSkillPaths: args.skills,
@@ -205,7 +198,7 @@ const services = await sdk.createAgentSessionServices({
     appendSystemPrompt: args.appendSystemPrompt,
     extensionFactories: [
       {
-        name: "subagent-pi",
+        name: "metis-subagent",
         hidden: true,
         factory(pi) {
           pi.on("session_start", bindManagedActions);
@@ -235,14 +228,14 @@ const services = await sdk.createAgentSessionServices({
     ],
     extensionsOverride(base) {
       resources = base;
-      const managed = base.extensions.find((e) => e.path === "<inline:subagent-pi>");
+      const managed = base.extensions.find((e) => e.path === "<inline:metis-subagent>");
       if (!managed) throw new Error("Managed SDK extension did not load");
       return {
         ...base,
         extensions: [
           managed,
           ...base.extensions.filter(
-            (e) => e !== managed && (!nativeHost || !e.path.split(/[\\/]/).includes("pi-subagents")),
+            (e) => e !== managed && !e.path.split(/[\\/]/).includes("pi-subagents"),
           ),
         ],
       };
@@ -257,7 +250,7 @@ const sessionManager = args.session
   : sdk.SessionManager.create(
       cwd,
       args.sessionDir,
-      nativeHost && process.env.PI_AGENTS_PARENT_SESSION
+      process.env.PI_AGENTS_PARENT_SESSION
         ? { parentSession: process.env.PI_AGENTS_PARENT_SESSION }
         : undefined,
     );
@@ -297,25 +290,19 @@ if (args.apiKey && resolved.model) await services.modelRuntime.setRuntimeApiKey(
   excludeTools: args.excludeTools,
   noTools: args.noTools ? "all" : args.noBuiltinTools ? "builtin" : undefined,
 }));
-const nativeRuntime = nativeHost ? new sdk.AgentSessionRuntime(session, services, unsupported) : undefined;
+const nativeRuntime = new sdk.AgentSessionRuntime(session, services, unsupported);
 let shutdownPromise;
 function shutdown() {
   return (shutdownPromise ??= (async () => {
     try {
-      if (nativeRuntime) await nativeRuntime.dispose();
+      await nativeRuntime.dispose();
     } finally {
       process.exit(0);
     }
   })());
 }
-if (nativeHost) {
-  process.once("SIGTERM", () => {
-    void shutdown();
-  });
-  process.once("SIGINT", () => {
-    void shutdown();
-  });
-}
+process.once("SIGTERM", () => { void shutdown(); });
+process.once("SIGINT", () => { void shutdown(); });
 
 session.subscribe((event) => {
   queue.observe(event);
@@ -424,7 +411,7 @@ async function command(request) {
       case "get_state":
         reply({
           subagentProtocol: 1,
-          ...(nativeHost ? { nativeHost: "pi" } : {}),
+          nativeHost: "pi",
           sessionFile: session.sessionFile,
           sessionId: session.sessionId,
           model: session.model,
@@ -470,7 +457,7 @@ async function command(request) {
       case "store_message":
         if (queue.active) throw new Error("Store-only message requires an idle managed task queue");
         await session.sendCustomMessage(
-          { customType: "subagent-pi-message", content: request.message, display: false },
+          { customType: "metis-subagent-message", content: request.message, display: false },
           { triggerTurn: false },
         );
         reply({ stored: true });

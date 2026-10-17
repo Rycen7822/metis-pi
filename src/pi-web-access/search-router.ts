@@ -381,7 +381,7 @@ async function searchWithResolvedProvider(
 			"Gemini search unavailable. Either:\n" +
 			`  1. Configure geminiApiKey in ${CONFIG_PATH} or set GEMINI_API_KEY\n` +
 			"  2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing\n" +
-			"  3. Set geminiAuth to \"adc\" in web-search.json with a Google Cloud ADC + project/location\n" +
+			"  3. Set webAccess.geminiAuth to \"adc\" in metis-pi.toml with a Google Cloud ADC + project/location\n" +
 			"  4. Sign into gemini.google.com in a supported Chromium-based browser",
 		);
 	}

@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stringify } from "smol-toml";
 import {
   createAgentSession,
   createEventBus,
@@ -30,12 +31,12 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
   process.env.PI_CODING_AGENT_DIR = dir;
   // Enable projection without invoking a summarizer. Production strategies are unchanged.
   writeFileSync(
-    join(dir, "settings.json"),
-    JSON.stringify({
+    join(dir, "metis-pi.toml"),
+    stringify({
       contextPrune: { enabled: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } },
     }),
   );
-  const originalSettings = readFileSync(join(dir, "settings.json"), "utf8");
+  const originalSettings = readFileSync(join(dir, "metis-pi.toml"), "utf8");
   const settingsManager = SettingsManager.inMemory();
   const modelRuntime = await ModelRuntime.create({
     authPath: join(dir, "auth.json"),
@@ -98,7 +99,7 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
     notify: (message) => notices.push(message), setStatus: (key, value) => statuses.set(key, value),
     setWidget() {},
   } }) });
-  assert.equal(readFileSync(join(dir, "settings.json"), "utf8"), originalSettings);
+  assert.equal(readFileSync(join(dir, "metis-pi.toml"), "utf8"), originalSettings);
   return { ...loaded, modelRuntime, sm, errors, notices, statuses, eventBus };
 }
 

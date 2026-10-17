@@ -1,4 +1,4 @@
-"""One managed Pi child: its JSONL SDK transport, boot handoff fds and process-group
+"""One managed Pi child: its JSONL SDK transport and process-group
 ownership. The Runtime owns state; this module owns the process-facing mechanics."""
 from __future__ import annotations
 import asyncio
@@ -13,18 +13,16 @@ import signal
 import sys
 import time
 
-from .common import (MAX_FRAME, AgentError, atomic_json, bounded, crop, dumps, group_members,
-    live_identity, new_id, now, private_dir, process_identity, read_frame)
+from .common import (MAX_FRAME, AgentError, atomic_json, crop, dumps, group_members,
+    live_identity, new_id, now, private_dir, read_frame)
 
 RESULT_CAP = 1024 * 1024
-BOOTSTRAP_MAX = 4 * 1024 * 1024
 # How long the built-in surface report may take after Pi answered get_state. The
 # shipped extension writes it during session_start, so a missing report means it
 # did not load or did not run; the boot then fails instead of claiming a
 # built-in restriction that was never applied.
 SURFACE_TIMEOUT_SECONDS = 10.0
-SURFACE_PREFIX = 'subagent-pi-surface '
-CONTEXT_READY = 'subagent-pi-context ready'
+SURFACE_PREFIX = 'metis-subagent-surface '
 
 def message_text(message):
     content = message.get('content',[])
@@ -85,7 +83,6 @@ class Worker:
         self.write_lock = asyncio.Lock()
         self.surface = None          # parsed report from extensions/managed-surface.ts
         self.surface_ready = asyncio.Event()
-        self.context_ready = asyncio.Event()
         self.surface_buf = b''
         # Set when the host starts work no daemon run owns (see Runtime.stop_unowned):
         # the worker is being stopped and none of its output may be absorbed.
@@ -166,9 +163,6 @@ class Worker:
         self.surface_buf = parts.pop()[-4096:]
         for raw in parts:
             line = raw.decode('utf-8','replace')
-            if line == CONTEXT_READY:
-                self.context_ready.set()
-                continue
             if not line.startswith(SURFACE_PREFIX): continue
             words = line.split()
             if words[1:2] != ['applied']: continue
@@ -197,62 +191,8 @@ class Worker:
         await self.on_exit(self,code)
         self.closed = True
 
-def close_quietly(fd):
-    """The fd owner closes exactly once; a second close or an already-gone pipe is
-    never an error here."""
-    if fd is None: return
-    with contextlib.suppress(OSError): os.close(fd)
-
-def _skill_file(path: str) -> Path:
-    """--skill takes a skill directory; Pi reports the SKILL.md it registered."""
-    entry = Path(path)
-    if entry.name != 'SKILL.md': entry = entry / 'SKILL.md'
-    try: return entry.resolve()
-    except (OSError, RuntimeError): return entry
-
-
-async def resolve_skills(w, plan):
-    """Describe how Pi actually resolved the inherited skill paths.
-
-    Pi resolves skill name collisions itself and keeps the skill it discovered
-    from the user's own Pi configuration (discovered skills are registered before
-    CLI --skill paths), so an inherited skill that duplicates a Pi skill is
-    dropped at Pi's loading boundary. Asking the live child which skills its
-    registry holds is the only honest way to report which inherited entries lost
-    and which Pi entry was kept; a failure here never fails the boot.
-    """
-    from .inheritance import pi_skill_name
-    try:
-        data = await w.rpc('get_commands')
-    except AgentError as exc:
-        return bounded({'source':plan.get('source'),'error':exc.code,'message':crop(exc.message,300)})
-    registered = {}
-    for entry in data.get('commands') or []:
-        if not isinstance(entry,dict) or entry.get('source') != 'skill': continue
-        name = str(entry.get('name') or '').removeprefix('skill:')
-        info = entry.get('sourceInfo') if isinstance(entry.get('sourceInfo'),dict) else {}
-        path = info.get('path') or entry.get('path')
-        if name and isinstance(path,str): registered[name] = {'path':path,'real':_skill_file(path)}
-    by_real = {e['real']: n for n,e in registered.items()}
-    records, ours = [], set()
-    for path in plan['skills']:
-        real = _skill_file(path)
-        ours.add(real)
-        if real in by_real:
-            records.append({'path':path,'name':by_real[real],'state':'loaded'})
-            continue
-        name = pi_skill_name(real)
-        kept = registered.get(name)
-        if kept:
-            records.append({'path':path,'name':name,'state':'skipped','kept':kept['path']})
-        else:
-            records.append({'path':path,'name':name,'state':'not_loaded'})
-    pi_owned = [{'name':n,'path':e['path']} for n,e in registered.items() if e['real'] not in ours]
-    return bounded({'source':plan.get('source'),'inherited':records,'pi_skills':pi_owned},4096)
-
-
 def parse_surface_line(text):
-    """Parse one `subagent-pi-surface applied ...` evidence line into fields."""
+    """Parse one `metis-subagent-surface applied ...` evidence line into fields."""
     fields = {}
     for part in text.split()[2:]:
         key,_,value = part.partition('=')
@@ -299,7 +239,6 @@ def managed_command(argv, sdk_path=None):
     Explicit non-Pi commands are protocol implementations (principally the offline
     fake in tests). Boot verifies the plugin protocol before accepting either.
     """
-    import shutil
     if sdk_path:
         sdk=Path(sdk_path)
         try: package=json.loads((sdk.parent.parent/'package.json').read_text())
@@ -311,22 +250,6 @@ def managed_command(argv, sdk_path=None):
         if not sdk.is_file() or not Path(argv[0]).is_file() or not os.access(argv[0],os.X_OK):
             raise AgentError('sdk_unavailable','Parent SDK and Node executable must still exist')
         return [argv[0],str(Path(__file__).resolve().parent.parent/'runtime/pi-sdk.mjs'),str(sdk),*argv[2:]]
-    executable = Path(argv[0]).resolve()
-    for directory in list(executable.parents)[:5]:
-        manifest = directory/'package.json'
-        if not manifest.is_file(): continue
-        try: package = json.loads(manifest.read_text())
-        except (OSError, ValueError): continue
-        if package.get('name') != '@earendil-works/pi-coding-agent': continue
-        version = package.get('version')
-        match = re.fullmatch(r'([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.-]+)?', version) if isinstance(version, str) else None
-        if not match or tuple(map(int, match.groups())) < (1, 3, 0):
-            raise AgentError('unsupported_pi_version', f'Pi >=1.3.0 is required; found SDK version {version!r}')
-        sdk = directory/'dist/index.js'
-        node = shutil.which('node')
-        if not sdk.is_file() or not node:
-            raise AgentError('sdk_unavailable','Pi SDK and Node.js are required; reinstall the official Pi package')
-        return [node,str(Path(__file__).resolve().parent.parent/'runtime/pi-sdk.mjs'),str(sdk),*argv[1:]]
     return argv
 
 def session_argv(home, a, spec):
@@ -336,8 +259,7 @@ def session_argv(home, a, spec):
     if session.is_symlink(): raise AgentError('unsafe_session','Managed session path must not be a symlink')
     if a['generation'] and (not session.exists() or session.stat().st_size==0):
         raise AgentError('session_unavailable','Previous Pi session is missing or empty; use pi_spawn_agent to create a new agent explicitly')
-    from .config import managed_context_argv
-    argv=list(spec['argv']) if spec.get('host')=='pi' else managed_context_argv(spec['argv'])
+    argv=list(spec['argv'])
     if not a['generation']:
         private_dir(directory/'sessions')
         argv += ['--session-dir',str(directory/'sessions')]
@@ -347,96 +269,11 @@ def session_argv(home, a, spec):
 def write_launch(directory, spec, argv, generation):
     atomic_json(directory/'launch.json',{**spec,'argv':managed_command(argv,spec.get('sdk_path')),'generation':generation})
 
-def bootstrap_body(payload):
-    if payload is None: return None
-    body=dumps(payload).encode()
-    if len(body)>BOOTSTRAP_MAX:
-        raise AgentError('bootstrap_too_large','Inherited MCP configuration exceeds the private channel limit')
-    return body
-
-async def start_guard(directory, spec, guard_env, body, before_spawn):
-    """Own launch pipes until handoff; returned fds belong to the caller."""
-    bootstrap_r=bootstrap_w=receipt_r=receipt_w=None
-    try:
-        if body is not None:
-            bootstrap_r,bootstrap_w=os.pipe()
-            receipt_r,receipt_w=os.pipe()
-            guard_env={**guard_env,'PI_AGENTS_BOOTSTRAP_FD':str(bootstrap_r),
-                       'PI_AGENTS_BRIDGE_RECEIPT_FD':str(receipt_w)}
-        before_spawn()  # reserve generation only after all launch pipes exist
-        proc=await asyncio.create_subprocess_exec(sys.executable,str(Path(__file__).with_name('worker_guard.py')),
-            str(directory/'launch.json'),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,start_new_session=True,limit=MAX_FRAME,
-            cwd=spec['cwd'],env=guard_env,pass_fds=(bootstrap_r,receipt_w) if body is not None else ())
-        close_quietly(bootstrap_r); close_quietly(receipt_w)
-        bootstrap_r=receipt_w=None
-        handoff=(proc,bootstrap_w,receipt_r)
-        bootstrap_w=receipt_r=None
-        return handoff
-    finally:
-        for fd in (bootstrap_r,bootstrap_w,receipt_r,receipt_w): close_quietly(fd)
-
-async def write_bootstrap(fd, data):
-    """Write the payload from a worker thread. The thread owns the fd and closes
-    it when the write finishes or breaks; a timeout abandons the wait, never the
-    write mid-close (closing an fd another thread still uses risks writing into
-    a reused descriptor)."""
-    def _write_and_close():
-        try:
-            with os.fdopen(fd, 'wb') as pipe:
-                pipe.write(data)
-            return 'ok'
-        except OSError:
-            return 'broken'
-    try:
-        return await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, _write_and_close), 30)
-    except asyncio.TimeoutError:
-        return 'timeout'
-
-async def read_receipt(fd, aid, generation, timeout):
-    """Read and parse the bridge's structured receipt from the pipe (in-memory,
-    not the size-capped stderr.log). Ownership: the caller hands over the fd
-    before awaiting; this method closes it exactly once on every path (success,
-    malformed receipt, required-server failure, timeout, cancellation,
-    transport-creation failure). The caller must not close it again — a second
-    close during failure cleanup could hit an fd another connection reclaimed."""
-    loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    pipe = os.fdopen(fd, 'rb', buffering=0)
-    transport = None
-    try:
-        try:
-            transport, _ = await loop.connect_read_pipe(lambda: protocol, pipe)
-        except BaseException:
-            pipe.close()  # connect_read_pipe failed without adopting the pipe
-            raise
-        line = await asyncio.wait_for(reader.readline(), timeout)
-    except asyncio.TimeoutError:
-        raise AgentError('bridge_unavailable', 'Managed MCP bridge did not report readiness in time; inspect the agent stderr log')
-    finally:
-        if transport is not None:
-            transport.close()  # owns the fd; idempotent
-    if not line:
-        raise AgentError('bridge_unavailable', 'Managed MCP bridge closed without a readiness receipt; inspect the agent stderr log')
-    try:
-        receipt = json.loads(line)
-    except ValueError:
-        raise AgentError('bridge_unavailable', 'Managed MCP bridge receipt was malformed')
-    if not isinstance(receipt, dict) or receipt.get('kind') != 'subagent-pi-bridge-receipt':
-        raise AgentError('bridge_unavailable', 'Managed MCP bridge receipt was malformed')
-    if receipt.get('agent') != aid or receipt.get('generation') != generation:
-        raise AgentError('bridge_unavailable', 'Managed MCP bridge receipt did not match this agent generation')
-    return receipt
-
-def check_receipt(receipt):
-    failed_required = [s.get('name') for s in receipt.get('servers', [])
-                       if isinstance(s, dict) and s.get('required') and s.get('status') != 'ready']
-    if failed_required:
-        raise AgentError('inheritance_required_server_failed',
-                         'required MCP server(s) failed to initialize in the child: ' + ', '.join(sorted(map(str, failed_required))))
-    if receipt.get('state') != 'ready':
-        raise AgentError('bridge_unavailable', 'Managed MCP bridge reported failure to start; inspect the agent stderr log')
+async def start_guard(directory, spec, guard_env, before_spawn):
+    before_spawn()
+    return await asyncio.create_subprocess_exec(sys.executable,str(Path(__file__).with_name('worker_guard.py')),
+        str(directory/'launch.json'),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,start_new_session=True,limit=MAX_FRAME,cwd=spec['cwd'],env=guard_env)
 
 def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
     """The one owner-record verdict for reaping, reconciliation and terminate:
