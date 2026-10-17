@@ -118,7 +118,8 @@ export class HostData {
     this.#contextUsage = undefined;
   }
 
-  /** Streaming changes display state, not Native's persisted usage source.
+  /** Native 1.3 getContextUsage() projects the persisted branch, not the
+   * in-flight agent message. Revisit reuse if that host contract changes.
    * Without a known branch/model and a valid sample, keep retrying as before. */
   bumpDisplay(): void {
     this.#revision += 1;

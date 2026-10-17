@@ -115,6 +115,7 @@ export interface TranscriptAdapterInput {
 }
 
 const RAIL_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-rail");
+const PEEK_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-peek");
 const SEP_SYMBOL = Symbol.for("Rycen7822.metis-pi.separator");
 
 export function installTranscriptDecorations(input: TranscriptAdapterInput): DecorationHandle {
@@ -238,11 +239,13 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
           queued.timer = setTimeout(() => {
             const latest = queued.args;
             releasePreview(queued);
-            if (!latest || !active || !input.enabled() || asRecord(target).lastMessage !== latest[0]) return;
-            queued.at = -Infinity; // Flush even if the system clock moved backwards.
-            const refresh = asRecord(target).updateContent;
-            if (typeof refresh === "function") refresh.apply(target, latest);
-            input.requestRender?.();
+            try {
+              if (!latest || !active || !input.enabled() || asRecord(target).lastMessage !== latest[0]) return;
+              queued.at = -Infinity; // Flush even if the system clock moved backwards.
+              const refresh = asRecord(target).updateContent;
+              if (typeof refresh === "function") refresh.apply(target, latest);
+              input.requestRender?.();
+            } catch { /* An optional presentation callback must not escape a timer. */ }
           }, delay);
           queued.timer.unref?.();
           pending.add(queued);
@@ -414,7 +417,8 @@ function coordinateSubtree(
   for (let i = children.length - 1; i >= 0; i--) {
     const child = children[i] as Record<string, unknown> | null;
     if (!child || typeof child !== "object") continue;
-    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL] || (child as Record<symbol, unknown>)[CLICK_SYMBOL]) {
+    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL] || (child as Record<symbol, unknown>)[CLICK_SYMBOL]
+      || (child as Record<symbol, unknown>)[PEEK_SYMBOL]) {
       children.splice(i, 1);
       continue;
     }
@@ -427,7 +431,7 @@ function coordinateSubtree(
     if (
       innerWrapper &&
       typeof innerWrapper === "object" &&
-      (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL])
+      (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL] || innerWrapper[PEEK_SYMBOL])
     ) {
       const original = innerWrapper["original"];
       if (original !== undefined) {
@@ -466,7 +470,7 @@ function coordinateSubtree(
   //    own "Thinking..." label — durations exist only for ended runs.
   const policy = input.thinkingPolicy?.();
   const viewFeature = policy !== undefined && (input.makePeek !== undefined || input.makeClickable !== undefined);
-  if (input.makeRail || (input.makeThoughtSummary && input.isCollapsedLabel) || (viewFeature && input.makeClickable)) {
+  if (input.makeRail || (input.makeThoughtSummary && input.isCollapsedLabel) || viewFeature) {
     for (const slot of slots) {
       if (slot.run.kind !== "thinking" || !slot.run.nonEmpty) continue;
       const child = slot.child as Record<string, unknown>;
@@ -479,7 +483,8 @@ function coordinateSubtree(
       const innerRecord = inner !== null && typeof inner === "object" ? (inner as Record<string, unknown>) : undefined;
       if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]
         || ((inner as Record<symbol, unknown>))[THOUGHT_LABEL]
-        || ((inner as Record<symbol, unknown>))[CLICK_SYMBOL]) continue;
+        || ((inner as Record<symbol, unknown>))[CLICK_SYMBOL]
+        || ((inner as Record<symbol, unknown>))[PEEK_SYMBOL]) continue;
 
       const ordinal = slot.run.thinkingRunIndex;
       const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
@@ -517,7 +522,11 @@ function coordinateSubtree(
             windowLines: policy.peekLines,
             onScroll: () => rebuild(component),
           });
-          if (peeked && typeof peeked === "object") { node = peeked; peeking = true; }
+          if (peeked && typeof peeked === "object") {
+            ((peeked as Record<symbol, unknown>))[PEEK_SYMBOL] = true;
+            node = peeked;
+            decorated = peeking = true;
+          }
         }
         if (input.makeRail) {
           const railed = input.makeRail(node);

@@ -30,7 +30,7 @@ class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
                 update=await self.request('pi_watch',{'scope':sid,'after':cursor},timeout=35,autostart=False,source=source)
                 cursor=update['cursor']  # A long-poll timeout is not daemon parking.
         watching=asyncio.create_task(watch_until_idle())
-        await asyncio.sleep(IDLE_SHUTDOWN_SECONDS*0.8)
+        await asyncio.sleep(IDLE_SHUTDOWN_SECONDS*0.5)
         refreshed=asyncio.get_running_loop().time()
         await self.request('scope_open',{'cwd':str(self.workspace),'scope':sid},source=source,autostart=False)
         with self.assertRaises(AgentError) as caught: await asyncio.wait_for(watching,IDLE_SHUTDOWN_SECONDS+10)

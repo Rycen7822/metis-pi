@@ -1,4 +1,4 @@
-import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext } from "./tool-names.ts";
+import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext, type ViewOptions } from "./tool-names.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";
@@ -42,19 +42,22 @@ function skipped(reason: string): AdapterHandle { return { installed: false, rea
  * Reflow can rebuild from the bounded source; no old args/result/lastComponent
  * is retained by this frame after invalidation. Other result owners stay native. */
 function nestedResult(
-  build: (result: unknown, context: ViewContext) => Component,
+  resolve: (result: unknown) => Renderers | undefined,
+  initial: Renderers["renderResult"],
   result: unknown,
-  context: ViewContext,
+  options: ViewOptions,
   theme: Palette,
+  context: ViewContext,
 ): Component {
   const { args, lastComponent: _previous, resultSource, ...snapshot } = context;
-  if (!resultSource) return build(result, context);
-  let body: Component | undefined = build(result, { ...snapshot, args });
+  if (!resultSource) return initial(result, options, theme, context);
+  let body: Component | undefined = initial(result, options, theme, { ...snapshot, args });
   return {
     render(width) {
       if (!body) {
         const source = resultSource();
-        if (source) body = build(source.result, { ...snapshot, args: source.args });
+        if (source) body = resolve(source.result)?.renderResult(source.result, options, theme, { ...snapshot, args: source.args })
+          ?? { render: () => [], invalidate() {} };
       }
       const rows = body?.render(width)
         ?? [theme.fg("dim", "Nested output was not retained; no saved diff/output to expand.".slice(0, Math.max(0, width)))];
@@ -272,13 +275,18 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // other provider origins and independent overlays have backed off above.
     return options.renderers[name as ToolName];
   }
+  // Give the rebuild resolver its own scope: it must not close over the initial
+  // selection (fusion renderers can themselves reference the full old receipt).
+  function nestedSelection(name: string, definition: object): (value: unknown) => Renderers | undefined {
+    return value => replacement({ toolName: name, toolDefinition: definition, result: value });
+  }
   const codemode = options.makeCodemode?.((name, result) => {
     if (!active || !ownsMethods() || !options.enabled() || name === "codemode") return;
     const context = definitionPrototype && LOOKUP_CONTEXTS.get(definitionPrototype)?.deref();
     if (!context) return;
     const definition = lookupWrapper.call(context, name);
     if (!definition || typeof definition !== "object") return;
-    const resolveOwned = (value: unknown) => replacement({ toolName: name, toolDefinition: definition, result: value });
+    const resolveOwned = nestedSelection(name, definition);
     const owned = resolveOwned(result);
     // Vendor execution results may own interactive state; only our compact
     // builtins/FFF and mutation bodies use this release-and-rebuild lifecycle.
@@ -286,9 +294,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (owned) return {
       renderCall: owned.renderCall,
       renderResult: (value, opts, theme, ctx) => nestedResult(
-        (value, context) => resolveOwned(value)?.renderResult(value, opts, theme, context)
-          ?? { render: () => [], invalidate() {} },
-        value, ctx, theme,
+        resolveOwned, owned.renderResult, value, opts, theme, ctx,
       ),
     };
     const { renderCall, renderResult } = asRecord(definition);

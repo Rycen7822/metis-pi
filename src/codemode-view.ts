@@ -52,11 +52,17 @@ function toolTimerText(context: ViewContext, isPartial: boolean): string | undef
 
 interface NestedView {
   name: string;
+  order: number;
   args: unknown;
   result?: unknown;
   isError: boolean;
   isPartial: boolean;
   bytes: number;
+}
+interface NestedParent {
+  calls: Map<string, NestedView>;
+  nextOrder: number;
+  history?: { value: unknown; bytes: number };
 }
 interface NestedEvent {
   toolCallId: string;
@@ -83,7 +89,7 @@ function sizeOf(value: unknown, seen = new Set<object>(), depth = 0): number {
 }
 
 export class CodemodeViewStore {
-  readonly #parents = new Map<string, { calls: Map<string, NestedView>; history?: unknown }>();
+  readonly #parents = new Map<string, NestedParent>();
   #bytes = 0;
   readonly #maxBytes: number;
   constructor(maxBytes = 4 * 1024 * 1024) { this.#maxBytes = maxBytes; }
@@ -91,38 +97,51 @@ export class CodemodeViewStore {
   #makeRoom(bytes: number, keep?: NestedView): boolean {
     if (bytes > this.#maxBytes) return false;
     if (this.#bytes + bytes <= this.#maxBytes) return true;
-    const evict: [Map<string, NestedView>, string, NestedView][] = [];
+    const evict: { parent: NestedParent; id?: string; bytes: number }[] = [];
     let freed = 0;
-    for (const { calls } of this.#parents.values()) {
-      for (const [id, view] of calls) {
+    parents: for (const parent of this.#parents.values()) {
+      if (parent.history) {
+        evict.push({ parent, bytes: parent.history.bytes });
+        freed += parent.history.bytes;
+        if (this.#bytes + bytes - freed <= this.#maxBytes) break;
+      }
+      for (const [id, view] of parent.calls) {
         if (view === keep || view.isPartial) continue;
-        evict.push([calls, id, view]);
+        evict.push({ parent, id, bytes: view.bytes });
         freed += view.bytes;
-        if (this.#bytes + bytes - freed <= this.#maxBytes) {
-          for (const [owner, id, view] of evict) { owner.delete(id); this.#bytes -= view.bytes; }
-          return true;
-        }
+        if (this.#bytes + bytes - freed <= this.#maxBytes) break parents;
       }
     }
-    return false;
+    if (this.#bytes + bytes - freed > this.#maxBytes) return false;
+    for (const entry of evict) {
+      if (entry.id === undefined) entry.parent.history = undefined;
+      else entry.parent.calls.delete(entry.id);
+      this.#bytes -= entry.bytes;
+    }
+    return true;
   }
 
   start(event: NestedEvent, ownedCodemode = false): void {
     if (!event.parentToolCallId) {
       if (!ownedCodemode) return;
-      if (!this.#parents.has(event.toolCallId)) this.#parents.set(event.toolCallId, { calls: new Map() });
+      if (!this.#parents.has(event.toolCallId)) this.#parents.set(event.toolCallId, { calls: new Map(), nextOrder: 0 });
       if (this.#parents.size > 64) {
-        const oldest = this.#parents.keys().next().value!;
-        for (const view of this.#parents.get(oldest)!.calls.values()) this.#bytes -= view.bytes;
+        const oldest = this.#parents.keys().next().value!, parent = this.#parents.get(oldest)!;
+        for (const view of parent.calls.values()) this.#bytes -= view.bytes;
+        this.#bytes -= parent.history?.bytes ?? 0;
         this.#parents.delete(oldest);
       }
       return;
     }
-    const calls = this.#parents.get(event.parentToolCallId)?.calls;
-    if (!calls || calls.size >= 256 || calls.has(event.toolCallId)) return;
+    const parent = this.#parents.get(event.parentToolCallId);
+    if (!parent || parent.calls.has(event.toolCallId)) return;
+    // Count starts even when their payload cannot be admitted. A later live
+    // call must not take an earlier /? slot just because its args were smaller.
+    const order = parent.nextOrder++;
+    if (parent.calls.size >= 256) return;
     const bytes = sizeOf(event.args);
     if (!this.#makeRoom(bytes)) return;
-    calls.set(event.toolCallId, { name: event.toolName, args: event.args, isError: false, isPartial: true, bytes });
+    parent.calls.set(event.toolCallId, { name: event.toolName, order, args: event.args, isError: false, isPartial: true, bytes });
     this.#bytes += bytes;
   }
 
@@ -142,12 +161,18 @@ export class CodemodeViewStore {
     const value = asRecord(message);
     if (value.role !== "toolResult" || value.toolName !== "codemode" || typeof value.toolCallId !== "string") return;
     const parent = this.#parents.get(value.toolCallId);
+    if (!parent) return;
+    this.#bytes -= parent.history?.bytes ?? 0;
+    parent.history = undefined;
     // Pi's live row gets execution-end data before the saved argument ledger.
-    // Reference that session-owned ledger separately from transient nested bodies.
-    if (parent) parent.history = value.nestedCalls;
+    // The bridge is an additional strong owner, so budget and evict it too.
+    const history = value.nestedCalls, bytes = sizeOf(history);
+    if (history === undefined || !this.#makeRoom(bytes)) return;
+    parent.history = { value: history, bytes };
+    this.#bytes += bytes;
   }
 
-  history(parent: string): unknown { return this.#parents.get(parent)?.history; }
+  history(parent: string): unknown { return this.#parents.get(parent)?.history?.value; }
   get(parent: string, id: string): NestedView | undefined { return this.#parents.get(parent)?.calls.get(id); }
   entries(parent: string): [string, NestedView][] { return [...(this.#parents.get(parent)?.calls.entries() ?? [])]; }
   clear(): void { this.#parents.clear(); this.#bytes = 0; }
@@ -240,25 +265,23 @@ export function makeCodemodeRenderers(input: {
       const historicalArgs = new Map((Array.isArray(history.calls) ? history.calls.map(asRecord) : []).map((call) => [call.id, call]));
       const live = input.store.entries(context.toolCallId ?? "");
       const byId = new Map(recorded.map((call) => [call.id, call]));
-      const pending = new Map<string, number>();
-      const liveCalls = new Map(live.map(([id, view]) => {
-        if (!byId.has(id)) pending.set(view.name, (pending.get(view.name) ?? 0) + 1);
-        return [id, { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" }] as const;
-      }));
-      // Cache eviction must not move older summaries after the latest calls.
-      const calls: Readonly<Record<string, unknown>>[] = [];
+      const liveCalls = new Map(live.map(([id, view]) =>
+        [id, { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" }] as const));
+      const byOrder = new Map(live.map(([id, view]) => [view.order, liveCalls.get(id)!]));
+      // Recorded positions include previews and evicted summaries. Only tool
+      // calls emit lifecycle starts; models.* records don't consume that order.
+      const calls: Readonly<Record<string, unknown>>[] = [], used = new Set<string>();
+      let order = 0;
       for (const call of recorded) {
-        const current = liveCalls.get(String(call.id));
-        if (current) { calls.push(current); continue; }
-        // Pi's running preview ids all end in /?. Real lifecycle ids own state.
-        const count = pending.get(String(call.name)) ?? 0;
-        if (String(call.id).endsWith("/?") && count > 0) {
-          pending.set(String(call.name), count - 1);
-          continue;
-        }
-        calls.push(call);
+        const position = String(call.name).startsWith("models.") ? undefined : order++;
+        const current = liveCalls.get(String(call.id))
+          ?? (String(call.id).endsWith("/?") && position !== undefined ? byOrder.get(position) : undefined);
+        if (current && current.name === call.name && !used.has(current.id)) {
+          calls.push({ ...call, ...current });
+          used.add(current.id);
+        } else calls.push(call);
       }
-      for (const [id, call] of liveCalls) if (!byId.has(id)) calls.push(call);
+      for (const [id, call] of liveCalls) if (!used.has(id)) calls.push(call);
       const allCalls = view.allCalls ?? view.expanded;
       // Keep explicitly opened older calls visible while new calls stream in.
       const shown = allCalls ? calls : calls.filter((call, index) => index >= calls.length - 8

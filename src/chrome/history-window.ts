@@ -122,6 +122,7 @@ export class HistoryWindow {
   #promptPreview: { component: Component; width: number; summary: string } | undefined;
   #cursor: Cursor | undefined;
   #scrollTarget: number | undefined;
+  #jumpQueued = false;
   #direction: "backward" | "forward" = "backward";
   #older = false;
   #newer = false;
@@ -237,6 +238,7 @@ export class HistoryWindow {
   }
 
   render(width: number): string[] {
+    this.#jumpQueued = false;
     // Keep a selected committed window stable while new output arrives. A
     // resize is handled by Pi's normal selection reset and must still reflow.
     if (width === this.#width && this.#rows.length && this.holdSelection()) return this.#rows;
@@ -428,13 +430,22 @@ export class HistoryWindow {
 
   get hasNewer(): boolean { return this.#newer; }
 
-  jump(direction: "older" | "newer"): void {
+  jump(direction: "older" | "newer"): boolean {
     this.#refreshItems();
     const component = direction === "older" ? this.#items[0] : this.#items.at(-1);
-    this.#cursor = component ? { component, row: direction === "older" ? 0 : Number.MAX_SAFE_INTEGER } : undefined;
-    this.#direction = direction === "older" ? "forward" : "backward";
-    this.#scrollTarget = direction === "older" ? 0 : undefined;
+    const row = direction === "older" ? 0 : Number.MAX_SAFE_INTEGER;
+    const traversal = direction === "older" ? "forward" : "backward";
+    const target = direction === "older" ? 0 : undefined;
+    // Repeated pointer notifications before the next frame share one jump.
+    // A changed endpoint or an intervening render/page rearms navigation.
+    if (this.#jumpQueued && this.#cursor?.component === component && this.#cursor?.row === row
+      && this.#direction === traversal && this.#scrollTarget === target) return false;
+    this.#cursor = component ? { component, row } : undefined;
+    this.#direction = traversal;
+    this.#scrollTarget = target;
     this.#dirty = true;
+    this.#jumpQueued = true;
+    return true;
   }
   invalidate(): void {
     this.#promptPreview = undefined;
@@ -460,6 +471,7 @@ export class HistoryWindow {
     };
   }
   dispose(): void {
+    this.#jumpQueued = false;
     this.#scrollTarget = undefined;
     this.#structureRestores.forEach((restore) => restore());
     this.#structureRestores = [];
@@ -560,28 +572,39 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
         }
       };
     }
+    let navigationActive = true;
     const restoreStart = observe(scroll, ["scrollToStart"], () => {
-      window.jump("older");
-      tui.requestRender?.();
+      if (navigationActive && scroll.child === window && window.jump("older")) tui.requestRender?.();
     });
     const restoreEnd = observe(scroll, ["scrollToEnd"], () => {
-      window.jump("newer");
-      tui.requestRender?.();
+      if (navigationActive && scroll.child === window && window.jump("newer")) tui.requestRender?.();
     });
-    const positionDescriptor = Object.getOwnPropertyDescriptor(scroll, "scrollTo");
-    const position = scroll.scrollTo;
-    const positionWrapper: Scroll["scrollTo"] = function (this: Scroll, row, options) {
-      position.call(this, row, options);
-      // Scrollbar drags position directly, bypassing wheel paging. Unsuppressed
-      // end-follow means the real history tail, not just this loaded page.
-      if (this.child === window && !selected() && options?.disableFollow !== true
-          && Number.isFinite(row) && row >= Math.max(0, this.contentHeight - this.viewportHeight)
-          && this.isFollowingEnd && window.hasNewer) {
-        window.jump("newer");
-        tui.requestRender?.();
+    // Pi 1.3's private pointer helper supplies actual scrollbar provenance.
+    // Generic scrollTo also serves prompt/search navigation and stays native.
+    // An absent/locked helper disables only this optional enhancement.
+    const pointerName = "scrollScrollbarToPointer";
+    let restorePointer = () => {};
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(tui, pointerName);
+      const pointer: unknown = Reflect.get(tui, pointerName);
+      if (typeof pointer === "function" && Object.isExtensible(tui)
+        && (!descriptor || descriptor.configurable && descriptor.writable !== false)) {
+        const pointerWrapper = function (this: object, ...args: unknown[]) {
+          const result = pointer.apply(this, args);
+          if (navigationActive && args[0] === scroll && Number.isFinite(args[2]) && Number.isFinite(args[3])
+            && scroll.child === window && !selected() && scroll.isFollowingEnd
+            && scroll.scrollTop === Math.max(0, scroll.contentHeight - scroll.viewportHeight)
+            && window.hasNewer && window.jump("newer")) tui.requestRender?.();
+          return result;
+        };
+        Object.defineProperty(tui, pointerName, { value: pointerWrapper, writable: true, configurable: true });
+        restorePointer = () => {
+          if (Reflect.get(tui, pointerName) !== pointerWrapper) return;
+          if (descriptor) Object.defineProperty(tui, pointerName, descriptor);
+          else Reflect.deleteProperty(tui, pointerName);
+        };
       }
-    };
-    scroll.scrollTo = positionWrapper;
+    } catch { /* Optional private bridge unavailable; wheel/explicit jumps remain native. */ }
     const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
     const updateLayout = scroll.updateLayout;
     const commitLayout: Scroll["updateLayout"] = function (this: Scroll, ...args) {
@@ -604,11 +627,8 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     };
     scroll.child = window as unknown as Component; scroll.children = [scroll.child]; scroll.scrollBy = wrapper;
     installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => {
-      restorePrompt(); restoreStart(); restoreEnd();
-      if (scroll.scrollTo === positionWrapper) {
-        if (positionDescriptor) Object.defineProperty(scroll, "scrollTo", positionDescriptor);
-        else Reflect.deleteProperty(scroll, "scrollTo");
-      }
+      navigationActive = false;
+      restorePointer(); restorePrompt(); restoreStart(); restoreEnd();
       if (scroll.updateLayout === commitLayout) {
         if (layoutDescriptor) Object.defineProperty(scroll, "updateLayout", layoutDescriptor);
         else Reflect.deleteProperty(scroll, "updateLayout");

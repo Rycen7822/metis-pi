@@ -605,14 +605,17 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       return emptyPayload(event.payload);
     }
     const current = active(ctx);
+    if (!current?.data) { cancelRequest(ctx); return emptyPayload(event.payload); }
     try {
-      if (!current?.data) throw new Error("Checkpoint binding changed");
       const request = await requestBinding(ctx, requestModel, accounts);
       // Authentication may yield to history edits, appends or session/model
-      // switches. Revalidate every guard with a fresh source hash after it.
+      // switches. Revalidate with a fresh source hash and use the same ordinary
+      // cancellation path as before await, rather than an authentication error.
       if (session !== ctx.sessionManager.getSessionId() || version !== generation || hash(requestModel) !== hash(ctx.model)
         || bindingState(current.data, request, current.origin) !== "valid"
-        || source !== sourceHash(ctx.sessionManager.getBranch())) throw new Error("Checkpoint binding changed");
+        || source !== sourceHash(ctx.sessionManager.getBranch())) {
+        cancelRequest(ctx); return emptyPayload(event.payload);
+      }
       return replaceMarker(event.payload, current.data);
     } catch (error) {
       cancelRequest(ctx, `Request cancelled while verifying remote checkpoint: ${safeError(error)}. `

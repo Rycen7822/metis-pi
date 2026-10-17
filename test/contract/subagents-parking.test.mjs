@@ -66,7 +66,9 @@ async function fixture(t) {
 
 test(
   "native SDK follow-up wakes an idle daemon through the same bridge and keeps the durable child session",
-  { timeout: 60000 },
+  // A 45s poll deadline can include a final 25s long-poll; keep separate
+  // headroom for startup, park-status observation and both 15s task waits.
+  { timeout: 120000 },
   async (t) => {
     const f = await fixture(t),
       { client } = f;
