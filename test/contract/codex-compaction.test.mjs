@@ -723,6 +723,65 @@ async function publishRecoverySummary(h, source) {
   await h.session.reload();
 }
 
+test("initial and reusable remote compaction use durable Condense projection before budgeting", async t => {
+  for (const [name, options] of [
+    ["Codex", { routeModel: model }],
+    ["hybrid OAuth", { routeModel: responsesModel, oauth: true }],
+    ["Responses API key", { routeModel: responsesModel, oauth: false }],
+  ]) for (const reusable of [false, true]) await t.test(`${name}: ${reusable ? "reusable" : "initial"}`, async sub => {
+    const h = await host(sub, { ...options, condense: true });
+    if (reusable) await h.session.compact();
+    const source = appendRecoverableResult(h);
+    await publishRecoverySummary(h, source);
+    // Put both the archived result and its summary inside the discarded prefix,
+    // rather than testing evidence that will survive verbatim in the kept tail.
+    h.sm.appendMessage(assistant("Work after the durable summary."));
+    h.sm.appendMessage(user("RETAINED EXCHANGE"));
+    await h.session.setModel({ ...options.routeModel, contextWindow: 8000, maxTokens: 1024 });
+    const before = h.bodies.length;
+    await h.session.compact();
+    assert.equal(h.bodies.length, before + 1, "projection must reuse durable evidence without a summary request");
+    const body = JSON.stringify(h.bodies.at(-1));
+    assert.doesNotMatch(body, /RECOVERABLE_TOOL_OUTPUT_/);
+    assert.match(body, /DURABLE RECOVERY SUMMARY/);
+    assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, reusable ? 1 : 0);
+    assert.equal(compactions(h).length, reusable ? 2 : 1);
+    assert.ok(h.sm.getBranch().some(entry => entry.type === "message" && entry.message.role === "toolResult"
+      && entry.message.content.some(part => part.text === source.text)), "projection never overwrites original evidence");
+  });
+});
+
+test("unprojectable initial and reusable compaction input is rejected locally without losing history", async t => {
+  for (const reusable of [false, true]) await t.test(reusable ? "reusable" : "initial", async sub => {
+    const h = await host(sub, { routeModel: responsesModel, oauth: true });
+    if (reusable) await h.session.compact();
+    h.sm.appendMessage(user("UNPROJECTABLE LARGE INPUT ".repeat(3000)));
+    h.sm.appendMessage(assistant("completed oversized exchange"));
+    h.sm.appendMessage(user("KEEP THIS RECENT TAIL"));
+    await h.session.setModel({ ...responsesModel, contextWindow: 8000, maxTokens: 1024 });
+    const before = h.bodies.length, original = history(h).map(entry => entry.id);
+    await assert.rejects(h.session.compact(), /cancel/i);
+    assert.equal(h.bodies.length, before, "an oversized visible prefix must not reach either remote endpoint");
+    assert.deepEqual(history(h).map(entry => entry.id), original);
+    assert.equal(compactions(h).length, reusable ? 1 : 0);
+    assert.match(h.notices.join("\n"), /approximately.*8000|context window is 8000/);
+    const failure = h.sm.getBranch().findLast(entry => entry.type === "custom" && entry.customType === "metisCodexCompactionFailure").data;
+    assert.ok(failure.projectedInputTokensEstimate > 8000);
+    assert.equal(failure.inputWindow, 8000);
+    assert.equal(failure.outputReserve, 0, "remote compaction does not reserve ordinary generation output");
+    assert.equal(failure.hasOpaqueCheckpoint, reusable);
+  });
+});
+
+test("remote input budgeting includes compaction focus without ordinary output reservation", async t => {
+  const h = await host(t, { routeModel: { ...model, contextWindow: 2000, maxTokens: 16000 } });
+  await assert.rejects(h.session.compact("FOCUS ".repeat(2000)), /cancel/i);
+  assert.equal(h.bodies.length, 0, "custom instructions are part of the input window");
+  await h.session.compact("Keep the goal");
+  assert.equal(h.bodies.length, 1, "small input fits even when ordinary maxTokens exceeds the input window");
+  assert.equal(compactions(h).length, 1);
+});
+
 test("portable context retains real Condense summaries without restoring source", async t => {
   const h = await host(t, { condense: true });
   const source = appendRecoverableResult(h);

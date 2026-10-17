@@ -3,6 +3,7 @@ import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "../src/extension.ts";
 import { createDiffComponent, createShellFactories } from "../src/chrome/tool-components.ts";
+import { registerCompactionPresentation } from "../src/chrome/compaction-presentation.ts";
 import type { LayoutOps } from "../src/shell.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
 import { makeSurfaceOps } from "../src/surface.ts";
@@ -72,7 +73,15 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       throw error;
     }
   };
-  const bootWritePreview = loadConfig(getAgentDir(), readFile).config.writePreview;
+  const bootConfig = loadConfig(getAgentDir(), readFile).config;
+  const bootWritePreview = bootConfig.writePreview;
+  registerCompactionPresentation(pi, {
+    prototype: Pi.CompactionSummaryMessageComponent?.prototype,
+    enabled: bootConfig.enabled,
+    host: { Text: Tui.Text, Markdown: Tui.Markdown, Spacer: Tui.Spacer,
+      Container: Tui.Container, MouseRegion: Tui.MouseRegion,
+      expandKey: () => Pi.keyText("app.tools.expand") },
+  });
 
   activate(pi, {
     getAgentDir,

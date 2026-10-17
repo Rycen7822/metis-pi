@@ -376,17 +376,18 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       }
     }
   };
-  const restorationError = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext,
-    outputReserve = ctx.model?.maxTokens ?? 0, subject = "Restored history") => {
+  const contextBudget = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext,
+    outputReserve = ctx.model?.maxTokens ?? 0, subject = "Restored history", additionalInputTokens = 0) => {
     const system = getCurrentSystemMessage(messages);
     const overhead = system ? 0 : Math.ceil((ctx.getSystemPrompt().length
       + JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name))).length) / 4);
-    const tokens = messages.reduce((n, m) => n + estimateTokens(m), overhead) + outputReserve;
+    const inputTokensEstimate = messages.reduce((n, m) => n + estimateTokens(m), overhead) + additionalInputTokens;
     const window = ctx.model?.contextWindow;
     const budget = outputReserve ? "including output reserve" : "for compaction input";
-    return window && tokens > window
-      ? `${subject} needs approximately ${tokens} tokens ${budget}; context window is ${window}`
-      : undefined;
+    return { inputTokensEstimate, inputWindow: window, outputReserve,
+      error: window && inputTokensEstimate + outputReserve > window
+        ? `${subject} needs approximately ${inputTokensEstimate + outputReserve} tokens ${budget}; context window is ${window}`
+        : undefined };
   };
   let generation = 0;
   let pending: AbortController | undefined;
@@ -566,7 +567,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       } else {
         if (summaries[0].summary !== summary)
           messages = messages.map(message => message.role === "compactionSummary" ? { ...message, summary } : message);
-        const reason = restorationError(messages, ctx, undefined, "Portable checkpoint context");
+        const reason = contextBudget(messages, ctx, undefined, "Portable checkpoint context").error;
         if (reason) cancelRequest(ctx, `${reason}. Request cancelled; history was preserved. `
           + "Use /compact to rebuild, or /tree to resume before the oversized input.");
       }
@@ -667,21 +668,26 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const cut = projected.entries.findIndex(e => e.sourceEntry.id === event.preparation.firstKeptEntryId);
       if (cut < 0) throw new Error("Compaction boundary is no longer visible");
       let prefix = projected.entries.slice(0, cut).flatMap(e => e.messages);
-      if (previous && !reusable) {
-        const goal: GoalProjectRequest = { messages: prefix };
-        pi.events.emit(METIS_EVENTS.goalProject, goal);
-        prefix = goal.messages as typeof prefix;
-        const projection: CondenseProjectRequest = { sessionId: session, api: model?.api,
-          messages: prefix, maintenance: true, includeSummaries: true };
-        pi.events.emit(METIS_EVENTS.condenseProject, projection);
-        if (projection.busy) throw new Error("Context projection is busy; retry compaction after it settles");
-        prefix = projection.messages as typeof prefix;
-        // Compaction has an input window, not ordinary generation's maxTokens
-        // reserve. Its provider owns checkpoint output limits and validation.
-        const reason = restorationError(prefix, ctx, remote ? 0 : undefined, rebuilding ? "Restored history" : "Portable checkpoint context");
-        if (reason) throw new Error(`${reason}. Use the original model with a sufficient context window and retry /compact, `
-          + "or /tree to resume before the oversized input; the original branch remains available");
-      }
+      // Every compaction path uses the same evidence projection as inference.
+      // Reusing ciphertext must not resurrect raw tool results beside it.
+      const goal: GoalProjectRequest = { messages: prefix };
+      pi.events.emit(METIS_EVENTS.goalProject, goal);
+      prefix = goal.messages as typeof prefix;
+      const projection: CondenseProjectRequest = { sessionId: session, api: model?.api,
+        messages: prefix, maintenance: true, includeSummaries: true };
+      pi.events.emit(METIS_EVENTS.condenseProject, projection);
+      if (projection.busy) throw new Error("Context projection is busy; retry compaction after it settles");
+      prefix = projection.messages as typeof prefix;
+      // This is a local visible-prefix estimate, not provider tokenization;
+      // opaque checkpoint contents are unknown. Never count ciphertext bytes
+      // as ordinary text or reserve ordinary generation's maxTokens remotely.
+      const budget = contextBudget(prefix, ctx, remote ? 0 : undefined,
+        rebuilding ? "Restored history" : previous && !reusable ? "Portable checkpoint context" : "Projected compaction input",
+        Math.ceil((event.customInstructions?.length ?? 0) / 4));
+      Object.assign(diagnostic, { projectedInputTokensEstimate: budget.inputTokensEstimate,
+        inputWindow: budget.inputWindow, outputReserve: budget.outputReserve, hasOpaqueCheckpoint: Boolean(reusable) });
+      if (budget.error) throw new Error(`${budget.error}. Use the original model with a sufficient context window and retry /compact, `
+        + "or /tree to resume before the oversized input; the original branch remains available");
       const files = record(previous?.entry.details);
       for (const path of Array.isArray(files.readFiles) ? files.readFiles : [])
         if (typeof path === "string") event.preparation.fileOps.read.add(path);
