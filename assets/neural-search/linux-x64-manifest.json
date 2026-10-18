@@ -12,7 +12,7 @@
       "native/neural-search",
       "src/neural-search/native/binding"
     ],
-    "sha256": "5ba75fc7e0bb4342478b9cd5570340321f4165ef04fbebe9c71e8846791c9c9a",
+    "sha256": "473bc90e1434cea6ef6cd34bbcd25a30458b7d19ce24d1521a0da750725d1f84",
     "inputs": [
       {
         "path": "native/neural-search/Cargo.lock",
@@ -92,11 +92,11 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/file_picker.rs",
-        "sha256": "f62c256ba90eeea5e0a16dc295071583e5cc9e44350d900dc81953a10edaae65"
+        "sha256": "5e33f0dc7754018d7f00715537d55766f87c7902e51972de30a7e966865f38ab"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git.rs",
-        "sha256": "81f87b7bd78732420241d5da10fca51cedee7065d51bf0b3b64dac706a371fc2"
+        "sha256": "c053b936720d4807a4ffb4c09ff27adde1a82b6dcd1e334a3dc52a7639c4270c"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git_recency.rs",
@@ -104,7 +104,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git_status_worker.rs",
-        "sha256": "dc37259c0639d6eb1e87658d78f4c3425617b855805483d4b664106fc36f1c2d"
+        "sha256": "f02c44f30899e85cba31021919095ab975a0ab7eadb9e43814ad94ba7eea6dfd"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/fuzzy_grep.rs",
@@ -188,7 +188,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/shared.rs",
-        "sha256": "b4763c866c5f233404938397a6a4cd7bf987f04fef7c4e7829edc16668f64b6f"
+        "sha256": "065c4009061df53c6036d61cad99644b315068fbd72b00a7e619b69e55a4af84"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/simd_path.rs",
@@ -228,7 +228,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "c827932f159182e29bb29eeb99f0b4844c8fa2b2298079283b57903074f3f08d"
+        "sha256": "a12c0d7ee2814524243cd11bb5bf7ed3dd8f69e8014beda2e61e7696496ef0cb"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/mod.rs",
@@ -361,8 +361,8 @@
   },
   "asset": {
     "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
-    "sha256": "b9deb2e66aa41ce059eaa4176a337695808926286247d84bba23a2a3fac7d765",
-    "bytes": 10473392,
+    "sha256": "056f2df1ac99bd56347718c47a95cd1c633686837d3d3d2874c5641ad8a5dff3",
+    "bytes": 10476000,
     "abi": {
       "version": 5,
       "machine": "x86-64",

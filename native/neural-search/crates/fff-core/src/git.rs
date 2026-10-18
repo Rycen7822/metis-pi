@@ -21,6 +21,17 @@ pub(crate) fn tune_libgit2_for_local_reads() {
     });
 }
 
+/// Keep the discovered working directory, including a .git file pointing at
+/// external metadata. Repository::discover reopens only the gitdir and can
+/// guess the wrong workdir. CROSS_FS preserves its existing search policy.
+pub(crate) fn discover_repository(path: &Path) -> Result<Repository> {
+    Ok(Repository::open_ext(
+        path,
+        git2::RepositoryOpenFlags::CROSS_FS,
+        std::iter::empty::<&Path>(),
+    )?)
+}
+
 pub(crate) fn default_status_options() -> StatusOptions {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)

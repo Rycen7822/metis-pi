@@ -52,7 +52,7 @@ use crate::walk::WalkOutput;
 use crate::watch::BackgroundWatcher;
 use ahash::AHashMap;
 use fff_query_parser::FFFQuery;
-use git2::{Repository, Status};
+use git2::Status;
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
@@ -967,7 +967,7 @@ impl FilePicker {
         }
 
         if let Some(workdir) = self.sync_data.git_workdir.clone()
-            && let Ok(repo) = Repository::open(&workdir)
+            && let Ok(repo) = git2::Repository::open(&workdir)
                 .inspect_err(|e| debug!(?e, ?workdir, "git recency: failed to open repo"))
         {
             let recency =
@@ -1924,7 +1924,7 @@ pub struct ScanProgress {
 
 impl FileSync {
     pub(crate) fn discover_git_workdir(base_path: &Path) -> Option<PathBuf> {
-        let git_workdir = Repository::discover(base_path)
+        let git_workdir = crate::git::discover_repository(base_path)
             .ok()
             .and_then(|repo| repo.workdir().map(Path::to_path_buf))
             .map(crate::path_utils::normalize);

@@ -24,7 +24,7 @@ fn wait_for_git_index_lock_release(git_root: &Path) {
     const GIT_LOCK_POLL: Duration = Duration::from_millis(10);
     const GIT_LOCK_MAX_WAIT: Duration = Duration::from_millis(500);
 
-    let lock = Repository::discover(git_root)
+    let lock = crate::git::discover_repository(git_root)
         .map(|repo| repo.path().join("index.lock"))
         .unwrap_or_else(|_| git_root.join(".git/index.lock"));
     // Fast path: no lock present.

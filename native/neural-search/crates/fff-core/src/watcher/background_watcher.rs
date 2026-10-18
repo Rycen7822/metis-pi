@@ -225,6 +225,18 @@ impl BackgroundWatcher {
                         WatchTask::IndexNewDir(dir) => (dir, true),
                     };
 
+                    // Recheck queued data paths before subscription, not just at admission.
+                    let follow_symlinks = strong_picker
+                        .read()
+                        .ok()
+                        .and_then(|guard| guard.as_ref().map(|picker| picker.follows_symlinks()))
+                        .unwrap_or(false);
+                    // Real I/O errors still go through watcher recovery below.
+                    if let Ok(metadata) = entry_metadata(&dir, follow_symlinks)
+                        && metadata.is_none_or(|metadata| !metadata.is_dir())
+                    {
+                        continue;
+                    }
                     // Subscribe before walking. A per-path failure must not kill the queue.
                     if !watch_dirs_nonrecursive(&owner_debouncer, std::iter::once(dir.as_path()))
                         && needs_watcher_recovery(&strong_picker, &owner_frecency, &owner_health)
@@ -435,7 +447,7 @@ pub(crate) fn handle_debounced_events(
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = discover_working_repository(base_path);
     // Repository identity is live, not the snapshot captured at watcher creation.
-    let (indexed_git_root, walker_rules) = shared_picker
+    let (indexed_git_root, walker_rules, follow_symlinks) = shared_picker
         .read()
         .ok()
         .and_then(|guard| {
@@ -443,6 +455,7 @@ pub(crate) fn handle_debounced_events(
                 (
                     picker.git_root().map(Path::to_path_buf),
                     picker.ignore_rules(),
+                    picker.follows_symlinks(),
                 )
             })
         })
@@ -492,12 +505,7 @@ pub(crate) fn handle_debounced_events(
     if events
         .iter()
         .flat_map(|event| &event.event.paths)
-        .any(|path| {
-            is_git_file(path)
-                || repo
-                    .as_ref()
-                    .is_some_and(|repo| path.starts_with(repo.path()))
-        })
+        .any(|path| is_git_metadata(path, repo.as_ref()))
     {
         let _ = watch_tx.send(WatchTask::GitMetadata);
     }
@@ -565,19 +573,15 @@ pub(crate) fn handle_debounced_events(
                     return Vec::new();
                 }
 
-                // Throttled: fall through so the ignore file itself stays
-                // indexed; the stale rules heal on the next admitted rescan.
+                // Throttled: apply the file only if scan policy admits it;
+                // stale rules heal on the next admitted rescan.
             }
 
             if is_dotgit_change_affecting_status(path, &repo) {
                 need_full_git_rescan = true;
             }
 
-            if is_git_file(path)
-                || repo
-                    .as_ref()
-                    .is_some_and(|repo| path.starts_with(repo.path()))
-            {
+            if is_git_metadata(path, repo.as_ref()) {
                 continue;
             }
 
@@ -601,7 +605,7 @@ pub(crate) fn handle_debounced_events(
                 EventKind::Remove(notify::event::RemoveKind::Folder)
             );
 
-            let metadata = std::fs::metadata(path).ok();
+            let metadata = entry_metadata(path, follow_symlinks).ok().flatten();
             let is_removed = is_folder_removal || is_removal || metadata.is_none();
             let is_dir = metadata.as_ref().is_some_and(|meta| meta.is_dir());
             let is_file = metadata.as_ref().is_some_and(|meta| meta.is_file());
@@ -1011,6 +1015,20 @@ fn watch_dirs_nonrecursive<'a>(
     true
 }
 
+fn entry_metadata(
+    path: &Path,
+    follow_symlinks: bool,
+) -> std::io::Result<Option<std::fs::Metadata>> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_symlink() {
+        Ok(Some(metadata))
+    } else if follow_symlinks {
+        std::fs::metadata(path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 struct IgnoreFilter<'a> {
     base_path: &'a Path,
     /// Reusable ignore rules from the last walk (zlob backend only).
@@ -1035,6 +1053,17 @@ impl<'a> IgnoreFilter<'a> {
 
     /// Whether `path` (absolute) is ignored.
     fn is_ignored(&self, path: &Path) -> bool {
+        // Match SKIP_HIDDEN in the non-working-repository walk, including
+        // hidden ancestors and roots that have collected ignore rules.
+        if self.repo.is_none()
+            && path.strip_prefix(self.base_path).is_ok_and(|relative| {
+                relative
+                    .components()
+                    .any(|part| part.as_os_str().as_encoded_bytes().starts_with(b"."))
+            })
+        {
+            return true;
+        }
         if let Some(rules) = self.rules.as_ref() {
             let Ok(relative) = path.strip_prefix(self.base_path) else {
                 return false;
@@ -1063,11 +1092,24 @@ pub(crate) fn is_git_file(path: &Path) -> bool {
         .any(|component| component.as_os_str() == ".git")
 }
 
+fn is_git_metadata(path: &Path, repo: Option<&Repository>) -> bool {
+    is_git_file(path)
+        || repo
+            .is_some_and(|repo| path.starts_with(repo.path()) || path.starts_with(repo.commondir()))
+}
+
 fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) -> bool {
     let Some(repo) = repo.as_ref() else {
         return false;
     };
 
+    // Linked worktrees share configuration, not their private indexes/HEADs.
+    if changed
+        .strip_prefix(repo.commondir())
+        .is_ok_and(|path| path == Path::new("config"))
+    {
+        return true;
+    }
     let git_dir = repo.path();
 
     if let Ok(path_in_git_dir) = changed.strip_prefix(git_dir) {
@@ -1109,7 +1151,7 @@ fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) 
 // A bare repository has no working tree: its files remain ordinary indexed
 // content, not an external metadata tree whose events should be suppressed.
 fn discover_working_repository(base_path: &Path) -> Option<Repository> {
-    Repository::discover(base_path)
+    crate::git::discover_repository(base_path)
         .ok()
         .filter(|repo| repo.workdir().is_some())
 }
@@ -1159,6 +1201,7 @@ struct GitWatchIdentity {
     path: PathBuf,
     directory: (u64, u64),
     logs: Option<(u64, u64)>,
+    common: Option<(PathBuf, (u64, u64))>,
 }
 
 fn watch_git_directory(
@@ -1191,6 +1234,14 @@ fn watch_git_status_paths(
     {
         dirs.push(repo.path().to_path_buf());
     }
+    let common = if let Some(repo) = &repo
+        && repo.commondir() != repo.path()
+    {
+        let path = repo.commondir().to_path_buf();
+        watch_git_directory(debouncer, &path)?.map(|identity| (path, identity))
+    } else {
+        None
+    };
     let mut identity = None;
     for git_dir in dirs {
         let Some(directory) = watch_git_directory(debouncer, &git_dir)? else {
@@ -1204,6 +1255,7 @@ fn watch_git_status_paths(
                 path: git_dir,
                 directory,
                 logs,
+                common: common.clone(),
             });
         }
     }

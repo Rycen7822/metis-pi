@@ -139,7 +139,10 @@ impl GitStatusWorker {
                     if let Err(error) = &result {
                         tracing::error!(?error, "Git status update failed");
                     }
-                    mailbox.set_error(result.err().map(|error| error.to_string()));
+                    // Partial success cannot establish recovery from earlier failures.
+                    if work.full_rescan || result.is_err() {
+                        mailbox.set_error(result.err().map(|error| error.to_string()));
+                    }
                     // Acknowledge only after the metadata write guard and health
                     // publication. Requests received mid-pass wait for the next pass.
                     for reply in work.full_waiters {
