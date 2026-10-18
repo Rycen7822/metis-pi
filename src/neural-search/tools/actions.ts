@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
 import { formatFindOutput, formatGrepOutput } from "./format.ts";
 import { buildQuery } from "../native/query.ts";
-import { contentPage, searchContent, MATCHES_PER_FILE } from "../native/content.ts";
+import { contentPage, searchContent, multilineOrError, MATCHES_PER_FILE } from "../native/content.ts";
 import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
 import { safeText } from "../../tool-names.ts";
@@ -15,8 +15,9 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
 const FIND_PAGE_SIZE_MAX = 100;
 const GREP_TIME_BUDGET_MS = 10_000;
+const NATIVE_MULTILINE_NOTICE = "Native multiline results are LIMITED blocks, not individual-hit counts: adjacent hits may coalesce and blocks may be clipped at 512 bytes before reaching the SDK. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
 const pathSchema = Type.Optional(Type.String({ description:
-  "Include path: directory prefix (src/), filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Matches the whole root-relative path. Outside-workspace paths and existing directory paths containing spaces use a separate local index. Filename/glob filters containing whitespace are unsupported; search the containing directory instead.",
+  "Include path: directory prefix (src/), filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Matches the whole root-relative path. Existing absolute files are literal, including glob metacharacters. Outside-workspace paths and existing directory paths containing spaces use a separate local index. Filename/glob filters containing whitespace are unsupported; search the containing directory instead.",
 }));
 const excludeSchema = Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description:
   "Exclude directories, filenames, or globs, as a comma/space-separated string or array. Leading ! is optional. Example: 'test/,*.min.js,!vendor/'.",
@@ -36,7 +37,7 @@ export const findSchema = Type.Object({
   cursor: cursorSchema,
 }, { additionalProperties: false });
 export const grepSchema = Type.Object({
-  pattern: Type.String({ minLength: 1, description: "Search text or regex. Regex is auto-detected; invalid expressions fall back to literal matching. Prefer concrete identifiers, not wildcard-only expressions." }),
+  pattern: Type.String({ minLength: 1, description: "Search text or regex. Regex is auto-detected; invalid expressions fall back to literal matching. LF matches are limited native blocks (coalescing/512-byte clipping), not complete per-line coverage. Prefer concrete identifiers, not wildcard-only expressions." }),
   path: pathSchema,
   exclude: excludeSchema,
   caseSensitive: caseSchema,
@@ -45,7 +46,7 @@ export const grepSchema = Type.Object({
   cursor: cursorSchema,
 }, { additionalProperties: false });
 export const multiGrepSchema = Type.Object({
-  patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Literal patterns, matched with OR logic. Include snake_case/camelCase/PascalCase variants as needed." }),
+  patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Literal OR patterns. Multiple patterns must be LF-free. A single LF-containing literal is allowed as limited native blocks (coalescing/512-byte clipping); split LF-containing patterns into separate queries." }),
   constraints: Type.Optional(Type.String({ description: "Additional native file filters, e.g. '*.{ts,tsx} !test/'. Use path for external roots." })),
   path: pathSchema,
   exclude: excludeSchema,
@@ -65,6 +66,7 @@ interface SearchDetails {
   patterns?: string[];
   perFileLimitReached?: boolean;
   outputTruncated?: boolean;
+  nativeMultilineLimited?: boolean;
 }
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -137,7 +139,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
 
   const grep: ToolDefinition<typeof grepSchema, SearchDetails> = {
     name: toolName, label: "Search", annotations,
-    description: "Search file contents. Smart-case, auto-detects regex vs literal, git-aware. Native frecency order across files, source order within files. Default limit 20. Use path/include and exclude to reduce noise; read the top matching file after 1-2 searches. Plain no-match queries may suggest fuzzy matches.",
+    description: "Search file contents. Smart-case, auto-detects regex vs literal, git-aware. Native frecency order across files, source order within files. Default limit 20. LF matches are limited native blocks (coalescing/512-byte clipping), flagged nativeMultilineLimited/outputTruncated for potential incompleteness. Use path/include and exclude to reduce noise; read the top matching file after 1-2 searches. Plain no-match queries may suggest fuzzy matches.",
     parameters: grepSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -175,6 +177,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           }
         }
         const result = page.result;
+        const nativeMultilineLimited = result.nativeMultilineLimited === true;
+        if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
         if (result.regexFallbackError) notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
         addFileLimitNotice(notices, page.cappedFiles);
         let cursor: string | undefined;
@@ -188,7 +192,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         let output = withNotices(formatted.output, notices);
         if (mode === "fuzzy") output = `[0 exact matches. Maybe you meant this?]\n${output}`;
         return textResult(output, { totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, cursor,
-          hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0, outputTruncated: formatted.truncated });
+          hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0,
+          outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited });
       } finally { lease.release(); }
     },
     renderCall(args, theme) {
@@ -205,11 +210,13 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
 
   const multi: ToolDefinition<typeof multiGrepSchema, SearchDetails> = {
     name: toolName, label: "Search", annotations,
-    description: "Search file contents for ANY of multiple literal patterns (OR, native SIMD Aho-Corasick). Faster than regex alternation. Supports native constraints plus path/exclude, smart-case, context, and cursor pagination. Default limit 20.",
+    description: "Search file contents for ANY of multiple LF-free literals (native SIMD OR). A single LF-containing literal is allowed as limited native blocks (coalescing/512-byte clipping), flagged nativeMultilineLimited/outputTruncated for potential incompleteness; split LF-containing patterns into separate queries. Supports native constraints plus path/exclude, smart-case, context, and cursor pagination. Default limit 20.",
     parameters: multiGrepSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       if (!params.patterns.length || params.patterns.some(pattern => !pattern.trim())) throw new Error("patterns must contain non-empty literal patterns.");
+      const unsupported = multilineOrError(params.patterns);
+      if (unsupported) throw new Error(unsupported);
       const scope = runtime.bind(ctx);
       const resumed = params.cursor ? runtime.cursors.get(params.cursor, "multi_grep", scope.id, params) : undefined;
       const request = resumed?.request ?? params;
@@ -226,6 +233,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           maxMatchesPerFile: MATCHES_PER_FILE, pageSize, smartCase: request.caseSensitive !== true, cursor,
           beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS,
         }), pageSize, resumed?.progress);
+        const nativeMultilineLimited = page.result.nativeMultilineLimited === true;
+        if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
         addFileLimitNotice(notices, page.cappedFiles);
         let cursor: string | undefined;
         if (page.progress) {
@@ -237,7 +246,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const formatted = formatGrepOutput(page.result);
         return textResult(withNotices(formatted.output, notices), {
           totalMatched: page.result.totalMatched, totalFiles: page.result.totalFiles, root: lease.root, cursor,
-          patterns: request.patterns, hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0, outputTruncated: formatted.truncated,
+          patterns: request.patterns, hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0,
+          outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited,
         });
       } finally { lease.release(); }
     },

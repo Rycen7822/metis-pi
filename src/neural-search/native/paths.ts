@@ -38,25 +38,33 @@ export function scanOptOutReason(root: string, config: { enableHomeDirScanning: 
 export function resolveAuxRoot(absPath: string): { root: string; suffix: string } | null {
   if (!path.isAbsolute(absPath)) return null;
   const parsedRoot = path.parse(absPath).root;
-  const trimmed = path.normalize(absPath.trim()).replace(/[\\/]+$/, "") || parsedRoot;
-  if (trimmed === parsedRoot.replace(/[\\/]+$/, "") || trimmed === parsedRoot) return { root: parsedRoot, suffix: "" };
+  const trimmed = path.normalize(absPath.trim());
+  if (trimmed === parsedRoot) return { root: parsedRoot, suffix: "" };
   const parts = trimmed.slice(parsedRoot.length).split(path.sep);
   const firstGlob = parts.findIndex(part => /[*?[{]/.test(part));
   const boundary = firstGlob === -1 ? parts.length : firstGlob;
-  for (let i = boundary; i >= 0; i--) {
+  // Probe the exact path first: an existing filename may contain glob syntax.
+  // Otherwise jump to the literal prefix, then walk its ancestors as before.
+  for (let i = parts.length; i >= 0; i = i > boundary ? boundary : i - 1) {
     const candidate = path.join(parsedRoot, ...parts.slice(0, i));
     let stat: fs.Stats;
     try { stat = fs.statSync(candidate); } catch { continue; }
     if (stat.isFile()) {
       const suffix = parts.slice(i - 1).join("/");
-      // A proven file is an exact singleton glob, not a directory inferred from
-      // its extension. Keep impossible file/child paths on the existing route.
-      const exact = `{${suffix.replace(/[\\*?\[\]{},]/g, "\\$&")}}`;
-      return { root: path.dirname(candidate), suffix: i === parts.length ? exact : suffix };
+      return { root: path.dirname(candidate), suffix: i === parts.length ? literalFileGlob(suffix) : suffix };
     }
     if (stat.isDirectory()) return { root: candidate, suffix: parts.slice(i).join("/") };
   }
   return null;
+}
+
+/** FFF's glob backend accepts bracket literals, not shell-style escapes. */
+function literalFileGlob(name: string): string {
+  const encoded = name.replace(/[\\*?[\]{},:]/g, char => char === "]" ? "[]]" : char === "\\" ? "[\\\\]" : `[${char}]`);
+  if (encoded !== name) return encoded;
+  // Force glob classification without putting UTF-8 bytes or ! in a class.
+  const ascii = name.search(/[A-Za-z0-9.]/);
+  return ascii < 0 ? `{${name},${name}}` : `${name.slice(0, ascii)}[${name[ascii]}]${name.slice(ascii + 1)}`;
 }
 
 export function assertEncodableFilter(filter: string): void {
