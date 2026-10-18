@@ -2177,7 +2177,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // boundary's deferred maintenance. The next boundary can re-arm it.
       await stopMaintenance();
       assertCurrent(version);
-      await delay(16, undefined, { signal: ctx.signal });
+      const signal = ctx.signal;
+      try {
+        await delay(16, undefined, { signal });
+      } catch (error) {
+        // Cancelling this request is normal, not an extension failure. Use
+        // the timer's signal: the host may already expose a newer request's.
+        if (signal?.aborted && error instanceof Error && error.name === "AbortError") return;
+        throw error;
+      }
       assertCurrent(version);
     }
     // A below-pressure final kept its batches pending. Retry only when a real
