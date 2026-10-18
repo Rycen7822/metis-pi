@@ -1,10 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { installAdapter, type AdapterHandle } from "./adapter.ts";
+import { installAdapter, OWNED_NEURAL_SEARCH_ENTRY, type AdapterHandle } from "./adapter.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "./codemode-view.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
+import { isExplorationTool } from "./tool-names.ts";
 import { WriteDiffTracker, type WriteDiff } from "./write-tracker.ts";
 import { resolveNativeMutationPath } from "./native-tool-path.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
@@ -487,7 +488,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     const source = info as { source?: string; path?: string } | undefined;
     codemodeViews.start(event, event.toolName === "codemode" && source?.source === "builtin" && source.path === "builtin:codemode");
     tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveNativeMutationPath(ctx.cwd, path));
-    if (!event.parentToolCallId) transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
+    if (!event.parentToolCallId) transcript.apply({
+      type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName,
+      exploration: event.toolName === "neural_search"
+        ? typeof source?.source === "string" && source.path === OWNED_NEURAL_SEARCH_ENTRY && isExplorationTool(event.toolName, event.args)
+        : undefined,
+    });
     if (chromeEnabled) metrics.toolStart(event.toolCallId, event.toolName);
     if (chromeEnabled && event.toolName === "write") metrics.writeStreaming();
   });

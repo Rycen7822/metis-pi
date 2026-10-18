@@ -526,5 +526,7 @@ test("whole package retains tools and applies dynamic policy", async t => {
   assert.match(body, /POLICY_A_SENTINEL/); assert.match(body, /PROJECT_SENTINEL/);
   assert.doesNotMatch(body, /NATIVE_GLOBAL_SENTINEL/);
   const names = h.session.getActiveToolNames();
-  for (const name of ["read", "write", "goal", "context_tree_query", "lsp"]) assert.ok(names.includes(name), name);
+  for (const name of ["read", "write", "goal", "lsp"]) assert.ok(names.includes(name), name);
+  assert.equal(h.session.getAllTools().find(tool => tool.name === "context_tree_query")?.exposure, "deferred");
+  assert.equal(names.includes("context_tree_query"), false);
 });

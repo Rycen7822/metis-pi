@@ -102,11 +102,15 @@ export function explorationTitle(
   theme: Palette,
   colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" },
 ): string {
-  const args = asRecord(ctx.args);
+  const outer = asRecord(ctx.args);
+  const args = name === "neural_search" ? asRecord(outer.params) : outer;
   const done = ctx.isPartial === false;
-  const verb = explorationVerb(name);
-  const target = typeof args.pattern === "string" ? JSON.stringify(args.pattern) : path(args, ctx);
-  const inPath = typeof args.pattern === "string" ? path(args, ctx) : undefined;
+  const verb = explorationVerb(name, outer);
+  const pattern = typeof args.pattern === "string" ? args.pattern :
+    name === "neural_search" && Array.isArray(args.patterns) && args.patterns.every(value => typeof value === "string")
+      ? args.patterns : undefined;
+  const target = safeText(pattern !== undefined ? JSON.stringify(pattern) : path(args, ctx));
+  const inPath = pattern !== undefined ? safeText([path(args, ctx), string(args.constraints)].filter(Boolean).join(" ")) : undefined;
   const suffix = name === "read" ? formatReadLineRange(args.offset, args.limit) : "";
   const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
   const level = ctx.colorLevel ?? colorLevel;
@@ -233,7 +237,7 @@ export function formatResult(
   const expanded = options.expanded === true;
   const error = ctx.isError === true || result.isError === true;
   const sections: string[] = [];
-  const foldedExploration = isExplorationTool(name) && !expanded && !error && !options.isPartial;
+  const foldedExploration = isExplorationTool(name, ctx.args) && !expanded && !error && !options.isPartial;
   if (lines.length && !foldedExploration) {
     sections.push(
       gutter(
@@ -249,7 +253,7 @@ export function formatResult(
     sections.push(gutter(["(no output)"], theme, "dim"));
   const images = blocks.filter((block) => block.type === "image").length;
   // Grouped members don't repeat the image notice; the group aggregates it once (call region).
-  const groupedMember = isExplorationTool(name) && ctx.explorationPlan !== undefined;
+  const groupedMember = isExplorationTool(name, ctx.args) && ctx.explorationPlan !== undefined;
   if (images && !groupedMember)
     sections.push(
       gutter(
@@ -489,7 +493,7 @@ export function makeRenderers(
             }
             return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
           }
-          if (isExplorationTool(name)) {
+          if (isExplorationTool(name, merged.args)) {
             const plan =
               merged.explorationPlan ??
               session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
@@ -497,6 +501,10 @@ export function makeRenderers(
               explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)),
               ctx,
             );
+          }
+          if (name === "neural_search") {
+            const action = string(asRecord(merged.args).action) || "…";
+            return component(theme.fg("toolTitle", `neural_search ${safeText(action)}`), ctx);
           }
           const state = view(ctx);
           const call = component(editCall(args, theme, merged, state?.stats), ctx);

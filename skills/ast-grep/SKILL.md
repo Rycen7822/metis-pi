@@ -1,6 +1,6 @@
 ---
 name: ast-grep
-description: "Use ast-grep for structural code search: AST-aware matching of call shapes, language constructs, nested scopes, and required or missing child nodes. Prefer fffind/ffgrep for filenames, keywords, strings, documentation, and broad text searches."
+description: "Use ast-grep for structural code search: AST-aware matching of call shapes, language constructs, nested scopes, and required or missing child nodes. Prefer neural_search path/content actions for filenames, keywords, strings, documentation, and broad text searches."
 ---
 
 # ast-grep Structural Search
@@ -14,12 +14,12 @@ Good uses:
 - find calls with particular argument shapes
 - inspect AST node kinds before writing a more exact rule
 
-For ordinary keyword, string, filename, documentation, or broad text searches, use `fffind` and `ffgrep` first. If FFF is unavailable, use scoped `fd`/`rg`. AST matching is not type checking or project-wide symbol resolution: identical method names need not refer to the same binding or runtime behavior.
+For ordinary keyword, string, filename, documentation, or broad text searches, discover `neural_search` with Pi's native `tool_search`, then use its `find` / `grep` actions directly. Load action parameters with `action: "describe"` if needed. If Neural Search is unavailable, use scoped `fd`/`rg`. AST matching is not type checking or project-wide symbol resolution: identical method names need not refer to the same binding or runtime behavior.
 
 ## Workflow
 
 1. Identify the language and exact structure to match.
-2. Use `fffind` for candidate paths and `ffgrep` for textual anchors; restrict the AST search to those files or the smallest relevant directory.
+2. Use `neural_search` action `find` for candidate paths and `grep` for textual anchors; restrict the AST search to those files or the smallest relevant directory.
 3. Start with `ast-grep run --pattern` for a simple single-node match.
 4. Use `ast-grep scan` with YAML or inline rules when relationships such as `has`, `inside`, or `not` are needed.
 5. Check a small positive example and a negative control before broad scans.

@@ -29,7 +29,7 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 
 网页请求默认校验 DNS 并固定实际连接地址，每次重定向重新校验。非信任 HTTP 代理需要支持 CONNECT；仅支持普通转发的代理会明确失败。`[webAccess.ssrf].trustEnvProxy=true` 保留可信环境/已配置代理的远端 DNS 解析，此时目标解析安全由代理负责，`NO_PROXY` 绕过的目标仍走本地校验。这不覆盖远程提取服务内部的请求或 yt-dlp/ffmpeg 的网络连接。
 
-归属审计边界：Metis 自有显示、执行、LSP、MCP 策略、动态指令、condense/OCC、子代理、网页访问与会话回忆偏好都在 TOML。`pi-fff.json`/其他独立插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
+归属审计边界：Metis 自有显示、执行、Neural Search、LSP、MCP 策略、动态指令、condense/OCC、子代理、网页访问与会话回忆偏好都在 TOML。Neural Search 使用 `[neuralSearch]`，不自动读取独立插件的 `pi-fff.json`；其他独立插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
 
 TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。损坏 TOML 不回退旧 JSON，也不允许保存覆盖；显示层记录 problem 并回退，condense 使用默认关闭值，执行/LSP/MCP 按自身错误边界报错。初始化和命令保存按包内模板回填分区/参数注释，并保留未知字段；个人自定义注释不保留，可写在旁边说明中。原子 rename 避免半文件；Metis 命令的读取、合并与发布由跨进程锁串行化，互不重叠的字段 patch 会保留双方修改；同一字段或重叠的完整配置快照仍由后一次更新覆盖。手动编辑或不使用此锁的外部写入不在该保护内。
 

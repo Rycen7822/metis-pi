@@ -25,6 +25,23 @@ collapseKey = "ctrl+]"
 # 只读本全局 TOML；不读取旧 rpiv JSON。参数通过 codemode 按需发现。
 
 # =============================================================================
+# Neural Search / 本地搜索
+# =============================================================================
+# 单一 deferred neural_search：原生 tool_search 发现后直接调用，不替换内置 find/grep。
+[neuralSearch]
+enabled = true
+# FFF 引擎支持的 @ 文件补全；不改变工具的延迟发现。
+mentions = true
+enableFsRootScanning = false
+enableHomeDirScanning = true
+warnOnHomeDirScan = true
+followSymlinks = true
+# 默认数据库目录：<agentDir>/metis/neural-search/{frecency,history}。
+# 可显式指定目录；不自动读取/迁移旧插件或编辑器的数据库。
+# frecencyDbPath = "/path/to/frecency"
+# historyDbPath = "/path/to/history"
+
+# =============================================================================
 # LSP / 语言服务器
 # =============================================================================
 [lsp]

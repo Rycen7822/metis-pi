@@ -115,6 +115,15 @@ upstream tools with one direct lsp diagnostics/fix interface and owns its
 configuration in the global metis-pi.toml. Provenance and maintenance boundaries
 are retained in src/pi-lsp/METIS.md.
 
+Metis-owned Neural Search (src/neural-search) derives from @ff-labs/pi-fff
+0.11.0 in dmtrKovalenko/fff, tag v0.11.0,
+commit 95fd777c2529fc7b4d7572dabff64cc07268f2c5.
+Copyright (c) 2025 Dmitriy Kovalenko. MIT License (src/neural-search/LICENSE).
+Metis owns the Pi integration, configuration, lifecycle, aggregated deferred
+neural_search entry, discovery catalogue and rendering. The FFF Node/Bun native
+engine packages remain separate, pinned npm dependencies. Provenance and
+maintenance boundaries are in src/neural-search/METIS.md.
+
 The standalone web MCP bundle also includes typebox 1.3.27 (MIT).
 Its upstream copyright and full license are retained in
 src/pi-web-access/licenses/typebox.LICENSE.

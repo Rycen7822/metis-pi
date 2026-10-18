@@ -15,6 +15,7 @@
 | `execution.ts` | deferred PTY 进程工具、执行设置、后台 shell 和资源清理。 |
 | `mcp.ts` | 默认关闭；`src/mcp` 持有目录缓存、连接租约和工具装配，协议/OAuth/CLI/codemode/权限由 Pi 提供。 |
 | `subagents.ts` | `src/subagents/host` 持有父会话租约、接收票据和采样协调；`ui` 负责交互；`backend` 持有账本、任务状态和进程管理；`worker` 执行子 Pi。 |
+| `neural-search.ts` | `src/neural-search` 的 index/config/session 负责组合、配置和会话生命周期，native 管理 FFF/路径策略，tools 管理动作及查询，ui 管理补全/原生回退；入口直接使用 action 表聚合一个 deferred `neural_search`，提供简短目录及原生发现后的直接调用。 |
 | `web-access.ts` | `src/pi-web-access` 管理搜索、提取、内容存储和 Curator；聚合工具沿 Pi deferred/codemode 发现与调用。 |
 | `session-recall.ts` | `src/pi-session-recall` 管理会话检索与回读；辅助模型请求使用当前 Pi ModelRuntime。 |
 

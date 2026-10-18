@@ -1,4 +1,4 @@
-import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext, type ViewOptions } from "./tool-names.ts";
+import { asRecord, TOOL_NAMES, isExplorationTool, type Component, type Palette, type Renderers, type ToolName, type ViewContext, type ViewOptions } from "./tool-names.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";
@@ -6,6 +6,7 @@ import type { NestedRendererLookup } from "./codemode-view.ts";
 
 export const OWNED_EXECUTION_ENTRY = fileURLToPath(new URL("../extensions/execution.ts", import.meta.url));
 export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fusion.ts", import.meta.url));
+export const OWNED_NEURAL_SEARCH_ENTRY = fileURLToPath(new URL("../extensions/neural-search.ts", import.meta.url));
 
 // Display-only adapter for Pi’s native ToolExecutionComponent.
 // No tool registration, execution replacement, context middleware or TUI root patch.
@@ -263,6 +264,19 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
             ctx,
           ),
       };
+    if (name === "neural_search") {
+      if (typeof source.source !== "string" || source.path !== OWNED_NEURAL_SEARCH_ENTRY) return;
+      const call = definition.renderCall;
+      const result = definition.renderResult;
+      if (typeof call !== "function" || typeof result !== "function") return;
+      const search = options.renderers.neural_search;
+      return {
+        renderCall: (args, theme, ctx) => isExplorationTool(name, args)
+          ? search.renderCall(args, theme, ctx) : call(args, theme, ctx),
+        renderResult: (value, opts, theme, ctx) => isExplorationTool(name, ctx.args)
+          ? search.renderResult(value, opts, theme, ctx) : result(value, opts, theme, ctx),
+      };
+    }
     if (!TOOL_NAMES.includes(name as ToolName)) return;
     const builtin = source.source === "builtin" && source.path === `builtin:${name}`;
     const fff = (name === "ffgrep" || name === "fffind") && typeof source.path === "string" && typeof source.source === "string"
