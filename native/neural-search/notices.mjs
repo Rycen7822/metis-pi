@@ -6,7 +6,7 @@ import { dirname, join, relative, resolve } from "node:path";
 // crates. Cargo's SPDX field alone does not contain their copyright notices.
 export function writeNotices(root, source) {
   const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--manifest-path", join(source, "Cargo.toml"),
-    "--locked", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu", "--no-default-features", "--features", "zlob"], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }));
+    "--locked", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }));
   const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
   const graph = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
   const closure = new Set([metadata.packages.find(pkg => pkg.name === "fff-c").id]);

@@ -19,13 +19,18 @@ const fileHash = path => hash(readFileSync(path));
 const command = (name, args, options = {}) => execFileSync(name, args, { cwd: root, encoding: "utf8", ...options }).trim();
 
 function inputs(directory = source) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+  const files = readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     if (entry.name === "target") return [];
     const path = join(directory, entry.name);
     if (entry.isDirectory()) return inputs(path);
     return entry.isFile() && (/(?:\.rs|\.toml|\.lock|\.h|\.mjs)$/.test(entry.name) || /^(?:LICENSE|COPYING|COPYRIGHT|NOTICE)(?:$|[-_.])/.test(entry.name))
       ? [{ path: relative(root, path), sha256: fileHash(path) }] : [];
-  }).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  });
+  if (directory === source) for (const name of ["api.ts", "ffi.ts", "finder.ts"]) {
+    const path = `src/neural-search/native/binding/${name}`;
+    files.push({ path, sha256: fileHash(join(root, path)) });
+  }
+  return files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 }
 
 function abi(path) {
@@ -43,14 +48,15 @@ function abi(path) {
     return major > 2 || major === 2 && minor > 31;
   })) throw new Error("Search library must target glibc 2.31 or older symbols.");
   const symbols = new Set(command("readelf", ["-W", "--dyn-syms", path]).split("\n").filter(line => !/\bUND\b/.test(line)).map(line => line.trim().split(/\s+/).at(-1)));
-  for (const name of ["fff_create_instance_with", "fff_destroy", "fff_search", "fff_search_mixed", "fff_live_grep_ex", "fff_multi_grep_ex", "fff_scan_files", "fff_is_scanning", "fff_get_scan_progress", "fff_health_check", "fff_free_result", "fff_free_search_result", "fff_free_mixed_search_result", "fff_free_grep_result", "fff_free_scan_progress", "fff_free_string", "fff_ptr_offset", "fff_search_result_get_item", "fff_search_result_get_score", "fff_mixed_search_result_get_item", "fff_mixed_search_result_get_score", "fff_grep_result_get_match"])
-    if (!symbols.has(name)) throw new Error(`Search ABI symbol missing: ${name}`);
-  return { machine: "x86-64", needed, glibc };
+  const expected = ["abi_version", "create", "take_instance", "destroy", "files", "mixed", "grep", "multi_grep", "scan", "is_scanning", "progress", "health", "free_result", "get_file", "get_mixed", "get_match", "pointer_offset"].map(name => `metis_search_${name}`).sort();
+  const exports = [...symbols].filter(name => /^(?:fff_|metis_search_)/.test(name)).sort();
+  if (JSON.stringify(exports) !== JSON.stringify(expected)) throw new Error(`Unexpected private search ABI: ${exports.join(", ")}`);
+  return { version: 3, machine: "x86-64", needed, glibc, exports };
 }
 
 function verify(manifest) {
   const current = inputs();
-  if (manifest.schemaVersion !== 1 || manifest.target !== target || manifest.asset.path !== asset || manifest.minGlibc !== "2.31" || manifest.createOptionsVersion !== 2 || manifest.engineVersion !== "0.11.0")
+  if (manifest.schemaVersion !== 2 || manifest.target !== target || manifest.asset.path !== asset || manifest.minGlibc !== "2.31" || manifest.abiVersion !== 3 || manifest.upstream?.version !== "0.11.0" || manifest.upstream?.commit !== "95fd777c2529fc7b4d7572dabff64cc07268f2c5")
     throw new Error("Unexpected search library manifest.");
   if (JSON.stringify(current) !== JSON.stringify(manifest.source.inputs) || hash(JSON.stringify(current)) !== manifest.source.sha256)
     throw new Error("Search engine source differs from the packaged library; rebuild it.");
@@ -66,17 +72,32 @@ function verify(manifest) {
 if (mode === "verify") {
   verify(JSON.parse(readFileSync(manifestPath, "utf8")));
 } else {
+  const rustc = command("rustc", ["--version"]);
+  const zig = command("zig", ["version"]);
+  const zigbuild = command("cargo-zigbuild", ["--version"]);
+  if (!rustc.startsWith("rustc 1.94.0 ") || zig !== "0.16.0" || !zigbuild.endsWith("0.23.4"))
+    throw new Error("Publish builds require Rust 1.94.0, Zig 0.16.0 and cargo-zigbuild 0.23.4; see native/neural-search/README.md.");
+  // A shipped library must not silently inherit a developer's native CPU flags.
+  // Local profiling can use cargo directly; the packaged target stays baseline x64.
+  const supplied = process.env.CARGO_ENCODED_RUSTFLAGS;
+  const flags = supplied === undefined ? (process.env.RUSTFLAGS ?? "").split(/\s+/).filter(Boolean) : supplied.split("\x1f").filter(Boolean);
+  const targetFlags = process.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS ?? "";
+  const cflags = [process.env.CFLAGS, process.env.CXXFLAGS, process.env.CFLAGS_x86_64_unknown_linux_gnu].filter(Boolean).join(" ");
+  if (/target-(?:cpu|feature)|target_feature/.test([...flags, targetFlags].join(" ")) || /(?:-march=|-mcpu=|-m(?:avx|sse|aes|bmi))/.test(cflags))
+    throw new Error("Packaged search builds reject host-specific CPU flags; use the portable build environment.");
+  flags.push("-Ctarget-cpu=x86-64");
   writeNotices(root, source);
   const before = inputs();
   const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target");
-  const args = ["zigbuild", "--manifest-path", "native/neural-search/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c", "--no-default-features", "--features", "zlob"];
-  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output } });
+  const args = ["zigbuild", "--manifest-path", "native/neural-search/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
+  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") } });
   if (JSON.stringify(inputs()) !== JSON.stringify(before)) throw new Error("Search source changed during compilation; packaged bytes were not updated.");
   const candidate = join(output, target, "ci/libmetis_neural_search.so");
   const manifest = {
-    schemaVersion: 1, target, minGlibc: "2.31", engineVersion: "0.11.0", createOptionsVersion: 2,
-    source: { root: "native/neural-search", sha256: hash(JSON.stringify(before)), inputs: before },
-    build: { command: ["cargo", ...args], rustc: command("rustc", ["--version"]), zig: command("zig", ["version"]), rustFlags: process.env.CARGO_ENCODED_RUSTFLAGS ?? process.env.RUSTFLAGS ?? "" },
+    schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 3,
+    upstream: { version: "0.11.0", commit: "95fd777c2529fc7b4d7572dabff64cc07268f2c5" },
+    source: { roots: ["native/neural-search", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
+    build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, cFlags: cflags },
     asset: { path: asset, sha256: fileHash(candidate), bytes: statSync(candidate).size, abi: abi(candidate) },
     notices: notices.map(path => ({ path, sha256: fileHash(join(root, path)) })),
   };

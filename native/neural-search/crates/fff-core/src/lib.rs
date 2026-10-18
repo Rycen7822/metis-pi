@@ -6,7 +6,7 @@
 //! and multi-mode grep search.
 //!
 //! > [!Important performance information]  
-//! > For the most optimized fff build use `zlob` feature. It requires zig v0.16.0 to be installed on the machine.
+//! > Linux x64/glibc engine using the required zlob backend (Zig 0.16.0 at build time).
 //!
 //! ## Architecture
 //!
@@ -20,9 +20,7 @@
 //! - [`grep`] — Live grep search supporting regex, plain-text, and fuzzy modes
 //!   with optional constraint filtering.
 //! - [`git`] — Git status caching and repository detection.
-//! - [`watch`] — Client-facing filesystem watch subscriptions: glob, exact
-//!   path, or directory subtree with normalized batch delivery
-//!   (see [`SharedFilePicker::watch`]).
+//! - [`watch`] — Background OS watcher maintaining the searchable index.
 //!
 //! ## Shared State
 //!
@@ -38,7 +36,7 @@
 //! use fff_search::frecency::FrecencyTracker;
 //! use fff_search::query_tracker::QueryTracker;
 //! use fff_search::{
-//!     FFFMode, FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser,
+//!     FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser,
 //!     SharedFrecency, SharedFilePicker, SharedQueryTracker,
 //! };
 //!
@@ -62,7 +60,6 @@
 //!     shared_frecency.clone(),
 //!     FilePickerOptions {
 //!         base_path: ".".into(),
-//!         mode: FFFMode::Ai,
 //!         ..Default::default()
 //!     },
 //! )?;
@@ -97,12 +94,6 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-#[cfg(not(any(feature = "ripgrep", feature = "zlob")))]
-compile_error!(
-    "fff-search requires either the `ripgrep` (default) or `zlob` feature. \
-     Enable one, e.g. `--features ripgrep` or `--features zlob`."
-);
-
 /// Primary entry points with thread-safe [`SharedFilePicker`](shared::FilePicker) instance
 pub mod shared;
 pub use shared::*;
@@ -126,7 +117,7 @@ pub use git_recency::GitRecencyConfig;
 pub mod grep;
 pub use grep::*;
 
-/// Tracing/logging initialization
+/// Lightweight trace helpers (uses the embedding host's subscriber).
 pub mod log;
 
 /// Various path utils might be handy for you to work with fff paths
@@ -147,11 +138,10 @@ mod rescan_throttle;
 // ==================================
 // these are public only for benchmarks, no backward compatibility guaranteed
 #[doc(hidden)]
-pub use index::bigram_filter;
-#[doc(hidden)]
 pub mod simd_string_utils;
 // ==================================
 
+mod binary_classifier;
 mod error;
 mod git_status_worker;
 mod ignore;
@@ -165,11 +155,9 @@ pub(crate) mod simd_path;
 pub(crate) mod stable_vec;
 pub(crate) mod walk;
 
-/// Filesystem watch subscriptions with glob filtering and batched delivery,
-/// plus the background OS watcher.
+/// Background OS watcher maintaining the file index.
 #[path = "watcher/mod.rs"]
 pub mod watch;
-pub use watch::{WatchEvent, WatchEventKind, WatchId, WatchOptions};
 
 // fff error
 pub use error::{Error, Result};

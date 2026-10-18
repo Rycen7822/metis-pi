@@ -15,15 +15,9 @@ pub(super) fn build_regex(pattern: &str, casing: Casing) -> Result<regex::bytes:
         return Err("empty pattern".to_string());
     }
 
-    let regex_pattern = if pattern.contains("\\n") {
-        pattern.replace("\\n", "\n")
-    } else {
-        pattern.to_string()
-    };
-
     let case_insensitive = casing.is_insensitive_for(pattern);
 
-    regex::bytes::RegexBuilder::new(&regex_pattern)
+    regex::bytes::RegexBuilder::new(pattern)
         .case_insensitive(case_insensitive)
         .multi_line(true)
         .unicode(false)

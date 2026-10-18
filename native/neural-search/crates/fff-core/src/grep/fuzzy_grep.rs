@@ -5,10 +5,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use super::sink::{
-    char_indices_to_byte_offsets, classify_definition, strip_line_terminators,
-    truncate_display_bytes,
-};
+use super::sink::{byte_indices_to_byte_offsets, strip_line_terminators, truncate_display_bytes};
 use super::types::{GrepMatch, GrepResult, GrepSearchOptions};
 
 #[allow(clippy::too_many_arguments)]
@@ -300,7 +297,7 @@ pub(super) fn fuzzy_grep_search<'a>(
 
                         let (ln, bo) = line_meta[idx];
                         let match_byte_offsets =
-                            char_indices_to_byte_offsets(display_line, &match_indices.indices);
+                            byte_indices_to_byte_offsets(display_line, &match_indices.indices);
                         let col = match_byte_offsets
                             .first()
                             .map(|r| r.0 as usize)
@@ -311,10 +308,6 @@ pub(super) fn fuzzy_grep_search<'a>(
                             line_number: ln,
                             col,
                             byte_offset: bo,
-                            is_definition: classify_definition(
-                                options.classify_definitions,
-                                display_line,
-                            ),
                             line_content: display_line.to_string(),
                             match_byte_offsets,
                             fuzzy_score: Some(match_indices.score),

@@ -1,4 +1,4 @@
-use heed::{Database, Env, WithoutTls};
+use heed::Database;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -72,8 +72,7 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
     let spawn_result = thread::Builder::new()
         .name("fff-lmdb-gc".into())
         .spawn(move || {
-            // Holding a read guard blocks `destroy` / re-init's write
-            // guard until this thread finishes — natural serialization.
+            // Holding a read guard serializes in-memory close/re-init against GC.
             let guard = match thread_shared.read() {
                 Ok(g) => g,
                 Err(e) => {
@@ -82,7 +81,7 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
                 }
             };
             let Some(ref tracker) = *guard else {
-                return; // destroyed before we started
+                return; // closed before we started
             };
             // Trackers attaching to an already-pooled env must not repeat the
             // GC; the first opener's run flips the shared health flag.
@@ -123,14 +122,9 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     /// Borrow the health flag from the tracker.
     fn health(&self) -> &DbHealth;
 
-    /// Borrow the raw heed env.
-    fn env(&self) -> &Env<WithoutTls> {
-        self.shared_env()
-    }
-
     /// Override to purge stale rows, compact, etc. Default no-op. Runs on
     /// the GC thread while a read lock is held against the shared handle,
-    /// so destroy / re-init naturally wait for it.
+    /// so close/re-init naturally wait for it.
     fn purge_stale_data(_env: &SharedEnv) -> Result<()> {
         Ok(())
     }

@@ -16,11 +16,10 @@ pub(crate) trait Constrainable {
     fn is_overflow(&self) -> bool;
 }
 
-/// Stored/canonical paths use `/`; also accept `\` so a Windows user typing
-/// a native separator in a query still matches.
+/// Linux paths use `/`; a literal backslash is part of a path component.
 #[inline]
 fn is_path_sep(b: u8) -> bool {
-    b == b'/' || b == b'\\'
+    b == b'/'
 }
 
 #[inline]
@@ -57,19 +56,9 @@ pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
         return false;
     }
 
-    // Exact or preceded by a separator. Scan backward past any multi-byte
-    // continuation bytes to find the preceding ASCII byte.
-    if start == 0 {
-        return true;
-    }
-    let mut i = start;
-    while i > 0 {
-        i -= 1;
-        if path_bytes[i] < 128 {
-            return is_path_sep(path_bytes[i]);
-        }
-    }
-    false
+    // Only the immediately preceding byte can be a separator; skipping a
+    // Unicode prefix would make `ébar.ts` satisfy the filename `bar.ts`.
+    start == 0 || is_path_sep(path_bytes[start - 1])
 }
 
 #[inline]
@@ -143,15 +132,11 @@ pub(crate) fn apply_constraints<'a, T: Constrainable + Sync>(
     Some(plan.run(items, base_arena, overflow_arena))
 }
 
-#[cfg(feature = "zlob")]
 pub(crate) type GlobPattern = zlob::ZlobPattern;
-#[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
-pub(crate) type GlobPattern = globset::GlobMatcher;
 
 /// `PERIOD` on top of `RECOMMENDED`: we filter an index that already contains
 /// dotfiles, so `**/x` must cross `.config`/`.pi` components. Without it zlob
-/// applies fnmatch's leading-dot rule and diverges from the globset backend.
-#[cfg(feature = "zlob")]
+/// applies fnmatch's leading-dot rule and drops indexed hidden paths.
 const GLOB_FLAGS: zlob::ZlobFlags = zlob::ZlobFlags::RECOMMENDED.union(zlob::ZlobFlags::PERIOD);
 
 /// How `Constraint::Glob` is evaluated for each item.
@@ -159,7 +144,7 @@ enum GlobStrategy {
     /// No Glob constraint present.
     None,
     /// Pure-glob workload (no Extension filter to reject items first).
-    /// Batch all paths through zlob/globset once; per-item check is a Vec<bool> lookup.
+    /// Batch all paths through zlob once; per-item check is a Vec<bool> lookup.
     Prepass(Vec<Vec<bool>>),
     /// Mixed workload (Extension filter present). Compile patterns up front, then
     /// only run them on items that survive the cheap Extension OR check.
@@ -352,7 +337,7 @@ fn evaluate<T: Constrainable>(
             return evaluate(item, index, inner, glob, glob_idx, !negate, arena, scratch);
         }
         // Pass-throughs — handled at higher levels.
-        Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,
+        Constraint::FileType(_) => true,
     };
     if negate { !raw } else { raw }
 }
@@ -376,33 +361,8 @@ fn matches_git_status(status: Option<git2::Status>, filter: &GitStatusFilter) ->
 }
 
 #[inline]
-#[cfg(feature = "zlob")]
 pub(crate) fn compiled_matches(p: &GlobPattern, path: &str) -> bool {
     p.matches_default(path)
-}
-
-#[inline]
-#[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
-pub(crate) fn compiled_matches(p: &GlobPattern, path: &str) -> bool {
-    p.is_match(path)
-}
-
-/// Append indices (into `rels`) of paths matching `p`, in input order.
-/// zlob backend: ONE FFI call for the whole batch.
-#[cfg(feature = "zlob")]
-pub(crate) fn glob_matches_into(p: &GlobPattern, rels: &[&str], out: &mut Vec<usize>) {
-    match p.match_indices(rels, p.flags()) {
-        Ok(ix) => out.extend_from_slice(ix.as_slice()),
-        Err(e) => {
-            tracing::warn!(?e, "zlob batch match failed, falling back to per-path");
-            out.extend((0..rels.len()).filter(|&i| p.matches_default(rels[i])));
-        }
-    }
-}
-
-#[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
-pub(crate) fn glob_matches_into(p: &GlobPattern, rels: &[&str], out: &mut Vec<usize>) {
-    out.extend((0..rels.len()).filter(|&i| p.is_match(rels[i])));
 }
 
 /// Decide between batch prepass and inline compiled patterns.
@@ -444,8 +404,7 @@ fn contains_glob(rest: &[&Constraint<'_>]) -> bool {
 }
 
 /// Contiguous byte buffer holding every item's `relative_path`. Single allocation
-/// instead of N `String`s. On Windows the in-place pass folds `\\` -> `/` so the
-/// glob library sees a canonical separator.
+/// instead of N `String`s; literal Linux path bytes are preserved.
 struct PathBuffer {
     bytes: Vec<u8>,
     offsets: Vec<(usize, usize)>,
@@ -508,21 +467,12 @@ fn walk_globs<F: FnMut(&str)>(c: &Constraint<'_>, f: &mut F) {
     }
 }
 
-#[cfg(feature = "zlob")]
 pub(crate) fn compile_one(pattern: &str) -> Option<GlobPattern> {
     zlob::ZlobPattern::compile(pattern, GLOB_FLAGS).ok()
 }
 
-#[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
-pub(crate) fn compile_one(pattern: &str) -> Option<GlobPattern> {
-    globset::Glob::new(pattern)
-        .ok()
-        .map(|g| g.compile_matcher())
-}
-
 /// Build a `paths.len()`-sized bitmap. Vec<bool> beats AHashSet ~2× in the per-item
 /// filter loop — no hashing, plain array indexing, sequential prefetcher-friendly.
-#[cfg(feature = "zlob")]
 fn match_glob_pattern(pattern: &str, paths: &[&str]) -> Vec<bool> {
     let mut mask = vec![false; paths.len()];
     let Ok(hits) = zlob::zlob_match_paths_indices(pattern, paths, GLOB_FLAGS) else {
@@ -531,26 +481,6 @@ fn match_glob_pattern(pattern: &str, paths: &[&str]) -> Vec<bool> {
     for i in hits.to_iter() {
         if i < mask.len() {
             mask[i] = true;
-        }
-    }
-    mask
-}
-
-#[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
-fn match_glob_pattern(pattern: &str, paths: &[&str]) -> Vec<bool> {
-    let mut mask = vec![false; paths.len()];
-    let Ok(glob) = globset::Glob::new(pattern) else {
-        return mask;
-    };
-    let matcher = glob.compile_matcher();
-    if paths.len() >= PAR_THRESHOLD {
-        use rayon::prelude::*;
-        mask.par_iter_mut()
-            .zip(paths.par_iter())
-            .for_each(|(slot, p)| *slot = matcher.is_match(p));
-    } else {
-        for (slot, p) in mask.iter_mut().zip(paths.iter()) {
-            *slot = matcher.is_match(p);
         }
     }
     mask
@@ -656,32 +586,6 @@ mod tests {
         assert!(!path_contains_segment("src", "src")); // no trailing slash
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn test_path_contains_segment_accepts_backslash() {
-        assert!(path_contains_segment("src\\lib.rs", "src"));
-        assert!(path_contains_segment(
-            "app\\modules\\src\\services\\x.lua",
-            "src"
-        ));
-        assert!(path_contains_segment("app\\SRC\\x.lua", "src"));
-
-        assert!(path_contains_segment(
-            "foo\\libswscale\\aarch64\\input.S",
-            "libswscale/aarch64"
-        ));
-        assert!(path_contains_segment(
-            "crates\\fff-core\\src\\grep.rs",
-            "fff-core/src"
-        ));
-
-        assert!(!path_contains_segment("mysrc\\lib.rs", "src"));
-        assert!(!path_contains_segment(
-            "xlibswscale\\aarch64\\in.S",
-            "libswscale/aarch64"
-        ));
-    }
-
     #[test]
     fn test_path_ends_with_suffix() {
         // Exact match
@@ -724,23 +628,6 @@ mod tests {
         // Simple path
         assert!(path_ends_with_suffix("src/main.rs", "src/main.rs"));
         assert!(path_ends_with_suffix("crates/src/main.rs", "src/main.rs"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_path_ends_with_suffix_accepts_backslash() {
-        assert!(path_ends_with_suffix(
-            "app\\modules\\src\\services\\handler.lua",
-            "services/handler.lua"
-        ));
-        assert!(path_ends_with_suffix(
-            "foo\\libswscale\\input.c",
-            "libswscale/input.c"
-        ));
-        assert!(!path_ends_with_suffix(
-            "xlibswscale\\input.c",
-            "libswscale/input.c"
-        ));
     }
 
     #[test]

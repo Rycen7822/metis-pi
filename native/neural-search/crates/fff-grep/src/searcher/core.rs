@@ -50,8 +50,10 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         self.sink_matched(buf, range)
     }
 
-    pub(crate) fn find(&mut self, slice: &[u8]) -> Result<Option<Range>, S::Error> {
-        self.matcher.find(slice).map_err(S::Error::error_message)
+    pub(crate) fn find_at(&mut self, buf: &[u8], at: usize) -> Result<Option<Range>, S::Error> {
+        self.matcher
+            .find_at(buf, at)
+            .map_err(S::Error::error_message)
     }
 
     pub(crate) fn begin(&mut self) -> Result<bool, S::Error> {
@@ -83,7 +85,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         while !buf[pos..].is_empty() {
             let mat = match self
                 .matcher
-                .find(&buf[pos..])
+                .find_at(buf, pos)
                 .map_err(S::Error::error_message)?
             {
                 None => return Ok(None),
@@ -92,7 +94,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
             let line = lines::locate(
                 buf,
                 self.config.line_term.as_byte(),
-                Range::zero(mat.start()).offset(pos),
+                Range::zero(mat.start()),
             );
             if line.start() == buf.len() {
                 pos = buf.len();

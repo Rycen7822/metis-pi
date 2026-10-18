@@ -82,16 +82,14 @@ pub trait ParserConfig {
 /// Default configuration for the file picker.
 ///
 /// Filename-constraint detection is off (trait default), so partial filenames
-/// like `vite.conf` don't silently filter out fuzzy matches. The Neovim layer
-/// overrides `enable_filename_constraint` to opt in based on user config.
+/// like `vite.conf` don't silently filter out fuzzy matches.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileSearchConfig;
 
 impl ParserConfig for FileSearchConfig {}
 
-/// Configuration for full-text search (grep) - file constraints enabled for
-/// filtering which files to search, git status disabled since it's not useful
-/// when searching file contents.
+/// Base grammar for content file filters. Content needles are passed separately
+/// and never parsed here. Git status and location parsing are disabled.
 ///
 /// Glob detection is narrowed: only patterns containing a path separator (`/`)
 /// or brace expansion (`{…}`) are treated as globs. Characters like `?` and
@@ -154,13 +152,13 @@ impl ParserConfig for GrepConfig {
     }
 }
 
-/// Configuration for AI-mode grep — extends `GrepConfig` behavior with
-/// automatic file-path constraint detection.
+/// Explicit content-filter grammar, extending `GrepConfig` with filename
+/// constraints. Use `parse_constraints` so a lone path stays a strict filter.
 ///
 /// Bare filenames with valid extensions (`schema.rs`) and path-prefixed
 /// filenames (`libswscale/input.c`) are detected as `FilePath` constraints
-/// so the search is scoped to matching files. The caller validates the
-/// constraint against the index and drops it if no files match (fallback).
+/// so the search is scoped to matching files. An empty candidate set must not
+/// drop that scope or broaden the search to other files.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AiGrepConfig;
 

@@ -56,26 +56,8 @@ fn select_rare_pair(needle_lower: &[u8]) -> (usize, usize) {
     (i1, i2)
 }
 
-/// Extract a 16-bit bitmask from a NEON comparison result (each byte 0x00 or 0xFF)
-/// Bit *i* of the result corresponds to byte *i* of the input vector
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon")]
-#[inline]
-unsafe fn neon_movemask(v: core::arch::aarch64::uint8x16_t) -> u16 {
-    use core::arch::aarch64::*;
-
-    // AND each byte with its bit-position mask, then horizontally sum each half.
-    static BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128];
-    let bit_mask = unsafe { vld1q_u8(BITS.as_ptr()) };
-    let masked = vandq_u8(v, bit_mask);
-    let lo = vaddv_u8(vget_low_u8(masked));
-    let hi = vaddv_u8(vget_high_u8(masked));
-    (lo as u16) | ((hi as u16) << 8)
-}
-
 /// AVX2 packed-pair kernel: scan 32 haystack positions per iteration,
 /// checking two rare bytes (case-insensitive) simultaneously
-#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn find_packed_pair_avx2(
     haystack: &[u8],
@@ -179,101 +161,6 @@ unsafe fn find_packed_pair_avx2(
     None
 }
 
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon")]
-unsafe fn find_packed_pair_neon(
-    haystack: &[u8],
-    needle_lower: &[u8],
-    i1: usize,
-    i2: usize,
-) -> Option<usize> {
-    use core::arch::aarch64::*;
-
-    let n = needle_lower.len();
-    let hlen = haystack.len();
-    let ptr = haystack.as_ptr();
-    let last_start = hlen - n;
-
-    let b1 = needle_lower[i1];
-    let b1_alt = if b1.is_ascii_lowercase() {
-        ascii_swap_case(b1)
-    } else {
-        b1
-    };
-    let b2 = needle_lower[i2];
-    let b2_alt = if b2.is_ascii_lowercase() {
-        ascii_swap_case(b2)
-    } else {
-        b2
-    };
-
-    let v1_lo = vdupq_n_u8(b1);
-    let v1_hi = vdupq_n_u8(b1_alt);
-    let v2_lo = vdupq_n_u8(b2);
-    let v2_hi = vdupq_n_u8(b2_alt);
-
-    let max_idx = i1.max(i2);
-    let max_offset = hlen.saturating_sub(max_idx + 16);
-    let mut offset = 0usize;
-
-    while offset <= max_offset {
-        let chunk1 = unsafe { vld1q_u8(ptr.add(offset + i1)) };
-        let chunk2 = unsafe { vld1q_u8(ptr.add(offset + i2)) };
-
-        // Case-insensitive match: OR both case variants, then AND the two positions.
-        let eq1 = vorrq_u8(vceqq_u8(chunk1, v1_lo), vceqq_u8(chunk1, v1_hi));
-        let eq2 = vorrq_u8(vceqq_u8(chunk2, v2_lo), vceqq_u8(chunk2, v2_hi));
-
-        let mut mask = unsafe { neon_movemask(vandq_u8(eq1, eq2)) };
-
-        while mask != 0 {
-            let bit = mask.trailing_zeros() as usize;
-            let candidate = offset + bit;
-            if candidate > last_start {
-                return None;
-            }
-            if unsafe { eq_lowered_case(ptr.add(candidate), needle_lower) } {
-                return Some(candidate);
-            }
-            mask &= mask - 1;
-        }
-
-        offset += 16;
-    }
-
-    // Tail: remaining positions that couldn't fill a full vector.
-    if offset <= last_start {
-        let rare_pos = if rank(needle_lower[i1]) <= rank(needle_lower[i2]) {
-            i1
-        } else {
-            i2
-        };
-        let rare_byte = needle_lower[rare_pos];
-        let tail_start = offset + rare_pos;
-        let tail_end = last_start + rare_pos + 1;
-        if tail_start < tail_end {
-            let tail_space = &haystack[tail_start..tail_end];
-            if rare_byte.is_ascii_lowercase() {
-                for pos in memchr::memchr2_iter(rare_byte, ascii_swap_case(rare_byte), tail_space) {
-                    let candidate = offset + pos;
-                    if unsafe { eq_lowered_case(ptr.add(candidate), needle_lower) } {
-                        return Some(candidate);
-                    }
-                }
-            } else {
-                for pos in memchr::memchr_iter(rare_byte, tail_space) {
-                    let candidate = offset + pos;
-                    if unsafe { eq_lowered_case(ptr.add(candidate), needle_lower) } {
-                        return Some(candidate);
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
 fn find_first_byte_with_memchr(haystack: &[u8], needle_lower: &[u8]) -> Option<usize> {
     let n = needle_lower.len();
     debug_assert!(n >= 1 && n <= haystack.len());
@@ -320,33 +207,13 @@ pub fn find(haystack: &[u8], needle_lower: &[u8]) -> Option<usize> {
         };
     }
 
-    #[cfg_attr(
-        not(any(target_arch = "x86_64", target_arch = "aarch64")),
-        allow(unused_variables)
-    )]
     let (i1, i2) = select_rare_pair(needle_lower);
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if std::is_x86_feature_detected!("avx2") {
-            // Need enough haystack for at least one vector load.
-            let max_idx = i1.max(i2);
-            if haystack.len() >= max_idx + 32 {
-                return unsafe { find_packed_pair_avx2(haystack, needle_lower, i1, i2) };
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        // Packed-pair wins when the first byte is common (memchr2 drowns in
-        // false positives), but a rare first byte (z, q, x, ...) makes
-        // memchr2's raw throughput dominate. Threshold 200 on the frequency
-        // table splits common letters (s=243, e=253) from rare ones (z=152).
-        let first_byte_rank = rank(needle_lower[0]);
+    if std::is_x86_feature_detected!("avx2") {
+        // Need enough haystack for at least one vector load.
         let max_idx = i1.max(i2);
-        if first_byte_rank >= 200 && haystack.len() >= max_idx + 16 {
-            return unsafe { find_packed_pair_neon(haystack, needle_lower, i1, i2) };
+        if haystack.len() >= max_idx + 32 {
+            return unsafe { find_packed_pair_avx2(haystack, needle_lower, i1, i2) };
         }
     }
 

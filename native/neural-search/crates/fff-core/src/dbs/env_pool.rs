@@ -33,7 +33,7 @@ pub(crate) struct PooledEnv {
 impl Drop for PooledEnv {
     fn drop(&mut self) {
         let mut pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
-        // Only remove a dead entry: begin_exclusive_destroy may have removed ours.
+        // Only remove our dead entry; a new opener may already own this key.
         if pool.get(&self.key).is_some_and(|w| w.strong_count() == 0) {
             pool.remove(&self.key);
         }
@@ -90,7 +90,7 @@ impl SharedEnv {
                     return Ok(Self(existing));
                 }
 
-                erase_if_oversized(&path, spec);
+                check_size_cap(&path, spec)?;
                 let result = unsafe {
                     // MDB_NOTLS: reader slots are tied to txn objects (freed on
                     // commit/abort) instead of pinned per thread for its lifetime (#783).
@@ -195,22 +195,6 @@ impl SharedEnv {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
-
-    pub(crate) fn destroy(&self) -> Result<Option<heed::EnvClosingEvent>> {
-        let mut pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
-        let holders = Arc::strong_count(&self.0);
-
-        if holders > 1 {
-            return Err(Error::DbInUse {
-                db: self.0.label,
-                path: self.0.key.clone(),
-                holders: holders - 1,
-            });
-        }
-
-        pool.remove(&self.0.key);
-        Ok(heed::env_closing_event(&self.0.key))
-    }
 }
 
 static POOL: LazyLock<Mutex<HashMap<PathBuf, Weak<PooledEnv>>>> = LazyLock::new(Mutex::default);
@@ -225,11 +209,12 @@ const MAX_TRANSIENT_RETRIES: u32 = 8;
 // heed's default reader table is 126 slots. In TLS mode each thread pins a slot
 // for its lifetime, so long-lived embedders (Neovim, node agents) that share one
 // lock file across many processes/threads exhaust it (#783). Reader slots are
-// tiny (~64B), so raise the ceiling; `FFF_LMDB_MAX_READERS` lets hosts tune it.
+// tiny (~64B), so raise the ceiling; `METIS_NEURAL_SEARCH_LMDB_MAX_READERS`
+// lets hosts tune it. No legacy alias: the Metis-specific name owns this setting.
 const DEFAULT_MAX_READERS: u32 = 1024;
 
 fn max_readers() -> u32 {
-    parse_max_readers(std::env::var("FFF_LMDB_MAX_READERS").ok())
+    parse_max_readers(std::env::var("METIS_NEURAL_SEARCH_LMDB_MAX_READERS").ok())
 }
 
 // Never drop below heed's default 126; ignore missing/garbage/too-small values.
@@ -249,24 +234,36 @@ fn is_transient_env_open_error(err: &heed::Error) -> bool {
     }
 }
 
-fn erase_if_oversized(db_path: &Path, spec: &EnvSpec) {
-    let data = db_path.join("data.mdb");
-    let Ok(meta) = fs::metadata(&data) else {
-        return;
+fn check_size_cap(db_path: &Path, spec: &EnvSpec) -> Result<()> {
+    let meta = match fs::metadata(db_path.join("data.mdb")) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(Error::EnvOpen {
+                db: spec.label,
+                source: heed::Error::Io(source),
+            });
+        }
     };
-
     if meta.len() <= spec.size_cap_bytes {
-        return;
+        return Ok(());
     }
 
     tracing::error!(
         path = %db_path.display(),
         size = meta.len(),
         cap = spec.size_cap_bytes,
-        "LMDB db exceeds size cap, erasing"
+        "LMDB db exceeds size cap, refusing to open; existing bytes preserved"
     );
-    let _ = fs::remove_file(&data);
-    let _ = fs::remove_file(db_path.join("lock.mdb"));
+    Err(Error::EnvOpen {
+        db: spec.label,
+        source: heed::Error::Io(std::io::Error::other(format!(
+            "LMDB environment {} exceeds size cap ({} > {} bytes); refusing to open without modifying it",
+            db_path.display(),
+            meta.len(),
+            spec.size_cap_bytes
+        ))),
+    })
 }
 
 #[cfg(test)]

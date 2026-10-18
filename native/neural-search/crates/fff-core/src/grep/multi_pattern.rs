@@ -2,7 +2,6 @@ use super::grep::{GrepContext, perform_grep};
 use super::prefilter::prefilter_files;
 use super::sink::{SinkState, debug_assert_newline_terminator};
 use super::types::{GrepResult, GrepSearchOptions};
-use crate::index::{BigramFilter, BigramOverlay, bigram_boundary, literal_candidates};
 use crate::types::{ContentCacheBudget, FileItem, FileSliceExt};
 use aho_corasick::AhoCorasick;
 use fff_grep::{
@@ -97,7 +96,7 @@ impl Sink for AhoCorasickSink<'_> {
 /// pass. This is significantly faster than regex alternation for literal text
 /// searches because Aho-Corasick uses SIMD-accelerated multi-needle matching.
 ///
-/// Returns the same `GrepResult` type as `grep_search`.
+/// Returns the same `GrepResult` type as `grep_search_pattern`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn multi_grep_search<'a>(
     files: &'a [FileItem],
@@ -105,8 +104,6 @@ pub(crate) fn multi_grep_search<'a>(
     constraints: &[fff_query_parser::Constraint<'_>],
     options: &GrepSearchOptions,
     budget: &ContentCacheBudget,
-    bigram_index: Option<&BigramFilter>,
-    bigram_overlay: Option<&BigramOverlay>,
     abort_signal: &AtomicBool,
     base_path: &Path,
     arena: crate::simd_path::ArenaPtr,
@@ -118,19 +115,9 @@ pub(crate) fn multi_grep_search<'a>(
         return GrepResult::empty(total_files, total_files);
     }
 
-    let bigram_candidates = literal_candidates(bigram_index, bigram_overlay, patterns);
-    let base_file_count = bigram_boundary(bigram_overlay, files.len());
-
     // Constraints are separate from patterns, so a miss must not broaden the search.
-    let (files_to_search, filtered_file_count) = prefilter_files(
-        files,
-        constraints,
-        bigram_candidates.as_deref(),
-        base_file_count,
-        options,
-        arena,
-        overflow_arena,
-    );
+    let (files_to_search, filtered_file_count) =
+        prefilter_files(files, constraints, options, arena, overflow_arena);
 
     if files_to_search.is_empty() {
         return GrepResult::empty(total_files, filtered_file_count);
@@ -172,7 +159,6 @@ pub(crate) fn multi_grep_search<'a>(
                 max_matches,
                 before_context: options.before_context,
                 after_context: options.after_context,
-                classify_definitions: options.classify_definitions,
             };
 
             let mut sink = AhoCorasickSink { state, ac: &ac };

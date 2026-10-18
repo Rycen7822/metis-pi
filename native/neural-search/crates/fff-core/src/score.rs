@@ -6,11 +6,30 @@ use crate::{
     sort_buffer::{sort_by_key_with_buffer, sort_with_buffer},
     types::{DirItem, FileItem, Score, ScoringContext},
 };
-use fff_query_parser::{FFFQuery, FuzzyQuery};
+use fff_query_parser::FuzzyQuery;
 use neo_frizbee::Scoring;
 use rayon::prelude::*;
-use smallvec::SmallVec;
-use std::{borrow::Cow, path::MAIN_SEPARATOR};
+use std::{
+    borrow::Cow,
+    path::{Component, MAIN_SEPARATOR, Path, PathBuf},
+};
+
+// Legacy associations may contain lexical dot segments. Do not resolve
+// symlinks or touch disk while scoring, and do not fold POSIX backslashes.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir if normalized.file_name().is_some_and(|n| n != "..") => {
+                normalized.pop();
+            }
+            Component::ParentDir if normalized.has_root() => {}
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
 
 enum FileItems<'a> {
     All(&'a [FileItem]),
@@ -85,7 +104,8 @@ fn match_fuzzy_parts(
         return first_part_matches;
     }
 
-    let total_parts = valid_parts.len() as u32;
+    let total_parts = valid_parts.len() as u64;
+    let mut totals: Vec<u64> = first_part_matches.iter().map(|m| m.score as u64).collect();
     let mut matches = first_part_matches;
     for part in valid_parts[1..].iter() {
         let mut part_options = *options;
@@ -109,22 +129,25 @@ fn match_fuzzy_parts(
             return vec![]; // break early! 
         }
 
-        // Map sub_matches back to original indices, average scores across all parts.
+        // Carry unrounded totals for each surviving original index. Never
+        // feed an already averaged score into the next part's accumulation.
+        let mut next_totals = Vec::with_capacity(sub_matches.len());
         matches = sub_matches
             .into_iter()
             .map(|sm| {
                 let prev = &matches[sm.index as usize];
-                let sum = (prev.score as u32).saturating_add(sm.score as u32);
-                let avg = sum / total_parts;
+                let sum = totals[sm.index as usize].saturating_add(sm.score as u64);
+                next_totals.push(sum);
 
                 neo_frizbee::Match {
                     index: prev.index,
-                    score: avg.min(u16::MAX as u32) as u16,
+                    score: (sum / total_parts).min(u16::MAX as u64) as u16,
                     end_col: prev.end_col, // keep first part's position for filename bonus
                     exact: prev.exact && sm.exact,
                 }
             })
             .collect();
+        totals = next_totals;
     }
 
     matches
@@ -160,130 +183,6 @@ pub(crate) fn fuzzy_match_and_score_files<'a>(
     };
 
     sort_and_paginate(results, context)
-}
-
-pub(crate) fn fuzzy_match_byte_offsets_for_page<'q>(
-    query: &'q FFFQuery<'q>,
-    items: &[&FileItem],
-    max_typos: u16,
-    base_arena: ArenaPtr,
-    overflow_arena: ArenaPtr,
-) -> Vec<SmallVec<[(u32, u32); 4]>> {
-    let parts: Vec<&str> = match &query.fuzzy_query {
-        FuzzyQuery::Text(text) if text.len() >= 2 => vec![*text],
-        FuzzyQuery::Parts(parts) => parts.iter().copied().filter(|p| p.len() >= 2).collect(),
-        _ => Vec::new(),
-    };
-
-    let mut ranges_by_item = vec![SmallVec::new(); items.len()];
-    if parts.is_empty() || items.is_empty() {
-        return ranges_by_item;
-    }
-
-    let paths: Vec<String> = items
-        .iter()
-        .map(|item| {
-            let arena = if item.is_overflow() {
-                overflow_arena
-            } else {
-                base_arena
-            };
-            let mut path = String::with_capacity(item.relative_path_len());
-            item.write_relative_path_from_arena(arena, &mut path);
-            path
-        })
-        .collect();
-
-    let has_uppercase = parts
-        .iter()
-        .any(|part| part.chars().any(|ch| ch.is_uppercase()));
-    let config = neo_frizbee::Config {
-        max_typos: Some(max_typos),
-        sort: neo_frizbee::SortStrategy::Unsorted,
-        scoring: Scoring {
-            capitalization_bonus: if has_uppercase { 8 } else { 0 },
-            matching_case_bonus: if has_uppercase { 4 } else { 0 },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // Match on `&str` so this shares frizbee's instantiation with fuzzy grep.
-    let path_strs: Vec<&str> = paths.iter().map(String::as_str).collect();
-    for (idx, part) in parts.iter().copied().enumerate() {
-        let mut part_config = config;
-        if idx > 0 {
-            part_config.max_typos = config.max_typos.map(|t| t.min(part.len() as u16));
-        }
-
-        let mut matcher = neo_frizbee::Matcher::new(part, &part_config);
-        for mut matched in matcher.match_list_indices(&path_strs) {
-            let item_idx = matched.index as usize;
-            let Some(path) = paths.get(item_idx) else {
-                continue;
-            };
-
-            matched.indices.sort_unstable();
-            ranges_by_item[item_idx].extend(char_indices_to_byte_offsets(path, &matched.indices));
-        }
-    }
-
-    for ranges in &mut ranges_by_item {
-        *ranges = merge_byte_offsets(std::mem::take(ranges));
-    }
-
-    ranges_by_item
-}
-
-fn char_indices_to_byte_offsets(line: &str, char_indices: &[u32]) -> SmallVec<[(u32, u32); 4]> {
-    let char_byte_ranges: Vec<(usize, usize)> = line
-        .char_indices()
-        .map(|(byte_pos, ch)| (byte_pos, byte_pos + ch.len_utf8()))
-        .collect();
-    let mut result: SmallVec<[(u32, u32); 4]> = SmallVec::with_capacity(char_indices.len());
-
-    for &char_idx in char_indices {
-        let Some(&(start, end)) = char_byte_ranges.get(char_idx as usize) else {
-            continue;
-        };
-
-        if let Some(last) = result.last_mut()
-            && last.1 == start as u32
-        {
-            last.1 = end as u32;
-            continue;
-        }
-
-        result.push((start as u32, end as u32));
-    }
-
-    result
-}
-
-fn merge_byte_offsets(mut ranges: SmallVec<[(u32, u32); 4]>) -> SmallVec<[(u32, u32); 4]> {
-    if ranges.len() <= 1 {
-        return ranges;
-    }
-
-    ranges.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    let mut merged: SmallVec<[(u32, u32); 4]> = SmallVec::with_capacity(ranges.len());
-
-    for (start, end) in ranges {
-        if end <= start {
-            continue;
-        }
-
-        if let Some(last) = merged.last_mut()
-            && start <= last.1
-        {
-            last.1 = last.1.max(end);
-            continue;
-        }
-
-        merged.push((start, end));
-    }
-
-    merged
 }
 
 /// Resolve a DirItem's chunked path into frizbee's pointer buffer.
@@ -337,8 +236,9 @@ fn match_fuzzy_parts_dirs(
         return first_part_matches;
     }
 
+    let mut totals: Vec<u64> = first_part_matches.iter().map(|m| m.score as u64).collect();
     let mut matches = first_part_matches;
-    let total_parts = valid_parts.len() as u32;
+    let total_parts = valid_parts.len() as u64;
     for part in valid_parts[1..].iter() {
         let mut part_options = *options;
         part_options.max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
@@ -361,22 +261,23 @@ fn match_fuzzy_parts_dirs(
             return vec![];
         }
 
-        // Map sub_matches back to original indices, average scores across all parts.
+        let mut next_totals = Vec::with_capacity(sub_matches.len());
         matches = sub_matches
             .into_iter()
             .map(|sm| {
                 let prev = &matches[sm.index as usize];
-                let sum = (prev.score as u32).saturating_add(sm.score as u32);
-                let avg = sum / total_parts;
+                let sum = totals[sm.index as usize].saturating_add(sm.score as u64);
+                next_totals.push(sum);
 
                 neo_frizbee::Match {
                     index: prev.index,
-                    score: avg.min(u16::MAX as u32) as u16,
+                    score: (sum / total_parts).min(u16::MAX as u64) as u16,
                     end_col: prev.end_col, // keep first part's position for dirname bonus
                     exact: prev.exact && sm.exact,
                 }
             })
             .collect();
+        totals = next_totals;
     }
 
     matches
@@ -696,6 +597,19 @@ fn match_and_score_in_arena<'a>(
         }
     };
 
+    let selected_relative_path = context
+        .last_same_query_match
+        .as_ref()
+        .zip(context.project_path)
+        .and_then(|(entry, project)| {
+            let selected = normalize_lexically(&entry.file_path);
+            let project = normalize_lexically(project);
+            if selected.is_absolute() {
+                selected.strip_prefix(&project).ok().map(Path::to_path_buf)
+            } else {
+                Some(selected)
+            }
+        });
     let mut next_filename_match_cursor = 0;
     let mut dir_buf = String::with_capacity(64);
     let mut fname_buf = String::with_capacity(32);
@@ -790,15 +704,12 @@ fn match_and_score_in_arena<'a>(
             let current_file_penalty =
                 calculate_current_file_penalty(file, base_score / 4, context, arena);
             let combo_match_boost = {
-                let last_same_query_match = context.last_same_query_match.as_ref().filter(|m| {
-                    let file_path_str = m.file_path.to_string_lossy();
-                    let total_len = file.path.byte_len as usize;
-                    if file_path_str.len() < total_len {
+                let last_same_query_match = context.last_same_query_match.as_ref().filter(|_| {
+                    let Some(selected) = selected_relative_path.as_deref() else {
                         return false;
-                    }
-                    // Reuse dir_buf (already has capacity) for the full path
+                    };
                     file.write_relative_path_from_arena(arena, &mut dir_buf);
-                    file_path_str.ends_with(dir_buf.as_str())
+                    Path::new(&dir_buf) == selected
                 });
 
                 match last_same_query_match {

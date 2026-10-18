@@ -17,7 +17,6 @@ fn eq_lowered_scalar(h: *const u8, needle_lower: &[u8]) -> bool {
 /// **unsigned** range check (`'A' <= byte <= 'Z'`). XOR-ing every byte with
 /// `0x80` maps the unsigned range `[0, 255]` into the signed range
 /// `[-128, 127]` preserving order, so signed `cmpgt` becomes correct
-#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn eq_lowered_avx2(h: *const u8, needle_lower: &[u8]) -> bool {
     use core::arch::x86_64::*;
@@ -58,58 +57,6 @@ unsafe fn eq_lowered_avx2(h: *const u8, needle_lower: &[u8]) -> bool {
     true
 }
 
-/// Unsigned range checks (`vcge`/`vcle`) detect uppercase ASCII, bit 5 folds
-/// to lowercase, then equality is checked via udot: xors the folded haystack
-/// with the pre-lowered needle and dot-product the difference with itself
-/// any non-zero byte produces a non-zero u32 lane. udot is emitted via inline
-/// asm because `vdotq_u32` is still behind an unstable feature gate.
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon,dotprod")]
-unsafe fn eq_lowered_neon_dotprod(h: *const u8, needle_lower: &[u8]) -> bool {
-    use core::arch::aarch64::*;
-
-    let len = needle_lower.len();
-    let mut i = 0usize;
-
-    let a_val = vdupq_n_u8(b'A');
-    let z_val = vdupq_n_u8(b'Z');
-    let bit20 = vdupq_n_u8(0x20);
-
-    while i + 16 <= len {
-        let hv = unsafe { vld1q_u8(h.add(i)) };
-        let nv = unsafe { vld1q_u8(needle_lower.as_ptr().add(i)) };
-
-        let upper = vandq_u8(vcgeq_u8(hv, a_val), vcleq_u8(hv, z_val));
-        let folded = vorrq_u8(hv, vandq_u8(upper, bit20));
-        let xored = veorq_u8(folded, nv);
-
-        let dots: uint32x4_t;
-        let zero = vdupq_n_u32(0);
-        unsafe {
-            core::arch::asm!(
-                "udot {d:v}.4s, {a:v}.16b, {b:v}.16b",
-                d = inlateout(vreg) zero => dots,
-                a = in(vreg) xored,
-                b = in(vreg) xored,
-            );
-        }
-
-        if vmaxvq_u32(dots) != 0 {
-            return false;
-        }
-
-        i += 16;
-    }
-
-    while i < len {
-        if unsafe { *h.add(i) }.to_ascii_lowercase() != needle_lower[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
 /// Case-insensitive equality of `needle_lower` against the haystack bytes
 /// starting at `h`. `needle_lower` must be pre-lowercased (ASCII).
 ///
@@ -117,17 +64,8 @@ unsafe fn eq_lowered_neon_dotprod(h: *const u8, needle_lower: &[u8]) -> bool {
 /// `h` must be valid for reads of `needle_lower.len()` bytes.
 #[inline]
 pub(crate) unsafe fn eq_lowered_case(haystack: *const u8, needle_lower: &[u8]) -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if needle_lower.len() >= 32 && std::is_x86_feature_detected!("avx2") {
-            return unsafe { eq_lowered_avx2(haystack, needle_lower) };
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        if needle_lower.len() >= 16 && std::arch::is_aarch64_feature_detected!("dotprod") {
-            return unsafe { eq_lowered_neon_dotprod(haystack, needle_lower) };
-        }
+    if needle_lower.len() >= 32 && std::is_x86_feature_detected!("avx2") {
+        return unsafe { eq_lowered_avx2(haystack, needle_lower) };
     }
 
     eq_lowered_scalar(haystack, needle_lower)

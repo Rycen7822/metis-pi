@@ -12,7 +12,6 @@ use crate::query_tracker::QueryTracker;
 use crate::rescan_stats::{RescanCounters, RescanReason, RescanStats};
 use crate::rescan_throttle::RescanThrottle;
 use crate::scan::ScanJob;
-use crate::watch::{WatchEvent, WatchId, WatchOptions, WatchRegistry};
 use git2::Repository;
 
 /// Poll `.git/index.lock` until it disappears (git write completed), giving up
@@ -77,9 +76,6 @@ pub struct SharedFilePicker(pub(crate) Arc<SharedPickerInner>);
 
 pub struct SharedPickerInner {
     picker: parking_lot::RwLock<Option<FilePicker>>,
-    /// Watch subscriptions live outside the picker lock so delivery and
-    /// (un)subscribing never contend with searches.
-    watchers: Arc<WatchRegistry>,
     rescans: RescanCounters,
     rescan_throttle: RescanThrottle,
 }
@@ -88,7 +84,6 @@ impl Default for SharedPickerInner {
     fn default() -> Self {
         Self {
             picker: parking_lot::RwLock::new(None),
-            watchers: Arc::new(WatchRegistry::default()),
             rescans: RescanCounters::default(),
             rescan_throttle: RescanThrottle::default(),
         }
@@ -141,15 +136,6 @@ impl SharedFilePicker {
         WeakFilePicker(Arc::downgrade(&self.0))
     }
 
-    /// Return `true` if this is an instance of the picker that requires a complicated post-scan
-    /// indexing/cache warmup job. The indexing is not crazy but it takes time.
-    pub fn need_complex_rebuild(&self) -> bool {
-        let guard = self.0.picker.read();
-        guard
-            .as_ref()
-            .is_some_and(|p| p.has_mmap_cache() || p.has_content_indexing())
-    }
-
     /// Block until the background filesystem scan finishes.
     /// Returns `true` if scan completed, `false` on timeout.
     pub fn wait_for_scan(&self, timeout: Duration) -> bool {
@@ -182,15 +168,15 @@ impl SharedFilePicker {
         })
     }
 
-    /// Blocks until both the filesystem walk and post-scan indexing are done.
-    /// Returns true once scanning=false AND post_scan_indexing_active=false.
+    /// Wait for the filesystem walk and its post-scan classification. Future
+    /// watcher jobs do not extend this startup/rescan completion boundary.
     pub fn wait_for_indexing_complete(&self, timeout: Duration) -> bool {
         let (scanning, post_scan_active) = {
             let guard = self.0.picker.read();
             match &*guard {
                 Some(picker) => (
                     Arc::clone(&picker.signals.scanning),
-                    Arc::clone(&picker.signals.post_scan_indexing_active),
+                    Arc::clone(&picker.signals.post_scan_active),
                 ),
                 None => return true,
             }
@@ -280,71 +266,6 @@ impl SharedFilePicker {
         self.0.rescans.record_throttled(reason);
         tracing::debug!(%reason, live_files, "Rescan throttled, skipping");
         false
-    }
-
-    /// Subscribe to filesystem changes matching `pattern`.
-    ///
-    /// Patterns may be base-relative globs (./ works), exact paths inside the indexed
-    /// tree, or existing directories. An empty pattern watches the whole tree.
-    ///
-    /// Events are debounced over a 50-ms window and submitted in batches of at most 128 events.
-    /// Gitignored and other ignored files are never triggering watcher.
-    pub fn watch(
-        &self,
-        pattern: &str,
-        options: WatchOptions,
-        callback: impl Fn(WatchId, &[WatchEvent]) + Send + Sync + 'static,
-    ) -> Result<WatchId, Error> {
-        let (base_path, has_watcher, watcher_ready) = {
-            let guard = self.read()?;
-            let picker = guard.as_ref().ok_or(Error::FilePickerMissing)?;
-
-            (
-                picker.base_path().to_path_buf(),
-                picker.has_watcher(),
-                picker.is_watcher_ready(),
-            )
-        };
-
-        if !has_watcher {
-            return Err(Error::WatcherDisabled);
-        }
-        if !watcher_ready {
-            return Err(Error::WatcherNotReady);
-        }
-
-        self.0
-            .watchers
-            .subscribe(&base_path, pattern, options, Box::new(callback))
-    }
-
-    /// Remove a watch subscription. Returns `true` if the id was active.
-    pub fn unwatch(&self, id: WatchId) -> bool {
-        self.0.watchers.unsubscribe(id)
-    }
-
-    /// Return whether a watch subscription is active.
-    pub fn is_watch_active(&self, id: WatchId) -> bool {
-        self.0.watchers.contains(id)
-    }
-
-    /// Remove every subscription without waiting for an executing callback.
-    pub fn shutdown_watches(&self) {
-        self.0.watchers.shutdown();
-    }
-
-    /// Remove every subscription and wait for an executing callback.
-    /// When called by that callback, it does not wait on itself.
-    pub fn shutdown_watches_and_wait(&self) {
-        self.0.watchers.shutdown_and_wait();
-    }
-
-    pub(crate) fn rebase_watches(&self, base_path: &Path) {
-        self.0.watchers.rebase(base_path);
-    }
-
-    pub(crate) fn watch_registry(&self) -> &Arc<WatchRegistry> {
-        &self.0.watchers
     }
 
     /// Refresh git statuses for all indexed files
@@ -500,43 +421,9 @@ impl<T: LmdbStore> SharedDb<T> {
             *guard = Some(tracker);
         }
 
-        // GC holds a read guard on this lock, so destroy / re-init wait won't race
+        // GC holds a read guard on this lock, so re-init/close cannot race it.
         spawn_lmdb_gc(self.inner.clone());
         Ok(())
-    }
-
-    /// Drop the in-memory tracker and delete the on-disk database directory.
-    ///
-    /// Returns `Ok(Some(path))` with the deleted path, or `Ok(None)` if no tracker was initialized.
-    pub fn destroy(&self) -> Result<Option<PathBuf>, Error> {
-        let mut guard = self.write()?;
-        let Some(tracker) = guard.take() else {
-            return Ok(None);
-        };
-
-        let closing_event = match tracker.shared_env().destroy() {
-            Ok(closing) => closing,
-            Err(e) => {
-                *guard = Some(tracker);
-                return Err(e);
-            }
-        };
-
-        let db_path = tracker.env().path().to_path_buf();
-        // Drop closes the LMDB env and unmaps the files
-        drop(tracker);
-        drop(guard);
-
-        // Deleting before mdb_env_close finishes would race the unmap.
-        if let Some(event) = closing_event {
-            event.wait_timeout(Duration::from_secs(5));
-        }
-
-        std::fs::remove_dir_all(&db_path).map_err(|source| Error::RemoveDbDir {
-            path: db_path.clone(),
-            source,
-        })?;
-        Ok(Some(db_path))
     }
 }
 

@@ -16,7 +16,7 @@ export function searchContent(
   const { mode = "plain", ...shared } = options;
   if (Array.isArray(pattern) || mode === "plain") return searchLiterals(finder, Array.isArray(pattern) ? pattern : [pattern], constraints, shared);
   const found = mode === "fuzzy"
-    ? finder.grep([constraints, pattern].filter(Boolean).join(" "), { ...shared, mode })
+    ? finder.grep(pattern, { ...shared, mode, constraints })
     : searchRegex(finder, pattern, constraints, shared);
   if (!found.ok || !found.value.regexFallbackError) return found;
   const literal = searchLiterals(finder, [pattern], constraints, shared);
@@ -38,17 +38,10 @@ function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: 
 }
 
 function searchRegex(finder: FileFinderApi, pattern: string, constraints: string, options: GrepOptions): Result<ContentResult> {
-  // Leading regex escape bypasses FFF constraint parsing; optional word boundary
-  // is zero-width and always succeeds. Keep the expression in one native token.
-  // Native build_regex blindly decodes \\n again, even inside \\\\n.
-  // Hex-encode literal backslash atoms before transporting the expression.
-  const encoded = pattern.replace(/\\\\/g, "\\x5c").replace(/(\\*)\p{White_Space}/gu, (token, escapes: string) => {
-    const char = token.at(-1)!;
-    const prefix = escapes.slice(0, escapes.length - escapes.length % 2);
-    return prefix + (char === "\n" ? "\\n" : `\\x{${char.codePointAt(0)!.toString(16)}}`);
-  });
-  const found = finder.grep([constraints, `\\b?(?:${encoded})`].filter(Boolean).join(" "), { ...options, mode: "regex" });
-  return found.ok && encoded.includes("\\n") && found.value.items.length
+  // Needles no longer pass through the filter grammar or a transport decoder.
+  const found = finder.grep(pattern, { ...options, mode: "regex", constraints });
+  const multiline = pattern.includes("\n") || /(?:^|[^\\])(?:\\\\)*\\n/.test(pattern);
+  return found.ok && multiline && found.value.items.length
     ? { ok: true, value: { ...found.value, nativeMultilineLimited: true } } : found;
 }
 

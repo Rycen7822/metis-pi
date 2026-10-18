@@ -9,15 +9,8 @@ pub enum Constraint<'a> {
     /// Glob pattern: **/*.rs -> Glob("**/*.rs")
     Glob(&'a str),
 
-    /// Multiple text search parts: ["src", "name"]
-    /// Uses slice to avoid allocation
-    Parts(&'a [&'a str]),
-
     /// Single text token (optimized case)
     Text(&'a str),
-
-    /// Exclude pattern: !test -> Exclude(&["test"])
-    Exclude(&'a [&'a str]),
 
     /// Path constraint: /src/ -> PathSegment("src")
     PathSegment(&'a str),

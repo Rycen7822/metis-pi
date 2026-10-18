@@ -1,7 +1,6 @@
 use super::db_healthcheck::DbHealthChecker;
 use super::env_pool::SharedEnv;
 use crate::error::{Error, Result};
-use crate::file_picker::FFFMode;
 use crate::git::is_modified_status;
 use crate::lmdb::{DbHealth, LmdbStore, is_map_full};
 use heed::Database;
@@ -9,7 +8,6 @@ use heed::types::{Bytes, SerdeBincode};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::VecDeque, path::Path};
 
-const DECAY_CONSTANT: f64 = 0.0693; // ln(2)/10 for 10-day half-life
 const SECONDS_PER_DAY: f64 = 86400.0;
 const MAX_HISTORY_DAYS: f64 = 30.0; // Only consider accesses within 30 days
 const MAX_TIMESTAMPS_PER_FILE: usize = 128;
@@ -24,14 +22,6 @@ pub struct FrecencyTracker {
     db: Database<Bytes, SerdeBincode<VecDeque<u64>>>,
     health: DbHealth,
 }
-
-const MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
-    (16, 60 * 2),          // 2 minutes
-    (8, 60 * 15),          // 15 minutes
-    (4, 60 * 60),          // 1 hour
-    (2, 60 * 60 * 24),     // 1 day
-    (1, 60 * 60 * 24 * 7), // 1 week
-];
 
 // AI mode: compressed thresholds since AI edits happen in rapid bursts
 const AI_MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
@@ -74,8 +64,8 @@ impl LmdbStore for FrecencyTracker {
     // leaves ~18× headroom while capping runaway growth (see GH issue #437).
     const MAP_SIZE: usize = 10 * 1024 * 1024;
     const MAX_DBS: u32 = 0;
-    // Nuke the db when it exceeds 8 MiB on disk — leaves a small margin under
-    // MAP_SIZE so we don't hit MDB_MAP_FULL before the open-time erase fires.
+    // Refuse new opens above this on-disk cap; never erase existing history.
+    // This is an open-time guard, not a recovery mechanism for MDB_MAP_FULL.
     const SIZE_CAP_BYTES: u64 = 12 * 1024 * 1024;
 
     fn shared_env(&self) -> &SharedEnv {
@@ -97,26 +87,12 @@ impl LmdbStore for FrecencyTracker {
 }
 
 impl FrecencyTracker {
-    /// Returns the on-disk path of the LMDB environment directory.
-    pub fn db_path(&self) -> &Path {
-        self.env.path()
-    }
-
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
         let (env, health) = Self::open_env(db_path)?;
 
         let db = Self::open_database_safe(&env, None)?;
         Ok(FrecencyTracker { db, env, health })
-    }
-
-    #[deprecated(
-        since = "0.7.0",
-        note = "LMDB unsafe no-lock mode is no longer supported; use `FrecencyTracker::open` instead. \
-                The `_use_unsafe_no_lock` argument is ignored."
-    )]
-    pub fn new(db_path: impl AsRef<Path>, _use_unsafe_no_lock: bool) -> Result<Self> {
-        Self::open(db_path)
     }
 
     /// Removes entries where all timestamps are older than MAX_HISTORY_DAYS,
@@ -135,8 +111,7 @@ impl FrecencyTracker {
             db: Self::LABEL,
             source,
         })?;
-        let mut to_delete: Vec<Vec<u8>> = Vec::new();
-        let mut to_update: Vec<(Vec<u8>, VecDeque<u64>)> = Vec::new();
+        let mut stale_keys: Vec<Vec<u8>> = Vec::new();
 
         let iter = db.iter(&rtxn).map_err(|source| Error::DbRead {
             db: Self::LABEL,
@@ -148,20 +123,14 @@ impl FrecencyTracker {
                 source,
             })?;
 
-            // Timestamps chronologically ordered (oldest at front).
-            let fresh_start = accesses.iter().position(|&ts| ts >= cutoff_time);
-            match fresh_start {
-                None => to_delete.push(key.to_vec()),
-                Some(0) => {}
-                Some(start) => {
-                    let pruned: VecDeque<u64> = accesses.iter().skip(start).copied().collect();
-                    to_update.push((key.to_vec(), pruned));
-                }
+            // This snapshot selects candidates only, never replacement values.
+            if accesses.front().is_none_or(|&ts| ts < cutoff_time) {
+                stale_keys.push(key.to_vec());
             }
         }
         drop(rtxn);
 
-        if to_delete.is_empty() && to_update.is_empty() {
+        if stale_keys.is_empty() {
             return Ok((0, 0));
         }
 
@@ -170,26 +139,43 @@ impl FrecencyTracker {
             source,
         })?;
 
-        for key in &to_delete {
-            db.delete(&mut wtxn, key).map_err(|source| Error::DbWrite {
+        let (mut deleted, mut pruned) = (0, 0);
+        for key in &stale_keys {
+            // A watcher/other process may have committed an access after the
+            // read snapshot. Re-decide under LMDB's single-writer transaction.
+            let Some(mut accesses) = db.get(&wtxn, key).map_err(|source| Error::DbRead {
                 db: Self::LABEL,
                 source,
-            })?;
-        }
-
-        for (key, accesses) in &to_update {
-            db.put(&mut wtxn, key, accesses)
-                .map_err(|source| Error::DbWrite {
-                    db: Self::LABEL,
-                    source,
-                })?;
+            })?
+            else {
+                continue;
+            };
+            match accesses.iter().position(|&ts| ts >= cutoff_time) {
+                None => {
+                    db.delete(&mut wtxn, key).map_err(|source| Error::DbWrite {
+                        db: Self::LABEL,
+                        source,
+                    })?;
+                    deleted += 1;
+                }
+                Some(0) => {}
+                Some(start) => {
+                    accesses.drain(..start);
+                    db.put(&mut wtxn, key, &accesses)
+                        .map_err(|source| Error::DbWrite {
+                            db: Self::LABEL,
+                            source,
+                        })?;
+                    pruned += 1;
+                }
+            }
         }
         wtxn.commit().map_err(|source| Error::DbCommit {
             db: Self::LABEL,
             source,
         })?;
 
-        Ok((to_delete.len(), to_update.len()))
+        Ok((deleted, pruned))
     }
 
     fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>> {
@@ -225,16 +211,6 @@ impl FrecencyTracker {
     }
 
     fn path_to_hash_bytes(path: &Path) -> Result<[u8; 32]> {
-        // On Windows, resolve to the canonical form (short-name/case/symlink)
-        // so the same file always hashes to one key regardless of how the
-        // caller spelled it. Falls back to the raw path when the file no
-        // longer exists (e.g. watcher delete events), so the op is never
-        // dropped. No-op on other platforms.
-        #[cfg(windows)]
-        let canonical: Option<std::path::PathBuf> = crate::path_utils::canonicalize(path).ok();
-        #[cfg(windows)]
-        let path: &Path = canonical.as_deref().unwrap_or(path);
-
         let Some(key) = path.to_str() else {
             return Err(Error::InvalidPath(path.to_path_buf()));
         };
@@ -250,9 +226,13 @@ impl FrecencyTracker {
         Ok(last.map(|ts| self.get_now().saturating_sub(ts)))
     }
 
-    /// Number of tracked access for file path
-    pub fn access_count(&self, path: &Path) -> Result<usize> {
-        Ok(self.get_accesses(path)?.map_or(0, |a| a.len()))
+    // Observe real persisted writes in watcher fixtures without restoring a
+    // general SDK inspection API in the shipped library.
+    #[cfg(test)]
+    pub(crate) fn access_count(&self, path: &Path) -> Result<usize> {
+        Ok(self
+            .get_accesses(path)?
+            .map_or(0, |accesses| accesses.len()))
     }
 
     pub fn track_access(&self, path: &Path) -> Result<()> {
@@ -287,8 +267,7 @@ impl FrecencyTracker {
                 self.health.mark_unhealthy("MDB_MAP_FULL on put");
                 tracing::error!(
                     ?path,
-                    "Frecency DB hit MDB_MAP_FULL; dropping write — db will be \
-                     erased on next open via LmdbStore::erase_if_oversized"
+                    "Frecency DB hit MDB_MAP_FULL; dropping write — existing history is preserved"
                 );
                 return Ok(());
             }
@@ -370,7 +349,7 @@ impl FrecencyTracker {
         Ok(true)
     }
 
-    pub fn get_access_score(&self, file_path: &Path, mode: FFFMode) -> i64 {
+    pub fn get_access_score(&self, file_path: &Path) -> i64 {
         let accesses = self
             .get_accesses(file_path)
             .ok()
@@ -381,21 +360,10 @@ impl FrecencyTracker {
             return 0;
         }
 
-        let decay_constant = if mode.is_ai() {
-            AI_DECAY_CONSTANT
-        } else {
-            DECAY_CONSTANT
-        };
-        let max_history_days = if mode.is_ai() {
-            AI_MAX_HISTORY_DAYS
-        } else {
-            MAX_HISTORY_DAYS
-        };
-
         let now = self.get_now();
         let mut total_frecency = 0.0;
 
-        let cutoff_time = now.saturating_sub((max_history_days * SECONDS_PER_DAY) as u64);
+        let cutoff_time = now.saturating_sub((AI_MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
 
         for &access_time in accesses.iter().rev() {
             if access_time < cutoff_time {
@@ -403,7 +371,7 @@ impl FrecencyTracker {
             }
 
             let days_ago = (now.saturating_sub(access_time) as f64) / SECONDS_PER_DAY;
-            let decay_factor = (-decay_constant * days_ago).exp();
+            let decay_factor = (-AI_DECAY_CONSTANT * days_ago).exp();
             total_frecency += decay_factor;
         }
 
@@ -421,18 +389,13 @@ impl FrecencyTracker {
         &self,
         modified_time: u64,
         git_status: Option<git2::Status>,
-        mode: FFFMode,
     ) -> i64 {
         let is_modified_git_status = git_status.is_some_and(is_modified_status);
         if !is_modified_git_status {
             return 0;
         }
 
-        let thresholds = if mode.is_ai() {
-            &AI_MODIFICATION_THRESHOLDS
-        } else {
-            &MODIFICATION_THRESHOLDS
-        };
+        let thresholds = &AI_MODIFICATION_THRESHOLDS;
 
         let now = self.get_now();
         let duration_since = now.saturating_sub(modified_time);
@@ -465,124 +428,64 @@ impl FrecencyTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_picker::FFFMode;
 
-    // A path that doesn't exist on disk must still hash (canonicalize fails on
-    // Windows → falls back to the raw string), so watcher delete events and
-    // raced files never drop their frecency op.
+    // Hashing is lexical and must not require an existing file, so watcher
+    // delete events and raced files never drop their frecency operation.
     #[test]
     fn hashes_nonexistent_path_without_error() {
         let missing = Path::new("/this/path/definitely/does/not/exist/frecency_test_xyz");
         assert!(FrecencyTracker::path_to_hash_bytes(missing).is_ok());
     }
 
-    fn calculate_test_frecency_score(access_timestamps: &[u64], current_time: u64) -> i64 {
-        let mut total_frecency = 0.0;
-
-        for &access_time in access_timestamps {
-            let days_ago = (current_time.saturating_sub(access_time) as f64) / SECONDS_PER_DAY;
-            let decay_factor = (-DECAY_CONSTANT * days_ago).exp();
-            total_frecency += decay_factor;
-        }
-
-        let normalized_frecency = if total_frecency <= 20.0 {
-            total_frecency
-        } else {
-            20.0 + (total_frecency - 10.0).sqrt()
-        };
-
-        normalized_frecency.round() as i64
-    }
-
     #[test]
     fn test_frecency_calculation() {
-        let current_time = 1000000000; // Base timestamp
-
-        let score = calculate_test_frecency_score(&[], current_time);
-        assert_eq!(score, 0);
-
-        let accesses = [current_time]; // Accessed right now
-        let score = calculate_test_frecency_score(&accesses, current_time);
-        assert_eq!(score, 1); // 1.0 decay factor = 1
-
-        let ten_days_seconds = 10 * 86400; // 10 days in seconds
-        let accesses = [current_time - ten_days_seconds];
-        let score = calculate_test_frecency_score(&accesses, current_time);
-        assert_eq!(score, 1); // ~0.5 decay factor rounds to 1
-
-        let accesses = [
-            current_time,          // Today
-            current_time - 86400,  // 1 day ago
-            current_time - 172800, // 2 days ago
-        ];
-        let score = calculate_test_frecency_score(&accesses, current_time);
-        assert!(score > 2 && score < 4, "Score: {}", score); // About 3 accesses with decay
-
-        let thirty_days = 30 * 86400;
-        let accesses = [current_time - thirty_days]; // 30 days ago
-        let score = calculate_test_frecency_score(&accesses, current_time);
-        assert!(
-            score < 2,
-            "Old access should have minimal score, got: {}",
-            score
-        );
-
-        let recent_frequent = [current_time, current_time - 86400, current_time - 172800];
-        let old_single = [current_time - ten_days_seconds];
-
-        let recent_score = calculate_test_frecency_score(&recent_frequent, current_time);
-        let old_score = calculate_test_frecency_score(&old_single, current_time);
-
-        assert!(
-            recent_score > old_score,
-            "Recent frequent access ({}) should score higher than old single access ({})",
-            recent_score,
-            old_score
-        );
+        // Exercise the actual database-backed AI scorer, not the old copied
+        // Neovim calculation (which even had a different normalization cap).
+        let temp = tempfile::tempdir().unwrap();
+        let tracker = FrecencyTracker::open(temp.path()).unwrap();
+        let path = temp.path().join("file.rs");
+        let key = FrecencyTracker::path_to_hash_bytes(&path).unwrap();
+        let now = tracker.get_now();
+        let score = |accesses: VecDeque<u64>| {
+            let mut txn = tracker.env.write_txn().unwrap();
+            tracker.db.put(&mut txn, &key, &accesses).unwrap();
+            txn.commit().unwrap();
+            tracker.get_access_score(&path)
+        };
+        assert_eq!(score(VecDeque::new()), 0);
+        assert_eq!(score(VecDeque::from([now])), 1);
+        let recent = score(VecDeque::from([now - 2 * 86400, now - 86400, now]));
+        assert_eq!(recent, 2);
+        assert_eq!(score(VecDeque::from([now - 8 * 86400])), 0);
+        assert!(recent > score(VecDeque::from([now - 4 * 86400])));
+        assert_eq!(score(VecDeque::from(vec![now; 20])), 13);
     }
 
     #[test]
     fn test_modification_score_interpolation() {
-        let temp_dir = std::env::temp_dir().join("fff_test_interpolation");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        let tracker = FrecencyTracker::open(temp_dir.to_str().unwrap()).unwrap();
-
-        let current_time = tracker.get_now();
+        let temp = tempfile::tempdir().unwrap();
+        let tracker = FrecencyTracker::open(temp.path()).unwrap();
+        let now = tracker.get_now();
         let git_status = Some(git2::Status::WT_MODIFIED);
-
-        // At 5 minutes: should interpolate between 16 and 8 points
-        let five_minutes_ago = current_time - (5 * 60);
-        let score = tracker.get_modification_score(five_minutes_ago, git_status, FFFMode::Neovim);
-
-        // Expected: 16 - (8 * 3 / 13) = 16 - 1 = 15 points
-        // (time_offset = 5-2 = 3, time_range = 15-2 = 13, points_diff = 16-8 = 8)
-        assert_eq!(score, 15, "5 minutes should interpolate to 15 points");
-
-        let two_minutes_ago = current_time - (2 * 60);
-        let score = tracker.get_modification_score(two_minutes_ago, git_status, FFFMode::Neovim);
-        assert_eq!(score, 16, "2 minutes should be exactly 16 points");
-
-        let fifteen_minutes_ago = current_time - (15 * 60);
-        let score =
-            tracker.get_modification_score(fifteen_minutes_ago, git_status, FFFMode::Neovim);
-        assert_eq!(score, 8, "15 minutes should be exactly 8 points");
-
-        // At 12 hours: should interpolate between 4 and 2 points
-        let twelve_hours_ago = current_time - (12 * 60 * 60);
-        let score = tracker.get_modification_score(twelve_hours_ago, git_status, FFFMode::Neovim);
-        // Expected: 4 - (2 * 11 / 23) = 4 - 0 = 4 points (integer division)
-        // (time_offset = 12-1 = 11 hours, time_range = 24-1 = 23 hours, points_diff = 4-2 = 2)
-        assert_eq!(score, 4, "12 hours should interpolate to 4 points");
-
-        // at 18 hours for more significant interpolation
-        let eighteen_hours_ago = current_time - (18 * 60 * 60);
-        let score = tracker.get_modification_score(eighteen_hours_ago, git_status, FFFMode::Neovim);
-        // Expected: 4 - (2 * 17 / 23) = 4 - 1 = 3 points
-        assert_eq!(score, 3, "18 hours should interpolate to 3 points");
-
-        let score = tracker.get_modification_score(five_minutes_ago, None, FFFMode::Neovim);
-        assert_eq!(score, 0, "No git status should return 0");
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        // Same interpolation/truncation contract, fixed to the shipped AI
+        // thresholds: 30s, 5m, 15m, 1h, 4h.
+        for (age, expected) in [
+            (30, 16),
+            (90, 15),
+            (300, 8),
+            (600, 6),
+            (900, 4),
+            (2700, 3),
+            (3600, 2),
+            (14300, 2),
+            (18000, 0),
+        ] {
+            assert_eq!(
+                tracker.get_modification_score(now - age, git_status),
+                expected,
+                "age {age}s"
+            );
+        }
+        assert_eq!(tracker.get_modification_score(now - 90, None), 0);
     }
 }

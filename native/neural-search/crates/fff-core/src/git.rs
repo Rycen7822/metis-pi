@@ -36,6 +36,7 @@ pub(crate) fn default_status_options() -> StatusOptions {
 /// `git_status: None` (== clean), so a missing cache entry already means
 /// "clean" — no need to ask libgit2 to enumerate every tracked path.
 /// Saves seconds on huge dirty trees (e.g. chromium with 400k+ entries).
+#[cfg(test)]
 pub(crate) fn initial_scan_status_options() -> StatusOptions {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true)
@@ -61,6 +62,7 @@ impl GitStatusCache {
         self.0.len()
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn lookup_status(&self, full_path: &Path) -> Option<Status> {
         self.0.get(full_path).copied()
@@ -81,8 +83,7 @@ impl GitStatusCache {
         let mut entries = AHashMap::with_capacity(statuses.len());
         for entry in &statuses {
             if let Ok(entry_path) = entry.path() {
-                // libgit2 returns entry paths with forward slashes on every platform
-                // fff stores native paths - meaning we have forward slash issue on windows
+                // libgit2 paths are relative to the repository workdir.
                 let full_path = crate::path_utils::normalize(repo_path.join(entry_path));
                 entries.insert(full_path, entry.status());
             }
@@ -91,6 +92,7 @@ impl GitStatusCache {
         Ok(Self(entries))
     }
 
+    #[cfg(test)]
     pub fn read_git_status(
         git_workdir: Option<&Path>,
         status_options: &mut StatusOptions,

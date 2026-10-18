@@ -1,10 +1,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "windows"))]
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-#[cfg(not(target_os = "windows"))]
 use crate::constants::{FRESH_MMAP_THRESHOLD, MMAP_THRESHOLD};
 use crate::constants::{MAX_CACHED_CONTENT_BYTES, MAX_FFFILE_SIZE, PATH_BUF_SIZE};
 use crate::index::constraints::Constrainable;
@@ -57,8 +55,7 @@ pub struct FileItemFlags;
 
 impl FileItemFlags {
     pub const BINARY: u8 = 1 << 0;
-    /// Tombstone — file was deleted but index slot is preserved so
-    /// bigram indices for other files stay valid.
+    /// Tombstone — deletion preserves slot identity for in-flight classifiers.
     pub const DELETED: u8 = 1 << 1;
     /// File was added after the last full reindex; its indices point
     /// into the overflow builder arena, not the base arena.
@@ -254,14 +251,15 @@ pub struct FileItem {
     pub git_status: Option<git2::Status>,
     pub(crate) path: crate::simd_path::ChunkedString,
     pub(crate) parent_dir_index: u32,
+    /// Incremented under the picker write lock on every content event, even
+    /// equal-size rewrites within the same mtime second. Never an IO timestamp.
+    pub(crate) content_revision: u64,
     flags: AtomicU8,
     /// Lazy mmap cache (boxed, set once). Only populated by the actual file
     /// read, controlled by the budget. Null while empty.
-    #[cfg(not(target_os = "windows"))]
     content: AtomicPtr<memmap2::Mmap>,
 }
 
-#[cfg(not(target_os = "windows"))]
 impl Drop for FileItem {
     fn drop(&mut self) {
         self.take_content();
@@ -273,6 +271,7 @@ impl Clone for FileItem {
         Self {
             path: self.path.clone(),
             parent_dir_index: self.parent_dir_index,
+            content_revision: self.content_revision,
             size: self.size,
             modified: self.modified,
             access_frecency_score: self.access_frecency_score,
@@ -281,7 +280,6 @@ impl Clone for FileItem {
             git_status: self.git_status,
             flags: AtomicU8::new(self.flags.load(Ordering::Relaxed)),
             // on clone we have to reset the content cache
-            #[cfg(not(target_os = "windows"))]
             content: AtomicPtr::new(std::ptr::null_mut()),
         }
     }
@@ -318,6 +316,7 @@ impl FileItem {
         Self {
             path,
             parent_dir_index: u32::MAX,
+            content_revision: 0,
             size,
             modified,
             access_frecency_score: 0,
@@ -325,7 +324,6 @@ impl FileItem {
             git_recency_score: 0,
             git_status,
             flags: AtomicU8::new(flags),
-            #[cfg(not(target_os = "windows"))]
             content: AtomicPtr::new(std::ptr::null_mut()),
         }
     }
@@ -424,131 +422,9 @@ impl FileItem {
         Path::new(unsafe { std::str::from_utf8_unchecked(&buf[..total]) })
     }
 
-    /// Write the relative path into `buf` and NUL-terminate, returning
-    /// a `&CStr`. Fixed-size array so the buffer is stack-allocatable.
-    ///
-    /// Paired with a parent-directory fd this eliminates the per-file
-    /// absolute-path memcpy: `openat(dir_fd, cstr.as_ptr(), O_RDONLY)`
-    /// resolves the name relative to `dir_fd`. Unix-only.
-    #[cfg(unix)]
-    pub(crate) fn write_relative_cstr<'a>(
-        &self,
-        arena: ArenaPtr,
-        buf: &'a mut [u8; PATH_BUF_SIZE],
-    ) -> &'a std::ffi::CStr {
-        // Reserve the last byte for the NUL terminator.
-        let rel = self.path.read_to_buf(arena, &mut buf[..PATH_BUF_SIZE - 1]);
-        let n = rel.len();
-        buf[n] = 0;
-        // SAFETY: `buf[..=n]` ends with the NUL we just wrote and
-        // filesystem paths never contain interior NULs.
-        unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(&buf[..=n]) }
-    }
-
     #[inline]
     pub fn total_frecency_score(&self) -> i32 {
         self.access_frecency_score as i32 + self.modification_frecency_score as i32
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn is_likely_hot(&self) -> bool {
-        self.access_frecency_score > 0 || self.git_status.is_some()
-    }
-
-    /// Reads a fixed bytes count from the file optimized for quick speed of opening
-    #[inline]
-    pub(crate) fn read_trimmed_into_buf(
-        &self,
-        base_fd: i32,
-        base_path: &Path,
-        arena: ArenaPtr,
-        path_buf: &mut [u8; PATH_BUF_SIZE],
-        buf: &mut [u8],
-    ) -> usize {
-        #[cfg(unix)]
-        {
-            self.read_into_buf_unix(base_fd, base_path, arena, path_buf, buf)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = base_fd;
-            self.read_into_buf_std(base_path, arena, path_buf, buf)
-        }
-    }
-
-    #[cfg(unix)]
-    fn read_into_buf_unix(
-        &self,
-        base_fd: libc::c_int,
-        base_path: &Path,
-        arena: ArenaPtr,
-        path_buf: &mut [u8; PATH_BUF_SIZE],
-        buf: &mut [u8],
-    ) -> usize {
-        let fd = if base_fd >= 0 {
-            let relative_path = self.write_relative_cstr(arena, path_buf);
-            // SAFETY: `relative_path` is NUL-terminated, `base_fd` is a
-            // valid directory descriptor owned by the caller.
-            unsafe { libc::openat(base_fd, relative_path.as_ptr(), libc::O_RDONLY) }
-        } else {
-            use std::os::unix::io::IntoRawFd;
-            let abs = self.write_absolute_path(arena, base_path, path_buf);
-            match std::fs::File::open(abs) {
-                Ok(f) => f.into_raw_fd(),
-                Err(e) => {
-                    tracing::error!(?e, "Failed to fopen file");
-                    return 0;
-                }
-            }
-        };
-        if fd < 0 {
-            return 0;
-        }
-
-        let mut filled = 0usize;
-        while filled < buf.len() {
-            // SAFETY: `fd` is an owned descriptor, `buf[filled..]` is a
-            // valid writable slice for `buf.len() - filled` bytes.
-            let n = unsafe {
-                libc::read(
-                    fd,
-                    buf[filled..].as_mut_ptr() as *mut libc::c_void,
-                    (buf.len() - filled) as libc::size_t,
-                )
-            };
-            if n <= 0 {
-                break;
-            }
-            filled += n as usize;
-        }
-
-        // SAFETY: matching close for the owned descriptor.
-        unsafe { libc::close(fd) };
-        filled
-    }
-
-    #[cfg(not(unix))]
-    fn read_into_buf_std(
-        &self,
-        base_path: &Path,
-        arena: ArenaPtr,
-        path_buf: &mut [u8; PATH_BUF_SIZE],
-        buf: &mut [u8],
-    ) -> usize {
-        let abs = self.write_absolute_path(arena, base_path, path_buf);
-        let Ok(mut f) = std::fs::File::open(abs) else {
-            return 0;
-        };
-        let mut filled = 0usize;
-        while filled < buf.len() {
-            match f.read(&mut buf[filled..]) {
-                Ok(0) => break,
-                Ok(n) => filled += n,
-                Err(_) => return 0,
-            }
-        }
-        filled
     }
 
     #[inline]
@@ -564,38 +440,6 @@ impl FileItem {
         } else {
             self.flags
                 .fetch_and(!FileItemFlags::BINARY, Ordering::Relaxed);
-        }
-    }
-
-    /// Chunked classifier of the binary content of the file chunk by chunk
-    /// accepts path which to reuse the allocated buffer for absolute path read
-    pub(crate) fn detect_binary_per_byte(&self, path: &Path, chunk: &mut [u8]) {
-        if self.size == 0 {
-            return;
-        }
-
-        let Ok(mut file) = std::fs::OpenOptions::new()
-            .write(false)
-            .read(true)
-            .open(path)
-        else {
-            tracing::error!(path = ?path.display(), "Failed to open indexed file");
-            return;
-        };
-
-        loop {
-            match file.read(chunk) {
-                Ok(0) => break,
-                Err(e) => {
-                    tracing::error!(?e, "Failed to read file chunk");
-                    break;
-                }
-                Ok(n) => {
-                    if detect_binary_content(&chunk[..n]) {
-                        self.set_binary(true);
-                    }
-                }
-            }
         }
     }
 
@@ -638,10 +482,8 @@ impl FileItem {
     /// Invalidate the cached mmap content, has to be called every time the file is updated.
     ///
     /// Call this when the background watcher detects that the file has been modified.
-    /// On Unix, a file that is truncated while mapped can cause SIGBUS. On Windows,
-    /// the stale buffer simply won't reflect the new contents. In both cases,
-    /// invalidating ensures a fresh read on the next access.
-    #[cfg(not(target_os = "windows"))]
+    /// Invalidation prevents stale mappings being reused on the next read. It
+    /// does not make external truncation of an in-use mmap safe from SIGBUS.
     pub fn invalidate_mmap(&mut self, budget: &ContentCacheBudget) {
         if self.take_content().is_some() {
             budget.cached_count.fetch_sub(1, Ordering::Relaxed);
@@ -649,7 +491,6 @@ impl FileItem {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[inline]
     fn cached_content(&self) -> Option<&[u8]> {
         let ptr = self.content.load(Ordering::Acquire);
@@ -657,15 +498,11 @@ impl FileItem {
         (!ptr.is_null()).then(|| unsafe { (&*ptr).as_ref() })
     }
 
-    #[cfg(not(target_os = "windows"))]
     fn take_content(&mut self) -> Option<Box<memmap2::Mmap>> {
         let ptr = self.content.swap(std::ptr::null_mut(), Ordering::AcqRel);
         // SAFETY: non-null pointers always come from `Box::into_raw` in `get_cached_content`.
         (!ptr.is_null()).then(|| unsafe { Box::from_raw(ptr) })
     }
-
-    #[cfg(target_os = "windows")]
-    pub fn invalidate_mmap(&mut self, _: &ContentCacheBudget) {}
 
     pub fn update_metadata(
         &mut self,
@@ -673,6 +510,10 @@ impl FileItem {
         modified_secs: Option<u64>,
         new_size: Option<u64>,
     ) {
+        self.content_revision = self
+            .content_revision
+            .checked_add(1)
+            .expect("content revision exhausted");
         if let Some(modified) = modified_secs
             && self.modified < modified
         {
@@ -693,25 +534,10 @@ impl FileItem {
     /// of the budget should use [`get_content_for_search`].
     ///
     /// After the first call, this is lock-free (just an atomic load + pointer deref).
-    ///
-    /// On Windows we never back this cache — `memmap2` would require a full
-    /// `std::fs::read` heap copy and the OS page cache already absorbs repeat
-    /// reopens. Returning `None` keeps callers on the scratch-read slow path
-    /// and avoids duplicating every indexed file on the heap.
-    #[cfg(target_os = "windows")]
-    pub(crate) fn get_cached_content(
-        &self,
-        _arena: ArenaPtr,
-        _base_path: &Path,
-        _budget: &ContentCacheBudget,
-    ) -> Option<&[u8]> {
-        None
-    }
 
     /// Returns a reference to a cached mmap of the file's contents.
     ///
     /// SAFETY-CRITICAL: callers must hold the picker read lock for as long as the returned slice is in use.
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn get_cached_content(
         &self,
         arena: ArenaPtr,
@@ -768,19 +594,14 @@ impl FileItem {
     pub(crate) fn get_content_for_search<'a>(
         &'a self,
         buf: &'a mut Vec<u8>,
-        #[cfg_attr(target_os = "windows", allow(unused_variables))] mmap_slot: &'a mut MmapSlot,
+        mmap_slot: &'a mut MmapSlot,
         arena: ArenaPtr,
         base_path: &Path,
         budget: &ContentCacheBudget,
     ) -> Option<&'a [u8]> {
-        #[cfg(not(target_os = "windows"))]
-        {
-            // Fast path: persistent cache hit (zero-copy). Safe here because
-            // grep callers hold the picker read lock for the lifetime of the
-            // returned slice — see [`Self::get_cached_content`] safety note.
-            if let Some(cached) = self.get_cached_content(arena, base_path, budget) {
-                return Some(cached);
-            }
+        // Grep holds the picker read lock for the returned slice's lifetime.
+        if let Some(cached) = self.get_cached_content(arena, base_path, budget) {
+            return Some(cached);
         }
 
         let max_file_size = budget.max_file_size;
@@ -790,7 +611,6 @@ impl FileItem {
 
         let abs = self.absolute_path(arena, base_path);
 
-        #[cfg(not(target_os = "windows"))]
         if self.size >= FRESH_MMAP_THRESHOLD {
             let file = std::fs::File::open(&abs).ok()?;
             let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
@@ -810,12 +630,8 @@ impl FileItem {
 }
 
 /// Per-thread scratch slot owning a transient mmap returned from
-/// [`FileItem::get_content_for_search`]. `Option<Mmap>` on Unix,
-/// unit on Windows where mmap is unused.
-#[cfg(not(target_os = "windows"))]
+/// [`FileItem::get_content_for_search`].
 pub type MmapSlot = Option<memmap2::Mmap>;
-#[cfg(target_os = "windows")]
-pub type MmapSlot = ();
 
 impl Constrainable for FileItem {
     #[inline]
@@ -898,7 +714,6 @@ impl ScoringContext<'_> {
 pub struct SearchResult<'a> {
     pub items: Vec<&'a FileItem>,
     pub scores: Vec<Score>,
-    pub match_byte_offsets: Vec<smallvec::SmallVec<[(u32, u32); 4]>>,
     pub total_matched: usize,
     pub total_files: usize,
     pub location: Option<Location>,

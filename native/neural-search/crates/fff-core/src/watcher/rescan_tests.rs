@@ -13,13 +13,11 @@ use tempfile::TempDir;
 
 use super::handle_debounced_events;
 use crate::constants::MAX_OVERFLOW_FILES;
-use crate::file_picker::{FFFMode, FilePicker, FilePickerOptions};
+use crate::file_picker::{FilePicker, FilePickerOptions};
 use crate::frecency::FrecencyTracker;
 use crate::git_status_worker::GitStatusWorker;
 use crate::rescan_stats::{RescanReason, RescanStats};
 use crate::shared::{SharedFilePicker, SharedFrecency};
-use crate::watch::{WatchEvent, WatchEventKind, WatchOptions};
-use std::sync::mpsc;
 
 #[test]
 fn saving_an_indexed_file_stays_incremental() {
@@ -524,36 +522,18 @@ fn renaming_a_file_carries_frecency_and_keeps_the_old_entry() {
 }
 
 #[test]
-fn renaming_a_file_emits_a_single_renamed_event() {
-    let f = Fixture::new();
-    f.write("src/old.rs", "fn old() {}");
-    f.index();
-    let events = f.subscribe("**");
-
-    std::fs::rename(f.path("src/old.rs"), f.path("src/new.rs")).unwrap();
-    f.feed([
-        remove_file(f.path("src/old.rs")),
-        create(f.path("src/new.rs")),
-    ]);
-
-    let received = events.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert_eq!(received.len(), 1, "expected one event, got {received:?}");
-    assert_eq!(received[0].kind, WatchEventKind::Renamed);
-    assert_eq!(received[0].path, f.path("src/new.rs"));
-    assert_eq!(
-        received[0].from.as_deref(),
-        Some(f.path("src/old.rs").as_path())
-    );
-}
-
-#[test]
 fn paired_rename_events_are_trusted_over_the_heuristic() {
-    let f = Fixture::new();
+    let f = Fixture::with_frecency();
     f.write("src/old.rs", "fn old() {}");
     f.index();
-    let events = f.subscribe("**");
+    for _ in 0..3 {
+        f.track_access("src/old.rs");
+    }
+    let before = f.access_score("src/old.rs");
 
     std::fs::rename(f.path("src/old.rs"), f.path("src/new.rs")).unwrap();
+    // Change identity: only the explicit paired event can carry the history.
+    f.write("src/new.rs", "pub fn renamed_and_edited() {}");
     // Linux/inotify pairs the halves for us and hands over both paths at once.
     f.feed([DebouncedEvent::new(
         Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
@@ -562,23 +542,22 @@ fn paired_rename_events_are_trusted_over_the_heuristic() {
         Instant::now(),
     )]);
 
-    let received = events.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert_eq!(received.len(), 1, "expected one event, got {received:?}");
-    assert_eq!(received[0].kind, WatchEventKind::Renamed);
-    assert_eq!(received[0].path, f.path("src/new.rs"));
-    assert_eq!(
-        received[0].from.as_deref(),
-        Some(f.path("src/old.rs").as_path())
-    );
+    assert!(f.is_indexed("src/new.rs"));
+    assert!(!f.is_indexed("src/old.rs"));
+    assert_eq!(f.access_score("src/new.rs"), before);
+    assert_eq!(f.access_score("src/old.rs"), before);
 }
 
 #[test]
 fn editing_an_indexed_file_is_never_mistaken_for_a_rename() {
-    let f = Fixture::new();
+    let f = Fixture::with_frecency();
     f.write("src/keep.rs", "same size!!");
     f.write("src/gone.rs", "same size!!");
     f.index();
-    let events = f.subscribe("**");
+    for _ in 0..3 {
+        f.track_access("src/gone.rs");
+    }
+    assert_eq!(f.access_count("src/gone.rs"), 3);
 
     // Both files share a size; copying the mtime across makes their identities
     // collide. `keep.rs` is still indexed, so it is an edit, not a destination.
@@ -597,10 +576,12 @@ fn editing_an_indexed_file_is_never_mistaken_for_a_rename() {
         modify(f.path("src/keep.rs")),
     ]);
 
-    let received = events.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(
-        received.iter().all(|e| e.kind != WatchEventKind::Renamed),
-        "an edit to a live file must not be reported as a rename: {received:?}"
+    assert!(f.is_indexed("src/keep.rs"));
+    assert!(!f.is_indexed("src/gone.rs"));
+    assert_eq!(
+        f.access_count("src/keep.rs"),
+        1,
+        "a live edit gets its own AI access, not the removed file's history"
     );
 }
 
@@ -613,7 +594,7 @@ fn unrelated_delete_and_create_never_share_history() {
     for _ in 0..3 {
         f.track_access("src/tracked.rs");
     }
-    assert!(f.access_score("src/tracked.rs") > 0);
+    assert_eq!(f.access_count("src/tracked.rs"), 3);
 
     f.remove("src/tracked.rs");
     f.write(
@@ -626,19 +607,29 @@ fn unrelated_delete_and_create_never_share_history() {
     ]);
 
     assert_eq!(
-        f.access_score("src/unrelated.rs"),
-        0,
-        "an unrelated file must not inherit anyone's history"
+        f.access_count("src/unrelated.rs"),
+        1,
+        "unrelated creation is auto-tracked but must not inherit the deleted file's history"
     );
+    // Burst edits are separate file events, but stay inside the AI cooldown.
+    for _ in 0..3 {
+        f.feed([modify(f.path("src/unrelated.rs"))]);
+    }
+    assert_eq!(f.access_count("src/unrelated.rs"), 1);
 }
 
 #[test]
 fn ambiguous_batch_falls_back_to_remove_and_create() {
-    let f = Fixture::new();
+    let f = Fixture::with_frecency();
     f.write("src/a.rs", "same");
     f.write("src/b.rs", "same");
     f.index();
-    let events = f.subscribe("**");
+    for _ in 0..3 {
+        f.track_access("src/a.rs");
+        f.track_access("src/b.rs");
+    }
+    assert_eq!(f.access_count("src/a.rs"), 3);
+    assert_eq!(f.access_count("src/b.rs"), 3);
 
     // Two identical files renamed at once: nothing can be paired safely.
     std::fs::rename(f.path("src/a.rs"), f.path("src/x.rs")).unwrap();
@@ -650,12 +641,15 @@ fn ambiguous_batch_falls_back_to_remove_and_create() {
         create(f.path("src/y.rs")),
     ]);
 
-    let received = events.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(
-        received.iter().all(|e| e.kind != WatchEventKind::Renamed),
-        "ambiguous identities must not be guessed: {received:?}"
-    );
-    assert_eq!(received.len(), 4, "{received:?}");
+    assert!(f.is_indexed("src/x.rs") && f.is_indexed("src/y.rs"));
+    assert!(!f.is_indexed("src/a.rs") && !f.is_indexed("src/b.rs"));
+    for path in ["src/x.rs", "src/y.rs"] {
+        assert_eq!(
+            f.access_count(path),
+            1,
+            "ambiguous destinations get fresh AI accesses, not guessed history: {path}"
+        );
+    }
 }
 
 struct Fixture {
@@ -734,7 +728,17 @@ impl Fixture {
         guard
             .as_ref()
             .expect("fixture built without frecency")
-            .get_access_score(&self.path(rel), FFFMode::Neovim)
+            .get_access_score(&self.path(rel))
+    }
+
+    fn access_count(&self, rel: &str) -> usize {
+        self.frecency
+            .read()
+            .unwrap()
+            .as_ref()
+            .expect("fixture without frecency")
+            .access_count(&self.path(rel))
+            .unwrap()
     }
 
     fn indexed_access_score(&self, rel: &str) -> i16 {
@@ -746,22 +750,6 @@ impl Fixture {
             .unwrap_or(0)
     }
 
-    fn subscribe(&self, pattern: &str) -> mpsc::Receiver<Vec<WatchEvent>> {
-        let (sender, receiver) = mpsc::channel();
-        self.picker
-            .watch_registry()
-            .subscribe(
-                &self.base,
-                pattern,
-                WatchOptions::default(),
-                Box::new(move |_, events| {
-                    let _ = sender.send(events.to_vec());
-                }),
-            )
-            .expect("subscribe");
-        receiver
-    }
-
     fn index(&self) {
         let mut picker = FilePicker::new(FilePickerOptions {
             base_path: self.base.to_string_lossy().into_owned(),
@@ -770,14 +758,12 @@ impl Fixture {
         })
         .unwrap();
         picker.collect_files().unwrap();
-        self.picker.rebase_watches(&self.base);
         *self.picker.write().unwrap() = Some(picker);
     }
 
     fn feed(&self, events: impl IntoIterator<Item = DebouncedEvent>) -> RescanStats {
         let before = self.picker.rescan_stats();
         handle_debounced_events(
-            FFFMode::Neovim,
             events.into_iter().collect(),
             &self.base,
             &self.git_workdir,

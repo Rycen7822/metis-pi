@@ -219,47 +219,6 @@ impl<C: ParserConfig> QueryParser<C> {
     }
 }
 
-impl<'a> FFFQuery<'a> {
-    /// Returns the grep search text by joining all non-constraint text tokens.
-    ///
-    /// Backslash-escaped tokens (e.g. `\*.rs`) are included as literal text
-    /// with the leading `\` stripped, since the backslash is only an escape
-    /// signal to the parser and should not appear in the final pattern.
-    ///
-    /// `FuzzyQuery::Empty` → empty string
-    /// `FuzzyQuery::Text("foo")` → `"foo"`
-    /// `FuzzyQuery::Parts(["a", "\\*.rs", "b"])` → `"a *.rs b"`
-    pub fn grep_text(&self) -> String {
-        match &self.fuzzy_query {
-            FuzzyQuery::Empty => String::new(),
-            FuzzyQuery::Text(t) => strip_leading_backslash(t).to_string(),
-            FuzzyQuery::Parts(parts) => parts
-                .iter()
-                .map(|t| strip_leading_backslash(t))
-                .collect::<Vec<_>>()
-                .join(" "),
-        }
-    }
-}
-
-/// Strip the leading `\` from a backslash-escaped constraint token only.
-///
-/// We strip the backslash when the next character is a constraint trigger
-/// (`*`, `/`, `!`) — the user typed `\*.rs` to mean literal `*.rs`, not an
-/// extension constraint. For regex escape sequences like `\w`, `\b`, `\d`,
-/// `\s`, `\n` etc., the backslash is preserved so regex mode works correctly.
-#[inline]
-fn strip_leading_backslash(token: &str) -> &str {
-    if token.len() > 1 && token.starts_with('\\') {
-        let next = token.as_bytes()[1];
-        // Only strip if the backslash is escaping a constraint trigger character
-        if next == b'*' || next == b'/' || next == b'!' {
-            return &token[1..];
-        }
-    }
-    token
-}
-
 impl Default for QueryParser<crate::FileSearchConfig> {
     fn default() -> Self {
         Self::new(crate::FileSearchConfig)
@@ -269,7 +228,7 @@ impl Default for QueryParser<crate::FileSearchConfig> {
 #[inline]
 fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constraint<'a>> {
     // Backslash escape: \token → treat as literal text, skip all constraint parsing.
-    // The leading \ is stripped by the caller when building the search text.
+    // File/mixed search keeps the original token; content needles bypass this parser.
     if token.starts_with('\\') && token.len() > 1 {
         return None;
     }
@@ -508,8 +467,7 @@ mod tests {
     use super::*;
     use crate::{AiGrepConfig, FileSearchConfig, GrepConfig};
 
-    /// File-picker-like config with filename-constraint detection enabled,
-    /// mirroring the Neovim layer's opt-in behavior.
+    /// File-parser configuration exercising shared filename-constraint rules.
     struct FilenameConstraintConfig;
 
     impl ParserConfig for FilenameConstraintConfig {
@@ -625,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_negation_operators_stay_literal() {
-        let parser = QueryParser::new(GrepConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         // Operator-like tokens must not become exclusion constraints
         for query in [
             "Ordering::Acquire) != delivery.epoch",
@@ -639,7 +597,10 @@ mod tests {
                 "{query:?} produced constraints {:?}",
                 result.constraints
             );
-            assert_eq!(result.grep_text(), query, "grep text must equal raw query");
+            assert_eq!(
+                result.fuzzy_query,
+                FuzzyQuery::Parts(query.split_whitespace().collect())
+            );
         }
     }
 
@@ -759,74 +720,6 @@ mod tests {
     }
 
     #[test]
-    fn test_grep_text_plain_text() {
-        // Multi-token plain text — no constraints
-        let q = QueryParser::new(GrepConfig).parse("name =");
-        assert_eq!(q.grep_text(), "name =");
-    }
-
-    #[test]
-    fn test_grep_text_strips_constraint() {
-        let q = QueryParser::new(GrepConfig).parse("name = *.rs someth");
-        assert_eq!(q.grep_text(), "name = someth");
-    }
-
-    #[test]
-    fn test_grep_text_leading_constraint() {
-        let q = QueryParser::new(GrepConfig).parse("*.rs name =");
-        assert_eq!(q.grep_text(), "name =");
-    }
-
-    #[test]
-    fn test_grep_text_only_constraints() {
-        let q = QueryParser::new(GrepConfig).parse("*.rs /src/");
-        assert_eq!(q.grep_text(), "");
-    }
-
-    #[test]
-    fn test_grep_text_path_constraint() {
-        let q = QueryParser::new(GrepConfig).parse("name /src/ value");
-        assert_eq!(q.grep_text(), "name value");
-    }
-
-    #[test]
-    fn test_grep_text_negation_constraint() {
-        let q = QueryParser::new(GrepConfig).parse("name !*.rs value");
-        assert_eq!(q.grep_text(), "name value");
-    }
-
-    #[test]
-    fn test_grep_text_backslash_escape_stripped() {
-        // \*.rs should be text with the leading \ removed
-        let q = QueryParser::new(GrepConfig).parse("\\*.rs foo");
-        assert_eq!(q.grep_text(), "*.rs foo");
-
-        let q = QueryParser::new(GrepConfig).parse("\\/src/ foo");
-        assert_eq!(q.grep_text(), "/src/ foo");
-
-        let q = QueryParser::new(GrepConfig).parse("\\!test foo");
-        assert_eq!(q.grep_text(), "!test foo");
-    }
-
-    #[test]
-    fn test_grep_text_question_mark_is_text() {
-        let q = QueryParser::new(GrepConfig).parse("foo? bar");
-        assert_eq!(q.grep_text(), "foo? bar");
-    }
-
-    #[test]
-    fn test_grep_text_bracket_is_text() {
-        let q = QueryParser::new(GrepConfig).parse("arr[0] more");
-        assert_eq!(q.grep_text(), "arr[0] more");
-    }
-
-    #[test]
-    fn test_grep_text_path_glob_is_constraint() {
-        let q = QueryParser::new(GrepConfig).parse("pattern src/**/*.rs");
-        assert_eq!(q.grep_text(), "pattern");
-    }
-
-    #[test]
     fn test_grep_question_mark_is_text() {
         let parser = QueryParser::new(GrepConfig);
         let result = parser.parse("foo?");
@@ -863,46 +756,6 @@ mod tests {
             result.constraints[0],
             Constraint::Glob("{src,lib}")
         ));
-    }
-
-    #[test]
-    fn test_grep_text_preserves_backslash_escapes() {
-        // Regex patterns like \w+ and \bfoo\b must survive grep_text()
-        // The parser sees \w+ as a text token (not a constraint escape),
-        // but strip_leading_backslash was stripping the \ anyway.
-        let q = QueryParser::new(GrepConfig).parse("pub struct \\w+");
-        assert_eq!(
-            q.grep_text(),
-            "pub struct \\w+",
-            "Backslash-w in regex must be preserved"
-        );
-
-        let q = QueryParser::new(GrepConfig).parse("\\bword\\b more");
-        assert_eq!(
-            q.grep_text(),
-            "\\bword\\b more",
-            "Backslash-b word boundaries must be preserved"
-        );
-
-        // Single-token regex like "fn\\s+\\w+" returns FFFQuery with Text fuzzy query
-        let result = QueryParser::new(GrepConfig).parse("fn\\s+\\w+");
-        assert!(result.constraints.is_empty());
-        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("fn\\s+\\w+"));
-
-        // But the escaped constraint forms SHOULD still be stripped:
-        let q = QueryParser::new(GrepConfig).parse("\\*.rs foo");
-        assert_eq!(
-            q.grep_text(),
-            "*.rs foo",
-            "Escaped constraint \\*.rs should still have backslash stripped"
-        );
-
-        let q = QueryParser::new(GrepConfig).parse("\\/src/ foo");
-        assert_eq!(
-            q.grep_text(),
-            "/src/ foo",
-            "Escaped constraint \\/src/ should still have backslash stripped"
-        );
     }
 
     #[test]
@@ -982,7 +835,7 @@ mod tests {
             "Expected FilePath, got {:?}",
             result.constraints[0]
         );
-        assert_eq!(result.grep_text(), "rgba32ToY");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("rgba32ToY"));
     }
 
     #[test]
@@ -995,7 +848,7 @@ mod tests {
             result.constraints[0],
             Constraint::FilePath("src/main.rs")
         ));
-        assert_eq!(result.grep_text(), "fn main");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Parts(vec!["fn", "main"]));
     }
 
     #[test]
@@ -1024,7 +877,7 @@ mod tests {
             "Expected FilePath, got {:?}",
             result.constraints[0]
         );
-        assert_eq!(result.grep_text(), "pattern");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("pattern"));
     }
 
     #[test]
@@ -1081,7 +934,7 @@ mod tests {
             "Expected single PathSegment, got {:?}",
             result.constraints
         );
-        assert_eq!(result.grep_text(), "profile.h");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("profile.h"));
     }
 
     #[test]
@@ -1168,7 +1021,7 @@ mod tests {
             "Expected Extension, got {:?}",
             result.constraints
         );
-        assert_eq!(result.grep_text(), "profile.h");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("profile.h"));
     }
 
     #[test]
@@ -1184,7 +1037,7 @@ mod tests {
             "Expected FilePath, got {:?}",
             result.constraints
         );
-        assert_eq!(result.grep_text(), "pattern");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("pattern"));
     }
 
     #[test]
@@ -1198,7 +1051,7 @@ mod tests {
             "Expected FilePath(schema.rs), got {:?}",
             result.constraints[0]
         );
-        assert_eq!(result.grep_text(), "part_revisions");
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("part_revisions"));
     }
 
     #[test]
@@ -1208,7 +1061,10 @@ mod tests {
         let result = parser.parse("schema pattern");
         // No extension → not a file path, just text
         assert_eq!(result.constraints.len(), 0);
-        assert_eq!(result.grep_text(), "schema pattern");
+        assert_eq!(
+            result.fuzzy_query,
+            FuzzyQuery::Parts(vec!["schema", "pattern"])
+        );
     }
 
     #[test]
@@ -1218,7 +1074,10 @@ mod tests {
         let result = parser.parse("src/utils pattern");
         // No extension in last component → not a file path, just text
         assert_eq!(result.constraints.len(), 0);
-        assert_eq!(result.grep_text(), "src/utils pattern");
+        assert_eq!(
+            result.fuzzy_query,
+            FuzzyQuery::Parts(vec!["src/utils", "pattern"])
+        );
     }
 
     #[test]
@@ -1275,11 +1134,7 @@ mod tests {
     #[test]
     fn test_grep_no_location_parsing_multi_token() {
         let q = QueryParser::new(GrepConfig).parse("*.rs localhost:8080");
-        assert_eq!(
-            q.grep_text(),
-            "localhost:8080",
-            "Colon-number suffix should be preserved in grep text"
-        );
+        assert_eq!(q.fuzzy_query, FuzzyQuery::Text("localhost:8080"));
         assert!(
             q.location.is_none(),
             "Grep should not parse location from colon-number"
@@ -1332,7 +1187,10 @@ mod tests {
             "Braces without comma should be text, got {:?}",
             result.constraints
         );
-        assert_eq!(result.grep_text(), r#"format!("{}\\AppData", home)"#);
+        assert_eq!(
+            result.fuzzy_query,
+            FuzzyQuery::Parts(vec![r#"format!("{}\\AppData","#, "home)"])
+        );
     }
 
     #[test]

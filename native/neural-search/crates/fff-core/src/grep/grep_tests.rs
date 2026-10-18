@@ -1,42 +1,52 @@
-use super::grep::replace_newline_escapes;
 use super::*;
 
 use crate::file_picker::{FilePicker, FilePickerOptions};
-use crate::index::BigramIndexBuilder;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
 #[test]
-fn test_replace_newline_escapes() {
-    // Single \n → multiline: replaced with a real newline at byte 3
-    assert_eq!(
-        replace_newline_escapes("foo\\nbar"),
-        Some(("foo\nbar".to_string(), 3))
-    );
-    // \\n → escaped backslash + literal n, NOT multiline
-    // (this is what the user types when grepping Rust source with `\\nvim`)
-    assert_eq!(replace_newline_escapes("foo\\\\nvim-data"), None);
-    // Real-world: source file has literal \\AppData\\Local\\nvim-data
-    // (double backslash in the file, so user types double backslash)
-    assert_eq!(
-        replace_newline_escapes(r#"format!("{}\\AppData\\Local\\nvim-data","#),
-        None
-    );
-    // No \n at all
-    assert_eq!(replace_newline_escapes("hello world"), None);
-    // \\\\n → even number of backslashes before n → NOT multiline
-    assert_eq!(replace_newline_escapes("foo\\\\\\\\nbar"), None);
-    // \\\n → 3 backslashes: first two pair up, third + n = \n → multiline,
-    // newline lands after "foo" + 2 kept backslashes = byte 5
-    assert_eq!(
-        replace_newline_escapes("foo\\\\\\nbar"),
-        Some(("foo\\\\\nbar".to_string(), 5))
-    );
-    // Position is for the FIRST newline when there are several
-    assert_eq!(
-        replace_newline_escapes("a\\nb\\nc"),
-        Some(("a\nb\nc".to_string(), 1))
-    );
+fn test_explicit_newline_and_backslash_patterns() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in [
+        ("multiline.txt", "foo\nbar\n"),
+        ("one.txt", "foo\\nbar\n"),
+        ("two.txt", "foo\\\\nbar\n"),
+        ("slash_multiline.txt", "foo\\\nbar\n"),
+    ] {
+        std::fs::write(dir.path().join(name), content).unwrap();
+    }
+    let mut picker = FilePicker::new(FilePickerOptions {
+        base_path: dir.path().to_string_lossy().into_owned(),
+        watch: false,
+        ..Default::default()
+    })
+    .unwrap();
+    picker.collect_files().unwrap();
+    for (pattern, mode, expected) in [
+        ("foo\nbar", GrepMode::PlainText, "multiline.txt"),
+        (r"foo\nbar", GrepMode::PlainText, "one.txt"),
+        (r"foo\\nbar", GrepMode::PlainText, "two.txt"),
+        (r"foo\nbar", GrepMode::Regex, "multiline.txt"),
+        (r"foo\\nbar", GrepMode::Regex, "one.txt"),
+        (r"foo\\\nbar", GrepMode::Regex, "slash_multiline.txt"),
+        (r"foo\\\\nbar", GrepMode::Regex, "two.txt"),
+    ] {
+        let result = picker.grep_pattern(
+            pattern,
+            &[],
+            &GrepSearchOptions {
+                mode,
+                ..Default::default()
+            },
+        );
+        assert!(result.regex_fallback_error.is_none());
+        let paths: Vec<_> = result
+            .files
+            .iter()
+            .map(|file| file.relative_path(&picker))
+            .collect();
+        assert_eq!(paths, [expected], "{mode:?} {pattern:?}");
+    }
 }
 
 #[test]
@@ -140,9 +150,6 @@ fn test_multi_grep_search() {
     .unwrap();
     picker.collect_files().unwrap();
 
-    let files = picker.get_files();
-    let arena = picker.arena_base_ptr();
-
     let options = super::GrepSearchOptions {
         max_file_size: MAX_FFFILE_SIZE,
         max_matches_per_file: 0,
@@ -155,25 +162,13 @@ fn test_multi_grep_search() {
         enforce_time_budget: false,
         before_context: 0,
         after_context: 0,
-        classify_definitions: false,
-        trim_whitespace: false,
         abort_signal: None,
     };
-    let no_cancel = AtomicBool::new(false);
-
     // Test with 3 patterns
-    let result = super::multi_grep_search(
-        files,
+    let result = picker.multi_grep(
         &["GrepMode", "GrepMatch", "PlainTextMatcher"],
         &[],
         &options,
-        picker.cache_budget(),
-        None,
-        None,
-        &no_cancel,
-        dir.path(),
-        arena,
-        arena,
     );
 
     assert!(
@@ -202,19 +197,7 @@ fn test_multi_grep_search() {
     assert_eq!(result.files.len(), 2, "Should match exactly 2 files");
 
     // Test with single pattern
-    let result2 = super::multi_grep_search(
-        files,
-        &["PlainTextMatcher"],
-        &[],
-        &options,
-        picker.cache_budget(),
-        None,
-        None,
-        &no_cancel,
-        dir.path(),
-        arena,
-        arena,
-    );
+    let result2 = picker.multi_grep(&["PlainTextMatcher"], &[], &options);
     assert_eq!(
         result2.matches.len(),
         1,
@@ -222,19 +205,7 @@ fn test_multi_grep_search() {
     );
 
     // Test with empty patterns
-    let result3 = super::multi_grep_search(
-        files,
-        &[],
-        &[],
-        &options,
-        picker.cache_budget(),
-        None,
-        None,
-        &no_cancel,
-        dir.path(),
-        arena,
-        arena,
-    );
+    let result3 = picker.multi_grep(&[], &[], &options);
     assert_eq!(
         result3.matches.len(),
         0,
@@ -243,7 +214,7 @@ fn test_multi_grep_search() {
 }
 
 /// E2E: multiline grep (`\n` in query) and escaped-backslash literals (`\\n`)
-/// through the full picker.grep pipeline, in both PlainText and Regex modes.
+/// through the explicit pattern entry, in both PlainText and Regex modes.
 #[test]
 fn test_grep_multiline_and_escaped_newline_e2e() {
     let dir = tempfile::tempdir().unwrap();
@@ -279,9 +250,8 @@ fn test_grep_multiline_and_escaped_newline_e2e() {
         ..Default::default()
     };
 
-    // 1. PlainText + `\n`: needle becomes a real newline, match spans two lines
-    let query = super::parse_grep_query("unicorn\\nrainbow");
-    let result = picker.grep(&query, &options);
+    // 1. A literal LF remains a real newline, matching across two lines.
+    let result = picker.grep_pattern("unicorn\nrainbow", &[], &options);
     assert_eq!(
         result.files.len(),
         1,
@@ -297,8 +267,7 @@ fn test_grep_multiline_and_escaped_newline_e2e() {
     assert_eq!(m.col, 6);
 
     // 2. PlainText + `\\n`: literal backslash + n, must NOT be mangled to newline
-    let query = super::parse_grep_query("\\\\nvim-data");
-    let result = picker.grep(&query, &options);
+    let result = picker.grep_pattern(r"\\nvim-data", &[], &options);
     assert_eq!(
         result.files.len(),
         1,
@@ -313,8 +282,7 @@ fn test_grep_multiline_and_escaped_newline_e2e() {
         mode: super::GrepMode::Regex,
         ..options.clone()
     };
-    let query = super::parse_grep_query("unicorn\\nrainbow");
-    let result = picker.grep(&query, &regex_options);
+    let result = picker.grep_pattern(r"unicorn\nrainbow", &[], &regex_options);
     assert!(result.regex_fallback_error.is_none());
     assert_eq!(
         result.files.len(),
@@ -330,23 +298,14 @@ fn test_grep_multiline_and_escaped_newline_e2e() {
     assert_eq!(m.match_byte_offsets.as_slice(), &[(6, 13)]);
 }
 
-/// Regression test for issue #407: Live grep returns duplicate results
-/// when the bigram candidate bitset has trailing bits set beyond
-/// `base_file_count`. The bitset is rounded up to a multiple of 64 bits
-/// so any trailing bit that happens to be set (e.g. from overlay data)
-/// would previously map to an overflow file index, which was then also
-/// unconditionally appended by the overflow loop, producing duplicates.
+/// Base and watcher-appended overflow files must each be searched once.
+/// Retains the live contract of issue #407 without the retired bitset injection.
 #[test]
-fn test_grep_no_duplicates_with_overflow_trailing_bits() {
+fn test_grep_no_duplicates_with_overflow() {
     let dir = tempfile::tempdir().unwrap();
-    // Match the picker's internal dunce-canonicalize so paths passed to
-    // on_create_or_modify resolve back to the same base_path on Windows.
     let base = crate::path_utils::canonicalize(dir.path()).unwrap();
 
     // Five base files: only three contain the pattern "unicorn".
-    // We need some files WITHOUT the pattern so the bigrams for
-    // "unicorn" aren't treated as ubiquitous (≥90% of files) and
-    // dropped from the index during compress().
     let base_contents: &[(&str, &str)] = &[
         ("a.txt", "hello unicorn world"),
         ("b.txt", "another unicorn line"),
@@ -368,18 +327,7 @@ fn test_grep_no_duplicates_with_overflow_trailing_bits() {
     picker.collect_files().unwrap();
     assert_eq!(picker.get_files().len(), 5);
 
-    // Manually build a bigram index over the 5 base files.
-    let base_count = 5usize;
-    let consec_builder = BigramIndexBuilder::new(base_count);
-    let skip_builder = BigramIndexBuilder::new(base_count);
-    for (i, (_, content)) in base_contents.iter().enumerate() {
-        consec_builder.add_file_content(&skip_builder, i, content.as_bytes());
-    }
-    let mut index = consec_builder.compress(Some(0));
-    index.set_skip_index(skip_builder.compress(Some(0)));
-    picker.set_bigram_index(index);
-
-    // Add three overflow files (new after the bigram index was built),
+    // Add three overflow files after the scan,
     // all containing "unicorn".
     for name in ["f.txt", "g.txt", "h.txt"] {
         let path = base.join(name);
@@ -390,33 +338,10 @@ fn test_grep_no_duplicates_with_overflow_trailing_bits() {
     }
     assert_eq!(picker.get_files().len(), 8);
 
-    // Inject a trailing bit into the overlay at a file index that
-    // corresponds to an overflow file (i.e. >= base_file_count=5 but
-    // < bitset_word_size=64). Without the fix, the bigram-candidate
-    // merge would set this bit in the bitset, and the bitset loop would
-    // push files[6] while the overflow loop also appends files[5..]
-    // which includes files[6], producing a duplicate.
-    let overflow_rel = "g.txt"; // middle overflow file
-    let overflow_abs = picker
-        .get_files()
-        .iter()
-        .position(|f| f.relative_path(&picker) == overflow_rel)
-        .expect("overflow file should be present");
-    assert!(overflow_abs >= base_count);
-    assert!(
-        overflow_abs < 64,
-        "index must fit in the single bitset word"
-    );
-
-    if let Some(overlay) = picker.bigram_overlay() {
-        overlay
-            .write()
-            .modify_file(overflow_abs, b"overflow unicorn entry");
-    }
+    assert_eq!(picker.get_overflow_files().len(), 3);
 
     // Run a grep for "unicorn": six files match
     // (a, b, c in base + f, g, h in overflow).
-    let query = super::parse_grep_query("unicorn");
     let options = super::GrepSearchOptions {
         max_file_size: MAX_FFFILE_SIZE,
         max_matches_per_file: 0,
@@ -429,11 +354,9 @@ fn test_grep_no_duplicates_with_overflow_trailing_bits() {
         enforce_time_budget: false,
         before_context: 0,
         after_context: 0,
-        classify_definitions: false,
-        trim_whitespace: false,
         abort_signal: Some(std::sync::Arc::new(AtomicBool::new(false))),
     };
-    let result = picker.grep(&query, &options);
+    let result = picker.grep_pattern("unicorn", &[], &options);
 
     // Collect the matched relative paths via the returned files list.
     let mut paths: Vec<String> = result
@@ -467,11 +390,8 @@ fn test_grep_no_duplicates_with_overflow_trailing_bits() {
     );
 }
 
-/// Issue #756: an AI-mode regex query with an inline FilePath scope and
-/// top-level alternation. The regex fragments are swallowed as bogus Glob
-/// constraints, the constrained search finds nothing, and the literal/regex
-/// fallback must NOT drop the FilePath scope — otherwise the `|` branch leaks
-/// matches into files outside the pinned path.
+/// Issue #756's continuing contract: regex alternation must not escape an
+/// explicit FilePath scope, even when its syntax resembles a glob filter.
 #[test]
 fn regex_fallback_keeps_file_path_scope_issue_756() {
     use fff_query_parser::{AiGrepConfig, QueryParser};
@@ -506,9 +426,8 @@ fn regex_fallback_keeps_file_path_scope_issue_756() {
         ..Default::default()
     };
 
-    let raw = r"scope/target.css ^/\* |^\s*/\* ----------";
-    let query = QueryParser::new(AiGrepConfig).parse(raw);
-    let result = picker.grep(&query, &options);
+    let constraints = QueryParser::new(AiGrepConfig).parse_constraints("scope/target.css");
+    let result = picker.grep_pattern(r"^/\* |^\s*/\* ----------", &constraints, &options);
     let mut paths: Vec<String> = result
         .files
         .iter()

@@ -42,9 +42,7 @@ export class FilePickerFactory {
   private open(FileFinder: FileFinderStatic, basePath: string, persistent: boolean): Result<FileFinderApi> {
     // Explicit fields keep database paths out of auxiliary and fallback indexes.
     const { enableHomeDirScanning, enableFsRootScanning, followSymlinks } = this.options;
-    // FFF 0.11's content-index prefilter drops valid multiGrep OR candidates.
-    const init = { basePath, enableHomeDirScanning, enableFsRootScanning, followSymlinks,
-      aiMode: true, disableContentIndexing: true };
+    const init = { basePath, enableHomeDirScanning, enableFsRootScanning, followSymlinks };
     if (!persistent || this.dbDisabled) return FileFinder.create(init);
     const result = FileFinder.create({ ...init,
       frecencyDbPath: this.options.frecencyDbPath, historyDbPath: this.options.historyDbPath,

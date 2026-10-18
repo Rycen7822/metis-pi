@@ -141,7 +141,7 @@ jobs:
           TMPDIR: ${{ github.workspace }}/.work/neural-engine/tmp
         run: |
           mkdir -p "$TMPDIR"
-          cargo test --manifest-path native/neural-search/Cargo.toml --workspace --lib --locked --no-default-features --features zlob
+          cargo test --manifest-path native/neural-search/Cargo.toml --workspace --lib --locked
       - uses: actions/upload-artifact@v4
         with:
           name: neural-search-linux-x64

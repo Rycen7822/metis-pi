@@ -112,9 +112,7 @@ impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
     }
 
     fn find(&mut self) -> Result<Option<Range>, S::Error> {
-        self.core
-            .find(&self.slice[self.core.pos()..])
-            .map(|m| m.map(|m| m.offset(self.core.pos())))
+        self.core.find_at(self.slice, self.core.pos())
     }
 
     fn advance(&mut self, range: &Range) {

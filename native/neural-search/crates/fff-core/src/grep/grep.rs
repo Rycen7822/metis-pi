@@ -1,18 +1,14 @@
-use super::prefilter::prefilter_with_filepath_retry;
+use super::prefilter::prefilter_files;
 use super::regex::{RegexMatcher, RegexSink, build_regex};
 use super::sink::{SinkState, debug_assert_newline_terminator};
 use super::types::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
-use crate::index::{
-    BigramFilter, BigramOverlay, bigram_boundary, fuzzy_candidates, literal_candidates,
-    regex_candidates,
-};
 use crate::simd_string_utils::memmem;
 use crate::types::{ContentCacheBudget, FileItem, FileSliceExt, MmapSlot};
 use fff_grep::{
     Searcher, SearcherBuilder, Sink, SinkMatch,
     matcher::{Match, Matcher, NoError},
 };
-use fff_query_parser::{FFFQuery, GrepConfig, QueryParser};
+use fff_query_parser::Constraint;
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::path::Path;
@@ -183,138 +179,42 @@ impl Sink for PlainTextSink<'_> {
     }
 }
 
-/// Perform a grep search across all indexed files.
-///
-/// When `query` is empty, returns git-modified/untracked files sorted by
-/// frecency for the "welcome state" UI.
-#[tracing::instrument(skip_all, fields(file_count = files.len()))]
+/// Search an explicit content pattern without query grammar or escape decoding.
+/// Invalid regex patterns fall back to the original literal pattern, retaining
+/// the same constraints and exposing the compilation error on the result.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn grep_search<'a>(
+pub(crate) fn grep_search_pattern<'a>(
     files: &'a [FileItem],
-    query: &FFFQuery<'_>,
+    grep_text: &str,
+    constraints: &[Constraint<'_>],
     options: &GrepSearchOptions,
     budget: &ContentCacheBudget,
-    bigram_index: Option<&BigramFilter>,
-    bigram_overlay: Option<&BigramOverlay>,
-    abort_signal: &AtomicBool,
-    base_path: &Path,
-    arena: crate::simd_path::ArenaPtr,
-    overflow_arena: crate::simd_path::ArenaPtr,
-) -> GrepResult<'a> {
-    let result = grep_search_parsed(
-        files,
-        query,
-        options,
-        budget,
-        bigram_index,
-        bigram_overlay,
-        abort_signal,
-        base_path,
-        arena,
-        overflow_arena,
-    );
-
-    // Constraint parsing can swallow tokens the user meant literally (e.g. `!=`
-    // becoming an exclusion). If the constrained search scanned everything and
-    // found nothing, retry the whole raw query as literal text. This also holds
-    // for later pages: an empty full scan at offset 0 stays empty at any offset,
-    // so paging offsets consistently index the literal search's file list.
-    let full_scan_empty = result.matches.is_empty() && result.next_file_offset == 0;
-    if !full_scan_empty || query.constraints.is_empty() || abort_signal.load(Ordering::Relaxed) {
-        return result;
-    }
-
-    let raw = query.raw_query.trim();
-    if raw.is_empty() {
-        return result;
-    }
-
-    // Keep any explicit FilePath scope (AI mode `path/to/file.ext` prefix) so the
-    // fallback can't leak matches outside the file the user pinned. Only the
-    // swallowed operator/glob tokens are dropped. See issue #756.
-    let scoped_constraints: fff_query_parser::ConstraintVec<'_> = query
-        .constraints
-        .iter()
-        .filter(|c| matches!(c, fff_query_parser::Constraint::FilePath(_)))
-        .cloned()
-        .collect();
-
-    let literal_query = FFFQuery {
-        raw_query: query.raw_query,
-        constraints: scoped_constraints,
-        fuzzy_query: fff_query_parser::FuzzyQuery::Text(raw),
-        location: None,
-    };
-
-    let mut fallback = grep_search_parsed(
-        files,
-        &literal_query,
-        options,
-        budget,
-        bigram_index,
-        bigram_overlay,
-        abort_signal,
-        base_path,
-        arena,
-        overflow_arena,
-    );
-
-    if fallback.matches.is_empty() {
-        result
-    } else {
-        fallback.literal_fallback = true;
-        fallback
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn grep_search_parsed<'a>(
-    files: &'a [FileItem],
-    query: &FFFQuery<'_>,
-    options: &GrepSearchOptions,
-    budget: &ContentCacheBudget,
-    bigram_index: Option<&BigramFilter>,
-    bigram_overlay: Option<&BigramOverlay>,
     abort_signal: &AtomicBool,
     base_path: &Path,
     arena: crate::simd_path::ArenaPtr,
     overflow_arena: crate::simd_path::ArenaPtr,
 ) -> GrepResult<'a> {
     let total_files = files.live_count();
-    let constraints_from_query = &query.constraints[..];
-
-    let grep_text = extract_grep_text(query);
     if grep_text.is_empty() {
         return GrepResult::empty(total_files, total_files);
     }
 
     let casing = options.effective_casing();
-    let case_insensitive = casing.is_insensitive_for(&grep_text);
-
-    let base_count = bigram_boundary(bigram_overlay, files.len());
+    let case_insensitive = casing.is_insensitive_for(grep_text);
 
     let mut regex_fallback_error: Option<String> = None;
     let regex = match options.mode {
         GrepMode::PlainText => None,
         GrepMode::Fuzzy => {
-            let bigram_candidates = fuzzy_candidates(bigram_index, bigram_overlay, &grep_text);
-
-            let (files_to_search, filtered_file_count) = prefilter_with_filepath_retry(
-                files,
-                constraints_from_query,
-                bigram_candidates.as_deref(),
-                base_count,
-                options,
-                arena,
-                overflow_arena,
-            );
+            let (files_to_search, filtered_file_count) =
+                prefilter_files(files, constraints, options, arena, overflow_arena);
 
             if files_to_search.is_empty() {
                 return GrepResult::empty(total_files, filtered_file_count);
             }
 
             return super::fuzzy_grep::fuzzy_grep_search(
-                &grep_text,
+                grep_text,
                 &files_to_search,
                 options,
                 total_files,
@@ -327,21 +227,23 @@ fn grep_search_parsed<'a>(
                 overflow_arena,
             );
         }
-        GrepMode::Regex => build_regex(&grep_text, casing)
+        GrepMode::Regex => build_regex(grep_text, casing)
             .inspect_err(|err| {
                 tracing::warn!("Regex compilation failed for {}. Error {}", grep_text, err);
-
                 regex_fallback_error = Some(err.to_string());
             })
             .ok(),
     };
 
-    let (multiline_segment_len, effective_pattern) = match replace_newline_escapes(&grep_text) {
-        Some((replaced, first_newline_pos)) => (Some(first_newline_pos), replaced),
-        None => (None, grep_text),
-    };
-
-    let is_multiline = multiline_segment_len.is_some();
+    let effective_pattern = grep_text;
+    let multiline_segment_len = effective_pattern
+        .as_bytes()
+        .iter()
+        .position(|&b| b == b'\n');
+    // Detect regex LF syntax for the existing limited multiline strategy, but
+    // never decode the explicit pattern (including invalid-regex fallback).
+    let is_multiline =
+        multiline_segment_len.is_some() || (regex.is_some() && has_newline_escape(grep_text));
 
     // when there is multiple line requested automatically expand the context to include all the lines
     let after_context = if is_multiline && regex.is_none() && options.after_context == 0 {
@@ -358,26 +260,13 @@ fn grep_search_parsed<'a>(
     let finder = NeedleFinder::new(&finder_pattern, case_insensitive);
     let pattern_len = finder_pattern.len() as u32;
 
-    // PlainText (or regex-fallback-to-plain): literal bigram query.
-    // Regex: decompose the pattern HIR into an AND/OR bigram query tree.
-    let bigram_candidates = if regex.is_none() {
-        literal_candidates(bigram_index, bigram_overlay, &[&effective_pattern])
-    } else {
-        regex_candidates(bigram_index, bigram_overlay, &effective_pattern)
-    };
-
-    let (files_to_search, filtered_file_count) = prefilter_with_filepath_retry(
-        files,
-        constraints_from_query,
-        bigram_candidates.as_deref(),
-        base_count,
-        options,
-        arena,
-        overflow_arena,
-    );
+    let (files_to_search, filtered_file_count) =
+        prefilter_files(files, constraints, options, arena, overflow_arena);
 
     if files_to_search.is_empty() {
-        return GrepResult::empty(total_files, filtered_file_count);
+        let mut result = GrepResult::empty(total_files, filtered_file_count);
+        result.regex_fallback_error = regex_fallback_error;
+        return result;
     }
 
     // `PlainTextMatcher` is used by the grep-searcher engine for line detection.
@@ -414,7 +303,6 @@ fn grep_search_parsed<'a>(
                 max_matches,
                 before_context: options.before_context,
                 after_context,
-                classify_definitions: options.classify_definitions,
             };
 
             match regex {
@@ -448,69 +336,17 @@ fn grep_search_parsed<'a>(
     result
 }
 
-/// Replace unescaped `\n` escapes with real newlines in a single pass.
-///
-/// Returns `Some((replaced, first_newline_pos))` when the pattern contained at
-/// least one real `\n` escape (the user wants multiline search), where
-/// `first_newline_pos` is the byte offset of the first inserted newline in the
-/// replaced string. Returns `None` when nothing had to be replaced: `\\n` is
-/// preserved as-is (escaped backslash + literal `n`, e.g. `\\nvim-data`).
-pub(super) fn replace_newline_escapes(text: &str) -> Option<(String, usize)> {
-    let bytes = text.as_bytes();
-    let mut result = Vec::with_capacity(bytes.len());
-    let mut first_newline_pos: Option<usize> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            if bytes[i + 1] == b'n' {
-                // Odd number of consecutive backslashes before 'n' -> real \n escape
-                let mut backslash_count = 1;
-                while backslash_count <= i && bytes[i - backslash_count] == b'\\' {
-                    backslash_count += 1;
-                }
-                if backslash_count % 2 == 1 {
-                    first_newline_pos.get_or_insert(result.len());
-                    result.push(b'\n');
-                    i += 2;
-                    continue;
-                }
-            }
-            result.push(bytes[i]);
-            i += 1;
-        } else {
-            result.push(bytes[i]);
-            i += 1;
+/// Whether the regex source contains an unescaped LF escape. This only
+/// selects the limited multiline strategy; the regex engine owns decoding.
+fn has_newline_escape(text: &str) -> bool {
+    let mut escaped = false;
+    for byte in text.bytes() {
+        if escaped && byte == b'n' {
+            return true;
         }
+        escaped = byte == b'\\' && !escaped;
     }
-
-    let first_newline_pos = first_newline_pos?;
-    let replaced = String::from_utf8(result).unwrap_or_else(|_| text.to_string());
-    Some((replaced, first_newline_pos))
-}
-
-pub fn parse_grep_query(query: &str) -> FFFQuery<'_> {
-    let parser = QueryParser::new(GrepConfig);
-    parser.parse(query)
-}
-
-/// Extract the grep pattern text from the parsed query: all non-constraint
-/// tokens joined with spaces, e.g. `"name = *.rs someth"` -> `"name = someth"`
-/// with constraint `Extension("rs")`.
-fn extract_grep_text(query: &FFFQuery<'_>) -> String {
-    if !matches!(query.fuzzy_query, fff_query_parser::FuzzyQuery::Empty) {
-        return query.grep_text();
-    }
-
-    // if constraint-only or empty query we use raw_query for backslash-escape handling
-    let t = query.raw_query.trim();
-    if t.starts_with('\\') && t.len() > 1 {
-        let suffix = &t[1..];
-        let parser = QueryParser::new(GrepConfig);
-        if !parser.parse(suffix).constraints.is_empty() {
-            return suffix.to_string();
-        }
-    }
-    t.to_string()
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -574,7 +410,7 @@ where
     // runs.
     //
     // So only grow when the prefilter is weak (large candidate set);
-    // when bigram cut the set in half, keep fixed small chunks for cheap page-fill termination.
+    // when constraints cut the set in half, keep small chunks for cheap page-fill termination.
     let base_chunk = rayon::current_num_threads() * 4;
     let prefilter_strong = ctx.total_files > 0 && files_to_search.len() * 2 < ctx.total_files;
     let max_chunk = if prefilter_strong {
@@ -663,9 +499,6 @@ where
 
             for mut m in file_matches {
                 m.file_index = file_result_idx;
-                if options.trim_whitespace {
-                    m.trim_leading_whitespace();
-                }
                 all_matches.push(m);
             }
 
@@ -705,6 +538,5 @@ where
         filtered_file_count: ctx.filtered_file_count,
         next_file_offset,
         regex_fallback_error: None,
-        literal_fallback: false,
     }
 }

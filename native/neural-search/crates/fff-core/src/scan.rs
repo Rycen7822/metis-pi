@@ -6,8 +6,6 @@ use tracing::{error, info};
 
 use crate::FileSync;
 use crate::error::Error;
-use crate::file_picker::FFFMode;
-use crate::index::{build_bigram_index, sniff_binary_for_non_indexable};
 use crate::parallelism::BACKGROUND_THREAD_POOL;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::types::ContentCacheBudget;
@@ -26,14 +24,12 @@ pub(crate) struct ScanSignals {
     /// Set by `post_scan_snapshot`, cleared by `PostScanSnapshot::drop`.
     /// DO NOT set or clear this manually — it is managed exclusively by the
     /// PostScanSnapshot lifecycle.
-    pub(crate) post_scan_indexing_active: Arc<AtomicBool>,
+    pub(crate) post_scan_active: Arc<AtomicBool>,
 }
 
 /// Which optional phases a scan should run.
 #[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct ScanConfig {
-    pub(crate) warmup: bool,
-    pub(crate) content_indexing: bool,
     pub(crate) watch: bool,
     pub(crate) auto_cache_budget: bool,
     pub(crate) install_watcher: bool,
@@ -51,7 +47,6 @@ pub(crate) struct ScanJob {
     shared_picker: SharedFilePicker,
     shared_frecency: SharedFrecency,
     base_path: PathBuf,
-    mode: FFFMode,
     signals: ScanSignals,
     config: ScanConfig,
     /// Walker-maintained counter backing `get_scan_progress` on the UI
@@ -69,24 +64,16 @@ impl ScanJob {
         let guard = shared_picker.read()?;
         let picker = guard.as_ref().ok_or(Error::FilePickerMissing)?;
 
-        if picker.is_scan_active()
-            || picker
-                .signals
-                .post_scan_indexing_active
-                .load(Ordering::Acquire)
-        {
+        if picker.is_scan_active() || picker.signals.post_scan_active.load(Ordering::Acquire) {
             return Ok(None);
         }
 
-        let mode = picker.mode();
         let signals = picker.scan_signals();
         let scanned_files_counter = picker.scanned_files_counter();
         let base_path = picker.base_path().to_path_buf();
         let trace_span = picker.trace_span();
 
         let new_scan_config = ScanConfig {
-            warmup: picker.has_mmap_cache(),
-            content_indexing: picker.has_content_indexing(),
             watch: picker.has_watcher(),
             auto_cache_budget: !picker.has_explicit_cache_budget(),
             install_watcher: false, // the watcher is independent of rescan, it is not restarting EVER
@@ -98,7 +85,6 @@ impl ScanJob {
         drop(guard); // just a sanity check
 
         Ok(Some(Self {
-            mode,
             signals,
             base_path,
             scanned_files_counter,
@@ -114,7 +100,6 @@ impl ScanJob {
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
         base_path: PathBuf,
-        mode: FFFMode,
         signals: ScanSignals,
         scanned_files_counter: Arc<AtomicUsize>,
         trace_span: tracing::Span,
@@ -124,7 +109,6 @@ impl ScanJob {
             shared_picker,
             shared_frecency,
             base_path,
-            mode,
             signals,
             scanned_files_counter,
             config,
@@ -134,12 +118,7 @@ impl ScanJob {
 
     /// Run the job on `BACKGROUND_THREAD_POOL`. Returns immediately.
     ///
-    /// Routed through the pool — and not a fresh `std::thread::spawn` — so the
-    /// orchestrator inherits rayon's QoS pin (USER_INITIATED). Without that
-    /// pin, an interactive nvim's USER_INTERACTIVE main thread spawns a child
-    /// at lower QoS, the walker's Zig worker pool inherits the demotion, and
-    /// the kernel drifts those workers onto E-cores. On chromium that turns a
-    /// ~800 ms walk into ~3 s.
+    /// Reuses the bounded background pool for the walk and classification.
     pub fn spawn(self) {
         self.signals.scanning.store(true, Ordering::Release);
         let span = self.trace_span.clone();
@@ -154,7 +133,6 @@ impl ScanJob {
             shared_picker,
             shared_frecency,
             base_path,
-            mode,
             signals,
             scanned_files_counter,
             config,
@@ -171,7 +149,6 @@ impl ScanJob {
             git_workdir.clone(),
             &scanned_files_counter,
             &shared_frecency,
-            mode,
             config.follow_symlinks,
         ) {
             Ok(sync) => sync,
@@ -210,19 +187,19 @@ impl ScanJob {
             git_status_worker.request_full_rescan(); // this runs anyway
         }
 
-        // BUG pinning: take the snapshot *before* the storing the scan=true, otherwise there is a tiny
-        // race window when there scanned is set to true, but `post_scan_indexing_active` flag is `false`
+        // Reserve classification before publishing scanning=false so readiness
+        // cannot observe a gap between walking and post-scan classification.
         let snapshot = if !signals.cancelled.load(Ordering::Acquire) {
             shared_picker.read().ok().and_then(|guard| {
                 guard
                     .as_ref()
-                    .and_then(|picker| unsafe { picker.post_scan_snapshot() })
+                    .and_then(|picker| picker.post_scan_snapshot())
             })
         } else {
             None
         };
 
-        signals.scanning.store(false, Ordering::Relaxed); // file are searchable
+        signals.scanning.store(false, Ordering::Release); // files are searchable
 
         // in case we do a rescan, we have to resubscribe a watcher to the new set of directories
         // all the already watched directories are not going to be resubscribed (this is internally deduped)
@@ -230,11 +207,11 @@ impl ScanJob {
             rescubscribe_watcher_post_scan(&shared_picker);
         }
 
-        // 3. Runs post scna in parallel with git status collection
+        // 3. Classify off-lock in parallel with git status collection.
         if !signals.cancelled.load(Ordering::Acquire)
             && let Some(snap) = snapshot.as_ref()
         {
-            Self::run_post_scan(&shared_picker, &signals, &config, snap);
+            Self::run_post_scan(&shared_picker, &signals, snap);
         }
 
         drop(snapshot); // SNAPSHOT SHOULD NOT BE USED AFTER THIS POINT
@@ -250,7 +227,6 @@ impl ScanJob {
                 git_workdir,
                 shared_picker.clone(),
                 shared_frecency.clone(),
-                mode,
                 config.enable_fs_root_scanning,
                 config.enable_home_dir_scanning,
                 git_status_worker,
@@ -293,69 +269,48 @@ impl ScanJob {
         }
     }
 
-    /// THIS IS VERY VERY IMPORTANT THAT ANYTHING INSIDE THIS FUNCTION TO NOT READ ANYTHING CLEARABLE OUTSIDE
-    /// this is a very silly off lock implementation that actually matters, and that's why it is crafted
-    /// to never read anything from the picker, it can only WRITE information using single instructions
-    ///
-    /// Things that are safe and immutable - file list, indexes of files, paths, and signals.
-    #[tracing::instrument(skip_all, fields(warmup = ?config.warmup, indexing = ?config.content_indexing))]
+    /// Copy bounded classifier inputs under a short read lock, do content IO
+    /// off-lock, then validate identity/revision under a short write lock.
+    /// Reserving the job before scanning=false preserves first-query timing.
+    #[tracing::instrument(skip_all)]
     fn run_post_scan(
         shared_picker: &SharedFilePicker,
         signals: &ScanSignals,
-        config: &ScanConfig,
-        unsafe_snapshot: &crate::file_picker::PostScanUnsafeSnapshot,
+        snapshot: &crate::file_picker::PostScanSnapshot,
     ) {
-        let Some(arena) = unsafe_snapshot
-            .arena // we are never touching overlays so this arena is always correct
-            .as_ref()
-            .map(|s| s.as_arena_ptr())
-        else {
-            tracing::error!("Failed to run post scan: arena is invalid");
-            return;
-        };
-
-        let files: &[crate::types::FileItem] = &unsafe_snapshot.files[..unsafe_snapshot.base_count];
         if signals.cancelled.load(Ordering::Acquire) {
             return;
         }
 
-        if config.content_indexing {
-            let indexable_count = unsafe_snapshot.indexable_count.min(files.len());
-            let (indexable_files, non_indexable_files) = files.split_at(indexable_count);
-            let index = build_bigram_index(indexable_files, &unsafe_snapshot.base_path, arena);
-
+        const BATCH_SIZE: usize = 64;
+        for start in (0..snapshot.base_count).step_by(BATCH_SIZE) {
+            if signals.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            let batch = shared_picker.read().ok().and_then(|guard| {
+                guard.as_ref().map(|picker| {
+                    picker.binary_batch(
+                        snapshot,
+                        start..(start + BATCH_SIZE).min(snapshot.base_count),
+                    )
+                })
+            });
+            let Some(batch) = batch else { return };
+            let classified: Vec<_> = batch
+                .into_iter()
+                .map(|task| task.run(&signals.cancelled))
+                .collect();
+            if signals.cancelled.load(Ordering::Acquire) {
+                return;
+            }
             if let Ok(mut guard) = shared_picker.write()
                 && let Some(picker) = guard.as_mut()
             {
-                picker.set_bigram_index(index);
+                for result in classified {
+                    picker.apply_classification(result);
+                }
             }
-            crate::index::release_thread_buffers();
-
-            // Bigram only sniffs files <= MAX_INDEXABLE_FILE_SIZE; large
-            // unknown-extension binaries slip past it and would otherwise be
-            // grep-able as text. Cheap header sniff catches those.
-            if !signals.cancelled.load(Ordering::Acquire) {
-                sniff_binary_for_non_indexable(
-                    non_indexable_files,
-                    &unsafe_snapshot.base_path,
-                    arena,
-                    &signals.cancelled,
-                );
-            }
-        } else {
-            // this potentially a long running as we are not parallelizing it but it's okay
-            sniff_binary_for_non_indexable(
-                files,
-                &unsafe_snapshot.base_path,
-                arena,
-                &signals.cancelled,
-            );
         }
-
-        // TODO Skipped as potentially unsafe - figure this out later
-        // if config.warmup && !signals.cancelled.load(Ordering::Acquire) {
-        //     warmup_mmaps(files, budget, &unsafe_snapshot.base_path, arena);
-        // }
     }
 }
 
@@ -373,7 +328,7 @@ impl<'a> ScanningGuard<'a> {
 
 impl Drop for ScanningGuard<'_> {
     fn drop(&mut self) {
-        self.signals.scanning.store(false, Ordering::Relaxed);
+        self.signals.scanning.store(false, Ordering::Release);
     }
 }
 

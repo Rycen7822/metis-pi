@@ -1,11 +1,9 @@
 use crate::constants::MAX_OVERFLOW_FILES;
 use crate::error::Error;
-use crate::file_picker::FFFMode;
 use crate::git_status_worker::GitStatusWorker;
 use crate::rescan_stats::RescanReason;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::sort_buffer::sort_with_buffer;
-use crate::watch::{RawWatchEvent, WatchEventKind};
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
 use notify::{Config, EventKind, EventKindMask, RecursiveMode};
@@ -19,8 +17,8 @@ use tracing::{Level, debug, error, info, warn};
 
 type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, NoCache>;
 
-/// Owns the file-system watcher and guarantees that all background threads
-/// are fully joined before `stop()` / `Drop` returns.
+/// Owns Linux directory subscriptions and signals non-blocking shutdown from
+/// `stop()` / `Drop`, including when the picker write lock is held.
 pub struct BackgroundWatcher {
     debouncer: Arc<Mutex<Option<Debouncer>>>,
     watch_tx: Option<mpsc::Sender<WatchTask>>,
@@ -48,16 +46,14 @@ impl BackgroundWatcher {
         git_workdir: Option<PathBuf>,
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
-        mode: FFFMode,
         enable_fs_root_scanning: bool,
         enable_home_dir_scanning: bool,
         git_status_worker: Arc<GitStatusWorker>,
         trace_span: tracing::Span,
     ) -> Result<Self, Error> {
         info!(
-            "Initializing background watcher for path: {}, mode: {:?}",
-            base_path.display(),
-            mode,
+            "Initializing background watcher for path: {}",
+            base_path.display()
         );
 
         // by default we do not want to allow users to search their FS root, this is very error prone
@@ -71,36 +67,20 @@ impl BackgroundWatcher {
             return Err(Error::FilesystemRoot(base_path));
         }
 
-        // macOS: always use a single recursive FSEvent stream.
-        // Per-dir NonRecursive watches create one FSEvent stream per dir.
-        // The per-process FSEvent cap is lower than expected in practice
-        // (4096 per process, but FFF usually is running within code editors),
-        // and each failed `watch()` after the cap blocks ~40 ms on kernel retry.
-        // Yes we pay for filtering events on handler phase but it is usable
-        //
-        // Windows doesn't seem to have a hard cap, but in practice non recursive watching
-        // does a way worse job and often looses events which is not an option for us.
-        //
-        // Linux keeps the per-dir NonRecursive strategy: inotify has no
-        // kernel-level watcher recursion, so we have to manually watch every single interested
-        // directory for watch events which is in practice stable and fast if system has enough
-        // spare watcher (configurable by the user, usually 100k - 1m)
-        let use_recursive = cfg!(any(target_os = "macos", target_os = "windows"));
-
+        // inotify is non-recursive: retain one subscription per indexed directory.
         let (watch_tx, watch_rx) = mpsc::channel::<WatchTask>();
         let watch_tx_for_debouncer = watch_tx.clone();
 
         let owner_weak_picker = shared_picker.weaken();
         let owner_git_workdir = git_workdir.clone();
         let owner_git_worker = Arc::clone(&git_status_worker);
+        let owner_frecency = shared_frecency.clone();
 
         let debouncer = Self::create_debouncer(
             base_path,
             git_workdir,
             shared_picker,
             shared_frecency,
-            mode,
-            use_recursive,
             watch_tx_for_debouncer,
             git_status_worker,
         )?;
@@ -108,9 +88,6 @@ impl BackgroundWatcher {
         info!("Background file watcher initialized successfully");
 
         let debouncer = Arc::new(Mutex::new(Some(debouncer)));
-        // Only the Linux per-dir-watch branch needs this clone; on other
-        // platforms the owner thread never touches the debouncer.
-        #[cfg(target_os = "linux")]
         let owner_debouncer = Arc::clone(&debouncer);
 
         let owner_span = trace_span.clone();
@@ -130,31 +107,26 @@ impl BackgroundWatcher {
                     };
 
                     // Register the watch BEFORE walking so files created mid-walk still handled
-                    #[cfg(target_os = "linux")]
                     if !watch_dirs_nonrecursive(&owner_debouncer, std::iter::once(dir.as_path())) {
                         break;
                     }
 
                     if is_new_dir {
-                        // need to call this on every platform to add subdirectories from the
-                        // new folders to the picker, but on linux we have to handle the subdirs
                         let subdirs = index_new_directory(
                             &dir,
                             &strong_picker,
+                            &owner_frecency,
                             &owner_git_workdir,
                             &owner_git_worker,
                         );
 
-                        // on linux we manually resubscribe for new inodes
-                        #[cfg(target_os = "linux")]
+                        // Subscribe to imported subdirectories as well.
                         if !watch_dirs_nonrecursive(
                             &owner_debouncer,
                             subdirs.iter().map(|p| p.as_path()),
                         ) {
                             break;
                         }
-
-                        drop(subdirs); // need it cause subdirs is unused on non-linux target'
                     }
 
                     drop(strong_picker);
@@ -177,8 +149,6 @@ impl BackgroundWatcher {
         git_workdir: Option<PathBuf>,
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
-        mode: FFFMode,
-        use_recursive: bool,
         watch_tx: mpsc::Sender<WatchTask>,
         git_status_worker: Arc<GitStatusWorker>,
     ) -> Result<Debouncer, Error> {
@@ -203,7 +173,6 @@ impl BackgroundWatcher {
                         };
 
                         let new_dirs = handle_debounced_events(
-                            mode,
                             events,
                             &base_path_for_handler,
                             &git_workdir_for_handler,
@@ -224,21 +193,12 @@ impl BackgroundWatcher {
                     }
                 }
             },
-            // There is an issue with recommended cache implementation on macos
-            // it keeps track of all the files added to the watcher which is not a problem
-            // for us because any rename to the file will anyway require the removing from the
-            // ordedred index and adding it back with the new name
+            // The picker owns file identities; do not duplicate them in a watcher cache.
             NoCache::new(),
             config,
         )?;
 
-        if use_recursive {
-            debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
-            info!(
-                "File watcher initialized with single recursive watch on {}",
-                base_path.display(),
-            );
-        } else {
+        {
             debouncer.watch(base_path.as_path(), RecursiveMode::NonRecursive)?;
 
             const MAX_CONSECUTIVE_WATCH_FAILURES: usize = 16;
@@ -326,7 +286,6 @@ impl Drop for BackgroundWatcher {
 
 #[tracing::instrument(name = "fs_events", skip(events, shared_picker, shared_frecency, git_status_worker), level = Level::DEBUG)]
 pub(crate) fn handle_debounced_events(
-    mode: FFFMode,
     events: Vec<DebouncedEvent>,
     base_path: &Path,
     git_workdir: &Option<PathBuf>,
@@ -352,14 +311,10 @@ pub(crate) fn handle_debounced_events(
     let mut affected_paths_count = 0usize;
     let mut explicit_renames: Vec<(PathBuf, PathBuf)> = Vec::new();
 
-    let watch_registry = shared_picker.watch_registry();
-    let need_events_propagation = watch_registry.is_active();
-
     let try_trigger_full_rescan = |reason: RescanReason| -> bool {
         match shared_picker.trigger_full_rescan_with_reason(shared_frecency, reason) {
             Ok(true) => {
                 warn!(%reason, "Triggering full rescan");
-                watch_registry.dispatch_rescan(base_path);
                 true
             }
             Ok(false) => false,
@@ -384,8 +339,8 @@ pub(crate) fn handle_debounced_events(
             continue;
         }
 
-        // When macOS FSEvents (or other backends) overflow their event buffer, the kernel
-        // drops individual events and emits a rescan flag telling us to re-scan the subtree
+        // Kernel event loss can require rebuilding the subtree rather than
+        // interpreting the partial event list as complete.
         if debounced_event.event.need_rescan() {
             let small_and_known = debounced_event.event.paths.len() < 16 // this should be usually one event
                 && debounced_event
@@ -450,15 +405,13 @@ pub(crate) fn handle_debounced_events(
             //
             // We cannot rely on `path.exists()` alone because:
             //   - A freshly created file might not be visible yet (race).
-            //   - macOS FSEvents uses Modify(Name(Any)) for both rename-in
-            //     and rename-out, so we must stat the path to disambiguate.
+            //   - A rename event can refer to either side of a move.
             //
             // We cannot rely on event kind alone because:
-            //   - Remove events are not always emitted (macOS often sends
-            //     Modify(Name(Any)) instead of Remove).
+            //   - Missing paths can arrive through a rename/modify event.
             let is_removal = matches!(debounced_event.event.kind, EventKind::Remove(_));
 
-            // Directory-level remove: both fsevents and inotify delivers a single
+            // Directory-level remove: inotify delivers a single
             // `Remove(Folder)` event for a whole directory tree (e.g.
             // after `git reset --hard` wipes a dir full of staged-but-
             // uncommitted files).
@@ -536,11 +489,6 @@ pub(crate) fn handle_debounced_events(
     let mut files_to_update_git_status = Vec::new();
     let mut index_update_rejected = false;
     let mut overflow_count = 0;
-    let mut removed_from_dirs = Vec::new();
-    // Destination path -> (kind, rename source). One entry per path, so a
-    // remove+add pair recognised as a rename collapses into a single event.
-    let mut watch_events: ahash::AHashMap<PathBuf, (WatchEventKind, Option<PathBuf>)> =
-        ahash::AHashMap::new();
     // Destination -> source for every rename recognised in this batch.
     let mut renames: ahash::AHashMap<PathBuf, PathBuf> = ahash::AHashMap::new();
 
@@ -577,11 +525,7 @@ pub(crate) fn handle_debounced_events(
         for (path, may_be_dir) in &paths_to_remove {
             let removed = picker.remove_file_by_path(path);
 
-            if removed {
-                if need_events_propagation {
-                    watch_events.insert(path.to_path_buf(), (WatchEventKind::Removed, None));
-                }
-            } else if *may_be_dir {
+            if !removed && *may_be_dir {
                 // Not an indexed file: likely a dir renamed out of the tree
                 // (no Remove(Folder) is emitted), expand it per indexed file.
                 dirs_to_remove.push(path.to_path_buf());
@@ -593,19 +537,7 @@ pub(crate) fn handle_debounced_events(
         dirs_to_remove.dedup();
         if !dirs_to_remove.is_empty() {
             let dirs = dirs_to_remove.iter().map(PathBuf::as_path);
-            if need_events_propagation {
-                picker.remove_all_files_in_dirs_with_callback(dirs, |path| {
-                    removed_from_dirs.push(path.to_path_buf());
-                })
-            } else {
-                picker.remove_all_files_in_dirs(dirs)
-            };
-        }
-
-        if need_events_propagation {
-            for path in removed_from_dirs.drain(..) {
-                watch_events.insert(path, (WatchEventKind::Removed, None));
-            }
+            picker.remove_all_files_in_dirs(dirs);
         }
 
         files_to_update_git_status.reserve(paths_to_add_or_modify.len());
@@ -618,35 +550,18 @@ pub(crate) fn handle_debounced_events(
                 break;
             }
 
-            let existed = need_events_propagation && picker.get_file_by_path(path).is_some();
-
             if picker.handle_create_or_modify(path).is_some() {
                 files_to_update_git_status.push(path.to_path_buf());
                 if renames.contains_key(*path) {
                     landed_renames.insert(path.to_path_buf());
-                }
-                if need_events_propagation {
-                    let event = match renames.get(*path) {
-                        Some(from) => (WatchEventKind::Renamed, Some(from.clone())),
-                        None if existed => (WatchEventKind::Modified, None),
-                        None => (WatchEventKind::Created, None),
-                    };
-
-                    watch_events.insert(path.to_path_buf(), event);
                 }
             } else {
                 index_update_rejected = true;
             }
         }
 
-        // A destination the picker rejected is not a rename: its source stays
-        // Removed and no history is carried. For the rest, the move is one event.
+        // Carry history only onto destinations accepted by the picker.
         renames.retain(|to, _| landed_renames.contains(to));
-        if need_events_propagation {
-            for from in renames.values() {
-                watch_events.remove(from);
-            }
-        }
 
         overflow_count = picker.get_overflow_files().len();
     }
@@ -656,7 +571,7 @@ pub(crate) fn handle_debounced_events(
         overflow_count, "File index changes applied",
     );
 
-    let rescan_started = if index_update_rejected || overflow_count > MAX_OVERFLOW_FILES {
+    if index_update_rejected || overflow_count > MAX_OVERFLOW_FILES {
         let reason = if index_update_rejected {
             RescanReason::IndexUpdateRejected
         } else {
@@ -664,26 +579,7 @@ pub(crate) fn handle_debounced_events(
         };
 
         info!(%reason, "Watcher faced limit of index overflow. Triggering rescan");
-        try_trigger_full_rescan(reason)
-    } else {
-        false
-    };
-
-    // When the rescan is throttled the incrementally applied changes are
-    // still the freshest state we have — propagate them to subscribers.
-    if !rescan_started && need_events_propagation {
-        watch_registry.dispatch(
-            base_path,
-            watch_events
-                .into_iter()
-                .map(|(path, (kind, from))| RawWatchEvent {
-                    path,
-                    kind,
-                    is_ignored: false,
-                    from,
-                })
-                .collect(),
-        );
+        try_trigger_full_rescan(reason);
     }
 
     // Carry the access history onto the new path. Copied, not moved: checking
@@ -725,7 +621,7 @@ pub(crate) fn handle_debounced_events(
     // Uses a 5-minute cooldown per file to prevent score inflation from rapid
     // burst edits (AI agents often edit the same file many times in minutes).
     // This runs after apply_changes so the picker write lock is released.
-    if mode.is_ai() && !paths_to_add_or_modify.is_empty() {
+    if !paths_to_add_or_modify.is_empty() {
         let mut tracked_count = 0usize;
         if let Ok(frecency_guard) = shared_frecency.read()
             && let Some(ref frecency) = *frecency_guard
@@ -783,6 +679,7 @@ pub(crate) fn handle_debounced_events(
 fn index_new_directory(
     dir: &Path,
     shared_picker: &SharedFilePicker,
+    shared_frecency: &SharedFrecency,
     git_workdir: &Option<PathBuf>,
     git_status_worker: &Arc<GitStatusWorker>,
 ) -> Vec<PathBuf> {
@@ -840,6 +737,7 @@ fn index_new_directory(
     }
 
     let mut indexed_files = Vec::with_capacity(files_to_add.len());
+    let mut index_update_rejected = false;
     {
         let Ok(mut guard) = shared_picker.write() else {
             return subdirs;
@@ -850,29 +748,44 @@ fn index_new_directory(
         };
 
         for path in files_to_add {
+            // Match the ordinary event path's admission check before pushing:
+            // StableVec asserts on exhaustion in debug builds. Existing paths
+            // can still be updated without consuming an overflow slot.
+            if picker.get_overflow_files().len() >= MAX_OVERFLOW_FILES
+                && picker.get_file_by_path(&path).is_none()
+            {
+                index_update_rejected = true;
+                break;
+            }
             if picker.handle_create_or_modify(&path).is_some() {
                 indexed_files.push(path);
+            } else {
+                index_update_rejected = true;
             }
         }
     }
     let added = indexed_files.len();
 
-    let watch_registry = shared_picker.watch_registry();
-    if watch_registry.is_active() {
-        let events = indexed_files
-            .iter()
-            .map(|path| RawWatchEvent {
-                path: path.clone(),
-                kind: WatchEventKind::Created,
-                is_ignored: false,
-                from: None,
-            })
-            .collect();
+    // Rescanning takes picker locks: never request it from inside the write
+    // guard above. Use the same admission/throttle mechanism as file events.
+    let rescan_started = if index_update_rejected {
+        let reason = RescanReason::IndexUpdateRejected;
+        match shared_picker.trigger_full_rescan_with_reason(shared_frecency, reason) {
+            Ok(true) => {
+                warn!(%reason, dir = %dir.display(), "New directory exceeded index capacity; triggering rescan");
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                error!(%reason, "Failed to trigger new-directory rescan: {:?}", e);
+                false
+            }
+        }
+    } else {
+        false
+    };
 
-        watch_registry.dispatch(&base_path, events);
-    }
-
-    if repo.is_some() {
+    if !rescan_started && repo.is_some() {
         git_status_worker.enqueue_paths(indexed_files);
     }
 
@@ -885,7 +798,6 @@ fn index_new_directory(
     subdirs
 }
 
-#[cfg(target_os = "linux")]
 fn watch_dirs_nonrecursive<'a>(
     debouncer: &Mutex<Option<Debouncer>>,
     dirs: impl Iterator<Item = &'a Path>,
@@ -1157,14 +1069,12 @@ fn pair_renames_by_identity(
 mod tests {
     use super::*;
     use crate::file_picker::{FilePicker, FilePickerOptions};
-    use crate::watch::{WatchEvent, WatchOptions};
     use notify::Event;
     use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind};
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     #[test]
-    fn replacement_batch_emits_one_modified_event() {
+    fn replacement_batch_keeps_one_current_index_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
         let path = base.join("file.txt");
@@ -1179,19 +1089,7 @@ mod tests {
         })
         .unwrap();
         picker.collect_files().unwrap();
-        shared_picker.rebase_watches(&base);
         *shared_picker.write().unwrap() = Some(picker);
-
-        let (sender, receiver) = mpsc::channel::<Vec<WatchEvent>>();
-        shared_picker
-            .watch_registry()
-            .subscribe(
-                &base,
-                "**",
-                WatchOptions::default(),
-                Box::new(move |_, events| sender.send(events.to_vec()).unwrap()),
-            )
-            .unwrap();
 
         std::fs::write(&path, "after").unwrap();
         let now = Instant::now();
@@ -1212,7 +1110,6 @@ mod tests {
         ];
 
         handle_debounced_events(
-            FFFMode::Neovim,
             events,
             &base,
             &None,
@@ -1221,10 +1118,13 @@ mod tests {
             &GitStatusWorker::new(),
         );
 
-        let received = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(received.len(), 1);
-        assert_eq!(received[0].path, path);
-        assert_eq!(received[0].kind, WatchEventKind::Modified);
+        let guard = shared_picker.read().unwrap();
+        let picker = guard.as_ref().unwrap();
+        assert_eq!(picker.live_file_count(), 1);
+        assert_eq!(picker.get_file_by_path(&path).unwrap().size, 5);
+        let found = picker.grep_pattern("after", &[], &Default::default());
+        assert_eq!(found.matches.len(), 1);
+        assert_eq!(found.matches[0].line_content, "after");
     }
 
     fn identity(size: u64, mtime: u64) -> FileIdentity {

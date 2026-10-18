@@ -166,8 +166,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           pageSize, beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS };
         let page = contentPage(cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
           pageSize, resumed?.progress);
-        // Fuzzy suggestions are optional; only unambiguous identifier tokens
-        // can cross the native fuzzy API's combined pattern/filter grammar.
+        // Fuzzy suggestions are optional; limit them to unambiguous identifiers,
+        // rather than treating phrases or punctuation as typo candidates.
         if (!page.result.items.length && !page.progress && !resumed && mode === "plain" && /^[\p{L}\p{N}_-]+$/u.test(pattern)) {
           const fuzzy = searchContent(lease.finder, pattern, query, { ...options,
             mode: "fuzzy", cursor: null, beforeContext: 0, afterContext: 0 });
@@ -288,5 +288,5 @@ function wildcardOnly(pattern: string): boolean {
 }
 function isWeakFind(result: SearchResult, pattern: string): boolean {
   const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
-  return result.items.length > 0 && fuzzy && (result.scores[0]?.total ?? 0) < Math.floor(pattern.length * 6);
+  return result.items.length > 0 && fuzzy && result.topScore < Math.floor(pattern.length * 6);
 }
