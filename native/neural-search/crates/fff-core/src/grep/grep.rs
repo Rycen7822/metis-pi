@@ -430,7 +430,7 @@ where
         let chunk_offset = files_consumed;
 
         // Unless enforced, the budget stays dormant until something matched.
-        let budget = time_budget.filter(|_| options.enforce_time_budget || all_matches.len() > 1);
+        let budget = time_budget.filter(|_| options.enforce_time_budget || !all_matches.is_empty());
 
         let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
             .par_iter()

@@ -456,44 +456,12 @@ fn score_dirs_by_frecency<'a>(
 
 /// Sort dir results by total score (descending) and apply pagination.
 fn sort_and_paginate_dirs<'a>(
-    mut results: Vec<(&'a DirItem, Score)>,
+    results: Vec<(&'a DirItem, Score)>,
     context: &ScoringContext,
 ) -> (Vec<&'a DirItem>, Vec<Score>, usize) {
-    let total_matched = results.len();
-    if total_matched == 0 {
-        return (vec![], vec![], 0);
-    }
-
-    let offset = context.pagination.offset;
-    let limit = if context.pagination.limit > 0 {
-        context.pagination.limit
-    } else {
-        total_matched
-    };
-
-    if offset >= total_matched {
-        return (vec![], vec![], total_matched);
-    }
-
-    let items_needed = offset.saturating_add(limit).min(total_matched);
-    let use_partial_sort = items_needed < total_matched / 2 && total_matched > 100;
-
-    if use_partial_sort {
-        results.select_nth_unstable_by(items_needed - 1, |a, b| b.1.total.cmp(&a.1.total));
-        results.truncate(items_needed);
-    }
-
-    sort_with_buffer(&mut results, |a, b| b.1.total.cmp(&a.1.total));
-
-    if results.len() > limit {
-        let page_end = std::cmp::min(offset + limit, results.len());
-        let page_size = page_end - offset;
-        results.drain(0..offset);
-        results.truncate(page_size);
-    }
-
-    let (items, scores): (Vec<&DirItem>, Vec<Score>) = results.into_iter().unzip();
-    (items, scores, total_matched)
+    sort_ranked_page(results, &context.pagination, |a, b| {
+        b.1.total.cmp(&a.1.total)
+    })
 }
 
 fn match_and_score_in_arena<'a>(
@@ -903,66 +871,43 @@ fn calculate_current_file_penalty(
 /// The UI layer handles rendering order based on prompt position.
 #[tracing::instrument(skip_all, level = tracing::Level::DEBUG)]
 fn sort_and_paginate<'a>(
-    mut results: Vec<(&'a FileItem, Score)>,
+    results: Vec<(&'a FileItem, Score)>,
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    let total_matched = results.len();
-
-    if total_matched == 0 {
-        return (vec![], vec![], 0);
-    }
-
-    let offset = context.pagination.offset;
-    let limit = if context.pagination.limit > 0 {
-        context.pagination.limit
-    } else {
-        total_matched
-    };
-
-    // Check if offset is out of bounds
-    if offset >= total_matched {
-        tracing::warn!(
-            offset = offset,
-            total_matched = total_matched,
-            "Pagination: offset >= total_matched, returning empty"
-        );
-
-        return (vec![], vec![], total_matched);
-    }
-
-    let items_needed = offset.saturating_add(limit).min(total_matched);
-    // Use partial sort if we need less than half the results and dataset is large
-    let use_partial_sort = items_needed < total_matched / 2 && total_matched > 100;
-    // Always sort in descending order (best scores first)
-    if use_partial_sort {
-        // Partition at position (items_needed - 1) with descending comparator
-        // This puts the highest N needed items at the front
-        results.select_nth_unstable_by(items_needed - 1, |a, b| {
-            b.1.total
-                .cmp(&a.1.total)
-                .then_with(|| b.0.modified.cmp(&a.0.modified))
-        });
-        results.truncate(items_needed);
-    }
-
-    // select nth does not sort the results, we have to sort accordingly anyway
-    sort_with_buffer(&mut results, |a, b| {
+    sort_ranked_page(results, &context.pagination, |a, b| {
         b.1.total
             .cmp(&a.1.total)
             .then_with(|| b.0.modified.cmp(&a.0.modified))
-    });
+    })
+}
 
-    // in the best scenario truncation happened in the select_nth step
-    if results.len() > limit {
-        let page_end = std::cmp::min(offset + limit, results.len());
-        let page_size = page_end - offset;
-
-        results.drain(0..offset);
-        results.truncate(page_size);
+// File and directory ranking retain their distinct comparators, but share the
+// partial-sort/window invariant: offset always applies, even on a short page.
+fn sort_ranked_page<'a, T>(
+    mut results: Vec<(&'a T, Score)>,
+    pagination: &crate::types::PaginationArgs,
+    mut compare: impl FnMut(&(&T, Score), &(&T, Score)) -> std::cmp::Ordering,
+) -> (Vec<&'a T>, Vec<Score>, usize) {
+    let total = results.len();
+    let offset = pagination.offset;
+    if offset >= total {
+        return (vec![], vec![], total);
     }
-
-    let (items, scores): (Vec<&FileItem>, Vec<Score>) = results.into_iter().unzip();
-    (items, scores, total_matched)
+    let limit = if pagination.limit == 0 {
+        total
+    } else {
+        pagination.limit
+    };
+    let end = offset.saturating_add(limit).min(total);
+    if end < total / 2 && total > 100 {
+        results.select_nth_unstable_by(end - 1, &mut compare);
+        results.truncate(end);
+    }
+    sort_with_buffer(&mut results, compare);
+    results.truncate(end);
+    results.drain(..offset);
+    let (items, scores) = results.into_iter().unzip();
+    (items, scores, total)
 }
 
 #[cfg(test)]

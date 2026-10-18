@@ -108,11 +108,15 @@ pub(crate) fn multi_grep_search<'a>(
     base_path: &Path,
     arena: crate::simd_path::ArenaPtr,
     overflow_arena: crate::simd_path::ArenaPtr,
-) -> GrepResult<'a> {
+) -> Result<GrepResult<'a>, aho_corasick::BuildError> {
     let total_files = files.live_count();
-
-    if patterns.is_empty() || patterns.iter().all(|p| p.is_empty()) {
-        return GrepResult::empty(total_files, total_files);
+    let patterns: Vec<_> = patterns
+        .iter()
+        .copied()
+        .filter(|pattern| !pattern.is_empty())
+        .collect();
+    if patterns.is_empty() {
+        return Ok(GrepResult::empty(total_files, total_files));
     }
 
     // Constraints are separate from patterns, so a miss must not broaden the search.
@@ -120,7 +124,7 @@ pub(crate) fn multi_grep_search<'a>(
         prefilter_files(files, constraints, options, arena, overflow_arena);
 
     if files_to_search.is_empty() {
-        return GrepResult::empty(total_files, filtered_file_count);
+        return Ok(GrepResult::empty(total_files, filtered_file_count));
     }
 
     let casing = options.effective_casing();
@@ -128,8 +132,7 @@ pub(crate) fn multi_grep_search<'a>(
 
     let ac = aho_corasick::AhoCorasickBuilder::new()
         .ascii_case_insensitive(case_insensitive)
-        .build(patterns)
-        .expect("Aho-Corasick build should not fail for literal patterns");
+        .build(&patterns)?;
 
     let searcher = {
         let mut b = SearcherBuilder::new();
@@ -139,7 +142,7 @@ pub(crate) fn multi_grep_search<'a>(
     .build();
 
     let ac_matcher = AhoCorasickMatcher { ac: &ac };
-    perform_grep(
+    Ok(perform_grep(
         &files_to_search,
         options,
         &GrepContext {
@@ -169,5 +172,5 @@ pub(crate) fn multi_grep_search<'a>(
 
             sink.state.matches
         },
-    )
+    ))
 }

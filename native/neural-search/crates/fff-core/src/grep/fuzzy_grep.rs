@@ -59,8 +59,7 @@ pub(super) fn fuzzy_grep_search<'a>(
     // Minimum score threshold: 50% of a perfect contiguous match.
     // With default scoring (match_score=12, matching_case_bonus=4 = 16/char),
     // a transposition costs ~5 from a gap, keeping the score well above 50%
-    let perfect_score = (grep_text.len() as u16) * 16;
-    let min_score = (perfect_score * 50) / 100;
+    let min_score = grep_text.len().saturating_mul(8).min(u16::MAX as usize) as u16;
 
     // Target identifiers are often longer than the query due to delimiters
     // (e.g. query "flvencodepicture" -> "ff_flv_encode_picture_header" from ffmpeg)

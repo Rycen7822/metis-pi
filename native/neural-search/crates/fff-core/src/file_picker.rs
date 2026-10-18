@@ -859,8 +859,8 @@ impl FilePicker {
         })
     }
 
-    /// Create a picker, place it into the shared handle, and spawn background
-    /// indexing + file-system watcgenerate_trace_id the default entry point.
+    /// Publish a picker with a reserved scan, then start background indexing
+    /// and filesystem monitoring. This is the default entry point.
     pub fn new_with_shared_state(
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
@@ -884,24 +884,10 @@ impl FilePicker {
         let path = picker.base_path.clone();
         let trace_span = picker.trace_span.clone();
 
-        // Pre-arm `scanning` BEFORE publishing the new picker. `ScanJob::spawn`
-        // also sets it, but that runs after this function returns; consumers
-        // (e.g. lua `wait_for_initial_scan` after `restart_index_in_path`)
-        // that grab the signal Arc between publish and spawn would otherwise
-        // observe scanning=false and skip the wait, racing the walker. The
-        // race is wide on Windows CI where notify is slow.
-        signals
-            .scanning
-            .store(true, std::sync::atomic::Ordering::Release);
-
-        {
-            let mut guard = shared_picker.write()?;
-            *guard = Some(picker);
-            // dropping old picker flips its `cancelled` flag → bg threads exit cleanly
-        }
-
-        ScanJob::new_initial(
-            shared_picker,
+        // Construct the owning reservation before publication, so a waiter
+        // cannot observe an idle picker between publication and scheduling.
+        let job = ScanJob::new_initial(
+            shared_picker.clone(),
             shared_frecency,
             path,
             signals,
@@ -915,8 +901,13 @@ impl FilePicker {
                 enable_fs_root_scanning,
                 enable_home_dir_scanning,
             },
-        )
-        .spawn();
+        );
+        {
+            let mut guard = shared_picker.write()?;
+            *guard = Some(picker);
+            // Dropping the old picker cancels its background work.
+        }
+        job.spawn();
 
         Ok(())
     }
@@ -1327,13 +1318,13 @@ impl FilePicker {
         })
     }
 
-    /// Multi-pattern grep search across indexed files.
+    /// Multi-pattern grep search, reporting automaton construction failures.
     pub fn multi_grep(
         &self,
         patterns: &[&str],
         constraints: &[fff_query_parser::Constraint<'_>],
         options: &GrepSearchOptions,
-    ) -> GrepResult<'_> {
+    ) -> Result<GrepResult<'_>, aho_corasick::BuildError> {
         let arena = self.arena_base_ptr();
         let overflow_arena = self.sync_data.arena_overflow_ptr();
         let cancel = options

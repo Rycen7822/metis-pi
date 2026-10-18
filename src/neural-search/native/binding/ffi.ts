@@ -96,8 +96,8 @@ export function ffiCreate(options: InitOptions): Result<NativeHandle> {
   });
 }
 export function ffiDestroy(handle: NativeHandle): void { invoke("destroy", [DataType.External], [handle], DataType.Void); }
-export function ffiSearch(handle: NativeHandle, query: string, pageIndex: number, pageSize: number): Result<SearchResult> {
-  return result("files", [DataType.External, DataType.String, DataType.U32, DataType.U32], [handle, query, pageIndex, pageSize], view => {
+export function ffiSearch(handle: NativeHandle, query: string, offset: number, pageSize: number): Result<SearchResult> {
+  return result("files", [DataType.External, DataType.String, DataType.U32, DataType.U32], [handle, query, offset, pageSize], view => {
     const raw = readStruct(view.handle, FILES);
     const items: FileItem[] = [];
     for (let index = 0; index < raw.count; index++) items.push(file(element("get_file", view.handle, index, FILE)));

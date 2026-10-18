@@ -165,11 +165,13 @@ fn test_multi_grep_search() {
         abort_signal: None,
     };
     // Test with 3 patterns
-    let result = picker.multi_grep(
-        &["GrepMode", "GrepMatch", "PlainTextMatcher"],
-        &[],
-        &options,
-    );
+    let result = picker
+        .multi_grep(
+            &["GrepMode", "GrepMatch", "PlainTextMatcher"],
+            &[],
+            &options,
+        )
+        .unwrap();
 
     assert!(
         result.matches.len() >= 3,
@@ -197,7 +199,9 @@ fn test_multi_grep_search() {
     assert_eq!(result.files.len(), 2, "Should match exactly 2 files");
 
     // Test with single pattern
-    let result2 = picker.multi_grep(&["PlainTextMatcher"], &[], &options);
+    let result2 = picker
+        .multi_grep(&["PlainTextMatcher"], &[], &options)
+        .unwrap();
     assert_eq!(
         result2.matches.len(),
         1,
@@ -205,7 +209,7 @@ fn test_multi_grep_search() {
     );
 
     // Test with empty patterns
-    let result3 = picker.multi_grep(&[], &[], &options);
+    let result3 = picker.multi_grep(&[], &[], &options).unwrap();
     assert_eq!(
         result3.matches.len(),
         0,

@@ -237,7 +237,21 @@ impl FrecencyTracker {
 
     pub fn track_access(&self, path: &Path) -> Result<()> {
         let key_hash = Self::path_to_hash_bytes(path)?;
-        let mut accesses = self.get_accesses(path)?.unwrap_or_default();
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|source| Error::DbStartWriteTxn {
+                db: Self::LABEL,
+                source,
+            })?;
+        let mut accesses = self
+            .db
+            .get(&wtxn, &key_hash)
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?
+            .unwrap_or_default();
 
         let now = self.get_now();
         let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
@@ -254,14 +268,6 @@ impl FrecencyTracker {
 
         accesses.push_back(now);
         tracing::debug!(?path, accesses = accesses.len(), "Tracking access");
-
-        let mut wtxn = self
-            .env
-            .write_txn()
-            .map_err(|source| Error::DbStartWriteTxn {
-                db: Self::LABEL,
-                source,
-            })?;
         if let Err(e) = self.db.put(&mut wtxn, &key_hash, &accesses) {
             if is_map_full(&e) {
                 self.health.mark_unhealthy("MDB_MAP_FULL on put");
@@ -299,12 +305,33 @@ impl FrecencyTracker {
             return Ok(false);
         }
 
-        let Some(source) = self.get_accesses(from)?.filter(|a| !a.is_empty()) else {
+        let source_key = Self::path_to_hash_bytes(from)?;
+        let target_key = Self::path_to_hash_bytes(to)?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|source| Error::DbStartWriteTxn {
+                db: Self::LABEL,
+                source,
+            })?;
+        let source = self
+            .db
+            .get(&wtxn, &source_key)
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
+        let Some(source) = source.filter(|accesses| !accesses.is_empty()) else {
             return Ok(false);
         };
-
-        let target_key = Self::path_to_hash_bytes(to)?;
-        if self.get_accesses(to)?.as_ref() == Some(&source) {
+        let target = self
+            .db
+            .get(&wtxn, &target_key)
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
+        if target.as_ref() == Some(&source) {
             return Ok(false);
         }
 
@@ -315,13 +342,6 @@ impl FrecencyTracker {
             "Copying frecency history"
         );
 
-        let mut wtxn = self
-            .env
-            .write_txn()
-            .map_err(|source| Error::DbStartWriteTxn {
-                db: Self::LABEL,
-                source,
-            })?;
         if let Err(e) = self.db.put(&mut wtxn, &target_key, &source) {
             if is_map_full(&e) {
                 self.health.mark_unhealthy("MDB_MAP_FULL");

@@ -40,8 +40,8 @@ pub(crate) struct ScanConfig {
 
 /// A fully-configured scan job ready to run on a background thread.
 ///
-/// Build with [`ScanJob::from_picker`] (reads all state from the
-/// current `FilePicker`) or [`ScanJob::initial`] (for the bootstrap
+/// Build with [`ScanJob::new_rescan`] (reads all state from the
+/// current `FilePicker`) or [`ScanJob::new_initial`] (for the bootstrap
 /// scan, before the picker is published to `SharedPicker`).
 pub(crate) struct ScanJob {
     shared_picker: SharedFilePicker,
@@ -49,6 +49,8 @@ pub(crate) struct ScanJob {
     base_path: PathBuf,
     signals: ScanSignals,
     config: ScanConfig,
+    /// Owns the reservation from admission through all scan phases.
+    scanning: ScanningGuard,
     /// Walker-maintained counter backing `get_scan_progress` on the UI
     /// side. Reset to 0 at scan start, incremented per-file by the
     /// walker. Shared `Arc` so the UI polls the same atomic.
@@ -61,14 +63,19 @@ impl ScanJob {
         shared_picker: &SharedFilePicker,
         shared_frecency: &SharedFrecency,
     ) -> Result<Option<Self>, Error> {
-        let guard = shared_picker.read()?;
+        // Admission and completion use the same lock: a busy request is queued
+        // before the current job can drain pending work and release its slot.
+        let guard = shared_picker.write()?;
         let picker = guard.as_ref().ok_or(Error::FilePickerMissing)?;
-
-        if picker.is_scan_active() || picker.signals.post_scan_active.load(Ordering::Acquire) {
+        let signals = picker.scan_signals();
+        if signals.cancelled.load(Ordering::Acquire) {
             return Ok(None);
         }
-
-        let signals = picker.scan_signals();
+        if picker.is_scan_active() || signals.post_scan_active.load(Ordering::Acquire) {
+            signals.rescan_pending.store(true, Ordering::Release);
+            return Ok(None);
+        }
+        let scanning = ScanningGuard::new(&signals);
         let scanned_files_counter = picker.scanned_files_counter();
         let base_path = picker.base_path().to_path_buf();
         let trace_span = picker.trace_span();
@@ -85,6 +92,7 @@ impl ScanJob {
         drop(guard); // just a sanity check
 
         Ok(Some(Self {
+            scanning,
             signals,
             base_path,
             scanned_files_counter,
@@ -106,6 +114,7 @@ impl ScanJob {
         config: ScanConfig,
     ) -> Self {
         Self {
+            scanning: ScanningGuard::new(&signals),
             shared_picker,
             shared_frecency,
             base_path,
@@ -120,7 +129,6 @@ impl ScanJob {
     ///
     /// Reuses the bounded background pool for the walk and classification.
     pub fn spawn(self) {
-        self.signals.scanning.store(true, Ordering::Release);
         let span = self.trace_span.clone();
         BACKGROUND_THREAD_POOL.spawn(move || {
             let _g = span.enter();
@@ -137,9 +145,8 @@ impl ScanJob {
             scanned_files_counter,
             config,
             trace_span: _,
+            scanning,
         } = self;
-
-        let _scanning = ScanningGuard::new(&signals);
         scanned_files_counter.store(0, Ordering::Relaxed);
 
         // 1. Walk the file system and collect the list of files
@@ -187,8 +194,8 @@ impl ScanJob {
             git_status_worker.request_full_rescan(); // this runs anyway
         }
 
-        // Reserve classification before publishing scanning=false so readiness
-        // cannot observe a gap between walking and post-scan classification.
+        // The scan reservation stays active through classification and watcher
+        // installation; no second job may publish a competing snapshot.
         let snapshot = if !signals.cancelled.load(Ordering::Acquire) {
             shared_picker.read().ok().and_then(|guard| {
                 guard
@@ -198,8 +205,6 @@ impl ScanJob {
         } else {
             None
         };
-
-        signals.scanning.store(false, Ordering::Release); // files are searchable
 
         // in case we do a rescan, we have to resubscribe a watcher to the new set of directories
         // all the already watched directories are not going to be resubscribed (this is internally deduped)
@@ -246,22 +251,22 @@ impl ScanJob {
             };
         }
 
-        // 6. Drain any rescan that arrived while we were busy.
-        // if user initiated a new rescan we had no way to cancel current post scan, so do it again
-        if !signals.cancelled.load(Ordering::Acquire)
-            && signals.rescan_pending.swap(false, Ordering::AcqRel)
-        {
+        // Release our slot before admitting follow-up work. Keeping the pending
+        // drain under the admission lock also prevents a late request being lost.
+        let pending = {
+            let _guard = shared_picker.write();
+            drop(scanning);
+            signals.rescan_pending.swap(false, Ordering::AcqRel)
+        };
+        if !signals.cancelled.load(Ordering::Acquire) && pending {
             match Self::new_rescan(&shared_picker, &shared_frecency) {
                 Ok(Some(follow_up)) => {
                     info!("Rescheduling deferred rescan after current scan finished");
                     follow_up.spawn();
                 }
-                Ok(None) => {
-                    // this should be practically impossible because we do not have any
-                    // queue, but if somehow a new rescan was triggered JUST IN THIS MOMENT
-                    // just ignore it because the ongoing one is fresh enough
-                    tracing::warn!("Post scan was re-triggered, ignoring");
-                }
+                // Another admission won the slot; new_rescan has queued this
+                // request behind it under the same lock, so it is not lost.
+                Ok(None) => {}
                 Err(e) => {
                     error!(?e, "Failed to reschedule deferred rescan");
                 }
@@ -271,7 +276,7 @@ impl ScanJob {
 
     /// Copy bounded classifier inputs under a short read lock, do content IO
     /// off-lock, then validate identity/revision under a short write lock.
-    /// Reserving the job before scanning=false preserves first-query timing.
+    /// The job reservation keeps readiness false through classification.
     #[tracing::instrument(skip_all)]
     fn run_post_scan(
         shared_picker: &SharedFilePicker,
@@ -314,21 +319,19 @@ impl ScanJob {
     }
 }
 
-// Ensures early returns clear the scanning signal.
-struct ScanningGuard<'a> {
-    signals: &'a ScanSignals,
-}
+// Queued, failed, cancelled and completed jobs all release the same reservation.
+struct ScanningGuard(Arc<AtomicBool>);
 
-impl<'a> ScanningGuard<'a> {
-    fn new(signals: &'a ScanSignals) -> Self {
-        signals.scanning.store(true, Ordering::Relaxed);
-        Self { signals }
+impl ScanningGuard {
+    fn new(signals: &ScanSignals) -> Self {
+        signals.scanning.store(true, Ordering::Release);
+        Self(Arc::clone(&signals.scanning))
     }
 }
 
-impl Drop for ScanningGuard<'_> {
+impl Drop for ScanningGuard {
     fn drop(&mut self) {
-        self.signals.scanning.store(false, Ordering::Release);
+        self.0.store(false, Ordering::Release);
     }
 }
 

@@ -10,7 +10,8 @@ export interface InitOptions {
   enableHomeDirScanning?: boolean;
   followSymlinks?: boolean;
 }
-export interface SearchOptions { pageIndex?: number; pageSize?: number; }
+/** offset is a zero-based item offset, never a page number. */
+export interface SearchOptions { offset?: number; pageSize?: number; }
 export interface FileItem { relativePath: string; gitStatus: string; totalFrecencyScore: number; }
 export interface SearchResult {
   items: FileItem[];

@@ -43,7 +43,7 @@ uint32_t metis_search_abi_version(void);
 MetisResult *metis_search_create(const MetisCreateOptions *options);
 void *metis_search_take_instance(MetisResult *create_result);
 void metis_search_destroy(void *handle);
-MetisResult *metis_search_files(void *handle, const char *query, uint32_t page_index, uint32_t page_size);
+MetisResult *metis_search_files(void *handle, const char *query, uint32_t item_offset, uint32_t page_size);
 MetisResult *metis_search_mixed(void *handle, const char *query, uint32_t page_size);
 /* Pattern bytes are independent from the filter grammar. mode: plain=0,
  * regex=1, fuzzy=2. page_limit is a soft whole-file limit, not a row cursor.

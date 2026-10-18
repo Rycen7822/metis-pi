@@ -20,7 +20,7 @@ export class FileFinder implements FileFinderApi {
   }
   fileSearch(query: string, options?: SearchOptions): Result<SearchResult> {
     const guard = this.alive();
-    return guard.ok ? ffiSearch(guard.value, query, options?.pageIndex ?? 0, options?.pageSize ?? 0) : guard;
+    return guard.ok ? ffiSearch(guard.value, query, options?.offset ?? 0, options?.pageSize ?? 0) : guard;
   }
   mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult> {
     const guard = this.alive();
@@ -49,11 +49,13 @@ export class FileFinder implements FileFinderApi {
     const guard = this.alive();
     if (!guard.ok) return guard;
     const deadline = Date.now() + timeoutMs;
-    while (this.isScanning()) {
+    while (true) {
+      const progress = this.getScanProgress();
+      if (!progress.ok) return progress;
+      if (progress.value.isReady) return { ok: true, value: true };
       if (Date.now() >= deadline) return { ok: true, value: false };
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    return this.handle === null ? err("FileFinder instance was destroyed during scan.") : { ok: true, value: true };
   }
   healthCheck(testPath = ""): Result<HealthCheck> {
     const guard = this.alive();

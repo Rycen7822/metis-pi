@@ -75,7 +75,7 @@ impl LmdbStore for QueryTracker {
     const LABEL: &'static str = "query";
     const MAP_SIZE: usize = 10 * 1024 * 1024;
     const MAX_DBS: u32 = 16;
-    const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+    const SIZE_CAP_BYTES: u64 = Self::MAP_SIZE as u64;
     fn shared_env(&self) -> &SharedEnv {
         &self.env
     }

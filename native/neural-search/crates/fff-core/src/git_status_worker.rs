@@ -45,7 +45,10 @@ impl GitStatusWorker {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            Self::spawn_consumer(Arc::clone(self), weak_picker, frecency);
+            if let Err(error) = Self::spawn_consumer(Arc::clone(self), weak_picker, frecency) {
+                self.consumer_spawned.store(false, Ordering::Release);
+                tracing::error!(?error, "Failed to spawn git status worker");
+            }
         }
     }
 
@@ -92,8 +95,8 @@ impl GitStatusWorker {
         mailbox: Arc<GitStatusWorker>,
         weak_picker: WeakFilePicker,
         frecency: SharedFrecency,
-    ) {
-        let _ = std::thread::Builder::new()
+    ) -> std::io::Result<()> {
+        std::thread::Builder::new()
             .name("fff-git-status".into())
             .spawn(move || {
                 while let Some(work) = mailbox.wait_and_take() {
@@ -115,6 +118,6 @@ impl GitStatusWorker {
 
                 tracing::info!("git-status worker stopped");
             })
-            .inspect_err(|err| tracing::error!(?err, "Failed to spawn git status worker"));
+            .map(|_| ())
     }
 }

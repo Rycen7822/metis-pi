@@ -54,6 +54,11 @@ unsafe fn optional_text<'a>(value: *const c_char) -> Option<&'a str> {
         .ok()
         .filter(|value| !value.is_empty())
 }
+// No engine panic may unwind into Node/Bun through a non-unwinding C call.
+fn guarded(action: impl FnOnce() -> *mut Envelope) -> *mut Envelope {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(action))
+        .unwrap_or_else(|_| Envelope::error("Neural Search operation panicked"))
+}
 unsafe fn with_picker(
     handle: *mut c_void,
     action: impl FnOnce(&Instance, &FilePicker) -> *mut Envelope,
@@ -66,7 +71,7 @@ unsafe fn with_picker(
         Err(error) => return Envelope::error(&error.to_string()),
     };
     match guard.as_ref() {
-        Some(picker) => action(instance, picker),
+        Some(picker) => guarded(|| action(instance, picker)),
         None => Envelope::error("Neural Search instance is closed"),
     }
 }
@@ -90,53 +95,57 @@ pub extern "C" fn metis_search_abi_version() -> u32 {
 /// All pointer fields must be live UTF-8 C strings for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn metis_search_create(options: *const CreateOptions) -> *mut Envelope {
-    // Read only the common version word until the ABI has been checked.
-    if options.is_null() || unsafe { options.cast::<u32>().read() } != ABI_VERSION {
-        return Envelope::error("Neural Search ABI mismatch; reinstall the package and restart Pi");
-    }
-    let options = unsafe { &*options };
-    let base_path = match unsafe { text(options.base_path) } {
-        Ok(path) if !path.is_empty() => path.to_owned(),
-        _ => return Envelope::error("Base path is empty or invalid UTF-8"),
-    };
-    let picker = SharedFilePicker::default();
-    let frecency = SharedFrecency::default();
-    let query_tracker = SharedQueryTracker::default();
-    if let Some(path) = unsafe { optional_text(options.frecency_db_path) } {
-        match FrecencyTracker::open(path).and_then(|tracker| frecency.init(tracker)) {
-            Ok(()) => {}
-            Err(error) => {
-                return Envelope::error(&format!("Failed to open frecency database: {error}"));
+    guarded(|| {
+        // Read only the common version word until the ABI has been checked.
+        if options.is_null() || unsafe { options.cast::<u32>().read() } != ABI_VERSION {
+            return Envelope::error(
+                "Neural Search ABI mismatch; reinstall the package and restart Pi",
+            );
+        }
+        let options = unsafe { &*options };
+        let base_path = match unsafe { text(options.base_path) } {
+            Ok(path) if !path.is_empty() => path.to_owned(),
+            _ => return Envelope::error("Base path is empty or invalid UTF-8"),
+        };
+        let picker = SharedFilePicker::default();
+        let frecency = SharedFrecency::default();
+        let query_tracker = SharedQueryTracker::default();
+        if let Some(path) = unsafe { optional_text(options.frecency_db_path) } {
+            match FrecencyTracker::open(path).and_then(|tracker| frecency.init(tracker)) {
+                Ok(()) => {}
+                Err(error) => {
+                    return Envelope::error(&format!("Failed to open frecency database: {error}"));
+                }
             }
         }
-    }
-    if let Some(path) = unsafe { optional_text(options.history_db_path) } {
-        match QueryTracker::open(path).and_then(|tracker| query_tracker.init(tracker)) {
-            Ok(()) => {}
-            Err(error) => {
-                return Envelope::error(&format!("Failed to open history database: {error}"));
+        if let Some(path) = unsafe { optional_text(options.history_db_path) } {
+            match QueryTracker::open(path).and_then(|tracker| query_tracker.init(tracker)) {
+                Ok(()) => {}
+                Err(error) => {
+                    return Envelope::error(&format!("Failed to open history database: {error}"));
+                }
             }
         }
-    }
-    if let Err(error) = FilePicker::new_with_shared_state(
-        picker.clone(),
-        frecency.clone(),
-        fff::FilePickerOptions {
-            base_path,
-            watch: true,
-            cache_budget: fff::ContentCacheBudget::from_overrides(0, 0, 0),
-            follow_symlinks: options.follow_symlinks,
-            enable_fs_root_scanning: options.enable_fs_root_scanning,
-            enable_home_dir_scanning: options.enable_home_dir_scanning,
-            git_recency: Default::default(),
-        },
-    ) {
-        return Envelope::error(&error.to_string());
-    }
-    Envelope::boxed(Instance {
-        picker,
-        frecency,
-        query_tracker,
+        if let Err(error) = FilePicker::new_with_shared_state(
+            picker.clone(),
+            frecency.clone(),
+            fff::FilePickerOptions {
+                base_path,
+                watch: true,
+                cache_budget: fff::ContentCacheBudget::from_overrides(0, 0, 0),
+                follow_symlinks: options.follow_symlinks,
+                enable_fs_root_scanning: options.enable_fs_root_scanning,
+                enable_home_dir_scanning: options.enable_home_dir_scanning,
+                git_recency: Default::default(),
+            },
+        ) {
+            return Envelope::error(&error.to_string());
+        }
+        Envelope::boxed(Instance {
+            picker,
+            frecency,
+            query_tracker,
+        })
     })
 }
 
@@ -159,7 +168,7 @@ pub unsafe extern "C" fn metis_search_destroy(handle: *mut c_void) {
 pub unsafe extern "C" fn metis_search_files(
     handle: *mut c_void,
     query: *const c_char,
-    page_index: u32,
+    item_offset: u32,
     page_size: u32,
 ) -> *mut Envelope {
     let query = match unsafe { text(query) } {
@@ -182,7 +191,7 @@ pub unsafe extern "C" fn metis_search_files(
                 combo_boost_score_multiplier: 100,
                 min_combo_count: 3,
                 pagination: PaginationArgs {
-                    offset: page_index as usize,
+                    offset: item_offset as usize,
                     limit: limit(page_size, 100),
                 },
             };
@@ -338,27 +347,29 @@ pub unsafe extern "C" fn metis_search_multi_grep(
     };
     unsafe {
         with_picker(handle, |_, picker| {
-            Envelope::boxed(Grep::new(
-                &picker.multi_grep(&patterns, &constraints, &options),
-                picker,
-            ))
+            match picker.multi_grep(&patterns, &constraints, &options) {
+                Ok(result) => Envelope::boxed(Grep::new(&result, picker)),
+                Err(error) => Envelope::error(&format!("Failed to build search patterns: {error}")),
+            }
         })
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn metis_search_scan(handle: *mut c_void) -> *mut Envelope {
-    if handle.is_null() {
-        return Envelope::error("Neural Search instance is null");
-    }
-    let instance = unsafe { &*handle.cast::<Instance>() };
-    match instance
-        .picker
-        .trigger_full_rescan_async(&instance.frecency)
-    {
-        Ok(()) => Envelope::integer(0),
-        Err(error) => Envelope::error(&error.to_string()),
-    }
+    guarded(|| {
+        if handle.is_null() {
+            return Envelope::error("Neural Search instance is null");
+        }
+        let instance = unsafe { &*handle.cast::<Instance>() };
+        match instance
+            .picker
+            .trigger_full_rescan_async(&instance.frecency)
+        {
+            Ok(()) => Envelope::integer(0),
+            Err(error) => Envelope::error(&error.to_string()),
+        }
+    })
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn metis_search_is_scanning(handle: *mut c_void) -> *mut Envelope {

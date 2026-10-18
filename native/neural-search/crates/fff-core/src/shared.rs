@@ -225,25 +225,9 @@ impl SharedFilePicker {
 
         self.0.rescans.record(reason);
 
-        match ScanJob::new_rescan(self, shared_frecency)? {
-            Some(job) => {
-                job.spawn();
-            }
-            None => {
-                // we can not abort the ongoing sync, but if the events
-                if let Ok(guard) = self.read()
-                    && let Some(picker) = guard.as_ref()
-                {
-                    picker
-                        .scan_signals()
-                        .rescan_pending
-                        .store(true, std::sync::atomic::Ordering::Release);
-                    tracing::info!(
-                        "Full rescan requested while another scan is active — \
-                         deferred via rescan_pending flag"
-                    );
-                }
-            }
+        // Admission also coalesces busy requests while holding its state lock.
+        if let Some(job) = ScanJob::new_rescan(self, shared_frecency)? {
+            job.spawn();
         }
         Ok(true)
     }

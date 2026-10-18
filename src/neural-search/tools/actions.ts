@@ -92,7 +92,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         let snapshot = resumed?.snapshot;
         if (!snapshot) {
           const query = buildQuery(lease.constraint, pattern, request.exclude, lease.root);
-          const searched = lease.finder.fileSearch(query, { pageIndex: 0, pageSize });
+          const searched = lease.finder.fileSearch(query, { offset: 0, pageSize });
           if (!searched.ok) throw new Error(searched.error);
           snapshot = searched.value;
           if (snapshot.totalMatched > FIND_SNAPSHOT_LIMIT)
@@ -100,7 +100,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           if (snapshot.items.length < snapshot.totalMatched && !isWeakFind(snapshot, pattern)) {
             // Native offset queries can reorder ties. Even page one must come
             // from the same complete snapshot as every later page.
-            const captured = lease.finder.fileSearch(query, { pageIndex: 0, pageSize: snapshot.totalMatched });
+            const captured = lease.finder.fileSearch(query, { offset: 0, pageSize: snapshot.totalMatched });
             if (!captured.ok) throw new Error(captured.error);
             if (captured.value.totalMatched !== snapshot.totalMatched || captured.value.items.length !== snapshot.totalMatched)
               throw new Error("Find index changed during snapshot creation. Retry or narrow the query; no partial pagination was created.");
