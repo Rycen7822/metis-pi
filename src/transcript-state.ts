@@ -66,6 +66,8 @@ export interface TranscriptEvent {
     | "tool_execution_end";
   toolCallId?: string;
   toolName?: string;
+  /** Lifecycle-boundary classification for operations whose source/action needs proof. */
+  exploration?: boolean;
   isError?: boolean;
   imageCount?: number;
   message?: {
@@ -352,7 +354,7 @@ export class TranscriptState {
       }
       case "tool_execution_start": {
         if (!event.toolCallId || !event.toolName) break;
-        if (isExplorationTool(event.toolName)) {
+        if (event.exploration ?? isExplorationTool(event.toolName)) {
           this.joinOrCreateGroup(event.toolCallId);
           this.lastNode = "exploration";
         } else {

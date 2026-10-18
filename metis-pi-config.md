@@ -11,7 +11,7 @@
 
 读取本身不写文件。所有偏好始终只读全局 TOML 与包内默认值；没有 TOML 时也使用默认值。网页凭据从同目录 JSON 或环境变量读取。命令只保存 TOML，首次保存也从默认值开始合并字段。损坏或无权限的文件不会被保存覆盖。需要保留的个性偏好请自行整理到对应 TOML 字段；**不要删除 Pi 的整个 settings.json**。
 
-Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`<agentDir>/metis/subagent/` 保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。`@ff-labs/pi-fff` 等其他插件配置不归本包所有。
+Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`<agentDir>/metis/subagent/` 保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。本地搜索由 `[neuralSearch]` 管理；旧独立插件 `pi-fff.json` 不再作为本组件的配置来源，其他独立插件配置仍不归本包所有。
 
 修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，LSP 在每次工具或 `/lsp` 调用时重读，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件；Metis 命令通过跨进程锁串行化读取、合并与发布，互不重叠的字段 patch 会保留双方修改；同一字段或重叠的完整配置快照仍由后一次更新覆盖。手动编辑或绕过此锁的外部写入不受该保护。
 
@@ -75,6 +75,22 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `guidance.description` / `promptSnippet` / `promptGuidelines` | 内置说明 | 非空字段完整替换，guidelines 为非空字符串数组。 |
 
 只读取全局 TOML，不读取项目或旧 rpiv JSON；已有快捷键/说明须手动复制。工具所有权与发现行为见 [结构化提问](https://github.com/Rycen7822/metis-pi/blob/main/docs/features/ask-user-question.md)。
+
+## `[neuralSearch]`
+
+Neural Search 只读全局 TOML；缺省值来自包内模板。修改后 `/reload` 或重启。启用时提供一个 `deferred` 工具 `neural_search`，原生 `tool_search` 发现并激活后直接调用；不要求 codemode，也不替换 Pi 的内置 `find` / `grep`。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `enabled` | `true` | 启用本组件及简短发现目录。 |
+| `mentions` | `true` | 为交互编辑器提供 `@` 文件/目录补全；不激活工具参数定义。 |
+| `enableFsRootScanning` | `false` | 允许索引文件系统根目录；默认拒绝，避免意外扫描整盘。 |
+| `enableHomeDirScanning` | `true` | 允许索引用户主目录；大型主目录可设 `false`。 |
+| `warnOnHomeDirScan` | `true` | 扫描覆盖主目录时警告。 |
+| `followSymlinks` | `true` | 索引目录符号链接指向的文件；按需可关闭以缩小扫描范围。 |
+| `frecencyDbPath` / `historyDbPath` | 不填写 | 可选数据库目录。缺省为 `<agentDir>/metis/neural-search/{frecency,history}`。 |
+
+没有旧 JSON、`FFF_*` / `PI_FFF_*` 环境变量或旧命令行开关的兼容读取，也不自动借用编辑器数据库。旧配置/数据库不修改、不删除；如果需要继续使用原有排序数据，应明确填入对应数据库目录，并自行管理其他使用者的并发访问。切换时从 Pi packages 移除独立 `@ff-labs/pi-fff`，避免两套工具和索引同时运行。详见 [Neural Search](docs/features/neural-search.md)。
 
 ## `[lsp]`
 
