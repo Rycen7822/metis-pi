@@ -30,11 +30,14 @@ export function normalizePathConstraint(pathConstraint: string, cwd = process.cw
 export function normalizeExcludes(exclude: string | string[] | undefined, cwd = process.cwd()): string[] {
   if (!exclude) return [];
   const out: string[] = [];
-  for (const raw of Array.isArray(exclude) ? exclude : [exclude]) {
-    // Commas inside braces belong to the glob, not to the list separator.
-    const parts = raw.match(/(?:\{[^}]*\}|[^,\s])+/g) ?? [];
-    for (const part of parts) {
-      const normalized = normalizePathConstraint(part.startsWith("!") ? part.slice(1) : part, cwd);
+  const array = Array.isArray(exclude);
+  // Arrays retain path whitespace for validation; scalar strings also support
+  // whitespace-separated lists. Commas inside braces always belong to the glob.
+  const tokens = array ? /(?:\{[^}]*\}|[^,])+/g : /(?:\{[^}]*\}|[^,\s])+/g;
+  for (const raw of array ? exclude : [exclude]) {
+    for (const part of raw.match(tokens) ?? []) {
+      const value = part.trim();
+      const normalized = normalizePathConstraint(value.startsWith("!") ? value.slice(1) : value, cwd);
       if (normalized) out.push(`!${normalized}`);
     }
   }

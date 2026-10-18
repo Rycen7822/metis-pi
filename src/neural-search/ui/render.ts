@@ -1,5 +1,6 @@
 import type { Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { safeText } from "../../tool-names.ts";
 
 export class CollapsedText implements Component {
   constructor(private readonly preview: string, private readonly suffix = "", private readonly marker = "...") {}
@@ -19,8 +20,8 @@ export function renderTextResult(
   theme: Theme,
   context: { isError: boolean },
 ): Component {
-  const output = result.content?.filter(item => item.type === "text").map(item => item.text ?? "").join("\n").trim() ?? "";
-  if (!output) return new Text(theme.fg("muted", "No output"), 0, 0);
+  const output = safeText(result.content?.filter(item => item.type === "text").map(item => item.text ?? "").join("\n") ?? "");
+  if (!output.trim()) return new Text(theme.fg("muted", "No output"), 0, 0);
   const color = context.isError ? "error" : "toolOutput";
   const lines = output.split("\n");
   if (options.expanded) return new Text(lines.map(line => theme.fg(color, line)).join("\n"), 0, 0);

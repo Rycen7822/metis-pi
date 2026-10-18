@@ -3,7 +3,13 @@ import type { FileFinderApi, InitOptions, Result } from "@ff-labs/fff-node";
 export const SCAN_TIMEOUT_MS = 15_000;
 export type FileFinderStatic = { create(options: InitOptions): Result<FileFinderApi> };
 type Sdk = { FileFinder: FileFinderStatic };
-const sdkPromises = new Map<string, Promise<Sdk>>();
+// Pi reloads extensions with jiti's module cache disabled. Keep native imports
+// process-wide; re-importing fff-bun can hang in a compiled Bun host.
+// Version this cache when the binding-selection policy changes.
+const sdkGlobal = globalThis as typeof globalThis & {
+  __metisNeuralSearchSdkPromisesV1?: Map<string, Promise<Sdk>>;
+};
+const sdkPromises = sdkGlobal.__metisNeuralSearchSdkPromisesV1 ??= new Map<string, Promise<Sdk>>();
 
 export function sdkCandidates(followSymlinks: boolean): readonly string[] {
   const bun = process.versions.bun || typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";

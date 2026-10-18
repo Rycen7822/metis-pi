@@ -3,10 +3,11 @@ import type { GrepMode } from "@ff-labs/fff-node";
 import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
 import { formatFindOutput, formatGrepOutput } from "./format.ts";
-import { buildQuery, hasGlobSyntax } from "../native/query.ts";
+import { buildQuery } from "../native/query.ts";
 import { contentPage, searchContent, MATCHES_PER_FILE } from "../native/content.ts";
 import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
+import { safeText } from "../../tool-names.ts";
 import type { SearchLease, SearchRuntime } from "../session.ts";
 
 const DEFAULT_GREP_LIMIT = 20;
@@ -63,6 +64,7 @@ interface SearchDetails {
   hasMore?: boolean;
   patterns?: string[];
   perFileLimitReached?: boolean;
+  outputTruncated?: boolean;
 }
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -105,14 +107,14 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         }
         const start = pageIndex * pageSize;
         const result = { ...snapshot, items: snapshot.items.slice(start, start + pageSize), scores: snapshot.scores.slice(start, start + pageSize) };
-        const formatted = formatFindOutput(result, pageSize, pattern);
+        const formatted = formatFindOutput(result, pageSize, pattern, snapshot.scores[0]?.total);
         const shownSoFar = pageIndex * pageSize + result.items.length;
-        const hasMore = result.items.length >= pageSize && result.totalMatched > shownSoFar;
+        const hasMore = !formatted.weak && result.items.length >= pageSize && result.totalMatched > shownSoFar;
         let cursor: string | undefined;
         if (formatted.weak && formatted.shownCount) notices.push(
           `Query "${pattern}" produced only weak scattered fuzzy matches. Output capped at ${formatted.shownCount}/${result.totalMatched}.`,
         );
-        if (!formatted.weak && hasMore) {
+        if (hasMore) {
           cursor = runtime.cursors.store({ action: "find", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
             finder: lease.finder, request, snapshot, nextPageIndex: pageIndex + 1,
           });
@@ -125,8 +127,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
       } finally { lease.release(); }
     },
     renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("Find")) + " " + theme.fg("accent", args.pattern ?? "") + theme.fg("toolOutput", ` in ${args.path ?? "."}`);
-      if (args.limit !== undefined) text += theme.fg("toolOutput", ` (limit ${args.limit})`);
+      let text = theme.fg("toolTitle", theme.bold("Find")) + " " + theme.fg("accent", safeText(args.pattern ?? "")) + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`));
+      if (args.limit !== undefined) text += theme.fg("toolOutput", safeText(` (limit ${args.limit})`));
       if (args.cursor) text += theme.fg("muted", " (page)");
       return new CollapsedText(text, "", theme.fg("muted", "..."));
     },
@@ -157,7 +159,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
         let mode = resumed?.mode ?? detected;
         const context = mode === "fuzzy" ? 0 : clampContext(request.context);
-        let query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
+        const query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
         const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
           pageSize, beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS };
         let page = contentPage(cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
@@ -165,13 +167,10 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         // Fuzzy suggestions are optional; only unambiguous identifier tokens
         // can cross the native fuzzy API's combined pattern/filter grammar.
         if (!page.result.items.length && !page.progress && !resumed && mode === "plain" && /^[\p{L}\p{N}_-]+$/u.test(pattern)) {
-          const concreteFile = request.path && !hasGlobSyntax(request.path) && /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(request.path);
-          const fuzzyQuery = concreteFile ? buildQuery(undefined, "", request.exclude, lease.root) : query;
-          const fuzzy = searchContent(lease.finder, pattern, fuzzyQuery, { ...options,
+          const fuzzy = searchContent(lease.finder, pattern, query, { ...options,
             mode: "fuzzy", cursor: null, beforeContext: 0, afterContext: 0 });
           if (fuzzy.ok && fuzzy.value.items.length) {
             page = contentPage(() => fuzzy, pageSize);
-            query = fuzzyQuery;
             mode = "fuzzy";
           }
         }
@@ -185,18 +184,19 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           });
           notices.push(`Continue with cursor="${cursor}"`);
         }
-        let output = withNotices(formatGrepOutput(result), notices);
+        const formatted = formatGrepOutput(result);
+        let output = withNotices(formatted.output, notices);
         if (mode === "fuzzy") output = `[0 exact matches. Maybe you meant this?]\n${output}`;
         return textResult(output, { totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, cursor,
-          hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0 });
+          hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0, outputTruncated: formatted.truncated });
       } finally { lease.release(); }
     },
     renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("Search")) + " " + theme.fg("accent", `/${args.pattern ?? ""}/`) + theme.fg("toolOutput", ` in ${args.path ?? "."}`);
+      let text = theme.fg("toolTitle", theme.bold("Search")) + " " + theme.fg("accent", safeText(`/${args.pattern ?? ""}/`)) + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`));
       const options: string[] = [];
       if (args.limit !== undefined) options.push(`limit ${args.limit}`);
       if (args.context !== undefined) options.push(`context ${args.context}`);
-      if (options.length) text += theme.fg("toolOutput", ` (${options.join(", ")})`);
+      if (options.length) text += theme.fg("toolOutput", safeText(` (${options.join(", ")})`));
       if (args.cursor) text += theme.fg("muted", " (page)");
       return new CollapsedText(text, "", theme.fg("muted", "..."));
     },
@@ -234,16 +234,17 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           });
           notices.push(`More available. cursor="${cursor}" to continue`);
         }
-        return textResult(withNotices(formatGrepOutput(page.result), notices), {
+        const formatted = formatGrepOutput(page.result);
+        return textResult(withNotices(formatted.output, notices), {
           totalMatched: page.result.totalMatched, totalFiles: page.result.totalFiles, root: lease.root, cursor,
-          patterns: request.patterns, hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0,
+          patterns: request.patterns, hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0, outputTruncated: formatted.truncated,
         });
       } finally { lease.release(); }
     },
     renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("Search")) + " " + theme.fg("accent", (args.patterns ?? []).map(pattern => `"${pattern}"`).join(", "));
-      if (args.path) text += theme.fg("toolOutput", ` in ${args.path}`);
-      if (args.constraints) text += theme.fg("toolOutput", ` (${args.constraints})`);
+      let text = theme.fg("toolTitle", theme.bold("Search")) + " " + theme.fg("accent", (args.patterns ?? []).map(pattern => safeText(JSON.stringify(pattern))).join(", "));
+      if (args.path) text += theme.fg("toolOutput", safeText(` in ${args.path}`));
+      if (args.constraints) text += theme.fg("toolOutput", safeText(` (${args.constraints})`));
       if (args.cursor) text += theme.fg("muted", " (page)");
       return new CollapsedText(text, "", theme.fg("muted", "..."));
     },

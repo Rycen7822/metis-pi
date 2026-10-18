@@ -47,7 +47,13 @@ export function resolveAuxRoot(absPath: string): { root: string; suffix: string 
     const candidate = path.join(parsedRoot, ...parts.slice(0, i));
     let stat: fs.Stats;
     try { stat = fs.statSync(candidate); } catch { continue; }
-    if (stat.isFile()) return { root: path.dirname(candidate), suffix: parts.slice(i - 1).join("/") };
+    if (stat.isFile()) {
+      const suffix = parts.slice(i - 1).join("/");
+      // A proven file is an exact singleton glob, not a directory inferred from
+      // its extension. Keep impossible file/child paths on the existing route.
+      const exact = `{${suffix.replace(/[\\*?\[\]{},]/g, "\\$&")}}`;
+      return { root: path.dirname(candidate), suffix: i === parts.length ? exact : suffix };
+    }
     if (stat.isDirectory()) return { root: candidate, suffix: parts.slice(i).join("/") };
   }
   return null;

@@ -62,7 +62,7 @@ export class AuxFinderPool {
     if (this.controller.signal.aborted) throw new Error("Neural-search auxiliary index pool is closed.");
     this.trim(MAX_AUX - 1);
     if (this.options.enableHomeDirScanning && coversHomeDir(entry.root)) this.options.onHomeDirScan?.(entry.root);
-    const finder = await this.options.pickers.create(entry.root, this.controller.signal);
+    const finder = await this.options.pickers.create(entry.root, this.controller.signal, false);
     if (this.controller.signal.aborted) {
       if (!finder.isDestroyed) finder.destroy();
       throw new Error("Neural-search auxiliary pool closed during index creation.");

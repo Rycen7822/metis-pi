@@ -15,6 +15,7 @@ export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () =>
 
   // With an ownership check, defer auxiliary setup until the registry is bound.
   let active = !isAvailable;
+  let sessionEpoch = 0;
   const isActive = () => {
     if (active && isAvailable && !isAvailable()) {
       active = false;
@@ -71,14 +72,15 @@ export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () =>
   });
   if (!isAvailable) registerCommand();
   pi.on("session_start", (_event, ctx) => {
+    const epoch = ++sessionEpoch;
     active = !isAvailable || isAvailable();
     if (!active) { runtime.shutdown(); return; }
-    const scope = runtime.start(ctx);
+    runtime.start(ctx);
     registerCommand();
     const refusal = scanOptOutReason(ctx.cwd, config);
     if (refusal) ctx.ui.notify(refusal, "warning");
     if (config.mentions && ctx.mode === "tui") ctx.ui.addAutocompleteProvider(
-      createMentionWrapper(runtime, () => isActive() && runtime.isCurrent(scope)),
+      createMentionWrapper(runtime, () => epoch === sessionEpoch && isActive()),
     );
   });
   pi.on("before_agent_start", (_event, ctx) => { if (isActive()) runtime.bind(ctx); });

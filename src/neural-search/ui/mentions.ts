@@ -24,7 +24,7 @@ export function createMentionWrapper(runtime: SearchRuntime, isActive: () => boo
             const items: AutocompleteItem[] = result.value.items.slice(0, 20).map(mixed => {
               const item = mixed.item;
               return {
-                value: quoted || item.relativePath.includes(" ") ? `@"${item.relativePath}"` : `@${item.relativePath}`,
+                value: quoted || /\s/.test(item.relativePath) ? `@"${item.relativePath}"` : `@${item.relativePath}`,
                 label: mixed.type === "directory" ? mixed.item.dirName : mixed.item.fileName,
                 description: item.relativePath,
               };

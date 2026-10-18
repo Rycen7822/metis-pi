@@ -109,8 +109,8 @@ export function explorationTitle(
   const pattern = typeof args.pattern === "string" ? args.pattern :
     name === "neural_search" && Array.isArray(args.patterns) && args.patterns.every(value => typeof value === "string")
       ? args.patterns : undefined;
-  const target = pattern !== undefined ? JSON.stringify(pattern) : path(args, ctx);
-  const inPath = pattern !== undefined ? path(args, ctx) || string(args.constraints) : undefined;
+  const target = safeText(pattern !== undefined ? JSON.stringify(pattern) : path(args, ctx));
+  const inPath = pattern !== undefined ? safeText([path(args, ctx), string(args.constraints)].filter(Boolean).join(" ")) : undefined;
   const suffix = name === "read" ? formatReadLineRange(args.offset, args.limit) : "";
   const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
   const level = ctx.colorLevel ?? colorLevel;
