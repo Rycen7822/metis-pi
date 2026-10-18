@@ -2,7 +2,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { GrepMode } from "@ff-labs/fff-node";
 import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
-import { formatFindOutput, formatGrepOutput } from "./format.ts";
+import { formatFindOutput, formatGrepOutput, isWeakFind } from "./format.ts";
 import { buildQuery } from "../native/query.ts";
 import { contentPage, searchContent, multilineOrError, MATCHES_PER_FILE } from "../native/content.ts";
 import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
@@ -97,7 +97,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           snapshot = searched.value;
           if (snapshot.totalMatched > FIND_SNAPSHOT_LIMIT)
             throw new Error(`Find matched ${snapshot.totalMatched} files, exceeding the ${FIND_SNAPSHOT_LIMIT}-match snapshot budget. Narrow pattern/path; no partial pagination was created.`);
-          if (snapshot.items.length < snapshot.totalMatched && !formatFindOutput(snapshot, pageSize, pattern).weak) {
+          if (snapshot.items.length < snapshot.totalMatched && !isWeakFind(snapshot, pattern)) {
             // Native offset queries can reorder ties. Even page one must come
             // from the same complete snapshot as every later page.
             const captured = lease.finder.fileSearch(query, { pageIndex: 0, pageSize: snapshot.totalMatched });
@@ -147,7 +147,6 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
       const resumed = params.cursor ? runtime.cursors.get(params.cursor, "grep", scope.id, params) : undefined;
       const request = resumed?.request ?? params;
       const pattern = request.pattern!;
-      const detected = detectMode(pattern);
       if (wildcardOnly(pattern)) return textResult(
         `Pattern '${pattern}' matches everything — grep needs a concrete substring or identifier. Example: \`pattern: 'MyClass'\` or \`pattern: 'export function'\`.`,
         { totalMatched: 0, totalFiles: 0 },
@@ -159,7 +158,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         runtime.assertCurrent(scope);
         const notices = searchNotices(lease);
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
-        let mode = resumed?.mode ?? detected;
+        let mode = resumed?.mode ?? detectMode(pattern);
         const context = mode === "fuzzy" ? 0 : clampContext(request.context);
         const query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
         const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
@@ -176,11 +175,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
             mode = "fuzzy";
           }
         }
-        const result = page.result;
-        const nativeMultilineLimited = result.nativeMultilineLimited === true;
-        if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
-        if (result.regexFallbackError) notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
-        addFileLimitNotice(notices, page.cappedFiles);
+        const formatted = contentPageResult(page, notices);
         let cursor: string | undefined;
         if (page.progress) {
           cursor = runtime.cursors.store({ action: "grep", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
@@ -188,12 +183,9 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           });
           notices.push(`Continue with cursor="${cursor}"`);
         }
-        const formatted = formatGrepOutput(result);
         let output = withNotices(formatted.output, notices);
         if (mode === "fuzzy") output = `[0 exact matches. Maybe you meant this?]\n${output}`;
-        return textResult(output, { totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, cursor,
-          hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0,
-          outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited });
+        return textResult(output, { ...formatted.details, root: lease.root, cursor });
       } finally { lease.release(); }
     },
     renderCall(args, theme) {
@@ -233,9 +225,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           maxMatchesPerFile: MATCHES_PER_FILE, pageSize, smartCase: request.caseSensitive !== true, cursor,
           beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS,
         }), pageSize, resumed?.progress);
-        const nativeMultilineLimited = page.result.nativeMultilineLimited === true;
-        if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
-        addFileLimitNotice(notices, page.cappedFiles);
+        const formatted = contentPageResult(page, notices);
         let cursor: string | undefined;
         if (page.progress) {
           cursor = runtime.cursors.store({ action: "multi_grep", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
@@ -243,11 +233,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           });
           notices.push(`More available. cursor="${cursor}" to continue`);
         }
-        const formatted = formatGrepOutput(page.result);
         return textResult(withNotices(formatted.output, notices), {
-          totalMatched: page.result.totalMatched, totalFiles: page.result.totalFiles, root: lease.root, cursor,
-          patterns: request.patterns, hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0,
-          outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited,
+          ...formatted.details, root: lease.root, cursor, patterns: request.patterns,
         });
       } finally { lease.release(); }
     },
@@ -271,8 +258,18 @@ function searchNotices(lease: SearchLease): string[] {
   return notices;
 }
 
-function addFileLimitNotice(notices: string[], files: string[]): void {
-  if (files.length) notices.push(`Native per-file match limit (${MATCHES_PER_FILE}) reached in ${files.join(", ")}; additional matches may be omitted. Refine the query or read those files.`);
+/** Both content actions expose the same collection limits and display status. */
+function contentPageResult(page: ReturnType<typeof contentPage>, notices: string[]) {
+  const { result, cappedFiles } = page;
+  const nativeMultilineLimited = result.nativeMultilineLimited === true;
+  if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
+  if (result.regexFallbackError) notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
+  if (cappedFiles.length) notices.push(`Native per-file match limit (${MATCHES_PER_FILE}) reached in ${cappedFiles.join(", ")}; additional matches may be omitted. Refine the query or read those files.`);
+  const formatted = formatGrepOutput(result);
+  return { output: formatted.output, details: {
+    totalMatched: result.totalMatched, totalFiles: result.totalFiles, hasMore: !!page.progress,
+    perFileLimitReached: cappedFiles.length > 0, outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited,
+  } };
 }
 
 function textResult(text: string, details: SearchDetails) {

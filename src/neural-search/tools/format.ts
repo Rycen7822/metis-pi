@@ -36,10 +36,14 @@ export function formatGrepOutput(result: GrepResult): { output: string; truncate
   return { output: bounded.content + notice, truncated: bounded.truncated };
 }
 
+export function isWeakFind(result: SearchResult, pattern: string, topScore = result.scores[0]?.total ?? 0): boolean {
+  const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
+  return result.items.length > 0 && fuzzy && topScore < Math.floor(pattern.length * 6);
+}
+
 export function formatFindOutput(result: SearchResult, limit: number, pattern: string, topScore = result.scores[0]?.total ?? 0): { output: string; weak: boolean; shownCount: number } {
   if (!result.items.length) return { output: "No files found matching pattern", weak: false, shownCount: 0 };
-  const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
-  const weak = fuzzy && topScore < Math.floor(pattern.length * 6);
+  const weak = isWeakFind(result, pattern, topScore);
   const shown = result.items.slice(0, weak ? Math.min(5, limit) : limit);
   return { output: shown.map(item => `${item.relativePath}${fileAnnotation(item)}`).join("\n"), weak, shownCount: shown.length };
 }

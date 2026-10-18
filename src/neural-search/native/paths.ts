@@ -35,12 +35,17 @@ export function scanOptOutReason(root: string, config: { enableHomeDirScanning: 
   return null;
 }
 
+/** Absolute whitespace is path data; only platform separators become '/'. */
+export function pathConstraintText(value: string): string {
+  return (path.isAbsolute(value) ? value : value.trim()).replaceAll(path.sep, "/");
+}
+
 export function resolveAuxRoot(absPath: string): { root: string; suffix: string } | null {
   if (!path.isAbsolute(absPath)) return null;
   const parsedRoot = path.parse(absPath).root;
-  const trimmed = path.normalize(absPath.trim());
-  if (trimmed === parsedRoot) return { root: parsedRoot, suffix: "" };
-  const parts = trimmed.slice(parsedRoot.length).split(path.sep);
+  const normalized = path.normalize(absPath);
+  if (normalized === parsedRoot) return { root: parsedRoot, suffix: "" };
+  const parts = normalized.slice(parsedRoot.length).split(path.sep);
   const firstGlob = parts.findIndex(part => /[*?[{]/.test(part));
   const boundary = firstGlob === -1 ? parts.length : firstGlob;
   // Probe the exact path first: an existing filename may contain glob syntax.
@@ -58,9 +63,14 @@ export function resolveAuxRoot(absPath: string): { root: string; suffix: string 
   return null;
 }
 
-/** FFF's glob backend accepts bracket literals, not shell-style escapes. */
+/** Bracket literals force exact native glob matches, not filename promotion. */
 function literalFileGlob(name: string): string {
-  const encoded = name.replace(/[\\*?[\]{},:]/g, char => char === "]" ? "[]]" : char === "\\" ? "[\\\\]" : `[${char}]`);
+  const encoded = name.replace(/[\\*?[\]{},:]/g, char => {
+    if (char === "]") return "[]]";
+    if (char === "\\") return "[\\\\]";
+    // Escape braces inside classes: FFF expands raw pairs before compiling them.
+    return char === "{" || char === "}" ? `[\\${char}]` : `[${char}]`;
+  });
   if (encoded !== name) return encoded;
   // Force glob classification without putting UTF-8 bytes or ! in a class.
   const ascii = name.search(/[A-Za-z0-9.]/);
@@ -82,12 +92,12 @@ export function rootCovers(root: string, target: string): boolean {
 }
 
 export function routePathConstraint(pathConstraint: string | undefined, cwd: string): { root: string; suffix: string } | null {
-  let candidate = pathConstraint?.trim();
+  let candidate = pathConstraint === undefined ? undefined : pathConstraintText(pathConstraint);
   if (!candidate) return null;
   if (candidate === "~" || candidate.startsWith("~/")) candidate = path.join(HOME_DIR, candidate.slice(1));
   if (!path.isAbsolute(candidate)) {
     // Resolve dot segments as well, so ./../sibling and src/../../sibling cannot escape silently.
-    if (!candidate.split(/[\\/]/).includes("..") && !FILTER_WHITESPACE.test(candidate)) return null;
+    if (!candidate.split("/").includes("..") && !FILTER_WHITESPACE.test(candidate)) return null;
     candidate = path.resolve(cwd, candidate);
   }
   if (canUseIndexRoot(cwd, candidate)) return null;

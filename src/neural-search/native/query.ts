@@ -1,14 +1,14 @@
 import path from "node:path";
-import { HOME_DIR, assertEncodableFilter } from "./paths.ts";
+import { HOME_DIR, assertEncodableFilter, pathConstraintText } from "./paths.ts";
 
 export function hasGlobSyntax(value: string): boolean { return /[*?[{]/.test(value); }
 
 export function normalizePathConstraint(pathConstraint: string, cwd = process.cwd()): string | null {
-  let trimmed = pathConstraint.trim();
+  let trimmed = pathConstraintText(pathConstraint);
   if (!trimmed) return null;
-  const directory = trimmed.endsWith("/") || trimmed.endsWith(path.sep);
+  const directory = trimmed.endsWith("/");
   if (trimmed === "~" || trimmed.startsWith("~/")) trimmed = path.join(HOME_DIR, trimmed.slice(1));
-  if (path.isAbsolute(trimmed) || trimmed.split(/[\\/]/).some(part => part === "." || part === "..")) {
+  if (path.isAbsolute(trimmed) || trimmed.split("/").some(part => part === "." || part === "..")) {
     const relative = path.relative(cwd, path.resolve(cwd, trimmed)).replaceAll(path.sep, "/");
     if (!relative) return "**/*";
     if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
@@ -32,11 +32,11 @@ export function normalizeExcludes(exclude: string | string[] | undefined, cwd = 
   const out: string[] = [];
   const array = Array.isArray(exclude);
   // Arrays retain path whitespace for validation; scalar strings also support
-  // whitespace-separated lists. Commas inside braces always belong to the glob.
-  const tokens = array ? /(?:\{[^}]*\}|[^,])+/g : /(?:\{[^}]*\}|[^,\s])+/g;
+  // whitespace-separated lists. Braces and bracket classes own their commas.
+  const tokens = array ? /(?:\{[^}]*\}|\[[^\]]*\]|[^,])+/g : /(?:\{[^}]*\}|\[[^\]]*\]|[^,\s])+/g;
   for (const raw of array ? exclude : [exclude]) {
     for (const part of raw.match(tokens) ?? []) {
-      const value = part.trim();
+      const value = part.trimStart();
       const normalized = normalizePathConstraint(value.startsWith("!") ? value.slice(1) : value, cwd);
       if (normalized) out.push(`!${normalized}`);
     }
