@@ -519,12 +519,13 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     preparedMarker = undefined;
     preparedPortable = undefined;
     requestCancelled = false;
-    // Native history/boundaries/edits determine checkpoint recovery. Extension
-    // journals and summary messages are projected by their own context hooks,
-    // which may legitimately publish them while preparing this same request.
-    preparedSource = sourceHash(ctx.sessionManager.getBranch());
+    preparedSource = undefined;
     const current = active(ctx);
     if (!current) return;
+    // Only owned checkpoints need raw-source verification. Native history,
+    // boundaries and edits determine recovery; extension journals and summary
+    // messages may legitimately be published by this request's context hooks.
+    preparedSource = sourceHash(ctx.sessionManager.getBranch());
     if (current.data && isRemoteModel(ctx.model)) {
       try {
         const state = bindingState(current.data, await requestBinding(ctx, ctx.model, accounts), current.origin);
@@ -590,9 +591,11 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     // source code, user text and tool output can contain the same marker literal.
     if (!preparedMarker) return;
     const requestModel = preparedModel ?? ctx.model;
+    const session = preparedSession, version = preparedGeneration;
+    const source = sourceHash(ctx.sessionManager.getBranch());
     if (!isRemoteModel(requestModel)
-      || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation
-      || hash(requestModel) !== hash(ctx.model) || preparedSource !== sourceHash(ctx.sessionManager.getBranch())) {
+      || session !== ctx.sessionManager.getSessionId() || version !== generation
+      || hash(requestModel) !== hash(ctx.model) || preparedSource !== source) {
       cancelRequest(ctx); return emptyPayload(event.payload);
     }
     const expected = summaryText(preparedMarker);
@@ -601,12 +604,18 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       cancelRequest(ctx, "Remote checkpoint carrier changed. Retry with the current context; history was preserved.");
       return emptyPayload(event.payload);
     }
-    const source = sourceHash(ctx.sessionManager.getBranch());
     const current = active(ctx);
+    if (!current?.data) { cancelRequest(ctx); return emptyPayload(event.payload); }
     try {
-      if (!current?.data || preparedSession !== ctx.sessionManager.getSessionId() || hash(requestModel) !== hash(ctx.model)
-        || bindingState(current.data, await requestBinding(ctx, requestModel, accounts), current.origin) !== "valid"
-        || source !== sourceHash(ctx.sessionManager.getBranch())) throw new Error("Checkpoint binding changed");
+      const request = await requestBinding(ctx, requestModel, accounts);
+      // Authentication may yield to history edits, appends or session/model
+      // switches. Revalidate with a fresh source hash and use the same ordinary
+      // cancellation path as before await, rather than an authentication error.
+      if (session !== ctx.sessionManager.getSessionId() || version !== generation || hash(requestModel) !== hash(ctx.model)
+        || bindingState(current.data, request, current.origin) !== "valid"
+        || source !== sourceHash(ctx.sessionManager.getBranch())) {
+        cancelRequest(ctx); return emptyPayload(event.payload);
+      }
       return replaceMarker(event.payload, current.data);
     } catch (error) {
       cancelRequest(ctx, `Request cancelled while verifying remote checkpoint: ${safeError(error)}. `

@@ -30,6 +30,8 @@ export interface ViewContext {
   /** Injected write change (tests/preview) — merged with tracker state. */
   readonly writeChanges?: unknown;
   readonly lastComponent?: unknown;
+  /** Nested display data stays owned by the bounded store, not evicted UI bodies. */
+  readonly resultSource?: () => { args: unknown; result: unknown } | undefined;
   /** Real color capability, injected by the host (pi-tui getCapabilities). */
   readonly colorLevel?: import("./palette.ts").ColorLevel;
   /** Transcript presentation plan for exploration grouping (host-injected). */

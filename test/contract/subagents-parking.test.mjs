@@ -66,7 +66,9 @@ async function fixture(t) {
 
 test(
   "native SDK follow-up wakes an idle daemon through the same bridge and keeps the durable child session",
-  { timeout: 40000 },
+  // A 45s poll deadline can include a final 25s long-poll; keep separate
+  // headroom for startup, park-status observation and both 15s task waits.
+  { timeout: 120000 },
   async (t) => {
     const f = await fixture(t),
       { client } = f;
@@ -87,10 +89,15 @@ test(
       watched.notifications.some((row) => row.run_id === first.run_id),
       "unconsumed terminal attention survives parking",
     );
-    await assert.rejects(
-      client.call("pi_watch", { after: watched.cursor }, undefined, { passive: true }),
-      isDaemonIdle,
-    );
+    await assert.rejects(async () => {
+      let cursor = watched.cursor;
+      const deadline = Date.now() + 45000;
+      while (Date.now() < deadline) {
+        const update = await client.call("pi_watch", { after: cursor }, undefined, { passive: true });
+        cursor = update.cursor; // A 25s long-poll can finish before the 30s quiet grace.
+      }
+      assert.fail("unused daemon did not park");
+    }, isDaemonIdle);
     const deadline = Date.now() + 10000;
     while (status(f.runtime, f.state) && Date.now() < deadline) await sleep(50);
     assert.equal(status(f.runtime, f.state), undefined);
@@ -231,14 +238,14 @@ test("closing during parking cannot restart a helper for waiting foreground work
   assert.equal(client.bridge, undefined, "a logical close cannot create a replacement");
 });
 
-test("native session parks its helper silently and automatic boundaries do not restart an empty daemon", { timeout: 30000 }, async t => {
+test("native session parks its helper silently and automatic boundaries do not restart an empty daemon", { timeout: 60000 }, async t => {
   const f = await fixture(t), warnings = [];
   const ctx = { ...f.ctx, mode: "rpc", isIdle: () => false, hasPendingMessages: () => false,
     ui: { notify: text => warnings.push(text), setStatus() {}, setWidget() {} } };
   const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, f.runtime, ctx, f.dir);
   try {
     assert.equal((await owner.execute("pi_list_agents", {}, "list-before-idle", ctx)).isError, false);
-    const deadline = Date.now() + 15000;
+    const deadline = Date.now() + 45000;
     while ((owner.syncState !== "parked" || owner.watching || status(f.runtime, f.state)) && Date.now() < deadline) {
       await owner.boundary({ type: "turn_end", outcome: "completed", entries: [] }, ctx);
       await owner.settled(ctx);

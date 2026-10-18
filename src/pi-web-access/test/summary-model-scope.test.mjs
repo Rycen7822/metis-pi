@@ -36,11 +36,13 @@ const summaryResults = [{
 	provider: "test",
 }];
 
-test("never-settling summary completion returns a deterministic deadline fallback", async () => {
+test("never-settling summary completion returns a deterministic deadline fallback", async t => {
+	// The deadline includes setup; control time so this test reaches pending completion.
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
 	let completionSignal;
+	const completionStarted = Promise.withResolvers();
 	const neverSettles = new Promise(() => {});
-	const startedAt = Date.now();
-	const result = await generateSummaryDraft(
+	const pending = generateSummaryDraft(
 		summaryResults,
 		summaryContext(),
 		undefined,
@@ -48,12 +50,20 @@ test("never-settling summary completion returns a deterministic deadline fallbac
 		undefined,
 		(_model, _request, options) => {
 			completionSignal = options.signal;
+			completionStarted.resolve();
 			return neverSettles;
 		},
 		20,
 	);
 
-	assert.ok(Date.now() - startedAt < 500);
+	await completionStarted.promise;
+	assert.equal(completionSignal.aborted, false);
+	t.mock.timers.tick(19);
+	assert.equal(completionSignal.aborted, false);
+	t.mock.timers.tick(1);
+	const result = await pending;
+
+	assert.equal(result.meta.durationMs, 20);
 	assert.equal(result.meta.fallbackUsed, true);
 	assert.equal(result.meta.fallbackReason, "summary-generation-timeout");
 	assert.equal(result.meta.phase, "deterministic-fallback");

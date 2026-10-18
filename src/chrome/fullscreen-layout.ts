@@ -25,7 +25,7 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
   const marginReady = options.margin > 0 && typeof host.HStack === "function" && typeof host.Spacer === "function";
   const historyReady = typeof host.Container === "function" && typeof host.ScrollView === "function";
   let reason = "not installed";
-  let lease: { proto: object; descriptor?: PropertyDescriptor; wrapper: Setter; tui: TuiLike } | undefined;
+  let lease: { proto: object; descriptor?: PropertyDescriptor; wrapper: Setter; tui: TuiLike; committedRoot?: unknown } | undefined;
 
   const wrapRoot = (root: unknown): object => {
     const HStack = host.HStack as new (children: unknown[], options: Record<string, unknown>) => object;
@@ -85,21 +85,30 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
         const wrapper: Setter = function (component) {
           // Use the lease identity, not a shared boolean: reinstalling cannot
           // reactivate an older hook captured by a third-party wrapper.
-          if (lease?.wrapper !== wrapper || this.mode !== "fullscreen") return original.call(this, component);
-          lease.tui = this; // The host can expose a Proxy facade during capture.
+          const current = lease;
+          if (current?.wrapper !== wrapper || this.mode !== "fullscreen") return original.call(this, component);
+          current.tui = this; // The host can expose a Proxy facade during capture.
           const root = innerRoot(component) ?? component;
           history.mount(this, root);
-          if (!marginReady || !root) return original.call(this, root);
-          return original.call(this, innerRoot(component) ? component : wrapRoot(root));
+          const result = original.call(this, marginReady && root ? (innerRoot(component) ? component : wrapRoot(root)) : root);
+          current.committedRoot = this.layoutRoot;
+          return result;
         };
         try { Object.defineProperty(proto, "setLayoutRoot", { value: wrapper, writable: true, configurable: true }); }
         catch { reason = "setLayoutRoot is not writable"; return false; }
         lease = { proto, descriptor, wrapper, tui: target };
       }
-      // Retry capture/mount without stacking another hook, even if a later
-      // extension has wrapped ours. Existing roots also receive the layout features.
-      if (marginReady && target.layoutRoot && !innerRoot(target.layoutRoot)) target.setLayoutRoot?.(target.layoutRoot);
-      else history.mount(target, innerRoot(target.layoutRoot) ?? target.layoutRoot);
+      const root = target.layoutRoot;
+      if (root && root === lease.committedRoot) {
+        // Already committed: remount directly on the captured renderer. A later
+        // setter may wrap every input, so replaying our root would grow the tree.
+        history.mount(lease.tui, innerRoot(root) ?? root);
+      } else if (root) {
+        // First capture also needs the real receiver at zero margin: Pi's
+        // facade binds method calls, but does not forward defineProperty.
+        target.setLayoutRoot?.(root);
+        if (lease) lease.committedRoot = target.layoutRoot; // Include later setters' final root.
+      } else history.mount(target, undefined);
       reason = "installed";
       return true;
     },

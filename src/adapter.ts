@@ -1,5 +1,5 @@
-import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext } from "./tool-names.ts";
-import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct } from "./selection-copy/model.ts";
+import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext, type ViewOptions } from "./tool-names.ts";
+import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";
 import type { NestedRendererLookup } from "./codemode-view.ts";
@@ -37,6 +37,37 @@ export interface AdapterHandle {
   dispose(): void;
 }
 function skipped(reason: string): AdapterHandle { return { installed: false, reason, dispose() {} }; }
+
+/** Keep initialization outside the frame: only its body may retain initial
+ * data, and invalidation releases it. Rebuild from the bounded source while
+ * preserving committed row geometry. Other result owners stay native. */
+function nestedResult(
+  resolve: (result: unknown) => Renderers | undefined,
+  body: Component | undefined,
+  options: ViewOptions,
+  theme: Palette,
+  snapshot: ViewContext,
+  resultSource: NonNullable<ViewContext["resultSource"]>,
+): Component {
+  return {
+    render(width) {
+      if (!body) {
+        const source = resultSource();
+        if (source) body = resolve(source.result)?.renderResult(source.result, options, theme, { ...snapshot, args: source.args })
+          ?? { render: () => [], invalidate() {} };
+      }
+      const rows = body?.render(width)
+        ?? [theme.fg("dim", "Nested output was not retained; no saved diff/output to expand.".slice(0, Math.max(0, width)))];
+      publishRows(this, rows);
+      return rows;
+    },
+    handleMouse(event) { return body?.handleMouse?.(event); },
+    invalidate() {
+      try { body?.invalidate(); }
+      finally { body = undefined; releaseCopyCache(this); }
+    },
+  };
+}
 function supportsSelector(key: typeof SELECTORS[number], select: UiMethod): boolean {
   const field = ({ getCallRenderer: "renderCall", getResultRenderer: "renderResult", getRenderShell: "renderShell" } as const)[key];
   const definition = { renderCall() {}, renderResult() {}, renderShell: "self" };
@@ -241,14 +272,31 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // other provider origins and independent overlays have backed off above.
     return options.renderers[name as ToolName];
   }
+  // Give the rebuild resolver its own scope: it must not close over the initial
+  // selection (fusion renderers can themselves reference the full old receipt).
+  function nestedSelection(name: string, definition: object): (value: unknown) => Renderers | undefined {
+    return value => replacement({ toolName: name, toolDefinition: definition, result: value });
+  }
   const codemode = options.makeCodemode?.((name, result) => {
     if (!active || !ownsMethods() || !options.enabled() || name === "codemode") return;
     const context = definitionPrototype && LOOKUP_CONTEXTS.get(definitionPrototype)?.deref();
     if (!context) return;
     const definition = lookupWrapper.call(context, name);
     if (!definition || typeof definition !== "object") return;
-    const owned = replacement({ toolName: name, toolDefinition: definition, result });
-    if (owned) return owned;
+    const resolveOwned = nestedSelection(name, definition);
+    const owned = resolveOwned(result);
+    // Vendor execution results may own interactive state; only our compact
+    // builtins/FFF and mutation bodies use this release-and-rebuild lifecycle.
+    if (owned && !TOOL_NAMES.includes(name as ToolName)) return owned;
+    if (owned) return {
+      renderCall: owned.renderCall,
+      renderResult(value, opts, theme, ctx) {
+        const { args, lastComponent: _previous, resultSource, ...snapshot } = ctx;
+        const initial = owned.renderResult;
+        const body = initial(value, opts, theme, resultSource ? { ...snapshot, args } : ctx);
+        return resultSource ? nestedResult(resolveOwned, body, opts, theme, snapshot, resultSource) : body;
+      },
+    };
     const { renderCall, renderResult } = asRecord(definition);
     if (typeof renderCall !== "function" || typeof renderResult !== "function") return;
     return {

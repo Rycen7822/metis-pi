@@ -296,7 +296,7 @@ test("one footer keeps ordered host metadata fresh across frames, events and ses
   let usage = { tokens: 172_000, contextWindow: 1_000_000, percent: 17.2 };
   const { handlers, slots, footer: makeFooter, ctx } = await session(t, {}, {
     model: { id: "test-model", provider: "openai-codex", contextWindow: 1_000_000 }, thinkingLevel: "high",
-    sessionManager: { getEntries: historyEntries, getLeafId: () => leaf },
+    sessionManager: { getEntries: historyEntries, getSessionId: () => "footer-session", getLeafId: () => leaf },
     getContextUsage() { reads += 1; return usage; },
   });
   assert.equal(widgetByKey(slots, "metis-pi:composer-meta"), undefined, "metadata belongs below the editor");
@@ -322,8 +322,14 @@ test("one footer keeps ordered host metadata fresh across frames, events and ses
   assert.match(switched, /8\.6%/, "same revision cannot mix old and new context windows");
   assert.doesNotMatch(switched, /test-model|17\.2%/);
 
+  const streaming = { role: "assistant", content: [{ type: "text", text: "partial response" }] };
+  handlers.get("message_update")({ message: streaming,
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "partial response", partial: streaming } });
+  assert.match(frame(), /ctx 172k\/2\.0M · 8\.6%/, "streaming has not changed the persisted context source");
+  assert.equal(reads, 2, "streaming updates reuse the unchanged persisted sample");
+
   usage = { tokens: 10, contextWindow: 100, percent: 10 };
-  for (const event of ["message_start", "message_update", "message_end", "agent_end", "agent_settled",
+  for (const event of ["message_start", "message_end", "agent_end", "agent_settled",
     "model_select", "thinking_level_select", "session_tree", "session_compact", "session_compact_failed"]) {
     usage = { ...usage, tokens: usage.tokens + 1, percent: usage.percent + 1 };
     handlers.get(event)({ type: event });

@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TaskQueue } from "./task-queue.mjs";
 import { configureNetwork } from "./network.mjs";
-import { createProtocolOutput } from "./protocol-output.mjs";
+import { createProtocolOutput, projectSdkEvent } from "./protocol-output.mjs";
 
 // Only this writer owns the protocol pipe. Extension console/terminal output is
 // diagnostic data, even when it contains JSON or lacks a trailing newline.
@@ -307,7 +307,7 @@ process.once("SIGINT", () => { void shutdown(); });
 session.subscribe((event) => {
   queue.observe(event);
   // A host per-run boundary has no authority over the daemon task.
-  if (event.type !== "agent_settled") output({ ...event, originRunId: queue.context.getStore()?.id });
+  if (event.type !== "agent_settled") output(projectSdkEvent(event, queue.context.getStore()?.id));
 });
 
 sdk.initTheme(settingsManager.getTheme(), false);
