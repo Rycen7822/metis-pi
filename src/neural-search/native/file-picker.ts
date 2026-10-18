@@ -1,4 +1,4 @@
-import type { FileFinderApi, InitOptions, Result } from "@ff-labs/fff-node";
+import type { FileFinderApi, InitOptions, Result } from "./binding/api.ts";
 import { loadSdk, SCAN_TIMEOUT_MS, type FileFinderStatic } from "./sdk.ts";
 
 type PickerOptions = Required<Pick<InitOptions, "enableHomeDirScanning" | "enableFsRootScanning" | "followSymlinks" | "frecencyDbPath" | "historyDbPath">>;
@@ -11,7 +11,7 @@ export class FilePickerFactory {
 
   async create(basePath: string, signal?: AbortSignal, persistent = true): Promise<FileFinderApi> {
     signal?.throwIfAborted();
-    const { FileFinder } = await loadSdk(this.options.followSymlinks);
+    const { FileFinder } = await loadSdk();
     signal?.throwIfAborted();
     const result = this.open(FileFinder, basePath, persistent);
     if (!result.ok) throw new Error(`Failed to create neural-search index for ${basePath}: ${result.error}`);

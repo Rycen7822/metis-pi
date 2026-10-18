@@ -95,6 +95,7 @@ jobs:
             assert.equal(manifest.version, process.env.EXPECTED_PI_VERSION, name);
           }
           NODE
+      - run: npm run verify:neural-engine
       - run: npm run verify
         env:
           NODE_COMPILE_CACHE: ${{ runner.temp }}/metis-pi-node-compile-cache
@@ -108,6 +109,43 @@ jobs:
       - run: npm run test:pty:strict
         env:
           PI_BIN: ${{ github.workspace }}/node_modules/.bin/pi
+  neural-engine:
+    name: Owned Rust search · Linux x64
+    needs: admission
+    if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.0'
+          components: rust-docs
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: '0.16.0'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/neural-search -> ../../.work/neural-engine/target
+          cache-all-crates: true
+          cache-targets: true
+      - run: cargo install cargo-zigbuild --locked --version 0.23.4
+      - run: npm run verify:neural-engine
+      - run: npm run build:neural-engine
+      - name: Run inherited Rust unit checks
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.work/neural-engine/target
+          TMPDIR: ${{ github.workspace }}/.work/neural-engine/tmp
+        run: |
+          mkdir -p "$TMPDIR"
+          cargo test --manifest-path native/neural-search/Cargo.toml --workspace --lib --locked --no-default-features --features zlob
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neural-search-linux-x64
+          path: assets/neural-search/
   retire-feature-push:
     name: Retire duplicate feature push
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository

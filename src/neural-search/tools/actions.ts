@@ -1,5 +1,5 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { GrepMode, SearchResult } from "@ff-labs/fff-node";
+import type { GrepMode, SearchResult } from "../native/binding/api.ts";
 import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
 import { formatFindOutput, formatGrepOutput } from "./format.ts";

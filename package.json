@@ -41,7 +41,9 @@
     "check:condense": "tsc -p tsconfig.condense.json",
     "prepare:subagents": "python3 scripts/prepare-subagents.py",
     "prepare": "npm run prepare:subagents",
-    "prepack": "npm run build:plugins && npm run prepare:subagents",
+    "build:neural-engine": "node native/neural-search/build-linux-x64.mjs",
+    "verify:neural-engine": "node native/neural-search/build-linux-x64.mjs verify",
+    "prepack": "npm run verify:neural-engine && npm run build:plugins && npm run prepare:subagents",
     "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q test/subagents -n 4 --dist=loadfile",
     "build:plugins": "npm --prefix src/pi-web-access run build",
     "test:plugins": "npm --prefix src/pi-web-access test",
@@ -65,8 +67,7 @@
     "unpdf": "^1.6.2"
   },
   "optionalDependencies": {
-    "@ff-labs/fff-bun": "0.11.0",
-    "@ff-labs/fff-node": "0.11.0"
+    "ffi-rs": "1.3.7"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "1.3.0",
@@ -102,6 +103,8 @@
     "docs/provenance/mcp/LICENSE",
     "vendor/tree-sitter-bash",
     "assets/native-tools",
+    "assets/neural-search",
+    "native/neural-search",
     "docs/provenance/subagents/LICENSE"
   ],
   "engines": {

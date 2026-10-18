@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FileFinderApi, GrepMode, SearchResult } from "@ff-labs/fff-node";
+import type { FileFinderApi, GrepMode, SearchResult } from "./native/binding/api.ts";
 import type { ContentProgress } from "./native/content.ts";
 
 export const FIND_SNAPSHOT_LIMIT = 10_000;

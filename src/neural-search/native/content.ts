@@ -1,4 +1,4 @@
-import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from "@ff-labs/fff-node";
+import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from "./binding/api.ts";
 
 export const MATCHES_PER_FILE = 200;
 export interface ContentResult extends GrepResult { nativeMultilineLimited?: boolean; }
