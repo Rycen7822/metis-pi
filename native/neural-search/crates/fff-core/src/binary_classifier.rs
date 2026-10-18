@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::constants::MAX_FFFILE_SIZE;
 use crate::file_picker::is_known_binary_extension;
-use crate::types::{BINARY_CLASSIFICATION_CHUNK_SIZE, detect_binary_content};
+use crate::types::{BINARY_CLASSIFICATION_CHUNK_SIZE, detect_binary_content, open_regular_file};
 
 pub(crate) struct BinaryInput {
     pub(crate) path: PathBuf,
@@ -49,7 +49,7 @@ impl BinaryInput {
 
 fn classify_path(path: &Path, cancelled: &AtomicBool, chunk: &mut [u8]) -> Result<Option<bool>> {
     // Bound growth during the read too, not just the captured indexed size.
-    let file = std::fs::File::open(path)?;
+    let file = open_regular_file(path)?;
     let mut reader = file.take(MAX_FFFILE_SIZE + 1);
     let mut total = 0u64;
     loop {

@@ -12,7 +12,7 @@
       "native/neural-search",
       "src/neural-search/native/binding"
     ],
-    "sha256": "f3e08d62d3561223c3a2b8a640b1617aafb39a2d35a2905465a81bf90ca3f282",
+    "sha256": "cba6eadf49d5c5ded4c09c99a6b821be9552c75a6af0328d7eb99dd76e44360b",
     "inputs": [
       {
         "path": "native/neural-search/Cargo.lock",
@@ -28,7 +28,7 @@
       },
       {
         "path": "native/neural-search/build-linux-x64.mjs",
-        "sha256": "865a403ff84bb9fed0d13a65d0666572275be649681f3e4503130e16c374e4d5"
+        "sha256": "211dc899416d12d92c3140c4d45e2184b145394d6658bbc00ca1907300fbeb61"
       },
       {
         "path": "native/neural-search/crates/fff-c/Cargo.toml",
@@ -56,7 +56,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/binary_classifier.rs",
-        "sha256": "20de496644eaab7c998cb6c251ac1a20422ef2c0d3f300cb0de66f406375f5b0"
+        "sha256": "585239edacb6d488dc7b219704aea234ffe784a6cc3361160f9c99373e081cb2"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/constants.rs",
@@ -92,7 +92,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/file_picker.rs",
-        "sha256": "3f69b6e98cb6b4a2cdab550edf497e49ba5b18f59dfc54cb1b23f764e92aeb26"
+        "sha256": "e1329763d5906e483c0dfbe29664cd5bf471f3bec05da261373f40a8c60a0a24"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git.rs",
@@ -180,7 +180,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/scan.rs",
-        "sha256": "0c89be0270df069c2ce31cab926be136ed30cf6ca67f517e06093c83b86bd45a"
+        "sha256": "70c400fafb8a0c5fbb6ef2b5584c207566f483a4369091fa624806f78d2de8b1"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/score.rs",
@@ -188,7 +188,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/shared.rs",
-        "sha256": "ce5b68c991325a7afe4f786d9b66c9f2b6bd5e3d184491891bbbcc64b97712a7"
+        "sha256": "00ee5691909b4d2d7c642c21ca831b5fcf681b023ce23b98397c539f574019a5"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/simd_path.rs",
@@ -216,7 +216,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/types.rs",
-        "sha256": "db6dcfa690dcebd4fd7f3da67f1a9772f63e8b6b6df1d204b6b05b9a7d88c70d"
+        "sha256": "0170ae98930d5b930421d183780bca789f4156a4128ebe7fc03b7cadb387e576"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/walk/mod.rs",
@@ -228,7 +228,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "9377ed1b75f22fc28021196c96740780f5bb0b64a67bef8b23f207aabb16eb72"
+        "sha256": "124d8132113660570531617e717c2773f4d866568143b68f237098f1875a860b"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/mod.rs",
@@ -236,7 +236,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/rescan_tests.rs",
-        "sha256": "72bd66894cd4ecf9de829e7f5c34f68b22581fbae1acc74ce240f6218a2564fd"
+        "sha256": "b86c7146a4b323510b8911898a70f981169e9943f71962be24d8fd1674353ff3"
       },
       {
         "path": "native/neural-search/crates/fff-grep/Cargo.toml",
@@ -328,7 +328,7 @@
       },
       {
         "path": "src/neural-search/native/binding/ffi.ts",
-        "sha256": "829fc0bf1c0b76f6fb09c70a9b35777a45d90d90574e1f43d03bf8b4f24ae40f"
+        "sha256": "f109a8c9566bc6d7c8375dfc6dc4faa6014ed7c213b24d5131dc59a788bb9234"
       },
       {
         "path": "src/neural-search/native/binding/finder.ts",
@@ -356,12 +356,13 @@
     "rustFlags": [
       "-Ctarget-cpu=x86-64"
     ],
-    "cFlags": ""
+    "cFlags": "",
+    "zlobZigCpu": "baseline"
   },
   "asset": {
     "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
-    "sha256": "476ca33a32a3b98740c894c4f09637adec4b0d4b833ac8e9ea412ca0566cff41",
-    "bytes": 10439248,
+    "sha256": "73872eb9e48c16b20174d3f90ede3ecf0ab78005822290360620dbda6f80a8a2",
+    "bytes": 10439648,
     "abi": {
       "version": 3,
       "machine": "x86-64",

@@ -613,12 +613,14 @@ impl FilePicker {
         self.sync_data.ignore_rules.clone()
     }
 
-    pub fn has_watcher(&self) -> bool {
+    pub fn watch_enabled(&self) -> bool {
         self.watch
     }
 
     pub fn is_watcher_ready(&self) -> bool {
-        self.background_watcher.is_some() && self.signals.watcher_ready.load(Ordering::Acquire)
+        self.background_watcher
+            .as_ref()
+            .is_some_and(|watcher| watcher.is_healthy())
     }
 
     pub fn follows_symlinks(&self) -> bool {
@@ -1355,8 +1357,10 @@ impl FilePicker {
         ScanProgress {
             scanned_files_count: scanned_count,
             is_scanning,
-            is_watcher_ready: self.signals.watcher_ready.load(Ordering::Relaxed),
-            is_ready: !is_scanning && !self.is_post_scan_active(),
+            is_watcher_ready: self.is_watcher_ready(),
+            is_ready: !is_scanning
+                && !self.is_post_scan_active()
+                && (!self.watch || self.is_watcher_ready()),
         }
     }
 
@@ -1614,12 +1618,12 @@ impl FilePicker {
         // this is the only way to actually know if the file is on disk, we CAN NOT
         // rely on the watcher to proive the latest state of the file, do the actual check
         let metadata = match std::fs::metadata(path) {
-            Ok(m) => {
+            Ok(m) if m.is_file() => {
                 self.untombstone_file(pos);
 
                 m
             }
-            Err(_) => {
+            _ => {
                 self.tombstone_file(pos);
                 return None;
             }
@@ -1646,7 +1650,12 @@ impl FilePicker {
     /// which indicates that it's time to trigger a new sync
     #[tracing::instrument(skip(self))]
     pub fn add_new_file(&mut self, path: &Path) -> Option<&FileItem> {
-        let (mut file_item, rel_path) = FileItem::new(path.to_path_buf(), &self.base_path, None);
+        let metadata = std::fs::metadata(path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        let (mut file_item, rel_path) =
+            FileItem::new_with_metadata(path.to_path_buf(), &self.base_path, None, Some(&metadata));
 
         let builder = self.sync_data.overflow_builder.get_or_insert_with(|| {
             // we know that overflow would never create more files during the file
@@ -1783,7 +1792,6 @@ impl FilePicker {
         if let Some(mut watcher) = self.background_watcher.take() {
             watcher.stop();
         }
-        self.signals.watcher_ready.store(false, Ordering::Release);
     }
 
     /// Quick way to check if scan is going without acquiring a lock for [Self::get_scan_progress]
@@ -1793,12 +1801,6 @@ impl FilePicker {
 
     pub fn is_post_scan_active(&self) -> bool {
         self.signals.post_scan_active.load(Ordering::Acquire)
-    }
-
-    /// Return a clone of the watcher-ready flag so callers can poll it without
-    /// holding a lock on the picker.
-    pub fn watcher_signal(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.signals.watcher_ready)
     }
 
     /// Convert an absolute path to a relative path string (relative to base_path).

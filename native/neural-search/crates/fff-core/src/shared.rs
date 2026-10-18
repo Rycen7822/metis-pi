@@ -24,7 +24,9 @@ fn wait_for_git_index_lock_release(git_root: &Path) {
     const GIT_LOCK_POLL: Duration = Duration::from_millis(10);
     const GIT_LOCK_MAX_WAIT: Duration = Duration::from_millis(500);
 
-    let lock = git_root.join(".git").join("index.lock");
+    let lock = Repository::discover(git_root)
+        .map(|repo| repo.path().join("index.lock"))
+        .unwrap_or_else(|_| git_root.join(".git/index.lock"));
     // Fast path: no lock present.
     if !lock.exists() {
         return;
@@ -155,16 +157,12 @@ impl SharedFilePicker {
     /// Block until the background file watcher is ready.
     /// Returns `true` if watcher ready, `false` on timeout.
     pub fn wait_for_watcher(&self, timeout: Duration) -> bool {
-        let watch_ready_signal = {
-            let guard = self.0.picker.read();
-            match &*guard {
-                Some(picker) => Arc::clone(&picker.signals.watcher_ready),
-                None => return true,
-            }
-        };
-
         poll_until(timeout, || {
-            watch_ready_signal.load(std::sync::atomic::Ordering::Acquire)
+            self.0
+                .picker
+                .read()
+                .as_ref()
+                .is_none_or(|picker| picker.is_watcher_ready())
         })
     }
 

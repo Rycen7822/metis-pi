@@ -56,7 +56,7 @@ function abi(path) {
 
 function verify(manifest) {
   const current = inputs();
-  if (manifest.schemaVersion !== 2 || manifest.target !== target || manifest.asset.path !== asset || manifest.minGlibc !== "2.31" || manifest.abiVersion !== 3 || manifest.upstream?.version !== "0.11.0" || manifest.upstream?.commit !== "95fd777c2529fc7b4d7572dabff64cc07268f2c5")
+  if (manifest.schemaVersion !== 2 || manifest.target !== target || manifest.asset.path !== asset || manifest.minGlibc !== "2.31" || manifest.abiVersion !== 3 || manifest.build?.zlobZigCpu !== "baseline" || manifest.upstream?.version !== "0.11.0" || manifest.upstream?.commit !== "95fd777c2529fc7b4d7572dabff64cc07268f2c5")
     throw new Error("Unexpected search library manifest.");
   if (JSON.stringify(current) !== JSON.stringify(manifest.source.inputs) || hash(JSON.stringify(current)) !== manifest.source.sha256)
     throw new Error("Search engine source differs from the packaged library; rebuild it.");
@@ -90,14 +90,14 @@ if (mode === "verify") {
   const before = inputs();
   const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target");
   const args = ["zigbuild", "--manifest-path", "native/neural-search/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
-  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") } });
+  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });
   if (JSON.stringify(inputs()) !== JSON.stringify(before)) throw new Error("Search source changed during compilation; packaged bytes were not updated.");
   const candidate = join(output, target, "ci/libmetis_neural_search.so");
   const manifest = {
     schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 3,
     upstream: { version: "0.11.0", commit: "95fd777c2529fc7b4d7572dabff64cc07268f2c5" },
     source: { roots: ["native/neural-search", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
-    build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, cFlags: cflags },
+    build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, cFlags: cflags, zlobZigCpu: "baseline" },
     asset: { path: asset, sha256: fileHash(candidate), bytes: statSync(candidate).size, abi: abi(candidate) },
     notices: notices.map(path => ({ path, sha256: fileHash(join(root, path)) })),
   };

@@ -122,6 +122,7 @@ export function ffiGrep(handle: NativeHandle, pattern: string, options: GrepOpti
   return grep("grep", handle, pattern, options, options.mode === "regex" ? 1 : options.mode === "fuzzy" ? 2 : 0);
 }
 export function ffiMultiGrep(handle: NativeHandle, options: MultiGrepOptions): Result<GrepResult> {
+  if (options.patterns.some(pattern => pattern.includes("\n"))) return err("multiGrep patterns must not contain LF; use a single grep for multiline content.");
   return grep("multi_grep", handle, options.patterns.join("\n"), options);
 }
 function grep(name: "grep" | "multi_grep", handle: NativeHandle, pattern: string, options: GrepOptions, mode?: number): Result<GrepResult> {

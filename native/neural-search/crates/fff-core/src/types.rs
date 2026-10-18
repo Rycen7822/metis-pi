@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -562,7 +563,7 @@ impl FileItem {
         }
 
         let path = self.absolute_path(arena, base_path);
-        let file = std::fs::File::open(&path).ok()?;
+        let file = open_regular_file(&path).ok()?;
         // SAFETY: the mmap is backed by the kernel page cache and reflects
         // file updates; the only risk is SIGBUS on a concurrent truncate,
         // which the watcher mitigates by invalidating on modification.
@@ -612,7 +613,7 @@ impl FileItem {
         let abs = self.absolute_path(arena, base_path);
 
         if self.size >= FRESH_MMAP_THRESHOLD {
-            let file = std::fs::File::open(&abs).ok()?;
+            let file = open_regular_file(&abs).ok()?;
             let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
             let stored = mmap_slot.insert(mmap);
             return Some(&stored[..]);
@@ -623,10 +624,26 @@ impl FileItem {
         let len = self.size as usize;
         buf.resize(len, 0);
 
-        let mut file = std::fs::File::open(&abs).ok()?;
+        let mut file = open_regular_file(&abs).ok()?;
         file.read_exact(buf).ok()?;
         Some(buf.as_slice())
     }
+}
+
+/// Open without waiting for a FIFO writer, then validate the actual descriptor.
+/// Index metadata alone cannot protect against a path changing type before IO.
+pub(crate) fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Per-thread scratch slot owning a transient mmap returned from

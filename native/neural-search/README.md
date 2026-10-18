@@ -19,7 +19,7 @@ Existing frecency/query-association encoding, keys, named tables and retention r
 
 The low-level capacity override is `METIS_NEURAL_SEARCH_LMDB_MAX_READERS` (default 1024, valid values >=126). The former `FFF_LMDB_MAX_READERS` name is not an alias. This is not a second preference source; global search preferences remain in `[neuralSearch]`. Existing LMDB users/lock state can determine capacity until all users restart; no data-format migration accompanies the rename.
 
-Scan admission reserves one queued/running job; busy requests coalesce until it finishes walking, classifying and installing its watcher. Readiness waits for those phases rather than just the filesystem walk. Classification copies immutable inputs under the index lock, performs IO outside it, then checks index identity/content revision before applying results. This protects Rust ownership, not a filesystem-wide content snapshot. mmap caching/fresh reads remain; external in-place truncation is not made safe by a watcher lock. Native queries are synchronous and cannot be interrupted mid-call by a JS abort signal. Whole-file soft pagination and complete zero-match search semantics remain.
+Scan admission reserves one queued/running job; busy requests coalesce until it finishes walking, classifying and installing its watcher. Readiness waits for those phases rather than just the filesystem walk. Classification copies immutable inputs under the index lock, performs IO outside it, then checks index identity/content revision before applying results. Only regular files enter the live content index; classification and content reads use nonblocking opens plus descriptor type checks, so a FIFO or a raced file-type change cannot wait for a pipe writer. This protects Rust ownership, not a filesystem-wide content snapshot. mmap caching/fresh reads remain; external in-place truncation is not made safe by a watcher lock. Native queries are synchronous and cannot be interrupted mid-call by a JS abort signal. Whole-file soft pagination and complete zero-match search semantics remain.
 
 ## Build and verify
 
@@ -33,7 +33,7 @@ RUSTUP_TOOLCHAIN=1.94.0 npm run build:neural-engine
 npm run verify:neural-engine
 ```
 
-The builder uses the locked graph, `ci` profile, `x86_64-unknown-linux-gnu.2.31`, and explicit baseline x64 CPU settings. It rejects host-specific CPU overrides; local profiling may use Cargo directly, but must not replace the published artifact. Outputs remain under `.work/neural-engine/target`. Verification checks the paired Rust/header/build and TS binding sources, exact exported ABI, ELF dependencies, glibc symbol floor, library bytes and notices. Packing a source/Git checkout therefore requires Linux x64 and GNU binutils as well; these delivery checks are not skipped on unsupported hosts. `prepack` verifies without compiling Rust; CI verifies the committed payload and rebuilds it.
+The builder uses the locked graph, `ci` profile, `x86_64-unknown-linux-gnu.2.31`, and explicit baseline x64 CPU settings. It rejects host-specific compiler CPU overrides, forces `ZLOB_ZIG_CPU=baseline` for the Zig helper and records that pin in the manifest; local profiling may use Cargo directly, but must not replace the published artifact. Outputs remain under `.work/neural-engine/target`. Verification checks the paired Rust/header/build and TS binding sources, exact exported ABI, ELF dependencies, glibc symbol floor, library bytes and notices. Packing a source/Git checkout therefore requires Linux x64 and GNU binutils as well; these delivery checks are not skipped on unsupported hosts. `prepack` verifies without compiling Rust; CI verifies the committed payload and rebuilds it.
 
 Inherited unit checks stay with the continuing implementation. Tests solely for retired SDK/editor/bigram behavior retire with that behavior; shared filtering, sorting, context, live updates and persistence protection remain. New one-off diagnosis/migration/package probes belong only under `.work/`, never permanent test discovery.
 
@@ -42,7 +42,7 @@ mkdir -p .work/neural-engine/tmp
 TMPDIR="$PWD/.work/neural-engine/tmp" CARGO_TARGET_DIR="$PWD/.work/neural-engine/target" cargo +1.94.0 test --manifest-path native/neural-search/Cargo.toml --workspace --lib --locked
 ```
 
-Native modules are process-cached. **Restart Pi after updating or rolling back the native engine**; `/reload` alone does not unload it. ABI/cache version guards refuse mismatched layouts rather than reinterpret old pointers. Finder instances still release their resources when their session/cwd lifetime ends. Deploy source, binding, manifest and library as one package, not independently.
+Native modules are process-cached. **Restart Pi after updating or rolling back the native engine**; `/reload` alone does not unload it. ABI/cache version guards refuse mismatched layouts rather than reinterpret old pointers. Finder instances still release their resources when their session/cwd lifetime ends. Watcher readiness comes from the current watcher instance, not a shared success latch: failed registrations stay unhealthy and a rescan can retry them. Git subscriptions resolve the actual repository directory for worktrees/submodules and refresh when a repository is initialized after startup. Deploy source, binding, manifest and library as one package, not independently.
 
 ## Redistribution
 

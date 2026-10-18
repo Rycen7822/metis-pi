@@ -15,8 +15,6 @@ use crate::watch::BackgroundWatcher;
 pub(crate) struct ScanSignals {
     /// Set to `true` while any scan phase is running
     pub(crate) scanning: Arc<AtomicBool>,
-    /// Set to `true` once the filesystem watcher has been installed
-    pub(crate) watcher_ready: Arc<AtomicBool>,
     /// Indicates that that owning picker was requested to shut down
     pub(crate) cancelled: Arc<AtomicBool>,
     /// Used to resolve conflicts if multiple rescans were triggered in a queue
@@ -81,9 +79,9 @@ impl ScanJob {
         let trace_span = picker.trace_span();
 
         let new_scan_config = ScanConfig {
-            watch: picker.has_watcher(),
+            watch: picker.watch_enabled(),
             auto_cache_budget: !picker.has_explicit_cache_budget(),
-            install_watcher: false, // the watcher is independent of rescan, it is not restarting EVER
+            install_watcher: !picker.is_watcher_ready(),
             follow_symlinks: picker.follows_symlinks(),
             enable_fs_root_scanning: picker.fs_root_scanning_enabled(),
             enable_home_dir_scanning: picker.home_dir_scanning_enabled(),
@@ -136,7 +134,28 @@ impl ScanJob {
         });
     }
 
-    fn run(self) {
+    fn run(mut self) {
+        loop {
+            if !self.signals.cancelled.load(Ordering::Acquire) {
+                self.run_phases();
+            }
+            // Keep the same reservation across queued passes, including an
+            // error retry. Readiness cannot observe an idle handoff gap.
+            let _guard = self.shared_picker.write();
+            let pending = self.signals.rescan_pending.swap(false, Ordering::AcqRel);
+            if self.signals.cancelled.load(Ordering::Acquire) || !pending {
+                drop(self.scanning);
+                return;
+            }
+            self.config.install_watcher = _guard.as_ref().is_ok_and(|guard| {
+                guard
+                    .as_ref()
+                    .is_some_and(|picker| !picker.is_watcher_ready())
+            });
+        }
+    }
+
+    fn run_phases(&self) {
         let Self {
             shared_picker,
             shared_frecency,
@@ -144,8 +163,7 @@ impl ScanJob {
             signals,
             scanned_files_counter,
             config,
-            trace_span: _,
-            scanning,
+            ..
         } = self;
         scanned_files_counter.store(0, Ordering::Relaxed);
 
@@ -221,15 +239,20 @@ impl ScanJob {
 
         drop(snapshot); // SNAPSHOT SHOULD NOT BE USED AFTER THIS POINT
 
-        // 5. Install filesystem watcher (initial scan only).
+        // 5. Install or recover the filesystem watcher.
         if config.install_watcher && config.watch && !signals.cancelled.load(Ordering::Acquire) {
+            if let Ok(mut guard) = shared_picker.write()
+                && let Some(picker) = guard.as_mut()
+            {
+                // Release failed/partial subscriptions before a retry.
+                picker.background_watcher.take();
+            }
             let shared_picker: &SharedFilePicker = &shared_picker;
             let shared_frecency: &SharedFrecency = &shared_frecency;
             let base_path: &std::path::Path = &base_path;
 
             match BackgroundWatcher::new(
                 base_path.to_path_buf(),
-                git_workdir,
                 shared_picker.clone(),
                 shared_frecency.clone(),
                 config.enable_fs_root_scanning,
@@ -244,33 +267,10 @@ impl ScanJob {
                         && !signals.cancelled.load(Ordering::Acquire)
                     {
                         picker.background_watcher = Some(watcher);
-                        signals.watcher_ready.store(true, Ordering::Release);
                     }
                 }
                 Err(e) => error!(?e, "failed to initialize background watcher"),
             };
-        }
-
-        // Release our slot before admitting follow-up work. Keeping the pending
-        // drain under the admission lock also prevents a late request being lost.
-        let pending = {
-            let _guard = shared_picker.write();
-            drop(scanning);
-            signals.rescan_pending.swap(false, Ordering::AcqRel)
-        };
-        if !signals.cancelled.load(Ordering::Acquire) && pending {
-            match Self::new_rescan(&shared_picker, &shared_frecency) {
-                Ok(Some(follow_up)) => {
-                    info!("Rescheduling deferred rescan after current scan finished");
-                    follow_up.spawn();
-                }
-                // Another admission won the slot; new_rescan has queued this
-                // request behind it under the same lock, so it is not lost.
-                Ok(None) => {}
-                Err(e) => {
-                    error!(?e, "Failed to reschedule deferred rescan");
-                }
-            }
         }
     }
 
@@ -350,6 +350,7 @@ fn rescubscribe_watcher_post_scan(shared_picker: &SharedFilePicker) {
         return;
     };
 
+    watcher.request_git_refresh();
     picker.for_each_dir(|dir: &std::path::Path| {
         watcher.request_watch_dir(dir.to_path_buf());
         std::ops::ControlFlow::Continue(())

@@ -656,7 +656,6 @@ struct Fixture {
     base: PathBuf,
     picker: SharedFilePicker,
     frecency: SharedFrecency,
-    git_workdir: Option<PathBuf>,
     git_worker: Arc<GitStatusWorker>,
     // Dropped last so background work started by a triggered rescan still
     // sees the tree it was asked to walk.
@@ -682,15 +681,14 @@ impl Fixture {
     fn build(git: bool, frecency: bool) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
-        let git_workdir = git.then(|| {
+        if git {
             let status = Command::new("git")
                 .args(["init", "-b", "main"])
                 .current_dir(&base)
                 .output()
                 .expect("git init");
             assert!(status.status.success(), "git init failed");
-            base.clone()
-        });
+        }
 
         let (shared_frecency, frecency_tmp) = if frecency {
             let db = tempfile::tempdir().unwrap();
@@ -707,7 +705,6 @@ impl Fixture {
             base,
             picker: SharedFilePicker::default(),
             frecency: shared_frecency,
-            git_workdir,
             git_worker: GitStatusWorker::new(),
             _tmp: tmp,
             _frecency_tmp: frecency_tmp,
@@ -766,7 +763,7 @@ impl Fixture {
         handle_debounced_events(
             events.into_iter().collect(),
             &self.base,
-            &self.git_workdir,
+            &std::sync::mpsc::channel().0,
             &self.picker,
             &self.frecency,
             &self.git_worker,
