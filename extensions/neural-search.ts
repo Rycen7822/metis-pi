@@ -7,7 +7,8 @@ const ownerPath = fileURLToPath(import.meta.url);
 const description = "Local fuzzy file/path and content search, with git-aware frecency ranking.";
 
 export default function neuralSearch(pi: ExtensionAPI): void {
-  const actions = createNeuralSearch(pi);
+  const available = () => !pi.getAllTools().some(tool => tool.name === name && tool.sourceInfo.path !== ownerPath);
+  const actions = createNeuralSearch(pi, available);
   if (!actions) return;
   const definition = {
     ...createDeferredActionTool(name, description, actions),
@@ -23,13 +24,13 @@ export default function neuralSearch(pi: ExtensionAPI): void {
     lastWarning = warning;
   };
   pi.on("session_start", (_event, ctx) => {
-    const current = pi.getAllTools().find(tool => tool.name === name);
-    if (current && current.sourceInfo.path !== ownerPath) {
+    if (!available()) {
       diagnose(ctx, "Metis Neural Search inactive: another neural_search provider is loaded.");
       return;
     }
     pi.registerTool(definition);
-    if (owned() && nativeSearch() && !pi.getActiveTools().includes("tool_search"))
+    // The managed surface owner has already applied and attested the profile.
+    if (process.env.PI_AGENTS_MANAGED_CHILD !== "1" && owned() && nativeSearch() && !pi.getActiveTools().includes("tool_search"))
       pi.setActiveTools([...pi.getActiveTools(), "tool_search"]);
     if (pi.getAllTools().some(tool => tool.sourceInfo.source.startsWith("npm:@ff-labs/pi-fff")))
       ctx.ui.notify("Standalone pi-fff is also loaded. Remove that package when switching to Metis Neural Search to avoid duplicate tools and indexes.", "warning");
@@ -41,6 +42,7 @@ export default function neuralSearch(pi: ExtensionAPI): void {
       return;
     }
     const ready = nativeSearch() && pi.getActiveTools().includes("tool_search");
+    if (process.env.PI_AGENTS_MANAGED_CHILD === "1" && !ready) { diagnose(ctx); return; }
     diagnose(ctx, ready ? undefined : "Metis Neural Search needs Pi's native tool_search enabled for discovery and direct calls.");
     event.systemPromptOptions.sections.metis_neural_search = ready
       ? `${name}: ${description} Discover with tool_search, then call directly. Use action=describe to load an action's parameters.`

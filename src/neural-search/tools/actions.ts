@@ -3,14 +3,15 @@ import type { GrepMode } from "@ff-labs/fff-node";
 import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
 import { formatFindOutput, formatGrepOutput } from "./format.ts";
-import { buildQuery } from "../native/query.ts";
+import { buildQuery, hasGlobSyntax } from "../native/query.ts";
+import { contentPage, searchContent, MATCHES_PER_FILE } from "../native/content.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
 import type { SearchLease, SearchRuntime } from "../session.ts";
 
 const DEFAULT_GREP_LIMIT = 20;
 const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
-const GREP_MAX_MATCHES_PER_FILE = 200;
+const FIND_PAGE_SIZE_MAX = 100;
 const GREP_TIME_BUDGET_MS = 10_000;
 const pathSchema = Type.Optional(Type.String({ description:
   "Include path: directory prefix (src/), filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Matches the whole root-relative path. Outside-workspace paths and existing directory paths containing spaces use a separate local index. Filename/glob filters containing whitespace are unsupported; search the containing directory instead.",
@@ -29,7 +30,7 @@ export const findSchema = Type.Object({
   pattern: Type.String({ description: "Fuzzy path query, glob, or empty string for listing by path. Multi-word is narrower (AND), not bound to order. Prefer 1-2 concept terms; use path for exact filename globs." }),
   path: pathSchema,
   exclude: excludeSchema,
-  limit: Type.Optional(Type.Integer({ minimum: 1, description: "Max results per page (default 30)." })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: FIND_PAGE_SIZE_MAX, description: "Max results per page (default 30, capped at 100)." })),
   cursor: cursorSchema,
 }, { additionalProperties: false });
 export const grepSchema = Type.Object({
@@ -60,6 +61,7 @@ interface SearchDetails {
   pageIndex?: number;
   hasMore?: boolean;
   patterns?: string[];
+  perFileLimitReached?: boolean;
 }
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -79,7 +81,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         signal?.throwIfAborted();
         runtime.assertCurrent(scope);
         const notices = searchNotices(lease);
-        const pageSize = positiveLimit(request.limit, DEFAULT_FIND_LIMIT);
+        const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_FIND_LIMIT), FIND_PAGE_SIZE_MAX);
         const pattern = request.pattern!;
         const pageIndex = resumed?.nextPageIndex ?? 0;
         // FFF 0.11 uses an item offset despite naming this option pageIndex.
@@ -139,38 +141,38 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
         let mode = resumed?.mode ?? detected;
         const context = mode === "fuzzy" ? 0 : clampContext(request.context);
-        const smartCase = request.caseSensitive !== true;
-        let query = resumed?.query ?? buildQuery(lease.constraint, pattern, request.exclude, lease.root);
-        const options = { mode, smartCase, maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE, pageSize,
-          cursor: resumed?.native ?? null, beforeContext: context, afterContext: context,
-          timeBudgetMs: GREP_TIME_BUDGET_MS,
-        };
-        const searched = lease.finder.grep(query, options);
-        if (!searched.ok) throw new Error(searched.error);
-        let result = searched.value;
-        if (!result.items.length && !result.nextCursor && !resumed && mode !== "regex") {
-          const lastSegment = request.path?.split(/[\\/]/).pop() ?? "";
-          // A misnamed file can broaden, but never discard caller exclusions.
-          const fuzzyQuery = /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment)
-            ? buildQuery(undefined, pattern, request.exclude, lease.root) : query;
-          const fuzzy = lease.finder.grep(fuzzyQuery, { ...options, mode: "fuzzy", cursor: null, beforeContext: 0, afterContext: 0 });
+        let query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
+        const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
+          pageSize, beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS };
+        let page = contentPage(cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
+          pageSize, resumed?.progress);
+        // Fuzzy suggestions are optional; only unambiguous identifier tokens
+        // can cross the native fuzzy API's combined pattern/filter grammar.
+        if (!page.result.items.length && !page.progress && !resumed && mode === "plain" && /^[\p{L}\p{N}_-]+$/u.test(pattern)) {
+          const concreteFile = request.path && !hasGlobSyntax(request.path) && /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(request.path);
+          const fuzzyQuery = concreteFile ? buildQuery(undefined, "", request.exclude, lease.root) : query;
+          const fuzzy = searchContent(lease.finder, pattern, fuzzyQuery, { ...options,
+            mode: "fuzzy", cursor: null, beforeContext: 0, afterContext: 0 });
           if (fuzzy.ok && fuzzy.value.items.length) {
-            result = fuzzy.value;
+            page = contentPage(() => fuzzy, pageSize);
             query = fuzzyQuery;
             mode = "fuzzy";
           }
         }
+        const result = page.result;
         if (result.regexFallbackError) notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
+        addFileLimitNotice(notices, page.cappedFiles);
         let cursor: string | undefined;
-        if (result.nextCursor) {
+        if (page.progress) {
           cursor = runtime.cursors.store({ action: "grep", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
-            finder: lease.finder, request, query, native: result.nextCursor, mode,
+            finder: lease.finder, request, query, progress: page.progress, mode,
           });
           notices.push(`Continue with cursor="${cursor}"`);
         }
         let output = withNotices(formatGrepOutput(result), notices);
         if (mode === "fuzzy") output = `[0 exact matches. Maybe you meant this?]\n${output}`;
-        return textResult(output, { totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, cursor });
+        return textResult(output, { totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, cursor,
+          hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0 });
       } finally { lease.release(); }
     },
     renderCall(args, theme) {
@@ -201,27 +203,24 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         signal?.throwIfAborted();
         runtime.assertCurrent(scope);
         const notices = searchNotices(lease);
-        const effectiveLimit = positiveLimit(request.limit, DEFAULT_GREP_LIMIT);
-        const pageSize = Math.min(effectiveLimit, GREP_PAGE_SIZE_MAX);
+        const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
         const context = clampContext(request.context);
-        const smartCase = request.caseSensitive !== true;
         const query = resumed?.query ?? [buildQuery(lease.constraint, "", request.exclude, lease.root), request.constraints].filter(Boolean).join(" ");
-        const searched = lease.finder.multiGrep({ patterns: request.patterns!, constraints: query || undefined,
-          maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE, pageSize, smartCase, cursor: resumed?.native ?? null,
+        const page = contentPage(cursor => searchContent(lease.finder, request.patterns!, query, {
+          maxMatchesPerFile: MATCHES_PER_FILE, pageSize, smartCase: request.caseSensitive !== true, cursor,
           beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS,
-        });
-        if (!searched.ok) throw new Error(searched.error);
-        const result = searched.value;
-        if (result.items.length >= effectiveLimit) notices.push(`${effectiveLimit}+ matches (refine patterns)`);
+        }), pageSize, resumed?.progress);
+        addFileLimitNotice(notices, page.cappedFiles);
         let cursor: string | undefined;
-        if (result.nextCursor) {
+        if (page.progress) {
           cursor = runtime.cursors.store({ action: "multi_grep", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
-            finder: lease.finder, request, query, native: result.nextCursor,
+            finder: lease.finder, request, query, progress: page.progress,
           });
           notices.push(`More available. cursor="${cursor}" to continue`);
         }
-        return textResult(withNotices(formatGrepOutput(result), notices), {
-          totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, cursor, patterns: request.patterns,
+        return textResult(withNotices(formatGrepOutput(page.result), notices), {
+          totalMatched: page.result.totalMatched, totalFiles: page.result.totalFiles, root: lease.root, cursor,
+          patterns: request.patterns, hasMore: !!page.progress, perFileLimitReached: page.cappedFiles.length > 0,
         });
       } finally { lease.release(); }
     },
@@ -243,6 +242,10 @@ function searchNotices(lease: SearchLease): string[] {
   if (progress.ok && progress.value.isScanning)
     notices.push("Index scan is still running; results cover only currently indexed files. Retry after the scan finishes.");
   return notices;
+}
+
+function addFileLimitNotice(notices: string[], files: string[]): void {
+  if (files.length) notices.push(`Native per-file match limit (${MATCHES_PER_FILE}) reached in ${files.join(", ")}; additional matches may be omitted. Refine the query or read those files.`);
 }
 
 function textResult(text: string, details: SearchDetails) {

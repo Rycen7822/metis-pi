@@ -1,4 +1,5 @@
 import type { GrepResult, SearchResult } from "@ff-labs/fff-node";
+import { hasGlobSyntax } from "../native/query.ts";
 
 export function fileAnnotation(item: { gitStatus?: string; totalFrecencyScore?: number; accessFrecencyScore?: number }): string {
   const git = item.gitStatus;
@@ -27,12 +28,12 @@ export function formatGrepOutput(result: GrepResult): string {
 
 export function formatFindOutput(result: SearchResult, limit: number, pattern: string): { output: string; weak: boolean; shownCount: number } {
   if (!result.items.length) return { output: "No files found matching pattern", weak: false, shownCount: 0 };
-  const weak = (result.scores[0]?.total ?? 0) < Math.floor(pattern.length * 6);
+  const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
+  const weak = fuzzy && (result.scores[0]?.total ?? 0) < Math.floor(pattern.length * 6);
   const shown = result.items.slice(0, weak ? Math.min(5, limit) : limit);
   return { output: shown.map(item => `${item.relativePath}${fileAnnotation(item)}`).join("\n"), weak, shownCount: shown.length };
 }
 
 function truncateLine(line: string): string {
-  const trimmed = line.trim();
-  return trimmed.length <= 500 ? trimmed : `${trimmed.slice(0, 500)}...`;
+  return line.length <= 500 ? line : `${line.slice(0, 500)}...`;
 }

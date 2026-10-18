@@ -17,14 +17,14 @@ index.ts          Pi composition, events/commands, action-map factory
 config.ts         Global preferences and owned database-path resolution
 session.ts        Session/cwd lifetime, indexes, leases and cursor invalidation
 cursors.ts        Bounded continuation state and checked action/request identity
-native/           FFF binding, finder creation, auxiliary pool, path policy/query codec
+native/           FFF binding, finder/pool, path/filter codec, content protocol/pages
 tools/            Pi action schemas, execution/query orchestration and returned text
 ui/               Autocomplete adaptation and native fallback widgets
 ```
 
 The extension consumes the factory's readonly action map directly; there is no registration callback or second action registry. `index.ts` is the composition root, not a barrel for native internals. The bundled root TOML is the sole defaults source. The config boundary resolves database paths once; each scoped native factory captures one fixed policy and explicitly whitelists native fields, so database-free retries cannot inherit persistence paths.
 
-`session.ts` selects and leases an index and returns its root/rebased constraint. It does not assemble queries: action execution owns initial, fuzzy-fallback and resumed queries together. Cursor lookup validates action/scope/request once and returns the corresponding typed variant; resource freshness is still checked after asynchronous acquisition.
+`session.ts` selects and leases an index and returns its root/relative constraint. It does not assemble queries: action execution owns initial, fuzzy-fallback and resumed queries together. Cursor lookup validates action/scope/request once and returns the corresponding typed variant; resource freshness is still checked after asynchronous acquisition.
 
 Native path routing and root/home scan policy share one owner in `native/paths.ts`; database paths belong to configuration, not routing. Native resource code does not depend on tool execution or TUI presentation. The concrete Pi session/UI adaptation remains in the application session owner; no generic host port or resource framework is added.
 
@@ -43,7 +43,11 @@ SDK cache policy, database fallback/scan cancellation, auxiliary leases/eviction
 
 Operation cancellation and scope lifetime are distinct. A private abortable wait lets one tool/command/autocomplete request stop waiting without aborting shared initialization. A lease arriving after its waiter is cancelled is released; shutdown/cwd/session changes still own actual finder destruction. Native synchronous grep itself is not interruptible by a JS signal.
 
-The action adapter captures scan progress before querying and discloses incomplete initial indexing. Auxiliary results state the actual search root. Root reuse eligibility includes whether a rebased path is representable in FFF's whitespace-tokenized filter grammar: a literal directory containing spaces can have its own finder, but an unrepresentable filename/glob is rejected explicitly. Dot segments are normalized before query encoding. Physical containment remains a separate policy from index reuse.
+The action adapter captures scan progress before querying and discloses incomplete initial indexing. Auxiliary results state the actual search root. Auxiliary reuse requires the exact scan root: hidden/ignore/git rules are root-relative, so physical containment cannot attest compatible coverage. Literal directories containing spaces can have their own finders; unrepresentable filename/glob filters are rejected explicitly. Dot segments are normalized before query encoding. Physical containment remains a separate routing policy.
+
+`native/content.ts` owns the pinned content protocol: structured literal patterns stay separate from constraints; regex uses an escaped, whitespace-preserving text token, with original-literal retry after native compilation failure. Its immutable native batch plus unread-row offset supplies bounded intra-file pages before advancing the native file cursor. Reaching the 200-match per-file cap is disclosed as possible truncation, not a promise to retrieve further hits. Public page limits are enforced even without host validation.
+
+The entry supplies a live ownership predicate: a conflicting provider disables auxiliary integration and disposes native resources. Managed children never regain a profile-excluded discovery builtin. Autocomplete delegates path navigation to the host before index initialization and gates stale wrappers by session ownership.
 
 Autocomplete wraps the host's public provider contract, including its natural trigger characters; native-editor tests cover custom triggers outside the default set. Do not remove numeric safety normalization merely because the dispatcher also validates/coerces schema inputs. The driver does not request unused definition classification that is discarded from both published text and details.
 
@@ -54,7 +58,8 @@ FFF 0.11.0 requires local integration corrections, verified against the real bin
 - `fileSearch.pageIndex` is an item offset: find continuations pass the logical page multiplied by page size.
 - The content-index prefilter can omit valid OR matches; owned finders disable content indexing, retaining mmap caching and native order. Correctness takes precedence over that optimization.
 - Bun ABI v1 ignores `followSymlinks`; Bun uses the Node binding when following links is enabled, and Bun-with-Node-fallback otherwise. SDK caching is keyed by binding policy, not by the first session that happens to load it.
-- Directory filters use explicit globs; `./`, absolute-path normalization and rebasing onto a cached auxiliary parent preserve directory meaning. A file such as `stray/pkg.v1` must not redirect a request for `./pkg.v1/` away from `pkg.v1/inside.ts`.
+- Directory filters use explicit globs; `./` and absolute-path normalization preserve directory meaning. A file such as `stray/pkg.v1` must not redirect a request for `./pkg.v1/` away from `pkg.v1/inside.ts`.
+- Native grep page size is a whole-file soft limit, not an output bound. Retain unread batch rows, cap displayed pages at50, and disclose per-file collection limits. Find pages are capped at100; exact glob filters bypass weak-fuzzy truncation. Grep text truncation preserves source indentation.
 
 Engine packages are optional dependencies so an unsupported native platform does not prevent installation of unrelated Metis functionality. Missing bindings fail explicitly when an index is requested, not during tool discovery.
 

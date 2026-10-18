@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { FileFinderApi, GrepCursor, GrepMode } from "@ff-labs/fff-node";
+import type { FileFinderApi, GrepMode } from "@ff-labs/fff-node";
+import type { ContentProgress } from "./native/content.ts";
 
 export type SearchAction = "find" | "grep" | "multi_grep";
 export interface SearchRequest {
@@ -23,8 +24,8 @@ interface BaseCursor {
 }
 export type SearchCursor = BaseCursor & (
   | { action: "find"; nextPageIndex: number }
-  | { action: "grep"; native: GrepCursor; mode: GrepMode }
-  | { action: "multi_grep"; native: GrepCursor }
+  | { action: "grep"; progress: ContentProgress; mode: GrepMode }
+  | { action: "multi_grep"; progress: ContentProgress }
 );
 
 export class CursorStore {

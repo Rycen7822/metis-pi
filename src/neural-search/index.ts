@@ -8,23 +8,28 @@ import { SearchRuntime } from "./session.ts";
 
 export const SEARCH_TOOL_NAME = "neural_search";
 
-export default function createNeuralSearch(pi: ExtensionAPI): ReadonlyMap<string, ActionTool> | undefined {
+export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () => boolean): ReadonlyMap<string, ActionTool> | undefined {
   const config = loadConfig();
   if (!config.enabled) return;
   const runtime = new SearchRuntime(config);
 
-  pi.on("session_start", (_event, ctx) => {
-    runtime.start(ctx);
-    const refusal = scanOptOutReason(ctx.cwd, config);
-    if (refusal) ctx.ui.notify(refusal, "warning");
-    if (config.mentions && ctx.mode === "tui") ctx.ui.addAutocompleteProvider(createMentionWrapper(runtime));
-  });
-  pi.on("before_agent_start", (_event, ctx) => { runtime.bind(ctx); });
-  pi.on("session_shutdown", () => { runtime.shutdown(); });
+  // With an ownership check, defer auxiliary setup until the registry is bound.
+  let active = !isAvailable;
+  const isActive = () => {
+    if (active && isAvailable && !isAvailable()) {
+      active = false;
+      runtime.shutdown();
+    }
+    return active;
+  };
 
-  pi.registerCommand("neural-search", {
+  const registerCommand = () => pi.registerCommand("neural-search", {
     description: "Local search index: /neural-search health | rescan",
     handler: async (args, ctx) => {
+      if (!isActive()) {
+        ctx.ui.notify("Neural search is inactive in this session.", "warning");
+        return;
+      }
       const action = args.trim() || "health";
       if (action !== "health" && action !== "rescan") {
         ctx.ui.notify("Usage: /neural-search health | rescan", "warning");
@@ -35,6 +40,7 @@ export default function createNeuralSearch(pi: ExtensionAPI): ReadonlyMap<string
         signal?.throwIfAborted();
         const scope = runtime.bind(ctx);
         const finder = await runtime.ensureMain(scope, signal);
+        if (!isActive()) return;
         runtime.assertCurrent(scope);
         if (action === "rescan") {
           const result = finder.scanFiles();
@@ -63,5 +69,19 @@ export default function createNeuralSearch(pi: ExtensionAPI): ReadonlyMap<string
       }
     },
   });
+  if (!isAvailable) registerCommand();
+  pi.on("session_start", (_event, ctx) => {
+    active = !isAvailable || isAvailable();
+    if (!active) { runtime.shutdown(); return; }
+    const scope = runtime.start(ctx);
+    registerCommand();
+    const refusal = scanOptOutReason(ctx.cwd, config);
+    if (refusal) ctx.ui.notify(refusal, "warning");
+    if (config.mentions && ctx.mode === "tui") ctx.ui.addAutocompleteProvider(
+      createMentionWrapper(runtime, () => isActive() && runtime.isCurrent(scope)),
+    );
+  });
+  pi.on("before_agent_start", (_event, ctx) => { if (isActive()) runtime.bind(ctx); });
+  pi.on("session_shutdown", () => { active = false; runtime.shutdown(); });
   return createSearchActions(runtime, SEARCH_TOOL_NAME);
 }

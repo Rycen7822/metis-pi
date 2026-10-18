@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { FileFinderApi } from "@ff-labs/fff-node";
 import type { FilePickerFactory } from "./file-picker.ts";
-import { canUseIndexRoot, coversHomeDir, scanOptOutReason } from "./paths.ts";
+import { coversHomeDir, scanOptOutReason } from "./paths.ts";
 
 export const MAX_AUX = 3;
 export const IDLE_TTL_MS = 5 * 60 * 1000;
@@ -25,10 +25,9 @@ export class AuxFinderPool {
     const refusal = scanOptOutReason(root, this.options);
     if (refusal) throw new Error(refusal);
     this.sweep();
-    const eligible = [...this.entries.values()].filter(entry => canUseIndexRoot(entry.root, root));
-    // Prefer a ready covering root over waiting for a more specific pending one.
-    let entry = eligible.filter(entry => entry.finder).sort((a, b) => b.root.length - a.root.length)[0]
-      ?? eligible.find(entry => !entry.finder);
+    // Hidden/ignore rules depend on the scan root. An ancestor index cannot
+    // attest coverage of this root even when it physically contains it.
+    let entry = this.entries.get(root);
     if (!entry) {
       const created: Entry = { root, users: 0, lastUsed: Date.now(),
         promise: Promise.resolve().then(() => this.create(created)).catch(error => { this.remove(created); throw error; }),

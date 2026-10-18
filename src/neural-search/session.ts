@@ -118,12 +118,7 @@ export class SearchRuntime {
     const lease = await waitForOperation(scope.pool.acquire(route.root), signal, lease => lease.release());
     try {
       this.assertCurrent(scope);
-      const rebase = path.relative(lease.root, route.root).replaceAll(path.sep, "/");
-      // An empty suffix means route.root is a known directory. Preserve that
-      // fact when a covering index rebases e.g. pkg.v1/ onto its parent.
-      const include = route.suffix ? [rebase, route.suffix].filter(Boolean).join("/")
-        : rebase ? `${rebase}/` : undefined;
-      return { ...lease, auxiliary: true, constraint: include };
+      return { ...lease, auxiliary: true, constraint: route.suffix || undefined };
     } catch (error) { lease.release(); throw error; }
   }
 

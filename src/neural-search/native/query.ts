@@ -1,6 +1,8 @@
 import path from "node:path";
 import { HOME_DIR, assertEncodableFilter } from "./paths.ts";
 
+export function hasGlobSyntax(value: string): boolean { return /[*?[{]/.test(value); }
+
 export function normalizePathConstraint(pathConstraint: string, cwd = process.cwd()): string | null {
   let trimmed = pathConstraint.trim();
   if (!trimmed) return null;
@@ -19,7 +21,7 @@ export function normalizePathConstraint(pathConstraint: string, cwd = process.cw
   // fileSearch treats a bare directory token as fuzzy text, unlike grep.
   // Explicit globs enforce the same directory constraint for both APIs.
   if (trimmed.endsWith("/")) return `${trimmed}**`;
-  if (trimmed.startsWith("/") || /[*?[{]/.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("/") || hasGlobSyntax(trimmed)) return trimmed;
   const lastSegment = trimmed.split("/").pop() ?? "";
   return /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment) ? trimmed : `${trimmed}/**`;
 }
