@@ -9,6 +9,7 @@ import { stringify } from "smol-toml";
 import {
   createAgentSession,
   createEventBus,
+  createToolSearchExtension,
   DefaultResourceLoader,
   initTheme,
   ModelRuntime,
@@ -65,6 +66,7 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
     agentDir: dir,
     settingsManager,
     additionalExtensionPaths: paths,
+    extensionFactories: [{ name: "tool_search", builtin: true, factory: createToolSearchExtension() }],
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
@@ -209,7 +211,7 @@ test("external owner is detected after discovery, before built-in handlers regis
   assert.ok(h.notices.some((text) => text.includes("built-in condense is inactive")));
 });
 
-test("Pi native context handlers and final provider payload retain recovery tools and projected results", async (t) => {
+test("Pi native discovery activates deferred recovery for direct calls and provider payloads", async (t) => {
   const model = modelNamed("gpt-6-astra");
   const raw = "ORIGINAL_LONG_RESULT_".repeat(5000);
   const call = assistantToolCall(model, "archived", "read");
@@ -221,18 +223,33 @@ test("Pi native context handlers and final provider payload retain recovery tool
   ] });
   const messages = await h.session.extensionRunner.emitContext([{ role: "user", content: "inspect history", timestamp: 1 }, call, result]);
   assert.ok(JSON.stringify(messages).length < raw.length / 2);
+  h.session.setActiveToolsByName([...h.session.getActiveToolNames(), "tool_search"]);
   const provider = h.modelRuntime.getRegisteredNativeProvider("openai-codex");
   const capture = await captureRegistration(provider);
-  const active = new Set(h.session.getActiveToolNames());
-  assert.ok(active.has("context_tree_query"), "recall must actually be callable, not merely registered");
-  const tools = h.session.extensionRunner
-    .getAllRegisteredTools()
-    .map(({ definition: { name, description, parameters } }) => ({ name, description, parameters }))
-    .filter((tool) => active.has(tool.name));
+  assert.equal(h.session.getAllTools().find(tool => tool.name === "context_tree_query").exposure, "deferred");
+  const activeTools = () => h.session.agent.state.tools
+    .map(({ name, description, parameters }) => ({ name, description, parameters }));
+  assert.ok(!h.session.getActiveToolNames().includes("context_tree_query"));
   await capture.registration
-    .streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools }, { apiKey: FAKE_API_KEY })
+    .streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools: activeTools() }, { apiKey: FAKE_API_KEY })
     .result();
-  const body = capture.bodies[0];
+  assert.ok(!(capture.bodies[0].tools ?? []).some(tool => tool.name === "context_tree_query"),
+    "the initial request must not advertise the deferred schema");
+
+  const search = h.session.agent.state.tools.find(tool => tool.name === "tool_search");
+  const found = await search.execute("discover-recovery", { query: "context_tree_query" });
+  assert.match(found.content.map(block => block.text ?? "").join("\n"), /context_tree_query/);
+  assert.ok(h.session.getActiveToolNames().includes("context_tree_query"));
+  const recall = h.session.agent.state.tools.find(tool => tool.name === "context_tree_query");
+  const recovered = await recall.execute("direct-recovery", { toolCallIds: ["archived"], maxBytes: 2048 });
+  const page = JSON.parse(recovered.content[0].text);
+  assert.ok(page.results[0].text.length > 0 && raw.startsWith(page.results[0].text),
+    "the discovered tool must directly recover archived evidence without codemode");
+  assert.equal(typeof page.nextCursor, "string");
+  await capture.registration
+    .streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools: activeTools() }, { apiKey: FAKE_API_KEY })
+    .result();
+  const body = capture.bodies.at(-1);
   const recallSchema = body.tools.find((tool) => tool.name === "context_tree_query");
   assert.ok(recallSchema?.parameters.properties.cursor, "the final request must advertise pagination");
   const wireCall = body.input.find((item) => item.type === "function_call");

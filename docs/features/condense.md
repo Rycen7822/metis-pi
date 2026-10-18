@@ -102,7 +102,7 @@ provider 的输出 cap 与此 proxy 分开：沿用模型窗口/输出的既有 
 - Pi bash fullOutputPath 在临时文件失效前导入；其他工具只能保存实际收到的内容，不能恢复 RTK/上游已丢文本。
 - 原生 nested 使用 execution start/end 与 prepared 参数归档，父结果传播保护、错误、未完成和归档失败。缺失或失败捕获必须标不完整。
 
-context_tree_query 返回历史证据；省略目标先列目录，再分页读取。
+`context_tree_query` 返回历史证据；省略目标先列目录，再分页读取。工具以 `deferred` 注册，默认不在初始请求中展开完整定义。可通过 Pi 原生 `tool_search` 按名字发现并激活，然后直接调用；codemode 仍可使用，但不是必经路径。激活后完整定义可进入后续请求，并不保证整个会话始终省下这部分开销。
 交互式 `/pruner tree` 已移除；原文目录、正文、参数与分页恢复仍通过 `context_tree_query` 使用。
 
 | 参数/字段 | 语义 |

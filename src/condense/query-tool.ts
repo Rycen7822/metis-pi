@@ -117,6 +117,7 @@ async function readPage(source: ByteSource, offset: number, budget: number) {
 export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): void {
   pi.registerTool({
     name: QUERY_TOOL_NAME,
+    exposure: "deferred",
     label: "Query Original Tool History",
     description:
       "Omit toolCallIds to list the evidence directory, then recover archived tool " +
