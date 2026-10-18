@@ -1,5 +1,5 @@
 // Derived from FFF 0.11.0 (MIT), copyright Dmitriy Kovalenko.
-// Metis private ABI v4: expose only the projections actually used by Metis.
+// Metis private ABI v5: expose only the projections actually used by Metis.
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
@@ -7,7 +7,7 @@ use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
 use fff::types::{MixedItemRef, MixedSearchResult, SearchResult};
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 #[repr(C)]
 pub struct CreateOptions {
@@ -288,6 +288,7 @@ pub struct Grep {
     pub filtered_file_count: u32,
     pub next_file_offset: u32,
     pub regex_fallback_error: *mut c_char,
+    pub index_version: u64,
 }
 impl Grep {
     pub fn new(result: &fff::GrepResult<'_>, picker: &FilePicker) -> Self {
@@ -305,6 +306,8 @@ impl Grep {
             total_files: result.total_files as u32,
             filtered_file_count: result.filtered_file_count as u32,
             next_file_offset: result.next_file_offset as u32,
+            // The picker read guard also covers matching and serialization.
+            index_version: picker.index_version(),
             regex_fallback_error: result
                 .regex_fallback_error
                 .as_deref()
@@ -330,6 +333,7 @@ pub struct Progress {
     pub index_version: u64,
     pub scan_error: *mut c_char,
     pub git_status_error: *mut c_char,
+    pub watcher_error: *mut c_char,
 }
 impl From<fff::file_picker::ScanProgress> for Progress {
     fn from(value: fff::file_picker::ScanProgress) -> Self {
@@ -344,6 +348,10 @@ impl From<fff::file_picker::ScanProgress> for Progress {
                 .git_status_error
                 .as_deref()
                 .map_or(ptr::null_mut(), string),
+            watcher_error: value
+                .watcher_error
+                .as_deref()
+                .map_or(ptr::null_mut(), string),
         }
     }
 }
@@ -352,6 +360,7 @@ impl Drop for Progress {
         unsafe {
             free_string(self.scan_error);
             free_string(self.git_status_error);
+            free_string(self.watcher_error);
         }
     }
 }
@@ -371,7 +380,9 @@ const _: () = {
     assert!(size_of::<MixedItem>() == 24 && offset_of!(MixedItem, item_type) == 16);
     assert!(size_of::<Mixed>() == 16);
     assert!(size_of::<GrepMatch>() == 64 && offset_of!(GrepMatch, line_number) == 40);
-    assert!(size_of::<Grep>() == 40 && offset_of!(Grep, regex_fallback_error) == 32);
-    assert!(size_of::<Progress>() == 40 && offset_of!(Progress, index_version) == 16);
+    assert!(size_of::<Grep>() == 48 && offset_of!(Grep, regex_fallback_error) == 32);
+    assert!(offset_of!(Grep, index_version) == 40);
+    assert!(size_of::<Progress>() == 48 && offset_of!(Progress, index_version) == 16);
+    assert!(offset_of!(Progress, watcher_error) == 40);
     assert!(offset_of!(Progress, scan_error) == 24 && offset_of!(Progress, git_status_error) == 32);
 };

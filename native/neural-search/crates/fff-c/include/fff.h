@@ -1,4 +1,4 @@
-/* Metis private Linux x64 ABI v4. Not a standalone SDK or allocation API.
+/* Metis private Linux x64 ABI v5. Not a standalone SDK or allocation API.
  * Maintained with src/ffi_types.rs and the ffi-rs layout. Derived from FFF
  * 0.11.0 (MIT), Copyright (c) 2025 Dmitriy Kovalenko; see ../../../LICENSE.
  * All result views and their strings/arrays are borrowed until free_result.
@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define METIS_SEARCH_ABI_VERSION 4
+#define METIS_SEARCH_ABI_VERSION 5
 
 typedef struct {
   uint32_t version;
@@ -36,12 +36,13 @@ typedef struct {
   MetisMatch *items;
   uint32_t count, total_files_searched, total_files, filtered_file_count, next_file_offset;
   char *regex_fallback_error;
+  uint64_t index_version;
 } MetisGrep;
 typedef struct {
   uint64_t scanned_files_count;
   bool is_scanning, is_watcher_ready, is_ready;
   uint64_t index_version;
-  char *scan_error, *git_status_error;
+  char *scan_error, *git_status_error, *watcher_error;
 } MetisProgress;
 
 uint32_t metis_search_abi_version(void);
@@ -53,14 +54,18 @@ MetisResult *metis_search_mixed(void *handle, const char *query, uint32_t page_s
 /* Pattern bytes are independent from the filter grammar. mode: plain=0,
  * regex=1, fuzzy=2. page_limit is a soft whole-file limit, not a row cursor.
  * Zero file-size/page-size selects the existing default; zero time is unlimited.
- * enforce_time_budget=false preserves complete zero-match searches. */
+ * enforce_time_budget=false preserves complete zero-match searches.
+ * Zero expected_index_version is fresh offset0; continuations must match the
+ * index version captured with the previous result under the same read lock. */
 MetisResult *metis_search_grep(void *handle, const char *pattern, const char *filters, uint8_t mode,
   uint64_t max_file_size, uint32_t max_matches, bool smart_case, uint32_t file_offset,
-  uint32_t page_limit, uint64_t time_ms, bool enforce_time_budget, uint32_t before, uint32_t after);
+  uint32_t page_limit, uint64_t time_ms, bool enforce_time_budget, uint32_t before, uint32_t after,
+  uint64_t expected_index_version);
 /* LF-separated literal OR needles; higher layers reject ambiguous embedded LF. */
 MetisResult *metis_search_multi_grep(void *handle, const char *patterns, const char *filters,
   uint64_t max_file_size, uint32_t max_matches, bool smart_case, uint32_t file_offset,
-  uint32_t page_limit, uint64_t time_ms, bool enforce_time_budget, uint32_t before, uint32_t after);
+  uint32_t page_limit, uint64_t time_ms, bool enforce_time_budget, uint32_t before, uint32_t after,
+  uint64_t expected_index_version);
 MetisResult *metis_search_scan(void *handle);
 MetisResult *metis_search_is_scanning(void *handle);
 MetisResult *metis_search_progress(void *handle);

@@ -83,6 +83,7 @@ fn unsupported_type(constraints: &[Constraint<'_>]) -> bool {
     })
 }
 const TYPE_ERROR: &str = "Unsupported type: filter. Use an extension or glob filter instead.";
+const CONTENT_CURSOR_ERROR: &str = "Content index changed; restart the query without a cursor.";
 fn limit(value: u32, default: u32) -> usize {
     (if value == 0 { default } else { value }) as usize
 }
@@ -258,6 +259,7 @@ pub unsafe extern "C" fn metis_search_grep(
     enforce_time_budget: bool,
     before_context: u32,
     after_context: u32,
+    expected_index_version: u64,
 ) -> *mut Envelope {
     let pattern = match unsafe { text(pattern) } {
         Ok(pattern) => pattern,
@@ -294,6 +296,11 @@ pub unsafe extern "C" fn metis_search_grep(
     };
     unsafe {
         with_picker(handle, |_, picker| {
+            if (file_offset != 0 || expected_index_version != 0)
+                && expected_index_version != picker.index_version()
+            {
+                return Envelope::error(CONTENT_CURSOR_ERROR);
+            }
             Envelope::boxed(Grep::new(
                 &picker.grep_pattern(pattern, &constraints, &options),
                 picker,
@@ -316,6 +323,7 @@ pub unsafe extern "C" fn metis_search_multi_grep(
     enforce_time_budget: bool,
     before_context: u32,
     after_context: u32,
+    expected_index_version: u64,
 ) -> *mut Envelope {
     let patterns = match unsafe { text(patterns) } {
         Ok(patterns) if !patterns.is_empty() => patterns.split('\n').collect::<Vec<_>>(),
@@ -347,6 +355,11 @@ pub unsafe extern "C" fn metis_search_multi_grep(
     };
     unsafe {
         with_picker(handle, |_, picker| {
+            if (file_offset != 0 || expected_index_version != 0)
+                && expected_index_version != picker.index_version()
+            {
+                return Envelope::error(CONTENT_CURSOR_ERROR);
+            }
             match picker.multi_grep(&patterns, &constraints, &options) {
                 Ok(result) => Envelope::boxed(Grep::new(&result, picker)),
                 Err(error) => Envelope::error(&format!("Failed to build search patterns: {error}")),

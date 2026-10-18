@@ -51,12 +51,12 @@ function abi(path) {
   const expected = ["abi_version", "create", "take_instance", "destroy", "files", "mixed", "grep", "multi_grep", "scan", "is_scanning", "progress", "health", "free_result", "get_file", "get_mixed", "get_match", "pointer_offset"].map(name => `metis_search_${name}`).sort();
   const exports = [...symbols].filter(name => /^(?:fff_|metis_search_)/.test(name)).sort();
   if (JSON.stringify(exports) !== JSON.stringify(expected)) throw new Error(`Unexpected private search ABI: ${exports.join(", ")}`);
-  return { version: 4, machine: "x86-64", needed, glibc, exports };
+  return { version: 5, machine: "x86-64", needed, glibc, exports };
 }
 
 function verify(manifest) {
   const current = inputs();
-  if (manifest.schemaVersion !== 2 || manifest.target !== target || manifest.asset.path !== asset || manifest.minGlibc !== "2.31" || manifest.abiVersion !== 4 || manifest.build?.zlobZigCpu !== "baseline" || manifest.upstream?.version !== "0.11.0" || manifest.upstream?.commit !== "95fd777c2529fc7b4d7572dabff64cc07268f2c5")
+  if (manifest.schemaVersion !== 2 || manifest.target !== target || manifest.asset.path !== asset || manifest.minGlibc !== "2.31" || manifest.abiVersion !== 5 || manifest.build?.zlobZigCpu !== "baseline" || manifest.upstream?.version !== "0.11.0" || manifest.upstream?.commit !== "95fd777c2529fc7b4d7572dabff64cc07268f2c5")
     throw new Error("Unexpected search library manifest.");
   if (JSON.stringify(current) !== JSON.stringify(manifest.source.inputs) || hash(JSON.stringify(current)) !== manifest.source.sha256)
     throw new Error("Search engine source differs from the packaged library; rebuild it.");
@@ -94,7 +94,7 @@ if (mode === "verify") {
   if (JSON.stringify(inputs()) !== JSON.stringify(before)) throw new Error("Search source changed during compilation; packaged bytes were not updated.");
   const candidate = join(output, target, "ci/libmetis_neural_search.so");
   const manifest = {
-    schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 4,
+    schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 5,
     upstream: { version: "0.11.0", commit: "95fd777c2529fc7b4d7572dabff64cc07268f2c5" },
     source: { roots: ["native/neural-search", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
     build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, cFlags: cflags, zlobZigCpu: "baseline" },

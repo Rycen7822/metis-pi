@@ -1,12 +1,12 @@
-// Metis private Linux x64 ABI v4. Rust owns each envelope and its payload;
+// Metis private Linux x64 ABI v5. Rust owns each envelope and its payload;
 // decode into detached JS values before freeing the envelope in finally.
 import { DataType, type FieldType, isNullPointer, type JsExternal, load, open, restorePointer, wrapPointer } from "ffi-rs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { err, type FileItem, type GrepOptions, type GrepResult, type HealthCheck, type InitOptions, type MixedItem, type MixedSearchResult, type MultiGrepOptions, type Result, type ScanProgress, type SearchResult } from "./api.ts";
 
-const LIBRARY_KEY = "metis_neural_search_v4";
-const ABI_VERSION = 4;
+const LIBRARY_KEY = "metis_neural_search_v5";
+const ABI_VERSION = 5;
 const CREATE = {
   version: DataType.U32, base_path: DataType.String, frecency_db_path: DataType.String, history_db_path: DataType.String,
   enable_fs_root_scanning: DataType.U8, enable_home_dir_scanning: DataType.U8, follow_symlinks: DataType.U8,
@@ -25,9 +25,9 @@ const MATCH = {
 } as const;
 const GREP = {
   items: DataType.External, count: DataType.U32, total_files_searched: DataType.U32, total_files: DataType.U32,
-  filtered_file_count: DataType.U32, next_file_offset: DataType.U32, regex_fallback_error: DataType.External,
+  filtered_file_count: DataType.U32, next_file_offset: DataType.U32, regex_fallback_error: DataType.External, index_version: DataType.U64,
 } as const;
-const PROGRESS = { scanned_files_count: DataType.U64, is_scanning: DataType.U8, is_watcher_ready: DataType.U8, is_ready: DataType.U8, index_version: DataType.U64, scan_error: DataType.External, git_status_error: DataType.External } as const;
+const PROGRESS = { scanned_files_count: DataType.U64, is_scanning: DataType.U8, is_watcher_ready: DataType.U8, is_ready: DataType.U8, index_version: DataType.U64, scan_error: DataType.External, git_status_error: DataType.External, watcher_error: DataType.External } as const;
 type Raw<S> = { [K in keyof S]: S[K] extends DataType.External ? JsExternal : number };
 export type NativeHandle = JsExternal;
 let loaded = false;
@@ -125,16 +125,25 @@ export function ffiMultiGrep(handle: NativeHandle, options: MultiGrepOptions): R
   if (options.patterns.some(pattern => pattern.includes("\n"))) return err("multiGrep patterns must not contain LF; use a single grep for multiline content.");
   return grep("multi_grep", handle, options.patterns.join("\n"), options);
 }
+function validIndexVersion(value: number): boolean { return Number.isSafeInteger(value) && value > 0; }
+function readIndexVersion(raw: number): number {
+  const value = Number(raw);
+  if (!validIndexVersion(value)) throw new Error("Native index revision is unavailable or exhausted; restart Pi.");
+  return value;
+}
 function grep(name: "grep" | "multi_grep", handle: NativeHandle, pattern: string, options: GrepOptions, mode?: number): Result<GrepResult> {
+  if (options.cursor && !validIndexVersion(options.cursor._indexVersion))
+    return err("Native content cursor has no valid index revision; restart the query without a cursor.");
   const types: FieldType[] = [DataType.External, DataType.String, DataType.String];
   const values: unknown[] = [handle, pattern, options.constraints ?? ""];
   if (mode !== undefined) { types.push(DataType.U8); values.push(mode); }
-  types.push(DataType.U64, DataType.U32, DataType.U8, DataType.U32, DataType.U32, DataType.U64, DataType.U8, DataType.U32, DataType.U32);
+  types.push(DataType.U64, DataType.U32, DataType.U8, DataType.U32, DataType.U32, DataType.U64, DataType.U8, DataType.U32, DataType.U32, DataType.U64);
   values.push(options.maxFileSize ?? 0, options.maxMatchesPerFile ?? 0, options.smartCase === false ? 0 : 1,
     options.cursor?._offset ?? 0, options.pageSize ?? 0, options.timeBudgetMs ?? 0, options.enforceTimeBudget ? 1 : 0,
-    options.beforeContext ?? 0, options.afterContext ?? 0);
+    options.beforeContext ?? 0, options.afterContext ?? 0, options.cursor?._indexVersion ?? 0);
   return result(name, types, values, view => {
     const raw = readStruct(view.handle, GREP);
+    const indexVersion = readIndexVersion(raw.index_version);
     const items: GrepResult["items"] = [];
     for (let index = 0; index < raw.count; index++) {
       const entry = element("get_match", view.handle, index, MATCH);
@@ -145,8 +154,8 @@ function grep(name: "grep" | "multi_grep", handle: NativeHandle, pattern: string
       });
     }
     const regexFallbackError = readString(raw.regex_fallback_error);
-    return { items, totalMatched: items.length, totalFiles: raw.total_files, totalFilesSearched: raw.total_files_searched,
-      filteredFileCount: raw.filtered_file_count, nextCursor: raw.next_file_offset ? { _offset: raw.next_file_offset } : null,
+    return { items, indexVersion, totalMatched: items.length, totalFiles: raw.total_files, totalFilesSearched: raw.total_files_searched,
+      filteredFileCount: raw.filtered_file_count, nextCursor: raw.next_file_offset ? { _offset: raw.next_file_offset, _indexVersion: indexVersion } : null,
       ...(regexFallbackError ? { regexFallbackError } : {}),
     };
   });
@@ -159,14 +168,13 @@ export function ffiIsScanning(handle: NativeHandle): boolean {
 export function ffiGetScanProgress(handle: NativeHandle): Result<ScanProgress> {
   return result("progress", [DataType.External], [handle], view => {
     const raw = readStruct(view.handle, PROGRESS);
-    const indexVersion = Number(raw.index_version);
-    if (!Number.isSafeInteger(indexVersion) || indexVersion < 1)
-      throw new Error("Native index revision is unavailable or exhausted; restart Pi.");
+    const indexVersion = readIndexVersion(raw.index_version);
     const scanError = readString(raw.scan_error);
     const gitStatusError = readString(raw.git_status_error);
+    const watcherError = readString(raw.watcher_error);
     return { scannedFilesCount: Number(raw.scanned_files_count), isScanning: !!raw.is_scanning,
       isWatcherReady: !!raw.is_watcher_ready, isReady: !!raw.is_ready, indexVersion,
-      ...(scanError ? { scanError } : {}), ...(gitStatusError ? { gitStatusError } : {}) };
+      ...(scanError ? { scanError } : {}), ...(gitStatusError ? { gitStatusError } : {}), ...(watcherError ? { watcherError } : {}) };
   });
 }
 export function ffiHealthCheck(handle: NativeHandle, path: string): Result<HealthCheck> {

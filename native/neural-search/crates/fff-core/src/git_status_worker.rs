@@ -50,7 +50,7 @@ impl GitStatusWorker {
         {
             if let Err(error) = Self::spawn_consumer(Arc::clone(self), weak_picker, frecency) {
                 self.consumer_spawned.store(false, Ordering::Release);
-                *self.error.lock() = Some(error.to_string());
+                self.set_error(Some(error.to_string()));
                 tracing::error!(?error, "Failed to spawn git status worker");
             }
         }
@@ -59,6 +59,10 @@ impl GitStatusWorker {
 
     pub(crate) fn error(&self) -> Option<String> {
         self.error.lock().clone()
+    }
+
+    pub(crate) fn set_error(&self, error: Option<String>) {
+        *self.error.lock() = error;
     }
 
     pub(crate) fn enqueue_paths<I>(&self, paths: I)
@@ -135,7 +139,7 @@ impl GitStatusWorker {
                     if let Err(error) = &result {
                         tracing::error!(?error, "Git status update failed");
                     }
-                    *mailbox.error.lock() = result.err().map(|error| error.to_string());
+                    mailbox.set_error(result.err().map(|error| error.to_string()));
                     // Acknowledge only after the metadata write guard and health
                     // publication. Requests received mid-pass wait for the next pass.
                     for reply in work.full_waiters {

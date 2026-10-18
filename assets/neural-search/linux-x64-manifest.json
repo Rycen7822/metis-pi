@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "x86_64-unknown-linux-gnu",
   "minGlibc": "2.31",
-  "abiVersion": 4,
+  "abiVersion": 5,
   "upstream": {
     "version": "0.11.0",
     "commit": "95fd777c2529fc7b4d7572dabff64cc07268f2c5"
@@ -12,7 +12,7 @@
       "native/neural-search",
       "src/neural-search/native/binding"
     ],
-    "sha256": "d1c20e71db5a1847b69e4d07bcd4c18ff2e85e0032993bed4c87345c96ea0a80",
+    "sha256": "5ba75fc7e0bb4342478b9cd5570340321f4165ef04fbebe9c71e8846791c9c9a",
     "inputs": [
       {
         "path": "native/neural-search/Cargo.lock",
@@ -28,7 +28,7 @@
       },
       {
         "path": "native/neural-search/build-linux-x64.mjs",
-        "sha256": "6e5bdf9e56e316dd3abeeb88ffe357804921c0ed2665384260b7987afd69398a"
+        "sha256": "59b28d334c37fe1022c56c43e6a485a41d12fe1c01d516d8b320b79b61217859"
       },
       {
         "path": "native/neural-search/crates/fff-c/Cargo.toml",
@@ -36,15 +36,15 @@
       },
       {
         "path": "native/neural-search/crates/fff-c/include/fff.h",
-        "sha256": "b47a2347baa83f3d0504bdd51448e52804b77ffc50709f41234eaba404ad3acc"
+        "sha256": "e6790d0efc88c907b86e3602660685df177caaf339f20b9545210862740fdf16"
       },
       {
         "path": "native/neural-search/crates/fff-c/src/ffi_types.rs",
-        "sha256": "658a949567773d41a9c2531f819e9b4ffd148207ad552717e394b40d09082983"
+        "sha256": "b894879c26ba255c39f1f38d242aeca2d60a6ca55499e003c9eb54ac885fb684"
       },
       {
         "path": "native/neural-search/crates/fff-c/src/lib.rs",
-        "sha256": "52e1680f4174e83bf80134057a2792338d8beaf8417686e9ffd04fd27ae6ba4f"
+        "sha256": "70d308b2b3758a98dc3db881d05d36f4e4bba6deda22340b198000f0c15bbd15"
       },
       {
         "path": "native/neural-search/crates/fff-core/Cargo.toml",
@@ -92,7 +92,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/file_picker.rs",
-        "sha256": "94cfa740ed04a1838294d4121f1935eedd05706820250a4b671e102e757d482e"
+        "sha256": "f62c256ba90eeea5e0a16dc295071583e5cc9e44350d900dc81953a10edaae65"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git.rs",
@@ -104,7 +104,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git_status_worker.rs",
-        "sha256": "f8e6095e98cc1f4c379964549d32fbb4774193f5e08fe111a6fc8bd5d07fe31f"
+        "sha256": "dc37259c0639d6eb1e87658d78f4c3425617b855805483d4b664106fc36f1c2d"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/fuzzy_grep.rs",
@@ -180,7 +180,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/scan.rs",
-        "sha256": "fa895408aa852b9341b83391f4fa3d1085f2fefa55c3a3ed5995ecb12d8c166d"
+        "sha256": "676a5a0efc779df33f4147a98394d9973404798a4fe9dff6efc0cd8ba1c54d8c"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/score.rs",
@@ -228,7 +228,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "2583b319e8e793812c60dada752973a42c41d537682c5c0f7014645d73b43332"
+        "sha256": "c827932f159182e29bb29eeb99f0b4844c8fa2b2298079283b57903074f3f08d"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/mod.rs",
@@ -324,15 +324,15 @@
       },
       {
         "path": "src/neural-search/native/binding/api.ts",
-        "sha256": "4c7ff3104afc8aa89865e2cabd71e97cb6d99aa8eaec643a0e8a81e8e39d7e2f"
+        "sha256": "592f2f677d5b0c841c00adc3ccf017978dd0de4b837cf2ae8f0a5860d6aec5ad"
       },
       {
         "path": "src/neural-search/native/binding/ffi.ts",
-        "sha256": "d3e77b6fdb1c8d1d32e77c39abf16e5157cef0facb010dec4fa23bb1265c584a"
+        "sha256": "952742b64774a2b4f356ec0ad64f60c7b955cbb10d55ff34e81d138b963c5c09"
       },
       {
         "path": "src/neural-search/native/binding/finder.ts",
-        "sha256": "28fefc858c5d1074976ced78304136d57facd0707a3342979baeab78d381eea5"
+        "sha256": "059b1a627bd88b3513ad3ec18d55a05e376cb70e66bb592d88508491e3d7bc75"
       }
     ]
   },
@@ -361,10 +361,10 @@
   },
   "asset": {
     "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
-    "sha256": "b592e3253453788d733887928d01ec2fb448b76e6eb8248b232df546c6258957",
-    "bytes": 10472688,
+    "sha256": "b9deb2e66aa41ce059eaa4176a337695808926286247d84bba23a2a3fac7d765",
+    "bytes": 10473392,
     "abi": {
-      "version": 4,
+      "version": 5,
       "machine": "x86-64",
       "needed": [
         "ld-linux-x86-64.so.2",

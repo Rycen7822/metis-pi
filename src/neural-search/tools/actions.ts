@@ -164,15 +164,15 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
         const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
           pageSize, beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS };
-        let page = contentPage((cursor, version) => searchContent(lease.finder, pattern, query, { ...options, cursor }, version),
+        let page = contentPage(lease.finder, cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
           pageSize, resumed?.progress);
         // Fuzzy suggestions are optional; limit them to unambiguous identifiers,
         // rather than treating phrases or punctuation as typo candidates.
         if (!page.result.items.length && !page.progress && !resumed && mode === "plain" && /^[\p{L}\p{N}_-]+$/u.test(pattern)) {
           const fuzzy = searchContent(lease.finder, pattern, query, { ...options,
             mode: "fuzzy", cursor: null, beforeContext: 0, afterContext: 0 });
-          if (fuzzy.ok && fuzzy.value.items.length) {
-            page = contentPage(() => fuzzy, pageSize);
+          if (fuzzy.ok && fuzzy.value.indexVersion === page.result.indexVersion && fuzzy.value.items.length) {
+            page = contentPage(lease.finder, () => fuzzy, pageSize);
             mode = "fuzzy";
           }
         }
@@ -222,10 +222,10 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
         const context = clampContext(request.context);
         const query = resumed?.query ?? [buildQuery(lease.constraint, "", request.exclude, lease.root), request.constraints].filter(Boolean).join(" ");
-        const page = contentPage((cursor, version) => searchContent(lease.finder, request.patterns!, query, {
+        const page = contentPage(lease.finder, cursor => searchContent(lease.finder, request.patterns!, query, {
           maxMatchesPerFile: MATCHES_PER_FILE, pageSize, smartCase: request.caseSensitive !== true, cursor,
           beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS,
-        }, version), pageSize, resumed?.progress);
+        }), pageSize, resumed?.progress);
         const formatted = contentPageResult(page, notices);
         let cursor: string | undefined;
         if (page.progress) {
@@ -256,8 +256,11 @@ function searchNotices(lease: SearchLease): string[] {
   const progress = lease.finder.getScanProgress();
   if (!progress.ok) throw new Error(progress.error);
   if (!progress.value.isScanning && progress.value.scanError) throw new Error(progress.value.scanError);
-  if (!progress.value.isReady)
-    notices.push("Index initialization is incomplete; results cover only currently indexed files. Retry after scanning, subscriptions and metadata initialization finish, or check /neural-search health.");
+  if (!progress.value.isReady) {
+    if (!progress.value.isScanning && !progress.value.isWatcherReady)
+      notices.push(`File monitoring is unavailable; results cover only the indexed snapshot and changes may not appear until monitoring recovers. Run /neural-search rescan to retry.${progress.value.watcherError ? ` ${progress.value.watcherError}` : ""}`);
+    else notices.push("Index initialization or refresh is incomplete; results cover only currently indexed files. Retry after scanning, subscriptions and metadata initialization finish, or check /neural-search health.");
+  }
   if (progress.value.gitStatusError)
     notices.push(`Git metadata is unavailable; status annotations and ranking may be incomplete: ${progress.value.gitStatusError}`);
   return notices;

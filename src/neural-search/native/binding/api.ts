@@ -32,6 +32,7 @@ export interface ScanProgress {
   indexVersion: number;
   scanError?: string;
   gitStatusError?: string;
+  watcherError?: string;
 }
 export interface DbHealth { path: string; diskSize: number; healthy: boolean; }
 export interface HealthCheck {
@@ -43,8 +44,8 @@ export interface HealthCheck {
 }
 
 export type GrepMode = "plain" | "regex" | "fuzzy";
-/** File offset into the native ordered candidate set, distinct from a JS row cursor. */
-export interface GrepCursor { readonly _offset: number; }
+/** File offset and index identity captured by the same native read operation. */
+export interface GrepCursor { readonly _offset: number; readonly _indexVersion: number; }
 export interface GrepOptions {
   constraints?: string;
   mode?: GrepMode;
@@ -67,6 +68,7 @@ export interface GrepMatch extends FileItem {
   contextAfter?: string[];
 }
 export interface GrepResult {
+  indexVersion: number;
   items: GrepMatch[];
   totalMatched: number;
   totalFilesSearched: number;

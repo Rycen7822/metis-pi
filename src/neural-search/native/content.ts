@@ -1,8 +1,7 @@
 import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from "./binding/api.ts";
 
 export const MATCHES_PER_FILE = 200;
-interface NativeContentResult extends GrepResult { nativeMultilineLimited?: boolean; }
-export interface ContentResult extends NativeContentResult { readonly indexVersion: number; }
+export interface ContentResult extends GrepResult { nativeMultilineLimited?: boolean; }
 /** The native cursor skips whole files; retain an immutable batch and its next unread row. */
 export interface ContentProgress { batch: ContentResult; offset: number; }
 
@@ -13,33 +12,7 @@ export function multilineOrError(patterns: readonly string[]): string | undefine
 
 export function searchContent(
   finder: FileFinderApi, pattern: string | string[], constraints: string, options: GrepOptions,
-  expectedVersion?: number,
 ): Result<ContentResult> {
-  const before = contentVersion(finder);
-  if (!before.ok) return before;
-  if (expectedVersion !== undefined && before.value !== expectedVersion) return staleContent();
-  const found = runContentSearch(finder, pattern, constraints, options);
-  if (!found.ok) return found;
-  const after = contentVersion(finder);
-  if (!after.ok) return after;
-  if (after.value !== before.value) return staleContent();
-  return { ok: true, value: { ...found.value, indexVersion: before.value } };
-}
-
-function contentVersion(finder: FileFinderApi): Result<number> {
-  const progress = finder.getScanProgress();
-  if (!progress.ok) return progress;
-  const version = progress.value.indexVersion;
-  return Number.isSafeInteger(version) && version > 0 ? { ok: true, value: version }
-    : { ok: false, error: "Native index revision is unavailable; restart Pi." };
-}
-function staleContent(): { ok: false; error: string } {
-  return { ok: false, error: "Content index changed; restart the query without a cursor." };
-}
-
-function runContentSearch(
-  finder: FileFinderApi, pattern: string | string[], constraints: string, options: GrepOptions,
-): Result<NativeContentResult> {
   const { mode = "plain", ...shared } = options;
   if (Array.isArray(pattern) || mode === "plain") return searchLiterals(finder, Array.isArray(pattern) ? pattern : [pattern], constraints, shared);
   const found = mode === "fuzzy"
@@ -51,7 +24,7 @@ function runContentSearch(
   return literal;
 }
 
-function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: string, options: GrepOptions): Result<NativeContentResult> {
+function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: string, options: GrepOptions): Result<ContentResult> {
   const unsupported = multilineOrError(patterns);
   if (unsupported) return { ok: false, error: unsupported };
   // FFF joins needles with LF; a single LF-containing literal must use one
@@ -64,7 +37,7 @@ function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: 
     ? { ok: false, error: `Cannot encode multiline literal search: ${found.value.regexFallbackError}` } : found;
 }
 
-function searchRegex(finder: FileFinderApi, pattern: string, constraints: string, options: GrepOptions): Result<NativeContentResult> {
+function searchRegex(finder: FileFinderApi, pattern: string, constraints: string, options: GrepOptions): Result<ContentResult> {
   // Needles no longer pass through the filter grammar or a transport decoder.
   const found = finder.grep(pattern, { ...options, mode: "regex", constraints });
   const multiline = pattern.includes("\n") || /(?:^|[^\\])(?:\\\\)*\\n/.test(pattern);
@@ -73,10 +46,16 @@ function searchRegex(finder: FileFinderApi, pattern: string, constraints: string
 }
 
 export function contentPage(
-  search: (cursor: GrepCursor | null, expectedVersion?: number) => Result<ContentResult>, limit: number, previous?: ContentProgress,
+  finder: FileFinderApi, search: (cursor: GrepCursor | null) => Result<ContentResult>, limit: number, previous?: ContentProgress,
 ): { result: ContentResult; progress?: ContentProgress; cappedFiles: string[] } {
   const buffered = previous && previous.offset < previous.batch.items.length;
-  const found = buffered ? { ok: true as const, value: previous.batch } : search(previous?.batch.nextCursor ?? null, previous?.batch.indexVersion);
+  if (buffered) {
+    const progress = finder.getScanProgress();
+    if (!progress.ok) throw new Error(progress.error);
+    if (progress.value.indexVersion !== previous.batch.indexVersion)
+      throw new Error("Content index changed; restart the query without a cursor.");
+  }
+  const found = buffered ? { ok: true as const, value: previous.batch } : search(previous?.batch.nextCursor ?? null);
   if (!found.ok) throw new Error(found.error);
   const batch = found.value;
   const start = buffered ? previous.offset : 0;

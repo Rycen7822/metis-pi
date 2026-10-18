@@ -70,8 +70,9 @@ export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () =>
         ];
         const progress = finder.getScanProgress();
         if (progress.ok) {
-          lines.push(`Index ready: ${progress.value.isReady ? "yes" : "no"}; scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`);
+          lines.push(`Index ready: ${progress.value.isReady ? "yes" : "no"}; scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files); watcher: ${progress.value.isWatcherReady ? "ready" : "unavailable"}`);
           if (progress.value.gitStatusError) lines.push(`Index Git metadata error: ${progress.value.gitStatusError}`);
+          if (progress.value.watcherError) lines.push(`Monitoring error: ${progress.value.watcherError}`);
         }
         ctx.ui.notify(lines.join("\n"), "info");
       } catch (error) {

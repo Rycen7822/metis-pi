@@ -1356,6 +1356,11 @@ impl FilePicker {
         self.index_version = self.index_version.saturating_add(1);
     }
 
+    /// Identity of the managed index under the caller's shared picker lock.
+    pub fn index_version(&self) -> u64 {
+        self.index_version
+    }
+
     pub fn scan_error(&self) -> Option<String> {
         self.signals.error.lock().clone()
     }
@@ -1376,6 +1381,7 @@ impl FilePicker {
         ScanProgress {
             index_version: self.index_version,
             git_status_error: self.git_status_error(),
+            watcher_error: self.signals.watcher_error.lock().clone(),
             scanned_files_count: scanned_count,
             is_scanning,
             is_watcher_ready: self.is_watcher_ready(),
@@ -1912,6 +1918,7 @@ pub struct ScanProgress {
     pub is_ready: bool,
     pub scan_error: Option<String>,
     pub git_status_error: Option<String>,
+    pub watcher_error: Option<String>,
     pub index_version: u64,
 }
 

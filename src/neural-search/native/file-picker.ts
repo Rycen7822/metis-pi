@@ -26,7 +26,8 @@ export class FilePickerFactory {
         signal?.addEventListener("abort", onAbort, { once: true });
         if (signal?.aborted) onAbort();
       });
-      // A false readiness result is a timeout, not an incomplete-index error.
+      // Timeout or unavailable monitoring may leave a usable partial index.
+      // Only a failed walk/commit makes the initialization result fatal.
       const scanned = await Promise.race([finder.waitForScan(SCAN_TIMEOUT_MS), aborted]);
       signal?.throwIfAborted();
       if (!scanned.ok) throw new Error(scanned.error);

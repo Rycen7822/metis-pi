@@ -26,6 +26,8 @@ pub(crate) struct ScanSignals {
     pub(crate) post_scan_active: Arc<AtomicBool>,
     /// Last walk/commit failure; cleared when another pass starts.
     pub(crate) error: Arc<Mutex<Option<String>>>,
+    /// Monitoring can fail after a valid index has been committed.
+    pub(crate) watcher_error: Arc<Mutex<Option<String>>>,
 }
 
 /// Which optional phases a scan should run.
@@ -163,6 +165,7 @@ impl ScanJob {
             ..
         } = self;
         *signals.error.lock() = None;
+        *signals.watcher_error.lock() = None;
         scanned_files_counter.store(0, Ordering::Relaxed);
 
         // 1. Walk the file system and collect the list of files
@@ -280,9 +283,9 @@ impl ScanJob {
                     }
                 }
                 Err(e) => {
-                    *signals.error.lock() = Some(format!("Watcher initialization failed: {e}"));
+                    *signals.watcher_error.lock() =
+                        Some(format!("Watcher initialization failed: {e}"));
                     error!(?e, "failed to initialize background watcher");
-                    return;
                 }
             };
         }
@@ -299,8 +302,9 @@ impl ScanJob {
                     Ok(()) => break,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        *signals.error.lock() =
-                            Some("Git worker stopped before initial refresh completed".into());
+                        git_status_worker.set_error(Some(
+                            "Git worker stopped before initial refresh completed".into(),
+                        ));
                         break;
                     }
                 }

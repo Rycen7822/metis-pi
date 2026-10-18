@@ -1072,12 +1072,16 @@ fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) 
 
     if let Ok(path_in_git_dir) = changed.strip_prefix(git_dir) {
         // Only react to changes that rewrite the worktree state: commits,
-        // staging, checkouts, merges, conflict resolution. Ref-only updates
+        // staging, checkouts, merges, conflicts or repository configuration
+        // that changes status interpretation (e.g. core.filemode). Ref-only updates
         // under refs/ (fetch, push, tag writes, pack-refs) do not change
         // which files are modified/untracked, so we deliberately skip them
         // watching refs/ recursively would cost one inotify watch per ref
         // namespace on repos with many branches/remotes.
-        if path_in_git_dir == Path::new("index") || path_in_git_dir == Path::new("index.lock") {
+        if matches!(
+            path_in_git_dir.to_str(),
+            Some("index" | "index.lock" | "config" | "config.worktree")
+        ) {
             return true;
         }
 
@@ -1505,7 +1509,15 @@ mod tests {
         let git_dir = repo.path().to_path_buf();
         let repo = Some(repo);
 
-        let affecting = ["index", "index.lock", "HEAD", "logs/HEAD", "MERGE_HEAD"];
+        let affecting = [
+            "index",
+            "index.lock",
+            "HEAD",
+            "logs/HEAD",
+            "MERGE_HEAD",
+            "config",
+            "config.worktree",
+        ];
         for p in affecting {
             assert!(
                 is_dotgit_change_affecting_status(&git_dir.join(p), &repo),
@@ -1520,6 +1532,7 @@ mod tests {
             "logs/refs/remotes/origin/main",
             "COMMIT_EDITMSG",
             "packed-refs",
+            "config.lock",
         ];
         for p in non_affecting {
             assert!(
