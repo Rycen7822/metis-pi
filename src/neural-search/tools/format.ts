@@ -1,6 +1,5 @@
 import type { GrepResult, SearchResult } from "@ff-labs/fff-node";
 import { truncateHead } from "@earendil-works/pi-coding-agent";
-import { hasGlobSyntax } from "../native/query.ts";
 
 export function fileAnnotation(item: { gitStatus?: string; totalFrecencyScore?: number; accessFrecencyScore?: number }): string {
   const git = item.gitStatus;
@@ -28,26 +27,24 @@ export function formatGrepOutput(result: GrepResult): { output: string; truncate
     add(match.lineNumber, match.lineContent, true);
     match.contextAfter?.forEach((line, i) => add(match.lineNumber + 1 + i, line));
   }
+  let lineTruncated = false;
   const blocks = [...files.values()].map(file => [file.heading,
-    ...[...file.rows].sort(([a], [b]) => a - b).map(([number, row]) => ` ${number}${row.matched ? ":" : "-"} ${truncateLine(row.text)}`),
+    ...[...file.rows].sort(([a], [b]) => a - b).map(([number, row]) => {
+      let text = row.text;
+      if (text.length > 500) { text = `${text.slice(0, 500)}...`; lineTruncated = true; }
+      return ` ${number}${row.matched ? ":" : "-"} ${text}`;
+    }),
   ].join("\n"));
   const bounded = truncateHead(blocks.join("\n\n"));
-  const notice = bounded.truncated ? `\n[Output truncated: ${bounded.totalLines - bounded.outputLines} output lines omitted by the display budget. Refine the query or read the matching files.]` : "";
-  return { output: bounded.content + notice, truncated: bounded.truncated };
+  const truncated = lineTruncated || bounded.truncated;
+  const reasons = [lineTruncated ? "source lines shortened to 500 characters" : "",
+    bounded.truncated ? `${bounded.totalLines - bounded.outputLines} output lines omitted by the display budget` : ""].filter(Boolean);
+  const notice = truncated ? `\n[Output truncated: ${reasons.join("; ")}. Refine the query or read the matching files.]` : "";
+  return { output: bounded.content + notice, truncated };
 }
 
-export function isWeakFind(result: SearchResult, pattern: string, topScore = result.scores[0]?.total ?? 0): boolean {
-  const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
-  return result.items.length > 0 && fuzzy && topScore < Math.floor(pattern.length * 6);
-}
-
-export function formatFindOutput(result: SearchResult, limit: number, pattern: string, topScore = result.scores[0]?.total ?? 0): { output: string; weak: boolean; shownCount: number } {
-  if (!result.items.length) return { output: "No files found matching pattern", weak: false, shownCount: 0 };
-  const weak = isWeakFind(result, pattern, topScore);
-  const shown = result.items.slice(0, weak ? Math.min(5, limit) : limit);
-  return { output: shown.map(item => `${item.relativePath}${fileAnnotation(item)}`).join("\n"), weak, shownCount: shown.length };
-}
-
-function truncateLine(line: string): string {
-  return line.length <= 500 ? line : `${line.slice(0, 500)}...`;
+export function formatFindOutput(items: SearchResult["items"], limit: number, weak: boolean): { output: string; shownCount: number } {
+  if (!items.length) return { output: "No files found matching pattern", shownCount: 0 };
+  const shown = items.slice(0, weak ? Math.min(5, limit) : limit);
+  return { output: shown.map(item => `${item.relativePath}${fileAnnotation(item)}`).join("\n"), shownCount: shown.length };
 }

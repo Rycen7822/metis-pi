@@ -1,9 +1,9 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { GrepMode } from "@ff-labs/fff-node";
+import type { GrepMode, SearchResult } from "@ff-labs/fff-node";
 import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
-import { formatFindOutput, formatGrepOutput, isWeakFind } from "./format.ts";
-import { buildQuery } from "../native/query.ts";
+import { formatFindOutput, formatGrepOutput } from "./format.ts";
+import { buildQuery, hasGlobSyntax } from "../native/query.ts";
 import { contentPage, searchContent, multilineOrError, MATCHES_PER_FILE } from "../native/content.ts";
 import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
@@ -108,23 +108,24 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           }
         }
         const start = pageIndex * pageSize;
-        const result = { ...snapshot, items: snapshot.items.slice(start, start + pageSize), scores: snapshot.scores.slice(start, start + pageSize) };
-        const formatted = formatFindOutput(result, pageSize, pattern, snapshot.scores[0]?.total);
-        const shownSoFar = pageIndex * pageSize + result.items.length;
-        const hasMore = !formatted.weak && result.items.length >= pageSize && result.totalMatched > shownSoFar;
+        const items = snapshot.items.slice(start, start + pageSize);
+        const weak = isWeakFind(snapshot, pattern);
+        const formatted = formatFindOutput(items, pageSize, weak);
+        const shownSoFar = start + items.length;
+        const hasMore = !weak && items.length >= pageSize && snapshot.totalMatched > shownSoFar;
         let cursor: string | undefined;
-        if (formatted.weak && formatted.shownCount) notices.push(
-          `Query "${pattern}" produced only weak scattered fuzzy matches. Output capped at ${formatted.shownCount}/${result.totalMatched}.`,
+        if (weak && formatted.shownCount) notices.push(
+          `Query "${pattern}" produced only weak scattered fuzzy matches. Output capped at ${formatted.shownCount}/${snapshot.totalMatched}.`,
         );
         if (hasMore) {
           cursor = runtime.cursors.store({ action: "find", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
             finder: lease.finder, request, snapshot, nextPageIndex: pageIndex + 1,
           });
-          const remaining = result.totalMatched - shownSoFar;
+          const remaining = snapshot.totalMatched - shownSoFar;
           notices.push(`${remaining} more match${remaining === 1 ? "" : "es"} available. cursor="${cursor}" to continue`);
         }
         return textResult(withNotices(formatted.output, notices), {
-          totalMatched: result.totalMatched, totalFiles: result.totalFiles, root: lease.root, pageIndex, hasMore, cursor,
+          totalMatched: snapshot.totalMatched, totalFiles: snapshot.totalFiles, root: lease.root, pageIndex, hasMore, cursor,
         });
       } finally { lease.release(); }
     },
@@ -147,7 +148,8 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
       const resumed = params.cursor ? runtime.cursors.get(params.cursor, "grep", scope.id, params) : undefined;
       const request = resumed?.request ?? params;
       const pattern = request.pattern!;
-      if (wildcardOnly(pattern)) return textResult(
+      let mode = resumed?.mode ?? detectMode(pattern);
+      if (!pattern.trim() || mode === "regex" && wildcardOnly(pattern)) return textResult(
         `Pattern '${pattern}' matches everything — grep needs a concrete substring or identifier. Example: \`pattern: 'MyClass'\` or \`pattern: 'export function'\`.`,
         { totalMatched: 0, totalFiles: 0 },
       );
@@ -158,7 +160,6 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         runtime.assertCurrent(scope);
         const notices = searchNotices(lease);
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
-        let mode = resumed?.mode ?? detectMode(pattern);
         const context = mode === "fuzzy" ? 0 : clampContext(request.context);
         const query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
         const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
@@ -283,5 +284,9 @@ function detectMode(pattern: string): GrepMode {
   try { new RegExp(pattern); return "regex"; } catch { return "plain"; }
 }
 function wildcardOnly(pattern: string): boolean {
-  return !pattern.trim() || /^(?:[.^$]*(?:[.][*+?]|\*|\+)[.^$]*|[.^$\s]*|\.\*\??|\.\*[+?]?|\.\+\??|\.|\*|\?)$/.test(pattern.trim());
+  return /^(?:[.^$]*(?:\.[*+?]|[*+])[.^$]*|[.^$\s]*|\.[*+]\?|\?)$/.test(pattern.trim());
+}
+function isWeakFind(result: SearchResult, pattern: string): boolean {
+  const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
+  return result.items.length > 0 && fuzzy && (result.scores[0]?.total ?? 0) < Math.floor(pattern.length * 6);
 }
