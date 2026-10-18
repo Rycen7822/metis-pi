@@ -11,6 +11,8 @@ pub enum RescanReason {
     Explicit,
     /// The kernel dropped events and asked us to re-read the subtree.
     KernelEventLoss,
+    /// A directory/Git subscription or watcher backend failed.
+    WatcherFailure,
     /// A `.gitignore`/`.ignore` changed, so the cached ignore rules are stale.
     IgnoreFileChanged,
     /// A single debounce batch touched more paths than we apply incrementally.
@@ -22,13 +24,14 @@ pub enum RescanReason {
 }
 
 impl RescanReason {
-    pub const ALL: [RescanReason; 6] = [
+    pub const ALL: [RescanReason; 7] = [
         RescanReason::Explicit,
         RescanReason::KernelEventLoss,
         RescanReason::IgnoreFileChanged,
         RescanReason::EventBatchOverflow,
         RescanReason::IndexUpdateRejected,
         RescanReason::OverflowCapacity,
+        RescanReason::WatcherFailure,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -39,6 +42,7 @@ impl RescanReason {
             RescanReason::EventBatchOverflow => "event_batch_overflow",
             RescanReason::IndexUpdateRejected => "index_update_rejected",
             RescanReason::OverflowCapacity => "overflow_capacity",
+            RescanReason::WatcherFailure => "watcher_failure",
         }
     }
 
@@ -50,6 +54,7 @@ impl RescanReason {
             RescanReason::EventBatchOverflow => 3,
             RescanReason::IndexUpdateRejected => 4,
             RescanReason::OverflowCapacity => 5,
+            RescanReason::WatcherFailure => 6,
         }
     }
 }

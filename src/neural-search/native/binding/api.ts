@@ -29,8 +29,11 @@ export interface ScanProgress {
   isScanning: boolean;
   isWatcherReady: boolean;
   isReady: boolean;
+  indexVersion: number;
+  scanError?: string;
+  gitStatusError?: string;
 }
-export interface DbHealth { path: string; diskSize: number; }
+export interface DbHealth { path: string; diskSize: number; healthy: boolean; }
 export interface HealthCheck {
   version: string;
   git: { available: boolean; repositoryFound: boolean; workdir?: string; libgit2Version: string; error?: string };

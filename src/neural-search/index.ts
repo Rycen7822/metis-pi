@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ActionTool } from "../deferred-action-tool.ts";
+import type { HealthCheck } from "./native/binding/api.ts";
 import { createSearchActions } from "./tools/actions.ts";
 import { scanOptOutReason } from "./native/paths.ts";
 import { loadConfig } from "./config.ts";
@@ -7,6 +8,12 @@ import { createMentionWrapper } from "./ui/mentions.ts";
 import { SearchRuntime } from "./session.ts";
 
 export const SEARCH_TOOL_NAME = "neural_search";
+
+function databaseState(health: HealthCheck["frecency"]): string {
+  if (health.error) return `health-check error (${health.error})`;
+  if (!health.initialized) return "disabled";
+  return health.dbHealthcheck?.healthy === false ? "not healthy (maintenance/degraded)" : "active";
+}
 
 export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () => boolean): ReadonlyMap<string, ActionTool> | undefined {
   const config = loadConfig();
@@ -50,19 +57,22 @@ export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () =>
           ctx.ui.notify("Neural-search rescan triggered; existing pagination cursors are now stale.", "info");
           return;
         }
-        const health = finder.healthCheck();
+        const health = finder.healthCheck(scope.cwd);
         if (!health.ok) throw new Error(health.error);
         const value = health.value;
         const lines = [
           `Neural search (FFF v${value.version})`,
           `Root: ${scope.cwd}`,
           `Git: ${value.git.repositoryFound ? `yes (${value.git.workdir ?? "unknown"})` : "no"}`,
-          `Index: ${value.filePicker.initialized ? `${value.filePicker.indexedFiles ?? 0} files` : "not initialized"}`,
-          `Frecency: ${value.frecency.initialized ? "active" : "disabled"}`,
-          `Query history: ${value.queryTracker.initialized ? "active" : "disabled"}`,
+          `Index: ${value.filePicker.error ? `error (${value.filePicker.error})` : value.filePicker.initialized ? `${value.filePicker.indexedFiles ?? 0} files` : "not initialized"}`,
+          `Frecency: ${databaseState(value.frecency)}`,
+          `Query history: ${databaseState(value.queryTracker)}`,
         ];
         const progress = finder.getScanProgress();
-        if (progress.ok) lines.push(`Scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`);
+        if (progress.ok) {
+          lines.push(`Index ready: ${progress.value.isReady ? "yes" : "no"}; scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`);
+          if (progress.value.gitStatusError) lines.push(`Index Git metadata error: ${progress.value.gitStatusError}`);
+        }
         ctx.ui.notify(lines.join("\n"), "info");
       } catch (error) {
         if (signal?.aborted && error === signal.reason) return;

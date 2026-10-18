@@ -547,6 +547,9 @@ pub struct FilePicker {
     sync_data: FileSync,
     classification_owner: Option<WeakFilePicker>,
     pub(crate) signals: ScanSignals,
+    /// Conservative continuation epoch: every shared mutable access invalidates
+    /// live content offsets, including no-op writes. Never reset by a rescan.
+    index_version: u64,
     pub(crate) background_watcher: Option<BackgroundWatcher>,
     /// Single serialized writer for all git-status updates (scan, watcher,
     /// FFI). Owned by the picker so it exists before the first scan; its
@@ -848,6 +851,7 @@ impl FilePicker {
             cache_budget: Arc::new(initial_budget),
             has_explicit_cache_budget: has_explicit_budget,
             signals: crate::scan::ScanSignals::default(),
+            index_version: 1,
             scanned_files_count: Arc::new(AtomicUsize::new(0)),
             sync_data: FileSync::new(),
             classification_owner: None,
@@ -898,7 +902,6 @@ impl FilePicker {
             ScanConfig {
                 watch,
                 auto_cache_budget: true,
-                install_watcher: true,
                 follow_symlinks,
                 enable_fs_root_scanning,
                 enable_home_dir_scanning,
@@ -1349,18 +1352,39 @@ impl FilePicker {
         })
     }
 
-    // Returns an ongoing or finisshed scan progress
+    pub(crate) fn advance_index_version(&mut self) {
+        self.index_version = self.index_version.saturating_add(1);
+    }
+
+    pub fn scan_error(&self) -> Option<String> {
+        self.signals.error.lock().clone()
+    }
+
+    pub fn git_status_error(&self) -> Option<String> {
+        if self.has_git_repo() {
+            self.git_status_worker.error()
+        } else {
+            None
+        }
+    }
+
     pub fn get_scan_progress(&self) -> ScanProgress {
         let scanned_count = self.scanned_files_count.load(Ordering::Relaxed);
         let is_scanning = self.signals.scanning.load(Ordering::Acquire);
+        let scan_error = self.scan_error();
 
         ScanProgress {
+            index_version: self.index_version,
+            git_status_error: self.git_status_error(),
             scanned_files_count: scanned_count,
             is_scanning,
             is_watcher_ready: self.is_watcher_ready(),
             is_ready: !is_scanning
+                && scan_error.is_none()
+                && !self.signals.rescan_pending.load(Ordering::Acquire)
                 && !self.is_post_scan_active()
                 && (!self.watch || self.is_watcher_ready()),
+            scan_error,
         }
     }
 
@@ -1883,9 +1907,12 @@ pub struct ScanProgress {
     pub scanned_files_count: usize,
     pub is_scanning: bool,
     pub is_watcher_ready: bool,
-    /// Current walk and post-scan classification are done, not a drain of
-    /// future watcher work.
+    /// Current walk, classification, subscriptions and initial Git attempt are
+    /// done, not a drain of all future watcher work. Git failures are disclosed.
     pub is_ready: bool,
+    pub scan_error: Option<String>,
+    pub git_status_error: Option<String>,
+    pub index_version: u64,
 }
 
 impl FileSync {
@@ -1913,9 +1940,8 @@ impl FileSync {
         })
     }
 
-    /// Returns files immediately (searchable) and a handle to the in-progress
-    /// git status computation. This avoids blocking on `git status` which can
-    /// take 10+ seconds on very large repos (e.g. chromium).
+    /// Collect files without blocking on Git IO. The scan job subsequently
+    /// publishes status/recency through its separately acknowledged worker.
     #[tracing::instrument(skip_all, name = "walk_filesystem", level = Level::INFO)]
     pub(crate) fn walk_filesystem(
         base_path: &Path,
@@ -1925,7 +1951,18 @@ impl FileSync {
         follow_symlinks: bool,
     ) -> Result<FileSync, Error> {
         let scan_start = std::time::Instant::now();
-        info!("SCAN: Starting filesystem walk and git status (async)");
+        info!("SCAN: Starting filesystem walk");
+        // The walker prunes inaccessible paths, including a vanished root.
+        // Distinguish that failure from a genuinely empty readable directory.
+        let check_root = || {
+            std::fs::read_dir(base_path).map(|_| ()).map_err(|error| {
+                Error::WalkFailed(format!(
+                    "Cannot read index root {}: {error}",
+                    base_path.display()
+                ))
+            })
+        };
+        check_root()?;
 
         // Walk files (the fast part, typically 2-3s even on huge repos).
         let is_git_repo = git_workdir.is_some();
@@ -1942,6 +1979,7 @@ impl FileSync {
             bg_threads,
             synced_files_count,
         )?;
+        check_root()?;
         let ignore_rules = ignore_rules.map(Arc::new);
 
         // group walked dirs and files with a dir part to the same order

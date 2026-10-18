@@ -393,9 +393,9 @@ fn database_health<T: DbHealthChecker>(database: Option<&T>) -> serde_json::Valu
         None => serde_json::json!({ "initialized": false }),
         Some(database) => match database.get_health() {
             Ok(health) => {
-                serde_json::json!({ "initialized": true, "dbHealthcheck": { "path": health.path, "diskSize": health.disk_size } })
+                serde_json::json!({ "initialized": true, "dbHealthcheck": { "path": health.path, "diskSize": health.disk_size, "healthy": health.healthy } })
             }
-            Err(_) => serde_json::json!({ "initialized": true }),
+            Err(error) => serde_json::json!({ "initialized": true, "error": error.to_string() }),
         },
     }
 }
@@ -433,9 +433,12 @@ pub unsafe extern "C" fn metis_search_health(
                 Ok(guard) => database_health(guard.as_ref()),
                 Err(error) => serde_json::json!({ "error": error.to_string() }),
             };
-            let health = serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "git": git,
-            "filePicker": { "initialized": true, "basePath": picker.base_path(), "isScanning": picker.is_scan_active(), "indexedFiles": picker.get_scan_progress().scanned_files_count },
+            let mut health = serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "git": git,
+            "filePicker": { "initialized": true, "basePath": picker.base_path(), "isScanning": picker.is_scan_active(), "indexedFiles": picker.live_file_count() },
             "frecency": frecency, "queryTracker": history });
+            if let Some(error) = picker.scan_error() {
+                health["filePicker"]["error"] = error.into();
+            }
             Envelope::text(&health.to_string())
         })
     }

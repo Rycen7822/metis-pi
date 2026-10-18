@@ -1,5 +1,5 @@
 // Derived from FFF 0.11.0 (MIT), copyright Dmitriy Kovalenko.
-// Metis private ABI v3: expose only the projections actually used by Metis.
+// Metis private ABI v4: expose only the projections actually used by Metis.
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
@@ -7,7 +7,7 @@ use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
 use fff::types::{MixedItemRef, MixedSearchResult, SearchResult};
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 #[repr(C)]
 pub struct CreateOptions {
@@ -327,6 +327,9 @@ pub struct Progress {
     pub is_scanning: bool,
     pub is_watcher_ready: bool,
     pub is_ready: bool,
+    pub index_version: u64,
+    pub scan_error: *mut c_char,
+    pub git_status_error: *mut c_char,
 }
 impl From<fff::file_picker::ScanProgress> for Progress {
     fn from(value: fff::file_picker::ScanProgress) -> Self {
@@ -335,6 +338,20 @@ impl From<fff::file_picker::ScanProgress> for Progress {
             is_scanning: value.is_scanning,
             is_watcher_ready: value.is_watcher_ready,
             is_ready: value.is_ready,
+            index_version: value.index_version,
+            scan_error: value.scan_error.as_deref().map_or(ptr::null_mut(), string),
+            git_status_error: value
+                .git_status_error
+                .as_deref()
+                .map_or(ptr::null_mut(), string),
+        }
+    }
+}
+impl Drop for Progress {
+    fn drop(&mut self) {
+        unsafe {
+            free_string(self.scan_error);
+            free_string(self.git_status_error);
         }
     }
 }
@@ -355,5 +372,6 @@ const _: () = {
     assert!(size_of::<Mixed>() == 16);
     assert!(size_of::<GrepMatch>() == 64 && offset_of!(GrepMatch, line_number) == 40);
     assert!(size_of::<Grep>() == 40 && offset_of!(Grep, regex_fallback_error) == 32);
-    assert!(size_of::<Progress>() == 16);
+    assert!(size_of::<Progress>() == 40 && offset_of!(Progress, index_version) == 16);
+    assert!(offset_of!(Progress, scan_error) == 24 && offset_of!(Progress, git_status_error) == 32);
 };

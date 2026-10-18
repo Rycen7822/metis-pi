@@ -1,4 +1,4 @@
-/* Metis private Linux x64 ABI v3. Not a standalone SDK or allocation API.
+/* Metis private Linux x64 ABI v4. Not a standalone SDK or allocation API.
  * Maintained with src/ffi_types.rs and the ffi-rs layout. Derived from FFF
  * 0.11.0 (MIT), Copyright (c) 2025 Dmitriy Kovalenko; see ../../../LICENSE.
  * All result views and their strings/arrays are borrowed until free_result.
@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define METIS_SEARCH_ABI_VERSION 3
+#define METIS_SEARCH_ABI_VERSION 4
 
 typedef struct {
   uint32_t version;
@@ -37,7 +37,12 @@ typedef struct {
   uint32_t count, total_files_searched, total_files, filtered_file_count, next_file_offset;
   char *regex_fallback_error;
 } MetisGrep;
-typedef struct { uint64_t scanned_files_count; bool is_scanning, is_watcher_ready, is_ready; } MetisProgress;
+typedef struct {
+  uint64_t scanned_files_count;
+  bool is_scanning, is_watcher_ready, is_ready;
+  uint64_t index_version;
+  char *scan_error, *git_status_error;
+} MetisProgress;
 
 uint32_t metis_search_abi_version(void);
 MetisResult *metis_search_create(const MetisCreateOptions *options);

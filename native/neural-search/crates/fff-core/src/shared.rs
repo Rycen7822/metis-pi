@@ -119,7 +119,11 @@ impl SharedFilePicker {
     }
 
     pub fn write(&self) -> Result<parking_lot::RwLockWriteGuard<'_, Option<FilePicker>>, Error> {
-        Ok(self.0.picker.write())
+        let mut guard = self.0.picker.write();
+        if let Some(picker) = guard.as_mut() {
+            picker.advance_index_version();
+        }
+        Ok(guard)
     }
 
     /// Signal the background scan to cancel. Non-blocking: post-scan
@@ -206,7 +210,7 @@ impl SharedFilePicker {
 
     /// Returns `Ok(true)` when a rescan was started (or queued behind an
     /// active scan) and `Ok(false)` when the request was throttled — the
-    /// caller must then fall back to incremental event processing.
+    /// caller must retain any invalidation that incremental processing cannot cover.
     pub(crate) fn trigger_full_rescan_with_reason(
         &self,
         shared_frecency: &SharedFrecency,
@@ -214,7 +218,7 @@ impl SharedFilePicker {
     ) -> Result<bool, Error> {
         // for giant folders we have no other choice other than throttling rescans
         // if user is running application in millions of files with a ton of rescan events
-        // we drop / throttle some of requests to avoid constant burst of IO
+        // Throttle admission; watcher owners retain deferred invalidations.
         if reason == RescanReason::Explicit {
             self.0.rescan_throttle.note_explicit_scan();
         } else if !self.check_rescan_throttle(reason) {
@@ -267,18 +271,19 @@ impl SharedFilePicker {
             )
         };
 
-        let repo = git_root.as_deref().and_then(|root| {
-            wait_for_git_index_lock_release(root);
-            Repository::open(root)
-                .inspect_err(|e| tracing::error!(?e, "Failed to open repo for git refresh"))
-                .ok()
-        });
-
-        let git_status = repo.as_ref().and_then(|repo| {
-            GitStatusCache::read_status(repo, &mut crate::git::default_status_options())
-                .inspect_err(|e| tracing::error!(?e, "Failed to read git status"))
-                .ok()
-        });
+        let repo = git_root
+            .as_deref()
+            .map(|root| {
+                wait_for_git_index_lock_release(root);
+                Repository::open(root)
+            })
+            .transpose()?;
+        let git_status = repo
+            .as_ref()
+            .map(|repo| {
+                GitStatusCache::read_status(repo, &mut crate::git::default_status_options())
+            })
+            .transpose()?;
 
         let recency = repo
             .as_ref()

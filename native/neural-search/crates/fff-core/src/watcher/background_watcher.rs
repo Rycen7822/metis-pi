@@ -9,11 +9,12 @@ use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
 use notify::{Config, EventKind, EventKindMask, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use parking_lot::Mutex;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{Level, debug, error, info, warn};
 
 type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, NoCache>;
@@ -30,12 +31,35 @@ pub struct BackgroundWatcher {
 
 pub(crate) enum WatchTask {
     GitMetadata,
+    Rescan(RescanReason),
+    Barrier(mpsc::Sender<()>),
     /// Only subscribe to a specific path, this is happening when we did rescun and have to update
     /// the watcher only
     Subscribe(PathBuf),
     /// This is requires a separate walk of the new directory copies or created within a scan
     /// window because it might contain subdirectories we have to walk, prune, and add to index
     IndexNewDir(PathBuf),
+}
+
+/// An acknowledgement belongs to the resource that accepted the subscriptions.
+pub(crate) struct WatchBarrier {
+    receiver: mpsc::Receiver<()>,
+    healthy: Arc<AtomicBool>,
+}
+
+impl WatchBarrier {
+    pub(crate) fn wait(self, cancelled: &AtomicBool) {
+        while !cancelled.load(Ordering::Acquire) {
+            match self.receiver.recv_timeout(Duration::from_millis(50)) {
+                Ok(()) => return,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.healthy.store(false, Ordering::Release);
+                    return;
+                }
+            }
+        }
+    }
 }
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
@@ -81,7 +105,7 @@ impl BackgroundWatcher {
         let healthy = Arc::new(AtomicBool::new(true));
         let owner_health = Arc::clone(&healthy);
 
-        let debouncer = Self::create_debouncer(
+        let (debouncer, mut git_identity) = Self::create_debouncer(
             base_path,
             shared_picker,
             shared_frecency,
@@ -100,13 +124,67 @@ impl BackgroundWatcher {
             .name("fff-watcher-own".into())
             .spawn(move || {
                 let _g = owner_span.enter();
-                while let Ok(task) = watch_rx.recv() {
-                    // if the picker is dropped we do need to exit the loop
+                let mut pending_rescan: Option<(RescanReason, Instant)> = None;
+                loop {
+                    let task = if let Some((_, deadline)) = pending_rescan {
+                        match watch_rx
+                            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                        {
+                            Ok(task) => Some(task),
+                            Err(mpsc::RecvTimeoutError::Timeout) => None,
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    } else {
+                        match watch_rx.recv() {
+                            Ok(task) => Some(task),
+                            Err(_) => break,
+                        }
+                    };
                     let Some(strong_picker) = owner_weak_picker.upgrade() else {
                         break;
                     };
 
+                    if let Some((reason, deadline)) = pending_rescan
+                        && Instant::now() >= deadline
+                    {
+                        // A stopped/replaced resource must not schedule more work.
+                        if owner_debouncer.lock().is_none() {
+                            break;
+                        }
+                        let dirty = strong_picker.read().ok().is_some_and(|guard| {
+                            guard.as_ref().is_some_and(|picker| {
+                                picker.signals.rescan_pending.load(Ordering::Acquire)
+                            })
+                        });
+                        if reason != RescanReason::WatcherFailure && !dirty {
+                            pending_rescan = None; // Another scan already consumed it.
+                        } else {
+                            match strong_picker
+                                .trigger_full_rescan_with_reason(&owner_frecency, reason)
+                            {
+                                Ok(true) => pending_rescan = None,
+                                Ok(false) => {
+                                    pending_rescan =
+                                        Some((reason, Instant::now() + Duration::from_millis(250)))
+                                }
+                                Err(error) => {
+                                    warn!(?error, "Deferred rescan could not run");
+                                    pending_rescan = None;
+                                }
+                            }
+                        }
+                    }
+
+                    let Some(task) = task else { continue };
                     let (dir, is_new_dir) = match task {
+                        WatchTask::Barrier(reply) => {
+                            let _ = reply.send(());
+                            continue;
+                        }
+                        WatchTask::Rescan(reason) => {
+                            defer_local_rescan(&mut pending_rescan, reason);
+                            continue;
+                        }
                         WatchTask::GitMetadata => {
                             let result = {
                                 let mut guard = owner_debouncer.lock();
@@ -116,16 +194,28 @@ impl BackgroundWatcher {
                                 watch_git_status_paths(debouncer, &owner_base_path)
                             };
                             match result {
-                                Ok(true) => {
-                                    // Subscribe before refreshing: a metadata write
-                                    // during registration must not remain unseen.
-                                    owner_git_worker
-                                        .spawn_once(strong_picker.weaken(), owner_frecency.clone());
-                                    owner_git_worker.request_full_rescan();
+                                Ok(identity) => {
+                                    let changed = identity.is_some() && identity != git_identity;
+                                    git_identity = identity;
+                                    if changed {
+                                        owner_git_worker.spawn_once(
+                                            strong_picker.weaken(),
+                                            owner_frecency.clone(),
+                                        );
+                                        owner_git_worker.request_full_rescan();
+                                    }
                                 }
-                                Ok(false) => {}
                                 Err(error) => {
-                                    owner_health.store(false, Ordering::Release);
+                                    if needs_watcher_recovery(
+                                        &strong_picker,
+                                        &owner_frecency,
+                                        &owner_health,
+                                    ) {
+                                        defer_local_rescan(
+                                            &mut pending_rescan,
+                                            RescanReason::WatcherFailure,
+                                        );
+                                    }
                                     warn!(?error, "Failed to watch Git metadata");
                                 }
                             }
@@ -135,10 +225,11 @@ impl BackgroundWatcher {
                         WatchTask::IndexNewDir(dir) => (dir, true),
                     };
 
-                    // Register the watch BEFORE walking so files created mid-walk still handled
-                    if !watch_dirs_nonrecursive(&owner_debouncer, std::iter::once(dir.as_path())) {
-                        owner_health.store(false, Ordering::Release);
-                        break;
+                    // Subscribe before walking. A per-path failure must not kill the queue.
+                    if !watch_dirs_nonrecursive(&owner_debouncer, std::iter::once(dir.as_path()))
+                        && needs_watcher_recovery(&strong_picker, &owner_frecency, &owner_health)
+                    {
+                        defer_local_rescan(&mut pending_rescan, RescanReason::WatcherFailure);
                     }
 
                     if is_new_dir {
@@ -147,19 +238,19 @@ impl BackgroundWatcher {
                             &strong_picker,
                             &owner_frecency,
                             &owner_git_worker,
+                            &mut pending_rescan,
                         );
-
-                        // Subscribe to imported subdirectories as well.
                         if !watch_dirs_nonrecursive(
                             &owner_debouncer,
                             subdirs.iter().map(|p| p.as_path()),
+                        ) && needs_watcher_recovery(
+                            &strong_picker,
+                            &owner_frecency,
+                            &owner_health,
                         ) {
-                            owner_health.store(false, Ordering::Release);
-                            break;
+                            defer_local_rescan(&mut pending_rescan, RescanReason::WatcherFailure);
                         }
                     }
-
-                    drop(strong_picker);
                 }
 
                 tracing::info!("Background watcher is stopped");
@@ -182,7 +273,7 @@ impl BackgroundWatcher {
         watch_tx: mpsc::Sender<WatchTask>,
         git_status_worker: Arc<GitStatusWorker>,
         healthy: Arc<AtomicBool>,
-    ) -> Result<Debouncer, Error> {
+    ) -> Result<(Debouncer, Option<GitWatchIdentity>), Error> {
         let config = Config::default()
             .with_follow_symlinks(false)
             // only the actual modification events, ignore the open syscals that we can generate by
@@ -220,7 +311,14 @@ impl BackgroundWatcher {
                         }
                     }
                     Err(errors) => {
-                        healthy.store(false, Ordering::Release);
+                        if let Some(picker) = file_picker.upgrade() {
+                            if needs_watcher_recovery(&picker, &shared_frecency, &healthy) {
+                                let _ =
+                                    watch_tx.send(WatchTask::Rescan(RescanReason::WatcherFailure));
+                            }
+                        } else {
+                            healthy.store(false, Ordering::Release);
+                        }
                         error!("File watcher errors: {:?}", errors);
                     }
                 }
@@ -245,6 +343,7 @@ impl BackgroundWatcher {
                             watched += 1;
                             ControlFlow::Continue(())
                         }
+                        Err(error) if missing_path_error(&error) => ControlFlow::Continue(()),
                         Err(error) => {
                             failure = Some(error);
                             ControlFlow::Break(())
@@ -266,9 +365,9 @@ impl BackgroundWatcher {
         // The .git directory is excluded from the file list but we still need
         // to observe changes that affect git status (staging, unstaging,
         // committing, branch switches, merges, etc)
-        watch_git_status_paths(&mut debouncer, &base_path)?;
+        let identity = watch_git_status_paths(&mut debouncer, &base_path)?;
 
-        Ok(debouncer)
+        Ok((debouncer, identity))
     }
 
     /// Signal the watcher to shut down without blocking on its worker
@@ -291,22 +390,30 @@ impl BackgroundWatcher {
     }
 
     pub(crate) fn request_git_refresh(&self) {
-        if let Some(tx) = &self.watch_tx {
-            if tx.send(WatchTask::GitMetadata).is_err() {
-                self.healthy.store(false, Ordering::Release);
-            }
+        self.queue(WatchTask::GitMetadata);
+    }
+
+    pub(crate) fn barrier(&self) -> WatchBarrier {
+        let (reply, receiver) = mpsc::channel();
+        self.queue(WatchTask::Barrier(reply));
+        WatchBarrier {
+            receiver,
+            healthy: Arc::clone(&self.healthy),
         }
     }
 
-    pub(crate) fn request_watch_dir(&self, dir: PathBuf) -> bool {
-        let queued = self
+    pub(crate) fn request_watch_dir(&self, dir: PathBuf) {
+        self.queue(WatchTask::Subscribe(dir));
+    }
+
+    fn queue(&self, task: WatchTask) {
+        if !self
             .watch_tx
             .as_ref()
-            .is_some_and(|tx| tx.send(WatchTask::Subscribe(dir)).is_ok());
-        if !queued {
+            .is_some_and(|tx| tx.send(task).is_ok())
+        {
             self.healthy.store(false, Ordering::Release);
         }
-        queued
     }
 }
 
@@ -356,7 +463,16 @@ pub(crate) fn handle_debounced_events(
                 warn!(%reason, "Triggering full rescan");
                 true
             }
-            Ok(false) => false,
+            Ok(false) => {
+                // Keep policy/event-loss invalidations even if this resource is
+                // replaced: the current scan drains the same dirty flag.
+                if mark_rescan_pending(shared_picker)
+                    && watch_tx.send(WatchTask::Rescan(reason)).is_ok()
+                {
+                    return true;
+                }
+                false
+            }
             Err(e) => {
                 error!(%reason, "Failed to trigger full rescan: {:?}", e);
                 false
@@ -747,6 +863,7 @@ fn index_new_directory(
     shared_picker: &SharedFilePicker,
     shared_frecency: &SharedFrecency,
     git_status_worker: &Arc<GitStatusWorker>,
+    pending_rescan: &mut Option<(RescanReason, Instant)>,
 ) -> Vec<PathBuf> {
     // Prefer the walker's ignore rules; read base_path + rules from the picker.
     let (base_path, walker_rules, follow_symlinks) = match shared_picker.read().ok().and_then(|g| {
@@ -840,7 +957,12 @@ fn index_new_directory(
                 warn!(%reason, dir = %dir.display(), "New directory exceeded index capacity; triggering rescan");
                 true
             }
-            Ok(false) => false,
+            Ok(false) => {
+                if mark_rescan_pending(shared_picker) {
+                    defer_local_rescan(pending_rescan, reason);
+                }
+                false
+            }
             Err(e) => {
                 error!(%reason, "Failed to trigger new-directory rescan: {:?}", e);
                 false
@@ -874,6 +996,9 @@ fn watch_dirs_nonrecursive<'a>(
 
     for dir in dirs {
         if let Err(e) = debouncer.watch(dir, RecursiveMode::NonRecursive) {
+            if missing_path_error(&e) {
+                continue;
+            }
             warn!(
                 ?e,
                 dir = %dir.display(),
@@ -985,28 +1110,100 @@ fn discover_working_repository(base_path: &Path) -> Option<Repository> {
         .filter(|repo| repo.workdir().is_some())
 }
 
-fn watch_git_status_paths(debouncer: &mut Debouncer, base_path: &Path) -> notify::Result<bool> {
-    // Bootstrap an in-progress git init too; discovery can fail before HEAD exists.
-    let mut dirs = Vec::new();
-    let bootstrap = base_path.join(".git");
-    if bootstrap.is_dir() {
-        dirs.push(bootstrap);
+// Optional directories can disappear after a snapshot; permissions and watch
+// exhaustion are not benign and must still degrade readiness.
+fn missing_path_error(error: &notify::Error) -> bool {
+    matches!(&error.kind, notify::ErrorKind::PathNotFound)
+        || matches!(&error.kind, notify::ErrorKind::Io(error) if error.kind() == std::io::ErrorKind::NotFound)
+}
+
+fn mark_rescan_pending(shared_picker: &SharedFilePicker) -> bool {
+    let Ok(guard) = shared_picker.write() else {
+        return false;
+    };
+    let Some(picker) = guard.as_ref() else {
+        return false;
+    };
+    picker.signals.rescan_pending.store(true, Ordering::Release);
+    true
+}
+
+/// Returns whether this resource needs a deferred retry. Only the first fault
+/// requests recovery; persistent failures still obey the shared rescan cooldown.
+fn needs_watcher_recovery(
+    picker: &SharedFilePicker,
+    frecency: &SharedFrecency,
+    healthy: &AtomicBool,
+) -> bool {
+    healthy.swap(false, Ordering::AcqRel)
+        && matches!(
+            picker.trigger_full_rescan_with_reason(frecency, RescanReason::WatcherFailure),
+            Ok(false)
+        )
+}
+
+fn defer_local_rescan(pending: &mut Option<(RescanReason, Instant)>, reason: RescanReason) {
+    let (queued, _) = pending.get_or_insert((reason, Instant::now()));
+    // A consumed policy request must not cancel an outstanding resource fault.
+    if reason == RescanReason::WatcherFailure {
+        *queued = reason;
     }
+}
+
+#[derive(PartialEq, Eq)]
+struct GitWatchIdentity {
+    path: PathBuf,
+    directory: (u64, u64),
+    logs: Option<(u64, u64)>,
+}
+
+fn watch_git_directory(
+    debouncer: &mut Debouncer,
+    path: &Path,
+) -> notify::Result<Option<(u64, u64)>> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => metadata,
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(notify::Error::io(error)),
+    };
+    match debouncer.watch(path, RecursiveMode::NonRecursive) {
+        Ok(()) => Ok(Some((metadata.dev(), metadata.ino()))),
+        Err(error) if missing_path_error(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn watch_git_status_paths(
+    debouncer: &mut Debouncer,
+    base_path: &Path,
+) -> notify::Result<Option<GitWatchIdentity>> {
+    // Re-register idempotently, including bootstrap init and same-path
+    // recreation. Do not shadow the kernel's current subscription state.
     let repo = discover_working_repository(base_path);
+    let mut dirs = vec![base_path.join(".git")];
     if let Some(repo) = &repo
         && !dirs.iter().any(|dir| dir == repo.path())
     {
-        // Linked worktrees/submodules store metadata behind a .git pointer file.
         dirs.push(repo.path().to_path_buf());
     }
+    let mut identity = None;
     for git_dir in dirs {
-        debouncer.watch(&git_dir, RecursiveMode::NonRecursive)?;
-        let logs = git_dir.join("logs");
-        if logs.is_dir() {
-            debouncer.watch(&logs, RecursiveMode::NonRecursive)?;
+        let Some(directory) = watch_git_directory(debouncer, &git_dir)? else {
+            continue;
+        };
+        let logs = watch_git_directory(debouncer, &git_dir.join("logs"))?;
+        if repo.as_ref().is_some_and(|repo| repo.path() == git_dir) {
+            // Directory identity, not mtime: ordinary Git writes do not
+            // justify another full worktree status pass.
+            identity = Some(GitWatchIdentity {
+                path: git_dir,
+                directory,
+                logs,
+            });
         }
     }
-    Ok(repo.is_some())
+    Ok(identity)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

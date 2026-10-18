@@ -52,6 +52,7 @@ export class FileFinder implements FileFinderApi {
     while (true) {
       const progress = this.getScanProgress();
       if (!progress.ok) return progress;
+      if (!progress.value.isScanning && progress.value.scanError) return err(progress.value.scanError);
       if (progress.value.isReady) return { ok: true, value: true };
       if (Date.now() >= deadline) return { ok: true, value: false };
       await new Promise(resolve => setTimeout(resolve, 50));

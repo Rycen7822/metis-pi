@@ -2,14 +2,15 @@ use crate::shared::{SharedFrecency, WeakFilePicker};
 use ahash::AHashSet;
 use parking_lot::{Condvar, Mutex};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 
 // we don't really need a queue here
 #[derive(Default)]
 struct Pending {
     paths: AHashSet<PathBuf>,
     full_rescan: bool,
+    full_waiters: Vec<mpsc::Sender<()>>,
     shutdown: bool,
 }
 
@@ -24,6 +25,7 @@ pub(crate) struct GitStatusWorker {
     state: Mutex<Pending>,
     cv: Condvar,
     consumer_spawned: AtomicBool,
+    error: Mutex<Option<String>>,
 }
 
 impl GitStatusWorker {
@@ -32,6 +34,7 @@ impl GitStatusWorker {
             state: Mutex::new(Pending::default()),
             cv: Condvar::new(),
             consumer_spawned: AtomicBool::new(false),
+            error: Mutex::new(None),
         })
     }
 
@@ -39,7 +42,7 @@ impl GitStatusWorker {
         self: &Arc<Self>,
         weak_picker: WeakFilePicker,
         frecency: SharedFrecency,
-    ) {
+    ) -> bool {
         if self
             .consumer_spawned
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -47,9 +50,15 @@ impl GitStatusWorker {
         {
             if let Err(error) = Self::spawn_consumer(Arc::clone(self), weak_picker, frecency) {
                 self.consumer_spawned.store(false, Ordering::Release);
+                *self.error.lock() = Some(error.to_string());
                 tracing::error!(?error, "Failed to spawn git status worker");
             }
         }
+        self.consumer_spawned.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn error(&self) -> Option<String> {
+        self.error.lock().clone()
     }
 
     pub(crate) fn enqueue_paths<I>(&self, paths: I)
@@ -69,9 +78,22 @@ impl GitStatusWorker {
         self.cv.notify_one();
     }
 
+    pub(crate) fn request_full_rescan_and_ack(&self) -> mpsc::Receiver<()> {
+        let (reply, receiver) = mpsc::channel();
+        let mut guard = self.state.lock();
+        if !guard.shutdown {
+            guard.full_rescan = true;
+            guard.full_waiters.push(reply);
+        }
+        drop(guard);
+        self.cv.notify_one();
+        receiver
+    }
+
     pub(crate) fn signal_shutdown(&self) {
         let mut guard = self.state.lock();
         guard.shutdown = true;
+        guard.full_waiters.clear();
         drop(guard);
         self.cv.notify_one();
     }
@@ -104,15 +126,20 @@ impl GitStatusWorker {
                         break;
                     };
 
-                    if work.full_rescan {
-                        if let Err(e) = picker.refresh_git_status(&frecency) {
-                            tracing::error!("git-status worker: full rescan failed: {e:?}");
-                        }
-                    } else if !work.paths.is_empty() {
+                    let result = if work.full_rescan {
+                        picker.refresh_git_status(&frecency).map(|_| ())
+                    } else {
                         let paths: Vec<PathBuf> = work.paths.into_iter().collect();
-                        if let Err(e) = picker.update_git_status_for_paths(&paths, &frecency) {
-                            tracing::error!("git-status worker: path update failed: {e:?}");
-                        }
+                        picker.update_git_status_for_paths(&paths, &frecency)
+                    };
+                    if let Err(error) = &result {
+                        tracing::error!(?error, "Git status update failed");
+                    }
+                    *mailbox.error.lock() = result.err().map(|error| error.to_string());
+                    // Acknowledge only after the metadata write guard and health
+                    // publication. Requests received mid-pass wait for the next pass.
+                    for reply in work.full_waiters {
+                        let _ = reply.send(());
                     }
                 }
 

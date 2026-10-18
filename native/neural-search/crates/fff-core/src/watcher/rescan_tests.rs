@@ -460,7 +460,7 @@ fn events_after_a_suppressed_kernel_rescan_are_still_applied() {
 }
 
 #[test]
-fn a_throttled_ignore_file_event_is_still_applied_incrementally() {
+fn a_throttled_ignore_file_event_retains_its_rescan() {
     let f = Fixture::with_git();
     f.write(".gitignore", "target/\n");
     f.write("src/main.rs", "fn main() {}");
@@ -472,16 +472,42 @@ fn a_throttled_ignore_file_event_is_still_applied_incrementally() {
     assert_eq!(delta.count(RescanReason::IgnoreFileChanged), 1);
     f.picker.wait_for_indexing_complete(Duration::from_secs(10));
 
-    // Recreating it inside the cooldown throttles the rescan, but the file
-    // itself must re-enter the index via the incremental fallback.
+    // Recreating it inside the cooldown must retain the rule invalidation,
+    // not apply this event with the old cached ignore rules.
     f.write(".gitignore", "target/\n__ignored_x/\n");
-    let delta = f.feed([create(f.path(".gitignore"))]);
+    let before = f.all_rescans();
+    let (tx, rx) = std::sync::mpsc::channel();
+    handle_debounced_events(
+        vec![create(f.path(".gitignore"))],
+        &f.base,
+        &tx,
+        &f.picker,
+        &f.frecency,
+        &f.git_worker,
+    );
+    let delta = f.all_rescans().since(&before);
     assert_eq!(delta.total, 0, "the rescan must be throttled, got {delta}");
     assert_eq!(delta.count_throttled(RescanReason::IgnoreFileChanged), 1);
+    assert!(rx.try_iter().any(|task| matches!(
+        task,
+        super::WatchTask::Rescan(RescanReason::IgnoreFileChanged)
+    )));
     assert!(
-        f.is_indexed(".gitignore"),
-        "a throttled ignore-file event must still index the file itself"
+        !f.picker
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get_scan_progress()
+            .is_ready
     );
+
+    // This fixture has no owner thread; drain the retained request explicitly.
+    f.picker
+        .trigger_full_rescan_with_reason(&f.frecency, RescanReason::Explicit)
+        .unwrap();
+    f.picker.wait_for_indexing_complete(Duration::from_secs(10));
+    assert!(f.is_indexed(".gitignore"));
 }
 
 #[test]

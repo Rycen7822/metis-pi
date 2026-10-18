@@ -24,7 +24,7 @@ const excludeSchema = Type.Optional(Type.Union([Type.String(), Type.Array(Type.S
 }));
 const contextSchema = Type.Optional(Type.Integer({ minimum: 0, maximum: 20, description: "Context lines before and after each match (0-20)." }));
 const cursorSchema = Type.Optional(Type.String({ description:
-  "Opaque cursor from this action in the same session/cwd. Repeat the original pattern(s); other original parameters may be omitted, but must not be changed.",
+  "Opaque cursor from this action in the same session/cwd. Repeat the original pattern(s); other original parameters may be omitted, but must not be changed. Content cursors may become stale on index updates; restart without cursor.",
 }));
 const caseSchema = Type.Optional(Type.Boolean({ description: "Force case-sensitive matching with true; otherwise smart-case (lowercase is insensitive)." }));
 const grepLimitSchema = Type.Optional(Type.Integer({ minimum: 1, description: "Max matches per page (default 20, capped at 50)." }));
@@ -164,7 +164,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
         const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
           pageSize, beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS };
-        let page = contentPage(cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
+        let page = contentPage((cursor, version) => searchContent(lease.finder, pattern, query, { ...options, cursor }, version),
           pageSize, resumed?.progress);
         // Fuzzy suggestions are optional; limit them to unambiguous identifiers,
         // rather than treating phrases or punctuation as typo candidates.
@@ -222,10 +222,10 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
         const context = clampContext(request.context);
         const query = resumed?.query ?? [buildQuery(lease.constraint, "", request.exclude, lease.root), request.constraints].filter(Boolean).join(" ");
-        const page = contentPage(cursor => searchContent(lease.finder, request.patterns!, query, {
+        const page = contentPage((cursor, version) => searchContent(lease.finder, request.patterns!, query, {
           maxMatchesPerFile: MATCHES_PER_FILE, pageSize, smartCase: request.caseSensitive !== true, cursor,
           beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS,
-        }), pageSize, resumed?.progress);
+        }, version), pageSize, resumed?.progress);
         const formatted = contentPageResult(page, notices);
         let cursor: string | undefined;
         if (page.progress) {
@@ -254,8 +254,12 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
 function searchNotices(lease: SearchLease): string[] {
   const notices = lease.auxiliary ? [`Search root: ${lease.root}`] : [];
   const progress = lease.finder.getScanProgress();
-  if (progress.ok && progress.value.isScanning)
-    notices.push("Index scan is still running; results cover only currently indexed files. Retry after the scan finishes.");
+  if (!progress.ok) throw new Error(progress.error);
+  if (!progress.value.isScanning && progress.value.scanError) throw new Error(progress.value.scanError);
+  if (!progress.value.isReady)
+    notices.push("Index initialization is incomplete; results cover only currently indexed files. Retry after scanning, subscriptions and metadata initialization finish, or check /neural-search health.");
+  if (progress.value.gitStatusError)
+    notices.push(`Git metadata is unavailable; status annotations and ranking may be incomplete: ${progress.value.gitStatusError}`);
   return notices;
 }
 

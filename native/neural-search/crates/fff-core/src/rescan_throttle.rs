@@ -7,8 +7,8 @@ use crate::constants::{
 
 const NEVER: u64 = u64::MAX;
 
-// Drops watcher rescan requests inside the cooldown after the last scan.
-// A slightly stale index is fine: the next admitted event rescans everything.
+// Limits admission inside the cooldown after the last scan. Watcher owners
+// retain deferred invalidations; a later unrelated event is not required.
 pub(crate) struct RescanThrottle {
     epoch: Instant,
     last_admitted: AtomicU64,
@@ -51,8 +51,8 @@ impl RescanThrottle {
         }
     }
 
-    /// Records an explicit (unthrottled) scan so watcher requests right after
-    /// it are dropped: the index is already fresh.
+    /// Records an explicit (unthrottled) scan so automatic requests right after
+    /// it wait for the cooldown rather than starting another independent scan.
     pub(crate) fn note_explicit_scan(&self) {
         self.last_admitted
             .store(self.elapsed_ms(), Ordering::Release);

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use parking_lot::Mutex;
 use tracing::{error, info};
 
 use crate::FileSync;
@@ -23,6 +24,8 @@ pub(crate) struct ScanSignals {
     /// DO NOT set or clear this manually — it is managed exclusively by the
     /// PostScanSnapshot lifecycle.
     pub(crate) post_scan_active: Arc<AtomicBool>,
+    /// Last walk/commit failure; cleared when another pass starts.
+    pub(crate) error: Arc<Mutex<Option<String>>>,
 }
 
 /// Which optional phases a scan should run.
@@ -30,7 +33,6 @@ pub(crate) struct ScanSignals {
 pub(crate) struct ScanConfig {
     pub(crate) watch: bool,
     pub(crate) auto_cache_budget: bool,
-    pub(crate) install_watcher: bool,
     pub(crate) follow_symlinks: bool,
     pub(crate) enable_fs_root_scanning: bool,
     pub(crate) enable_home_dir_scanning: bool,
@@ -73,6 +75,7 @@ impl ScanJob {
             signals.rescan_pending.store(true, Ordering::Release);
             return Ok(None);
         }
+        signals.rescan_pending.store(false, Ordering::Release);
         let scanning = ScanningGuard::new(&signals);
         let scanned_files_counter = picker.scanned_files_counter();
         let base_path = picker.base_path().to_path_buf();
@@ -81,7 +84,6 @@ impl ScanJob {
         let new_scan_config = ScanConfig {
             watch: picker.watch_enabled(),
             auto_cache_budget: !picker.has_explicit_cache_budget(),
-            install_watcher: !picker.is_watcher_ready(),
             follow_symlinks: picker.follows_symlinks(),
             enable_fs_root_scanning: picker.fs_root_scanning_enabled(),
             enable_home_dir_scanning: picker.home_dir_scanning_enabled(),
@@ -134,7 +136,7 @@ impl ScanJob {
         });
     }
 
-    fn run(mut self) {
+    fn run(self) {
         loop {
             if !self.signals.cancelled.load(Ordering::Acquire) {
                 self.run_phases();
@@ -147,11 +149,6 @@ impl ScanJob {
                 drop(self.scanning);
                 return;
             }
-            self.config.install_watcher = _guard.as_ref().is_ok_and(|guard| {
-                guard
-                    .as_ref()
-                    .is_some_and(|picker| !picker.is_watcher_ready())
-            });
         }
     }
 
@@ -165,6 +162,7 @@ impl ScanJob {
             config,
             ..
         } = self;
+        *signals.error.lock() = None;
         scanned_files_counter.store(0, Ordering::Relaxed);
 
         // 1. Walk the file system and collect the list of files
@@ -178,6 +176,14 @@ impl ScanJob {
         ) {
             Ok(sync) => sync,
             Err(e) => {
+                *signals.error.lock() = Some(e.to_string());
+                // The root may have disappeared, invalidating inotify watches.
+                // A later successful retry must construct fresh subscriptions.
+                if let Ok(mut guard) = shared_picker.write()
+                    && let Some(picker) = guard.as_mut()
+                {
+                    picker.stop_background_monitor();
+                }
                 error!(?e, "scan walk failed");
                 return;
             }
@@ -201,15 +207,9 @@ impl ScanJob {
                 picker.set_cache_budget(ContentCacheBudget::new_for_repo(live_count));
             }
         } else {
+            *signals.error.lock() = Some("Failed to install scan results into picker".into());
             error!("failed to install scan results into picker");
             return;
-        }
-
-        // Spawn the git status worker once. BUG PINNNING. If the user initiated git in the folder
-        // which is a real use case we need to have a way to start the git worker background thread dynamically
-        if git_workdir.is_some() && !signals.cancelled.load(Ordering::Acquire) {
-            git_status_worker.spawn_once(shared_picker.weaken(), shared_frecency.clone());
-            git_status_worker.request_full_rescan(); // this runs anyway
         }
 
         // The scan reservation stays active through classification and watcher
@@ -224,13 +224,14 @@ impl ScanJob {
             None
         };
 
-        // in case we do a rescan, we have to resubscribe a watcher to the new set of directories
-        // all the already watched directories are not going to be resubscribed (this is internally deduped)
-        if !config.install_watcher && !signals.cancelled.load(Ordering::Acquire) {
-            rescubscribe_watcher_post_scan(&shared_picker);
-        }
+        // Registration and classification overlap, but readiness includes both.
+        let subscriptions = if config.watch && !signals.cancelled.load(Ordering::Acquire) {
+            resubscribe_watcher_post_scan(shared_picker)
+        } else {
+            None
+        };
 
-        // 3. Classify off-lock in parallel with git status collection.
+        // 3. Classify off-lock.
         if !signals.cancelled.load(Ordering::Acquire)
             && let Some(snap) = snapshot.as_ref()
         {
@@ -239,8 +240,17 @@ impl ScanJob {
 
         drop(snapshot); // SNAPSHOT SHOULD NOT BE USED AFTER THIS POINT
 
-        // 5. Install or recover the filesystem watcher.
-        if config.install_watcher && config.watch && !signals.cancelled.load(Ordering::Acquire) {
+        if let Some(barrier) = subscriptions {
+            barrier.wait(&signals.cancelled);
+        }
+
+        // Health may change after admission or while registering directories.
+        let needs_watcher = shared_picker.read().ok().is_some_and(|guard| {
+            guard
+                .as_ref()
+                .is_some_and(|picker| !picker.is_watcher_ready())
+        });
+        if needs_watcher && config.watch && !signals.cancelled.load(Ordering::Acquire) {
             if let Ok(mut guard) = shared_picker.write()
                 && let Some(picker) = guard.as_mut()
             {
@@ -257,7 +267,7 @@ impl ScanJob {
                 shared_frecency.clone(),
                 config.enable_fs_root_scanning,
                 config.enable_home_dir_scanning,
-                git_status_worker,
+                Arc::clone(&git_status_worker),
                 tracing::Span::current(),
             ) {
                 Ok(watcher) => {
@@ -269,8 +279,32 @@ impl ScanJob {
                         picker.background_watcher = Some(watcher);
                     }
                 }
-                Err(e) => error!(?e, "failed to initialize background watcher"),
+                Err(e) => {
+                    *signals.error.lock() = Some(format!("Watcher initialization failed: {e}"));
+                    error!(?e, "failed to initialize background watcher");
+                    return;
+                }
             };
+        }
+
+        // Subscribe first. Completion includes status and recency publication,
+        // not just admission to the detached Git worker's mailbox.
+        if git_workdir.is_some()
+            && !signals.cancelled.load(Ordering::Acquire)
+            && git_status_worker.spawn_once(shared_picker.weaken(), shared_frecency.clone())
+        {
+            let refreshed = git_status_worker.request_full_rescan_and_ack();
+            while !signals.cancelled.load(Ordering::Acquire) {
+                match refreshed.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(()) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        *signals.error.lock() =
+                            Some("Git worker stopped before initial refresh completed".into());
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -339,20 +373,17 @@ impl Drop for ScanningGuard {
 /// this is fine because the watcher does deduplicate the entries and doesn't add a lot of
 /// garbage notify watchers / fs events streams
 #[tracing::instrument(skip_all)]
-fn rescubscribe_watcher_post_scan(shared_picker: &SharedFilePicker) {
-    let Ok(guard) = shared_picker.read() else {
-        return;
-    };
-    let Some(picker) = guard.as_ref() else {
-        return;
-    };
-    let Some(watcher) = picker.background_watcher.as_ref() else {
-        return;
-    };
+fn resubscribe_watcher_post_scan(
+    shared_picker: &SharedFilePicker,
+) -> Option<crate::watch::WatchBarrier> {
+    let guard = shared_picker.read().ok()?;
+    let picker = guard.as_ref()?;
+    let watcher = picker.background_watcher.as_ref()?;
 
     watcher.request_git_refresh();
     picker.for_each_dir(|dir: &std::path::Path| {
         watcher.request_watch_dir(dir.to_path_buf());
         std::ops::ControlFlow::Continue(())
     });
+    Some(watcher.barrier())
 }

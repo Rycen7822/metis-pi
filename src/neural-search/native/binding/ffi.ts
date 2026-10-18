@@ -1,12 +1,12 @@
-// Metis private Linux x64 ABI v3. Rust owns each envelope and its payload;
+// Metis private Linux x64 ABI v4. Rust owns each envelope and its payload;
 // decode into detached JS values before freeing the envelope in finally.
 import { DataType, type FieldType, isNullPointer, type JsExternal, load, open, restorePointer, wrapPointer } from "ffi-rs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { err, type FileItem, type GrepOptions, type GrepResult, type HealthCheck, type InitOptions, type MixedItem, type MixedSearchResult, type MultiGrepOptions, type Result, type ScanProgress, type SearchResult } from "./api.ts";
 
-const LIBRARY_KEY = "metis_neural_search_v3";
-const ABI_VERSION = 3;
+const LIBRARY_KEY = "metis_neural_search_v4";
+const ABI_VERSION = 4;
 const CREATE = {
   version: DataType.U32, base_path: DataType.String, frecency_db_path: DataType.String, history_db_path: DataType.String,
   enable_fs_root_scanning: DataType.U8, enable_home_dir_scanning: DataType.U8, follow_symlinks: DataType.U8,
@@ -27,7 +27,7 @@ const GREP = {
   items: DataType.External, count: DataType.U32, total_files_searched: DataType.U32, total_files: DataType.U32,
   filtered_file_count: DataType.U32, next_file_offset: DataType.U32, regex_fallback_error: DataType.External,
 } as const;
-const PROGRESS = { scanned_files_count: DataType.U64, is_scanning: DataType.U8, is_watcher_ready: DataType.U8, is_ready: DataType.U8 } as const;
+const PROGRESS = { scanned_files_count: DataType.U64, is_scanning: DataType.U8, is_watcher_ready: DataType.U8, is_ready: DataType.U8, index_version: DataType.U64, scan_error: DataType.External, git_status_error: DataType.External } as const;
 type Raw<S> = { [K in keyof S]: S[K] extends DataType.External ? JsExternal : number };
 export type NativeHandle = JsExternal;
 let loaded = false;
@@ -159,7 +159,14 @@ export function ffiIsScanning(handle: NativeHandle): boolean {
 export function ffiGetScanProgress(handle: NativeHandle): Result<ScanProgress> {
   return result("progress", [DataType.External], [handle], view => {
     const raw = readStruct(view.handle, PROGRESS);
-    return { scannedFilesCount: Number(raw.scanned_files_count), isScanning: !!raw.is_scanning, isWatcherReady: !!raw.is_watcher_ready, isReady: !!raw.is_ready };
+    const indexVersion = Number(raw.index_version);
+    if (!Number.isSafeInteger(indexVersion) || indexVersion < 1)
+      throw new Error("Native index revision is unavailable or exhausted; restart Pi.");
+    const scanError = readString(raw.scan_error);
+    const gitStatusError = readString(raw.git_status_error);
+    return { scannedFilesCount: Number(raw.scanned_files_count), isScanning: !!raw.is_scanning,
+      isWatcherReady: !!raw.is_watcher_ready, isReady: !!raw.is_ready, indexVersion,
+      ...(scanError ? { scanError } : {}), ...(gitStatusError ? { gitStatusError } : {}) };
   });
 }
 export function ffiHealthCheck(handle: NativeHandle, path: string): Result<HealthCheck> {
