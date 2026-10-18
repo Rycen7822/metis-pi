@@ -3,7 +3,7 @@ import type { SearchRuntime } from "../session.ts";
 
 export function createMentionWrapper(runtime: SearchRuntime, isActive: () => boolean = () => true): (current: AutocompleteProvider) => AutocompleteProvider {
   return current => ({
-    get triggerCharacters() { return current.triggerCharacters; },
+    triggerCharacters: current.triggerCharacters,
     async getSuggestions(lines, cursorLine, cursorCol, options) {
       if (options.signal.aborted) return null;
       const prefix = (lines[cursorLine] ?? "").slice(0, cursorCol).match(/(?:^|[ \t])(@(?:"[^"]*|[^\s]*))$/)?.[1];

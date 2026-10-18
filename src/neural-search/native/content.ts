@@ -8,27 +8,35 @@ export function searchContent(
   finder: FileFinderApi, pattern: string | string[], constraints: string, options: GrepOptions,
 ): Result<GrepResult> {
   const { mode = "plain", ...shared } = options;
-  if (Array.isArray(pattern) || mode === "plain" && !pattern.includes("\n")) {
-    return finder.multiGrep({ ...shared, patterns: Array.isArray(pattern) ? pattern : [pattern], constraints: constraints || undefined });
-  }
-  const regex = mode === "plain" ? pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : pattern;
-  // A leading regex escape bypasses FFF's constraint parser. Optional word
-  // boundary is zero-width and always succeeds; encode whitespace as one token.
-  const encoded = regex.replace(/(\\*)\p{White_Space}/gu, (token, escapes: string) => {
+  if (Array.isArray(pattern) || mode === "plain") return searchLiterals(finder, Array.isArray(pattern) ? pattern : [pattern], constraints, shared);
+  const found = mode === "fuzzy"
+    ? finder.grep([constraints, pattern].filter(Boolean).join(" "), { ...shared, mode })
+    : searchRegex(finder, pattern, constraints, shared);
+  if (!found.ok || !found.value.regexFallbackError) return found;
+  const literal = searchLiterals(finder, [pattern], constraints, shared);
+  if (literal.ok) literal.value.regexFallbackError = found.value.regexFallbackError;
+  return literal;
+}
+
+function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: string, options: GrepOptions): Result<GrepResult> {
+  // FFF joins needles with LF; an embedded LF must use one escaped expression,
+  // including on regex fallback, rather than silently becoming extra OR items.
+  if (patterns.every(pattern => !pattern.includes("\n"))) return finder.multiGrep({ ...options, patterns, constraints: constraints || undefined });
+  const expression = patterns.map(pattern => pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const found = searchRegex(finder, expression, constraints, options);
+  return found.ok && found.value.regexFallbackError
+    ? { ok: false, error: `Cannot encode multiline literal search: ${found.value.regexFallbackError}` } : found;
+}
+
+function searchRegex(finder: FileFinderApi, pattern: string, constraints: string, options: GrepOptions): Result<GrepResult> {
+  // Leading regex escape bypasses FFF constraint parsing; optional word boundary
+  // is zero-width and always succeeds. Keep the expression in one native token.
+  const encoded = pattern.replace(/(\\*)\p{White_Space}/gu, (token, escapes: string) => {
     const char = token.at(-1)!;
-    // An odd preceding escape already belongs to this whitespace atom.
     const prefix = escapes.slice(0, escapes.length - escapes.length % 2);
     return prefix + (char === "\n" ? "\\n" : `\\x{${char.codePointAt(0)!.toString(16)}}`);
   });
-  const token = mode === "fuzzy" ? pattern : `\\b?(?:${encoded})`;
-  const query = [constraints, token].filter(Boolean).join(" ");
-  const found = finder.grep(query, { ...shared, mode: mode === "plain" ? "regex" : mode });
-  if (found.ok && found.value.regexFallbackError) {
-    const literal = finder.multiGrep({ ...shared, patterns: [pattern], constraints: constraints || undefined });
-    if (literal.ok) literal.value.regexFallbackError = found.value.regexFallbackError;
-    return literal;
-  }
-  return found;
+  return finder.grep([constraints, `\\b?(?:${encoded})`].filter(Boolean).join(" "), { ...options, mode: "regex" });
 }
 
 export function contentPage(

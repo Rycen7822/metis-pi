@@ -21,7 +21,8 @@ export function normalizePathConstraint(pathConstraint: string, cwd = process.cw
   // fileSearch treats a bare directory token as fuzzy text, unlike grep.
   // Explicit globs enforce the same directory constraint for both APIs.
   if (trimmed.endsWith("/")) return `${trimmed}**`;
-  if (trimmed.startsWith("/") || hasGlobSyntax(trimmed)) return trimmed;
+  // A slash also makes basename globs unambiguous to the content parser.
+  if (trimmed.startsWith("/") || hasGlobSyntax(trimmed)) return trimmed.includes("/") ? trimmed : `./${trimmed}`;
   const lastSegment = trimmed.split("/").pop() ?? "";
   return /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment) ? trimmed : `${trimmed}/**`;
 }

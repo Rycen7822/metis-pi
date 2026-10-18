@@ -5,6 +5,7 @@ import type { ActionTool } from "../../deferred-action-tool.ts";
 import { formatFindOutput, formatGrepOutput } from "./format.ts";
 import { buildQuery, hasGlobSyntax } from "../native/query.ts";
 import { contentPage, searchContent, MATCHES_PER_FILE } from "../native/content.ts";
+import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
 import type { SearchLease, SearchRuntime } from "../session.ts";
 
@@ -68,7 +69,7 @@ const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint
 export function createSearchActions(runtime: SearchRuntime, toolName: string): ReadonlyMap<string, ActionTool> {
   const find: ToolDefinition<typeof findSchema, SearchDetails> = {
     name: toolName, label: "Find", annotations,
-    description: `Fuzzy path and glob search, matching the whole root-relative path (not only filename). Native frecency-ranked, git-aware; multi-word is narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}. For exact filenames use a glob in path; for directory listings use path='dir/**' and an empty pattern.`,
+    description: `Fuzzy path and glob search, matching the whole root-relative path (not only filename). Native frecency-ranked, git-aware; multi-word is narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}. Stable snapshots allow at most ${FIND_SNAPSHOT_LIMIT} matches; narrow larger queries. For exact filenames use a glob in path; for directory listings use path='dir/**' and an empty pattern.`,
     parameters: findSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -84,11 +85,26 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_FIND_LIMIT), FIND_PAGE_SIZE_MAX);
         const pattern = request.pattern!;
         const pageIndex = resumed?.nextPageIndex ?? 0;
-        // FFF 0.11 uses an item offset despite naming this option pageIndex.
-        const query = resumed?.query ?? buildQuery(lease.constraint, pattern, request.exclude, lease.root);
-        const searched = lease.finder.fileSearch(query, { pageIndex: pageIndex * pageSize, pageSize });
-        if (!searched.ok) throw new Error(searched.error);
-        const result = searched.value;
+        let snapshot = resumed?.snapshot;
+        if (!snapshot) {
+          const query = buildQuery(lease.constraint, pattern, request.exclude, lease.root);
+          const searched = lease.finder.fileSearch(query, { pageIndex: 0, pageSize });
+          if (!searched.ok) throw new Error(searched.error);
+          snapshot = searched.value;
+          if (snapshot.totalMatched > FIND_SNAPSHOT_LIMIT)
+            throw new Error(`Find matched ${snapshot.totalMatched} files, exceeding the ${FIND_SNAPSHOT_LIMIT}-match snapshot budget. Narrow pattern/path; no partial pagination was created.`);
+          if (snapshot.items.length < snapshot.totalMatched && !formatFindOutput(snapshot, pageSize, pattern).weak) {
+            // Native offset queries can reorder ties. Even page one must come
+            // from the same complete snapshot as every later page.
+            const captured = lease.finder.fileSearch(query, { pageIndex: 0, pageSize: snapshot.totalMatched });
+            if (!captured.ok) throw new Error(captured.error);
+            if (captured.value.totalMatched !== snapshot.totalMatched || captured.value.items.length !== snapshot.totalMatched)
+              throw new Error("Find index changed during snapshot creation. Retry or narrow the query; no partial pagination was created.");
+            snapshot = captured.value;
+          }
+        }
+        const start = pageIndex * pageSize;
+        const result = { ...snapshot, items: snapshot.items.slice(start, start + pageSize), scores: snapshot.scores.slice(start, start + pageSize) };
         const formatted = formatFindOutput(result, pageSize, pattern);
         const shownSoFar = pageIndex * pageSize + result.items.length;
         const hasMore = result.items.length >= pageSize && result.totalMatched > shownSoFar;
@@ -98,7 +114,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         );
         if (!formatted.weak && hasMore) {
           cursor = runtime.cursors.store({ action: "find", scope: scope.id, root: lease.root, auxiliary: lease.auxiliary,
-            finder: lease.finder, request, query, nextPageIndex: pageIndex + 1,
+            finder: lease.finder, request, snapshot, nextPageIndex: pageIndex + 1,
           });
           const remaining = result.totalMatched - shownSoFar;
           notices.push(`${remaining} more match${remaining === 1 ? "" : "es"} available. cursor="${cursor}" to continue`);

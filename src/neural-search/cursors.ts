@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { FileFinderApi, GrepMode } from "@ff-labs/fff-node";
+import type { FileFinderApi, GrepMode, SearchResult } from "@ff-labs/fff-node";
 import type { ContentProgress } from "./native/content.ts";
 
+export const FIND_SNAPSHOT_LIMIT = 10_000;
+const FIND_CACHE_LIMIT = 20_000;
 export type SearchAction = "find" | "grep" | "multi_grep";
 export interface SearchRequest {
   pattern?: string;
@@ -20,12 +22,11 @@ interface BaseCursor {
   auxiliary: boolean;
   finder: FileFinderApi;
   request: SearchRequest;
-  query: string;
 }
 export type SearchCursor = BaseCursor & (
-  | { action: "find"; nextPageIndex: number }
-  | { action: "grep"; progress: ContentProgress; mode: GrepMode }
-  | { action: "multi_grep"; progress: ContentProgress }
+  | { action: "find"; snapshot: SearchResult; nextPageIndex: number }
+  | { action: "grep"; query: string; progress: ContentProgress; mode: GrepMode }
+  | { action: "multi_grep"; query: string; progress: ContentProgress }
 );
 
 export class CursorStore {
@@ -37,8 +38,20 @@ export class CursorStore {
     const request = structuredClone(cursor.request);
     delete request.cursor;
     this.entries.set(token, { ...cursor, request });
-    if (this.entries.size > 200) this.entries.delete(this.entries.keys().next().value!);
+    this.trim();
     return token;
+  }
+
+  private trim(): void {
+    const snapshots = new Set([...this.entries.values()].flatMap(cursor => cursor.action === "find" ? [cursor.snapshot] : []));
+    let matches = [...snapshots].reduce((sum, snapshot) => sum + snapshot.items.length, 0);
+    while (this.entries.size > 200 || matches > FIND_CACHE_LIMIT) {
+      const token = this.entries.keys().next().value!;
+      const oldest = this.entries.get(token)!;
+      this.entries.delete(token);
+      if (oldest.action === "find" && ![...this.entries.values()].some(cursor => cursor.action === "find" && cursor.snapshot === oldest.snapshot))
+        matches -= oldest.snapshot.items.length;
+    }
   }
 
   get<A extends SearchAction>(token: string, action: A, scope: string, request: SearchRequest): Extract<SearchCursor, { action: A }> {
