@@ -333,7 +333,9 @@ export class SubagentSession {
         }
       } catch (error) { this.synchronizationFailed(error, activity); }
       finally {
-        try { if (this.syncState !== "active") await this.client.park(); }
+        // Drain automatic passive calls before parking; otherwise their pending
+        // RPCs can make park() skip the only teardown attempt.
+        try { await this.serialize(async () => { if (this.syncState !== "active") await this.client.park(); }); }
         catch (error) { this.synchronizationFailed(error, activity); }
         this.watching = undefined;
         // Foreground activity may have won the race with an old idle watch.
