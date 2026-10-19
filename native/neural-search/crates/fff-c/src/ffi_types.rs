@@ -1,5 +1,5 @@
 // Derived from FFF 0.11.0 (MIT), copyright Dmitriy Kovalenko.
-// Metis private ABI v5: expose only the projections actually used by Metis.
+// Metis private ABI v6: expose only the projections actually used by Metis.
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
@@ -7,7 +7,7 @@ use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
 use fff::types::{MixedItemRef, MixedSearchResult, SearchResult};
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 #[repr(C)]
 pub struct CreateOptions {
@@ -287,6 +287,8 @@ pub struct Grep {
     pub total_files: u32,
     pub filtered_file_count: u32,
     pub next_file_offset: u32,
+    /// Bit 0: limited multiline projection; bit 1: native display/context clipping.
+    pub output_limits: u8,
     pub regex_fallback_error: *mut c_char,
     pub index_version: u64,
 }
@@ -306,6 +308,11 @@ impl Grep {
             total_files: result.total_files as u32,
             filtered_file_count: result.filtered_file_count as u32,
             next_file_offset: result.next_file_offset as u32,
+            output_limits: result.matches.iter().fold(0, |limits, line| {
+                limits
+                    | u8::from(line.native_multiline_limited)
+                    | (u8::from(line.native_output_truncated) << 1)
+            }),
             // The picker read guard also covers matching and serialization.
             index_version: picker.index_version(),
             regex_fallback_error: result
@@ -382,6 +389,7 @@ const _: () = {
     assert!(size_of::<GrepMatch>() == 64 && offset_of!(GrepMatch, line_number) == 40);
     assert!(size_of::<Grep>() == 48 && offset_of!(Grep, regex_fallback_error) == 32);
     assert!(offset_of!(Grep, index_version) == 40);
+    assert!(offset_of!(Grep, output_limits) == 28);
     assert!(size_of::<Progress>() == 48 && offset_of!(Progress, index_version) == 16);
     assert!(offset_of!(Progress, watcher_error) == 40);
     assert!(offset_of!(Progress, scan_error) == 24 && offset_of!(Progress, git_status_error) == 32);

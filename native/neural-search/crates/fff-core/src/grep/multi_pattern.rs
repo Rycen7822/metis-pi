@@ -105,8 +105,9 @@ impl Sink for AhoCorasickSink<'_> {
             }
         }
 
-        let (context_before, context_after) = self.state.extract_context(mat);
+        let (context_before, context_after, context_truncated) = self.state.extract_context(mat);
         self.state.push_match(
+            mat,
             line_number,
             col,
             byte_offset,
@@ -114,6 +115,7 @@ impl Sink for AhoCorasickSink<'_> {
             match_byte_offsets,
             context_before,
             context_after,
+            context_truncated,
         );
         Ok(true)
     }

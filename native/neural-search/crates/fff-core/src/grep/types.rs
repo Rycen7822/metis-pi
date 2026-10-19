@@ -63,6 +63,10 @@ pub struct GrepMatch {
     pub context_before: Vec<String>,
     /// Lines after the match (for context display). Empty when context is 0.
     pub context_after: Vec<String>,
+    /// An actual cross-line match or coalesced region has limited line projection.
+    pub native_multiline_limited: bool,
+    /// Native display or context bytes were clipped before crossing the ABI.
+    pub native_output_truncated: bool,
 }
 
 /// Options for grep search.

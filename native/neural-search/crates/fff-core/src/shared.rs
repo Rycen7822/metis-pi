@@ -228,7 +228,9 @@ impl SharedFilePicker {
         self.0.rescans.record(reason);
 
         // Admission also coalesces busy requests while holding its state lock.
-        if let Some(job) = ScanJob::new_rescan(self, shared_frecency)? {
+        if let Some(job) =
+            ScanJob::new_rescan(self, shared_frecency, reason == RescanReason::Reconcile)?
+        {
             job.spawn();
         }
         Ok(true)

@@ -1,4 +1,4 @@
-/* Metis private Linux x64 ABI v5. Not a standalone SDK or allocation API.
+/* Metis private Linux x64 ABI v6. Not a standalone SDK or allocation API.
  * Maintained with src/ffi_types.rs and the ffi-rs layout. Derived from FFF
  * 0.11.0 (MIT), Copyright (c) 2025 Dmitriy Kovalenko; see ../../../LICENSE.
  * All result views and their strings/arrays are borrowed until free_result.
@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define METIS_SEARCH_ABI_VERSION 5
+#define METIS_SEARCH_ABI_VERSION 6
 
 typedef struct {
   uint32_t version;
@@ -35,6 +35,8 @@ typedef struct {
 typedef struct {
   MetisMatch *items;
   uint32_t count, total_files_searched, total_files, filtered_file_count, next_file_offset;
+  /* Bit 0: multiline projection limited; bit 1: display/context bytes clipped. */
+  uint8_t output_limits;
   char *regex_fallback_error;
   uint64_t index_version;
 } MetisGrep;

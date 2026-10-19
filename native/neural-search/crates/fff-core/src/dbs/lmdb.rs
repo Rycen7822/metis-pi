@@ -89,20 +89,24 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
                 return;
             }
 
-            if let Err(e) = T::purge_stale_data(tracker.shared_env()) {
-                tracing::debug!("purge_stale_data failed: {e}");
+            match T::purge_stale_data(tracker.shared_env()) {
+                Ok(()) => tracker.health().mark_healthy(),
+                Err(error) => {
+                    tracker.health().mark_unhealthy("startup cleanup failed");
+                    tracing::debug!(%error, "purge_stale_data failed");
+                }
             }
-
-            tracker.health().mark_healthy();
         });
 
     if let Err(e) = spawn_result {
         tracing::debug!(?e, "failed to spawn fff-lmdb-gc thread");
-        // No thread = mark healthy now so healthcheck isn't stuck Pending.
+        // No maintenance attempt ran; do not advertise a healthy environment.
         if let Ok(guard) = shared.read()
             && let Some(ref tracker) = *guard
         {
-            tracker.health().mark_healthy();
+            tracker
+                .health()
+                .mark_unhealthy("startup cleanup thread unavailable");
         }
     }
 }

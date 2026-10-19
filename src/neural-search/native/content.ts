@@ -1,7 +1,7 @@
 import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from "./binding/api.ts";
 
 export const MATCHES_PER_FILE = 200;
-export interface ContentResult extends GrepResult { nativeMultilineLimited?: boolean; }
+export type ContentResult = GrepResult;
 /** The native cursor skips whole files; retain an immutable batch and its next unread row. */
 export interface ContentProgress { batch: ContentResult; offset: number; }
 
@@ -17,7 +17,7 @@ export function searchContent(
   if (Array.isArray(pattern) || mode === "plain") return searchLiterals(finder, Array.isArray(pattern) ? pattern : [pattern], constraints, shared);
   const found = mode === "fuzzy"
     ? finder.grep(pattern, { ...shared, mode, constraints })
-    : searchRegex(finder, pattern, constraints, shared);
+    : finder.grep(pattern, { ...shared, mode: "regex", constraints });
   if (!found.ok || !found.value.regexFallbackError) return found;
   const literal = searchLiterals(finder, [pattern], constraints, shared);
   if (literal.ok) literal.value.regexFallbackError = found.value.regexFallbackError;
@@ -32,18 +32,11 @@ function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: 
   if (patterns.every(pattern => !pattern.includes("\n"))) return finder.multiGrep({ ...options, patterns, constraints: constraints || undefined });
   // The guard leaves exactly one LF-containing literal here.
   const expression = patterns[0]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const found = searchRegex(finder, expression, constraints, options);
+  const found = finder.grep(expression, { ...options, mode: "regex", constraints });
   return found.ok && found.value.regexFallbackError
     ? { ok: false, error: `Cannot encode multiline literal search: ${found.value.regexFallbackError}` } : found;
 }
 
-function searchRegex(finder: FileFinderApi, pattern: string, constraints: string, options: GrepOptions): Result<ContentResult> {
-  // Needles no longer pass through the filter grammar or a transport decoder.
-  const found = finder.grep(pattern, { ...options, mode: "regex", constraints });
-  const multiline = pattern.includes("\n") || /(?:^|[^\\])(?:\\\\)*\\n/.test(pattern);
-  return found.ok && multiline && found.value.items.length
-    ? { ok: true, value: { ...found.value, nativeMultilineLimited: true } } : found;
-}
 
 export function contentPage(
   finder: FileFinderApi, search: (cursor: GrepCursor | null) => Result<ContentResult>, limit: number, previous?: ContentProgress,

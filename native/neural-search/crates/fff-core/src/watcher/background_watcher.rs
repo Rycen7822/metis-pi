@@ -154,6 +154,7 @@ impl BackgroundWatcher {
                         let dirty = strong_picker.read().ok().is_some_and(|guard| {
                             guard.as_ref().is_some_and(|picker| {
                                 picker.signals.rescan_pending.load(Ordering::Acquire)
+                                    || picker.signals.reconcile_pending.load(Ordering::Acquire)
                             })
                         });
                         if reason != RescanReason::WatcherFailure && !dirty {
@@ -245,7 +246,7 @@ impl BackgroundWatcher {
                     }
 
                     if is_new_dir {
-                        let subdirs = index_new_directory(
+                        let (subdirs, reconcile_after_subscribe) = index_new_directory(
                             &dir,
                             &strong_picker,
                             &owner_frecency,
@@ -261,6 +262,17 @@ impl BackgroundWatcher {
                             &owner_health,
                         ) {
                             defer_local_rescan(&mut pending_rescan, RescanReason::WatcherFailure);
+                        }
+                        if reconcile_after_subscribe {
+                            if let Ok(mut guard) = strong_picker.write()
+                                && let Some(picker) = guard.as_mut()
+                            {
+                                picker
+                                    .signals
+                                    .reconcile_pending
+                                    .store(true, Ordering::Release);
+                            }
+                            defer_local_rescan(&mut pending_rescan, RescanReason::Reconcile);
                         }
                     }
                 }
@@ -325,6 +337,10 @@ impl BackgroundWatcher {
                             return;
                         }
 
+                        if events.iter().any(|event| event.event.need_rescan()) {
+                            // Unknown event coverage invalidates same-path subscriptions too.
+                            healthy.store(false, Ordering::Release);
+                        }
                         let new_dirs = handle_debounced_events(
                             events,
                             &base_path_for_handler,
@@ -421,6 +437,10 @@ impl BackgroundWatcher {
         self.healthy.load(Ordering::Acquire)
     }
 
+    pub(crate) fn request_reconciliation(&self) {
+        self.queue(WatchTask::Rescan(RescanReason::Reconcile));
+    }
+
     pub(crate) fn request_git_refresh(&self) {
         self.queue(WatchTask::GitMetadata);
     }
@@ -499,7 +519,7 @@ pub(crate) fn handle_debounced_events(
             Ok(false) => {
                 // Keep policy/event-loss invalidations even if this resource is
                 // replaced: the current scan drains the same dirty flag.
-                if mark_rescan_pending(shared_picker)
+                if retain_deferred_reconciliation(shared_picker)
                     && watch_tx.send(WatchTask::Rescan(reason)).is_ok()
                 {
                     return true;
@@ -732,6 +752,8 @@ pub(crate) fn handle_debounced_events(
             return new_dirs_to_watch;
         };
 
+        picker.note_filesystem_change();
+
         // Must run before the removals below, while the vanished files still
         // carry their indexed size/mtime.
         renames.extend(detect_renames(
@@ -902,7 +924,7 @@ fn index_new_directory(
     shared_frecency: &SharedFrecency,
     git_status_worker: &Arc<GitStatusWorker>,
     pending_rescan: &mut Option<(RescanReason, Instant)>,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, bool) {
     // Prefer the walker's ignore rules; read base_path + rules from the picker.
     let (base_path, walker_rules, follow_symlinks) = match shared_picker.read().ok().and_then(|g| {
         g.as_ref().map(|p| {
@@ -914,7 +936,7 @@ fn index_new_directory(
         })
     }) {
         Some(triple) => triple,
-        None => return Vec::new(),
+        None => return (Vec::new(), false),
     };
 
     let repo = discover_working_repository(&base_path);
@@ -928,7 +950,7 @@ fn index_new_directory(
         Ok(walk) => walk,
         Err(e) => {
             warn!(?e, dir = %dir.display(), "Failed to walk new directory");
-            return Vec::new();
+            return (Vec::new(), false);
         }
     };
 
@@ -936,7 +958,7 @@ fn index_new_directory(
     // ignore rules, but currently we have to filter out ignored files on our own
     let filter = IgnoreFilter::new(&base_path, walker_rules, repo.as_ref());
     if filter.is_ignored(dir) {
-        return Vec::new();
+        return (Vec::new(), false);
     }
     let join_unless_ignored = |relative_path: &str| -> Option<PathBuf> {
         let path = dir.join(relative_path);
@@ -967,19 +989,28 @@ fn index_new_directory(
         });
 
     let mut indexed_files = Vec::with_capacity(files_to_add.len());
+    let mut uncovered_descendants = false;
     let mut index_update_rejected = false;
     {
         let Ok(mut guard) = shared_picker.write() else {
-            return subdirs;
+            return (subdirs, false);
         };
 
         let Some(ref mut picker) = *guard else {
-            return subdirs;
+            return (subdirs, false);
         };
+        picker.note_filesystem_change();
 
-        for directory in std::iter::once(dir).chain(subdirs.iter().map(PathBuf::as_path)) {
-            if picker.add_directory(directory).is_none() {
-                index_update_rejected = true;
+        for (index, directory) in std::iter::once(dir)
+            .chain(subdirs.iter().map(PathBuf::as_path))
+            .enumerate()
+        {
+            match picker.add_directory(directory) {
+                Some(uncovered) => uncovered_descendants |= index != 0 && uncovered,
+                None => {
+                    index_update_rejected = true;
+                    uncovered_descendants |= index != 0;
+                }
             }
         }
 
@@ -1016,7 +1047,7 @@ fn index_new_directory(
                 true
             }
             Ok(false) => {
-                if mark_rescan_pending(shared_picker) {
+                if retain_deferred_reconciliation(shared_picker) {
                     defer_local_rescan(pending_rescan, reason);
                 }
                 false
@@ -1040,7 +1071,7 @@ fn index_new_directory(
         dir.display(),
     );
 
-    subdirs
+    (subdirs, uncovered_descendants)
 }
 
 fn watch_dirs_nonrecursive<'a>(
@@ -1246,14 +1277,18 @@ fn missing_path_error(error: &notify::Error) -> bool {
         || matches!(&error.kind, notify::ErrorKind::Io(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
 
-fn mark_rescan_pending(shared_picker: &SharedFilePicker) -> bool {
+fn retain_deferred_reconciliation(shared_picker: &SharedFilePicker) -> bool {
     let Ok(guard) = shared_picker.write() else {
         return false;
     };
     let Some(picker) = guard.as_ref() else {
         return false;
     };
-    picker.signals.rescan_pending.store(true, Ordering::Release);
+    // Not admitted yet: it must not impersonate an already-queued scan pass.
+    picker
+        .signals
+        .reconcile_pending
+        .store(true, Ordering::Release);
     true
 }
 

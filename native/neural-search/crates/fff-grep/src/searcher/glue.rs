@@ -42,7 +42,7 @@ pub(crate) struct MultiLine<'s, M, S> {
     config: &'s Config,
     core: Core<'s, M, S>,
     slice: &'s [u8],
-    last_match: Option<Range>,
+    last_match: Option<(Range, bool)>,
 }
 
 impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
@@ -68,8 +68,8 @@ impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
             while !self.slice[self.core.pos()..].is_empty() && keepgoing {
                 keepgoing = self.sink()?;
             }
-            if keepgoing && let Some(last_match) = self.last_match.take() {
-                self.sink_matched(&last_match)?;
+            if keepgoing && let Some((last_match, crosses_line)) = self.last_match.take() {
+                self.sink_matched(&last_match, crosses_line)?;
             }
         }
         let byte_count = self.slice.len() as u64;
@@ -86,29 +86,33 @@ impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
         };
         self.advance(&mat);
 
+        let crosses_line = self.slice[mat].contains(&self.config.line_term.as_byte());
         let line = lines::locate(self.slice, self.config.line_term.as_byte(), mat);
         match self.last_match.take() {
             None => {
-                self.last_match = Some(line);
+                self.last_match = Some((line, crosses_line));
                 Ok(true)
             }
-            Some(last_match) => {
+            Some((last_match, last_crosses_line)) => {
                 if last_match.end() >= line.start() {
-                    self.last_match = Some(last_match.with_end(line.end()));
+                    self.last_match = Some((
+                        last_match.with_end(line.end()),
+                        last_crosses_line || crosses_line,
+                    ));
                     Ok(true)
                 } else {
-                    self.last_match = Some(line);
-                    self.sink_matched(&last_match)
+                    self.last_match = Some((line, crosses_line));
+                    self.sink_matched(&last_match, last_crosses_line)
                 }
             }
         }
     }
 
-    fn sink_matched(&mut self, range: &Range) -> Result<bool, S::Error> {
+    fn sink_matched(&mut self, range: &Range, crosses_line: bool) -> Result<bool, S::Error> {
         if range.is_empty() {
             return Ok(false);
         }
-        self.core.matched(self.slice, range)
+        self.core.matched(self.slice, range, crosses_line)
     }
 
     fn find(&mut self) -> Result<Option<Range>, S::Error> {

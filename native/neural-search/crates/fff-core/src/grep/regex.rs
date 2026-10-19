@@ -95,7 +95,8 @@ impl Sink for RegexSink<'_> {
             match_byte_offsets.push((abs_start, abs_end));
         }
 
-        let (context_before, context_after) = self.state.extract_context(sink_match);
+        let (context_before, context_after, context_truncated) =
+            self.state.extract_context(sink_match);
         let context_after = if extra_after.is_empty() {
             context_after
         } else {
@@ -104,6 +105,7 @@ impl Sink for RegexSink<'_> {
             combined
         };
         self.state.push_match(
+            sink_match,
             line_number,
             col,
             byte_offset,
@@ -111,6 +113,7 @@ impl Sink for RegexSink<'_> {
             match_byte_offsets,
             context_before,
             context_after,
+            context_truncated,
         );
         Ok(true)
     }

@@ -161,8 +161,10 @@ impl Sink for PlainTextSink<'_> {
             });
         }
 
-        let (context_before, context_after) = self.state.extract_context(sink_match);
+        let (context_before, context_after, context_truncated) =
+            self.state.extract_context(sink_match);
         self.state.push_match(
+            sink_match,
             line_number,
             col,
             byte_offset,
@@ -170,6 +172,7 @@ impl Sink for PlainTextSink<'_> {
             match_byte_offsets,
             context_before,
             context_after,
+            context_truncated,
         );
         Ok(true)
     }

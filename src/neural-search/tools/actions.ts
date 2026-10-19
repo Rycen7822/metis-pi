@@ -15,7 +15,7 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
 const FIND_PAGE_SIZE_MAX = 100;
 const GREP_TIME_BUDGET_MS = 10_000;
-const NATIVE_MULTILINE_NOTICE = "Native multiline results are LIMITED blocks, not individual-hit counts: adjacent hits may coalesce and blocks may be clipped at 512 bytes before reaching the SDK. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
+const NATIVE_MULTILINE_NOTICE = "Native cross-line projections are LIMITED, not individual-hit counts: later matched lines may be omitted, adjacent blocks may coalesce and text may be clipped before reaching the SDK. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
 const pathSchema = Type.Optional(Type.String({ description:
   "Include path: directory prefix (src/), filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Matches the whole root-relative path. Existing absolute files are literal, including glob metacharacters. Outside-workspace paths and existing directory paths containing spaces use a separate local index. Filename/glob filters containing whitespace are unsupported; search the containing directory instead.",
 }));
@@ -270,13 +270,15 @@ function searchNotices(lease: SearchLease): string[] {
 function contentPageResult(page: ReturnType<typeof contentPage>, notices: string[]) {
   const { result, cappedFiles } = page;
   const nativeMultilineLimited = result.nativeMultilineLimited === true;
+  const nativeOutputTruncated = result.nativeOutputTruncated === true;
   if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
+  if (nativeOutputTruncated) notices.push("Native result or context text was clipped at the byte display limit. Read the source for complete text.");
   if (result.regexFallbackError) notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
   if (cappedFiles.length) notices.push(`Native per-file match limit (${MATCHES_PER_FILE}) reached in ${cappedFiles.join(", ")}; additional matches may be omitted. Refine the query or read those files.`);
   const formatted = formatGrepOutput(result);
   return { output: formatted.output, details: {
     totalMatched: result.totalMatched, totalFiles: result.totalFiles, hasMore: !!page.progress,
-    perFileLimitReached: cappedFiles.length > 0, outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited,
+    perFileLimitReached: cappedFiles.length > 0, outputTruncated: formatted.truncated || nativeMultilineLimited || nativeOutputTruncated, nativeMultilineLimited, nativeOutputTruncated,
   } };
 }
 

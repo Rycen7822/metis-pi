@@ -9,7 +9,6 @@ use crate::FileSync;
 use crate::error::Error;
 use crate::parallelism::BACKGROUND_THREAD_POOL;
 use crate::shared::{SharedFilePicker, SharedFrecency};
-use crate::types::ContentCacheBudget;
 use crate::watch::BackgroundWatcher;
 
 #[derive(Clone, Default)]
@@ -20,6 +19,8 @@ pub(crate) struct ScanSignals {
     pub(crate) cancelled: Arc<AtomicBool>,
     /// Used to resolve conflicts if multiple rescans were triggered in a queue
     pub(crate) rescan_pending: Arc<AtomicBool>,
+    /// Automatic filesystem coverage debt; distinct from already-admitted requests.
+    pub(crate) reconcile_pending: Arc<AtomicBool>,
     /// Set by `post_scan_snapshot`, cleared by `PostScanSnapshot::drop`.
     /// DO NOT set or clear this manually — it is managed exclusively by the
     /// PostScanSnapshot lifecycle.
@@ -34,7 +35,6 @@ pub(crate) struct ScanSignals {
 #[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct ScanConfig {
     pub(crate) watch: bool,
-    pub(crate) auto_cache_budget: bool,
     pub(crate) follow_symlinks: bool,
     pub(crate) enable_fs_root_scanning: bool,
     pub(crate) enable_home_dir_scanning: bool,
@@ -64,6 +64,7 @@ impl ScanJob {
     pub fn new_rescan(
         shared_picker: &SharedFilePicker,
         shared_frecency: &SharedFrecency,
+        reconciliation: bool,
     ) -> Result<Option<Self>, Error> {
         // Admission and completion use the same lock: a busy request is queued
         // before the current job can drain pending work and release its slot.
@@ -74,7 +75,11 @@ impl ScanJob {
             return Ok(None);
         }
         if picker.is_scan_active() || signals.post_scan_active.load(Ordering::Acquire) {
-            signals.rescan_pending.store(true, Ordering::Release);
+            if reconciliation {
+                signals.reconcile_pending.store(true, Ordering::Release);
+            } else {
+                signals.rescan_pending.store(true, Ordering::Release);
+            }
             return Ok(None);
         }
         signals.rescan_pending.store(false, Ordering::Release);
@@ -85,7 +90,6 @@ impl ScanJob {
 
         let new_scan_config = ScanConfig {
             watch: picker.watch_enabled(),
-            auto_cache_budget: !picker.has_explicit_cache_budget(),
             follow_symlinks: picker.follows_symlinks(),
             enable_fs_root_scanning: picker.fs_root_scanning_enabled(),
             enable_home_dir_scanning: picker.home_dir_scanning_enabled(),
@@ -139,18 +143,39 @@ impl ScanJob {
     }
 
     fn run(self) {
+        let mut automatic_followup = false;
         loop {
             if !self.signals.cancelled.load(Ordering::Acquire) {
                 self.run_phases();
             }
             // Keep the same reservation across queued passes, including an
             // error retry. Readiness cannot observe an idle handoff gap.
-            let _guard = self.shared_picker.write();
+            let guard = self.shared_picker.write().ok();
             let pending = self.signals.rescan_pending.swap(false, Ordering::AcqRel);
-            if self.signals.cancelled.load(Ordering::Acquire) || !pending {
-                drop(self.scanning);
-                return;
+            if !self.signals.cancelled.load(Ordering::Acquire) {
+                if pending {
+                    continue;
+                }
+                let watcher = guard
+                    .as_ref()
+                    .and_then(|guard| guard.as_ref())
+                    .filter(|picker| picker.is_watcher_ready())
+                    .and_then(|picker| picker.background_watcher.as_ref());
+                if self.signals.reconcile_pending.load(Ordering::Acquire)
+                    && self.signals.error.lock().is_none()
+                    && let Some(watcher) = watcher
+                {
+                    if !automatic_followup {
+                        automatic_followup = true;
+                        continue;
+                    }
+                    // One immediate automatic pass per reservation. Further debt
+                    // stays visible and moves to the owner's existing cooldown.
+                    watcher.request_reconciliation();
+                }
             }
+            drop(self.scanning);
+            return;
         }
     }
 
@@ -167,6 +192,18 @@ impl ScanJob {
         *signals.error.lock() = None;
         *signals.watcher_error.lock() = None;
         scanned_files_counter.store(0, Ordering::Relaxed);
+
+        let filesystem_epoch = match shared_picker.write() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(picker) => {
+                    // Only the pass that starts covering the debt consumes it.
+                    signals.reconcile_pending.store(false, Ordering::Release);
+                    picker.filesystem_epoch()
+                }
+                None => return,
+            },
+            Err(_) => return,
+        };
 
         // 1. Walk the file system and collect the list of files
         let git_workdir = FileSync::discover_git_workdir(&base_path);
@@ -202,13 +239,14 @@ impl ScanJob {
                 return;
             }
 
-            let live_count = sync.live_count;
+            if config.watch
+                && (picker.filesystem_epoch() != filesystem_epoch
+                    || picker.has_uncovered_directories(&sync))
+            {
+                signals.reconcile_pending.store(true, Ordering::Release);
+            }
             picker.commit_new_sync(sync);
             git_status_worker = Arc::clone(&picker.git_status_worker);
-
-            if config.auto_cache_budget && !picker.has_explicit_cache_budget() {
-                picker.set_cache_budget(ContentCacheBudget::new_for_repo(live_count));
-            }
         } else {
             *signals.error.lock() = Some("Failed to install scan results into picker".into());
             error!("failed to install scan results into picker");
@@ -280,6 +318,8 @@ impl ScanJob {
                         && !signals.cancelled.load(Ordering::Acquire)
                     {
                         picker.background_watcher = Some(watcher);
+                        // Monitoring installed after walking cannot replay earlier writes.
+                        signals.reconcile_pending.store(true, Ordering::Release);
                     }
                 }
                 Err(e) => {

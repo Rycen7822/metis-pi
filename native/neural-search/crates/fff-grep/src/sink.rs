@@ -92,6 +92,7 @@ impl SinkFinish {
 #[derive(Clone, Debug)]
 pub struct SinkMatch<'b> {
     pub(crate) bytes: &'b [u8],
+    pub(crate) crosses_line: bool,
     pub(crate) absolute_byte_offset: u64,
     pub(crate) line_number: Option<u64>,
     pub(crate) buffer: &'b [u8],
@@ -104,6 +105,11 @@ impl<'b> SinkMatch<'b> {
     #[inline]
     pub fn bytes(&self) -> &'b [u8] {
         self.bytes
+    }
+
+    /// Whether an actual match consumed a line terminator, before line projection.
+    pub fn crosses_line(&self) -> bool {
+        self.crosses_line
     }
 
     /// Returns the absolute byte offset of the start of this match. This

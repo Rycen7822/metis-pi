@@ -55,6 +55,7 @@ impl SinkState {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn push_match(
         &mut self,
+        mat: &SinkMatch<'_>,
         line_number: u64,
         col: usize,
         byte_offset: u64,
@@ -62,8 +63,13 @@ impl SinkState {
         match_byte_offsets: SmallVec<[(u32, u32); 4]>,
         context_before: Vec<String>,
         context_after: Vec<String>,
+        context_truncated: bool,
     ) {
+        let raw = strip_line_terminators(mat.bytes());
         self.matches.push(GrepMatch {
+            native_multiline_limited: mat.crosses_line() || raw.contains(&b'\n'),
+            native_output_truncated: context_truncated
+                || raw.len() > truncate_display_bytes(raw).len(),
             file_index: self.file_index,
             line_number,
             col,
@@ -77,10 +83,11 @@ impl SinkState {
     }
 
     /// Extract context lines from the full buffer around a matched region.
-    pub(super) fn extract_context(&self, mat: &SinkMatch<'_>) -> (Vec<String>, Vec<String>) {
+    pub(super) fn extract_context(&self, mat: &SinkMatch<'_>) -> (Vec<String>, Vec<String>, bool) {
         if self.before_context == 0 && self.after_context == 0 {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), false);
         }
+        let mut output_truncated = false;
 
         let buffer = mat.buffer();
         let range = mat.bytes_range_in_buffer();
@@ -106,6 +113,7 @@ impl SinkState {
                     line
                 };
                 let truncated = truncate_display_bytes(line);
+                output_truncated |= truncated.len() < line.len();
                 before.push(String::from_utf8_lossy(truncated).into_owned());
                 pos = line_start;
                 lines_found += 1;
@@ -131,6 +139,7 @@ impl SinkState {
                     line
                 };
                 let truncated = truncate_display_bytes(line);
+                output_truncated |= truncated.len() < line.len();
                 after.push(String::from_utf8_lossy(truncated).into_owned());
                 pos = if line_end < buffer.len() {
                     line_end + 1 // skip past \n
@@ -141,7 +150,7 @@ impl SinkState {
             }
         }
 
-        (before, after)
+        (before, after, output_truncated)
     }
 }
 

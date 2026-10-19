@@ -296,6 +296,8 @@ pub(super) fn fuzzy_grep_search<'a>(
                             .unwrap_or(0);
 
                         file_matches.push(GrepMatch {
+                            native_multiline_limited: false,
+                            native_output_truncated: truncated.len() < raw_line.len(),
                             file_index: 0,
                             line_number: ln,
                             col,

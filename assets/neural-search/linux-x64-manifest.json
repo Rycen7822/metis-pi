@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "x86_64-unknown-linux-gnu",
   "minGlibc": "2.31",
-  "abiVersion": 5,
+  "abiVersion": 6,
   "upstream": {
     "version": "0.11.0",
     "commit": "95fd777c2529fc7b4d7572dabff64cc07268f2c5"
@@ -12,7 +12,7 @@
       "native/neural-search",
       "src/neural-search/native/binding"
     ],
-    "sha256": "6ab2dd68856a66e34458fe777fa83eaaa63eee26d304f27a25a45818275a58bc",
+    "sha256": "3b7f79924af5e61e09ba338e0e11f37048cdeb0fd98d930af5cb44bd3a3d532a",
     "inputs": [
       {
         "path": "native/neural-search/Cargo.lock",
@@ -28,7 +28,7 @@
       },
       {
         "path": "native/neural-search/build-linux-x64.mjs",
-        "sha256": "59b28d334c37fe1022c56c43e6a485a41d12fe1c01d516d8b320b79b61217859"
+        "sha256": "5a1f5e2e0f777bcb26b243e014d7cecb70ccb151f7cbbe10d86f7f6490cd9838"
       },
       {
         "path": "native/neural-search/crates/fff-c/Cargo.toml",
@@ -36,11 +36,11 @@
       },
       {
         "path": "native/neural-search/crates/fff-c/include/fff.h",
-        "sha256": "e6790d0efc88c907b86e3602660685df177caaf339f20b9545210862740fdf16"
+        "sha256": "5af33353d778b495286766a716bb0b673055f525c2fa50cddb1378f3517bb0c6"
       },
       {
         "path": "native/neural-search/crates/fff-c/src/ffi_types.rs",
-        "sha256": "b894879c26ba255c39f1f38d242aeca2d60a6ca55499e003c9eb54ac885fb684"
+        "sha256": "840b38259b1556cb0c1af33b99dcac7b9f137e28d2ca6ef9543522a95282fe08"
       },
       {
         "path": "native/neural-search/crates/fff-c/src/lib.rs",
@@ -76,7 +76,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/dbs/lmdb.rs",
-        "sha256": "45673e0db5285d800c2afe244fc1e5da7f355539c77f74c9463872b70c3dfe61"
+        "sha256": "f903e8b6626980dbf31dfc7df2da99a6d8b6cffb7d2e40d682d0f73f451aebae"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/dbs/mod.rs",
@@ -92,7 +92,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/file_picker.rs",
-        "sha256": "8f56a05121ccd3d04768b573bf0e0dd3cc4522066ceaca21df72460859adad6e"
+        "sha256": "eef4bd8e5ee4810e4ce312d88d512a46f92086e5be3180ecf0587ff1a5337212"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/git.rs",
@@ -108,11 +108,11 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/fuzzy_grep.rs",
-        "sha256": "43aaf7e731a87add12fc46f8addc0a9501ba51d2cff43e1a39f19d851ceddd1e"
+        "sha256": "60254cb864b24f254d362405e36b159483fef9167024cd1f3b0404e95d3fc55c"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/grep.rs",
-        "sha256": "9b0f3dd9f5fb3bfa558bcddedee450fc88254268edbe6ab2ce4863f3593e4e5f"
+        "sha256": "24fe692966c55285dfd69c396848603a217008bde0534037e15968ad761e4115"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/grep_tests.rs",
@@ -124,7 +124,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/multi_pattern.rs",
-        "sha256": "9115427b4b679931b3b71a6d147c1033ac5b56497d70c310a6366fa19baaa45c"
+        "sha256": "42731b966236d7b505c7304d65b9a7a62dfaa56bf0131b47618df1302a4bc4ff"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/prefilter.rs",
@@ -132,15 +132,15 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/regex.rs",
-        "sha256": "76583040f38c6c9a7c3b7af2b168a8f3f0a100c251746273a706d0422c8eca86"
+        "sha256": "21949c625eefef714ab9c4e1080f0d1cc89b3c3c16f9eef04ef1a5264b575e36"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/sink.rs",
-        "sha256": "50f99be780ba8d83addcca2d18d0fa870da92bb8f1723832589c87fa57e59b3b"
+        "sha256": "2aca7f2ba8d37545eeed7d6218cbb5c3cd982e14ac4bfd2d3c8fb0abcf08ed5b"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/grep/types.rs",
-        "sha256": "755e4ddf5a33f8a594761485a9388ce34eaaf60e750f986fe3f6a99c73fb442d"
+        "sha256": "c7a3f09697e02e0350054358dc14983b57e33aecccbf8eb609c88cf1f4a2a191"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/ignore.rs",
@@ -172,7 +172,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/rescan_stats.rs",
-        "sha256": "5bddbe27bcb6dc9230e2c73ee6667be4adef299b42471afcb51aeb2408dd7fdb"
+        "sha256": "e9714354aa5c347b2ef3237d8875c4afde97bfc6b474579b423241ae7a9bbf1d"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/rescan_throttle.rs",
@@ -180,7 +180,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/scan.rs",
-        "sha256": "676a5a0efc779df33f4147a98394d9973404798a4fe9dff6efc0cd8ba1c54d8c"
+        "sha256": "ae2de3c5786508640217c3d64febfb43a9cda14517a741f571a80b84fd62467c"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/score.rs",
@@ -188,7 +188,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/shared.rs",
-        "sha256": "065c4009061df53c6036d61cad99644b315068fbd72b00a7e619b69e55a4af84"
+        "sha256": "aec1f510567c2dac4c3b49c966116b3cd2299967f6039297abdd3eab624a58a7"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/simd_path.rs",
@@ -228,7 +228,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "bcf480245ab467b90c079222f5994704ea5442732975e4c8f4a97a94b405c8e6"
+        "sha256": "60957e8b89a4d219d8dba1934042a5094246f133f8750b0b6ffb85b0ddcd297e"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/mod.rs",
@@ -256,11 +256,11 @@
       },
       {
         "path": "native/neural-search/crates/fff-grep/src/searcher/core.rs",
-        "sha256": "58d7b9502e46cf437c20e87acba9489bc8a44eb37d1dabe13341ad1599e9c2fb"
+        "sha256": "94739f140aeda5aa9dc862524dc4f5cfeb9d6ee0130c9c8ba2f5f7cd604daa39"
       },
       {
         "path": "native/neural-search/crates/fff-grep/src/searcher/glue.rs",
-        "sha256": "3c9e40cf5f5a04eca848b6d8e5be30ef309a21926c758ed47bdfa1fc04d2ecfc"
+        "sha256": "d911f9d9705f6fb3b15e48567a1cebf82891e4e9a02325579a1c7cc0755ce157"
       },
       {
         "path": "native/neural-search/crates/fff-grep/src/searcher/mod.rs",
@@ -268,7 +268,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-grep/src/sink.rs",
-        "sha256": "4a70cbde0cb179acf8b1a2d23cfa348ca23e2529d52ae4f48c65571965a7674a"
+        "sha256": "4bfeb96b4b68efaf230710c142a7da2efd438e64e1972e292f0b41bbb938f82c"
       },
       {
         "path": "native/neural-search/crates/fff-query-parser/Cargo.toml",
@@ -324,11 +324,11 @@
       },
       {
         "path": "src/neural-search/native/binding/api.ts",
-        "sha256": "592f2f677d5b0c841c00adc3ccf017978dd0de4b837cf2ae8f0a5860d6aec5ad"
+        "sha256": "1f8b54a77f5dfde7048f1f86c24af776262d2a0e43d63c07ec3aca7e8d5fd863"
       },
       {
         "path": "src/neural-search/native/binding/ffi.ts",
-        "sha256": "952742b64774a2b4f356ec0ad64f60c7b955cbb10d55ff34e81d138b963c5c09"
+        "sha256": "fe8ea3a29deec075708fb15145ff4ac50c30796ce159f2e1af9395e5a441e42e"
       },
       {
         "path": "src/neural-search/native/binding/finder.ts",
@@ -361,10 +361,10 @@
   },
   "asset": {
     "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
-    "sha256": "1c357364f3b9da14a546c48324e7f8ce5e417ed88334ae6d9afd419db8cf249f",
-    "bytes": 10480368,
+    "sha256": "f25a23aef15fc6094d599c0e59fe745c38333c1d711af4e7b6f4dca5c99e25b8",
+    "bytes": 10487328,
     "abi": {
-      "version": 5,
+      "version": 6,
       "machine": "x86-64",
       "needed": [
         "ld-linux-x86-64.so.2",

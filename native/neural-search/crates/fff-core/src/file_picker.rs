@@ -332,10 +332,11 @@ impl FileSync {
 
     /// Finds or appends the DirItem for `dir_rel`, returning its index.
     /// `None` when the dir table's overflow capacity is exhausted.
-    fn find_or_add_dir(&mut self, dir_rel: &str) -> Option<u32> {
+    fn find_or_add_dir(&mut self, dir_rel: &str) -> Option<(u32, bool)> {
         if let Some(idx) = self.find_dir_index(dir_rel) {
+            let uncovered = self.dirs[idx].is_deleted();
             self.revive_dir(idx as u32);
-            return Some(idx as u32);
+            return Some((idx as u32, uncovered));
         }
         if self.dirs.len() - self.base_dirs_count >= MAX_OVERFLOW_FILES {
             return None;
@@ -361,7 +362,7 @@ impl FileSync {
             return None;
         }
         self.live_dirs_count += 1;
-        Some(idx as u32)
+        Some((idx as u32, true))
     }
 }
 
@@ -554,6 +555,8 @@ pub struct FilePicker {
     /// Conservative continuation epoch: every shared mutable access invalidates
     /// live content offsets, including no-op writes. Never reset by a rescan.
     index_version: u64,
+    /// Only watcher-applied filesystem changes, not classification/control writes.
+    filesystem_epoch: u64,
     pub(crate) background_watcher: Option<BackgroundWatcher>,
     /// Single serialized writer for all git-status updates (scan, watcher,
     /// FFI). Owned by the picker so it exists before the first scan; its
@@ -666,14 +669,6 @@ impl FilePicker {
     /// inside a git working directory. `None` for non-git bases.
     pub fn git_root(&self) -> Option<&Path> {
         self.sync_data.git_workdir.as_deref()
-    }
-
-    pub fn has_explicit_cache_budget(&self) -> bool {
-        self.has_explicit_cache_budget
-    }
-
-    pub fn set_cache_budget(&mut self, budget: ContentCacheBudget) {
-        self.cache_budget = Arc::new(budget);
     }
 
     /// Get all indexed files sorted by path.
@@ -820,17 +815,9 @@ impl FilePicker {
             error!("Base path does not exist: {}", options.base_path);
             return Err(Error::InvalidPath(path));
         }
-        // Relative bases (".", "sub/dir") are resolved against the cwd so
-        // they can be compared with the absolute paths reported by the OS
-        // watcher. Purely lexical: no symlinks are resolved. The
-        // `components()` pass drops interior `.` segments ("/cwd/.").
-        let path = if path.is_relative() {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&path).components().collect())
-                .unwrap_or(path)
-        } else {
-            path
-        };
+        // Git caches and watcher paths must use the same physical root identity,
+        // including when the caller chose an absolute or relative symlink alias.
+        let path = crate::path_utils::canonicalize(&path).map_err(|_| Error::InvalidPath(path))?;
         if path.parent().is_none() && !options.enable_fs_root_scanning {
             error!("Refusing to index filesystem root: {}", path.display());
             return Err(Error::FilesystemRoot(path));
@@ -856,6 +843,7 @@ impl FilePicker {
             has_explicit_cache_budget: has_explicit_budget,
             signals: crate::scan::ScanSignals::default(),
             index_version: 1,
+            filesystem_epoch: 0,
             scanned_files_count: Arc::new(AtomicUsize::new(0)),
             sync_data: FileSync::new(),
             classification_owner: None,
@@ -905,7 +893,6 @@ impl FilePicker {
             trace_span,
             ScanConfig {
                 watch,
-                auto_cache_budget: true,
                 follow_symlinks,
                 enable_fs_root_scanning,
                 enable_home_dir_scanning,
@@ -946,14 +933,7 @@ impl FilePicker {
             self.follow_symlinks,
         )?;
 
-        self.sync_data = sync;
-
-        if !self.has_explicit_cache_budget {
-            let file_count = self.sync_data.files().len();
-            self.cache_budget = Arc::new(ContentCacheBudget::new_for_repo(file_count));
-        } else {
-            self.cache_budget.reset();
-        }
+        self.commit_new_sync(sync);
 
         if let Some(handle) = git_handle
             && let Ok(Some(git_cache)) = handle.join()
@@ -1392,6 +1372,7 @@ impl FilePicker {
             is_ready: !is_scanning
                 && scan_error.is_none()
                 && !self.signals.rescan_pending.load(Ordering::Acquire)
+                && !self.signals.reconcile_pending.load(Ordering::Acquire)
                 && !self.is_post_scan_active()
                 && (!self.watch || self.is_watcher_ready()),
             scan_error,
@@ -1507,9 +1488,56 @@ impl FilePicker {
         }
     }
 
+    pub(crate) fn filesystem_epoch(&self) -> u64 {
+        self.filesystem_epoch
+    }
+
+    pub(crate) fn note_filesystem_change(&mut self) {
+        self.filesystem_epoch = self.filesystem_epoch.wrapping_add(1);
+    }
+
+    /// Compare sorted base directories linearly; only the bounded overflow is unsorted.
+    /// Live rows were subscribed by the previous scan/owner; revived rows need coverage.
+    pub(crate) fn has_uncovered_directories(&self, candidate: &FileSync) -> bool {
+        let old = &self.sync_data;
+        let mut previous = old.dirs[..old.base_dirs_count]
+            .iter()
+            .filter(|directory| !directory.is_deleted())
+            .peekable();
+        let mut old_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
+        let mut new_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
+        for directory in candidate
+            .dirs
+            .iter()
+            .filter(|directory| !directory.is_deleted())
+        {
+            let path = directory.read_relative_path(candidate.arena_base_ptr(), &mut new_buf);
+            while previous.peek().is_some_and(|previous| {
+                previous.read_relative_path(old.arena_base_ptr(), &mut old_buf) < path
+            }) {
+                previous.next();
+            }
+            let covered = previous.peek().is_some_and(|previous| {
+                previous.read_relative_path(old.arena_base_ptr(), &mut old_buf) == path
+            }) || old.dirs[old.base_dirs_count..].iter().any(|previous| {
+                !previous.is_deleted()
+                    && previous.read_relative_path(old.arena_overflow_ptr(), &mut old_buf) == path
+            });
+            if !covered {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Install a fresh cache-empty index and its budget as one write operation.
     pub(crate) fn commit_new_sync(&mut self, sync: FileSync) {
         self.sync_data = sync;
         self.cache_budget.reset();
+        if !self.has_explicit_cache_budget {
+            self.cache_budget =
+                Arc::new(ContentCacheBudget::new_for_repo(self.sync_data.live_count));
+        }
     }
 
     #[inline]
@@ -1625,9 +1653,8 @@ impl FilePicker {
         index.and_then(|i| self.sync_data.get_file_mut(i))
     }
 
-    /// Handle the event of certain file being modified or adds a neww file if it is not added
-    /// If this function returns `None` it means that picker is in the invalid state, or the capacity
-    /// of index is exhausted and a new rescan needs to be triggered.
+    /// Apply a file event, retaining existing metadata on non-missing IO failure.
+    /// `None` requests recovery: failed inspection, missing/nonregular file or capacity.
     #[tracing::instrument(skip(self),level = Level::DEBUG)]
     pub fn handle_create_or_modify(&mut self, path: impl AsRef<Path> + Debug) -> Option<&FileItem> {
         let path = path.as_ref();
@@ -1657,6 +1684,14 @@ impl FilePicker {
 
                 m
             }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                warn!(
+                    ?path,
+                    ?error,
+                    "Cannot inspect modified file; retaining indexed metadata"
+                );
+                return None;
+            }
             _ => {
                 self.tombstone_file(pos);
                 return None;
@@ -1681,13 +1716,15 @@ impl FilePicker {
     }
 
     /// Admit/revive a walked directory without requiring a file beneath it.
-    pub(crate) fn add_directory(&mut self, path: &Path) -> Option<()> {
+    pub(crate) fn add_directory(&mut self, path: &Path) -> Option<bool> {
         let relative = path.strip_prefix(&self.base_path).ok()?.to_str()?;
         let mut relative = crate::path_utils::to_canonical_slashes(relative);
         if !relative.is_empty() && !relative.ends_with('/') {
             relative.to_mut().push('/');
         }
-        self.sync_data.find_or_add_dir(&relative).map(|_| ())
+        self.sync_data
+            .find_or_add_dir(&relative)
+            .map(|(_, uncovered)| uncovered)
     }
 
     /// Adds a new file to picker, if the file can not be added returns `None`
@@ -1709,7 +1746,7 @@ impl FilePicker {
         let dir_rel = crate::path_utils::to_canonical_slashes(
             &rel_path[..file_item.path.filename_offset as usize],
         );
-        file_item.parent_dir_index = self.sync_data.find_or_add_dir(&dir_rel)?;
+        file_item.parent_dir_index = self.sync_data.find_or_add_dir(&dir_rel)?.0;
 
         let builder = self.sync_data.overflow_builder.get_or_insert_with(|| {
             crate::simd_path::ChunkedPathStoreBuilder::new(MAX_OVERFLOW_FILES)

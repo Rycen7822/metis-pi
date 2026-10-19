@@ -76,6 +76,8 @@ export interface GrepResult {
   filteredFileCount: number;
   nextCursor: GrepCursor | null;
   regexFallbackError?: string;
+  nativeMultilineLimited: boolean;
+  nativeOutputTruncated: boolean;
 }
 export interface FileFinderApi {
   readonly isDestroyed: boolean;

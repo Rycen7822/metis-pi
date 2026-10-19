@@ -46,8 +46,13 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         self.pos = pos;
     }
 
-    pub(crate) fn matched(&mut self, buf: &[u8], range: &Range) -> Result<bool, S::Error> {
-        self.sink_matched(buf, range)
+    pub(crate) fn matched(
+        &mut self,
+        buf: &[u8],
+        range: &Range,
+        crosses_line: bool,
+    ) -> Result<bool, S::Error> {
+        self.sink_matched(buf, range, crosses_line)
     }
 
     pub(crate) fn find_at(&mut self, buf: &[u8], at: usize) -> Result<Option<Range>, S::Error> {
@@ -66,9 +71,9 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
 
     pub(crate) fn match_by_line(&mut self, buf: &[u8]) -> Result<bool, S::Error> {
         while !buf[self.pos()..].is_empty() {
-            if let Some(line) = self.find_by_line(buf)? {
+            if let Some((line, crosses_line)) = self.find_by_line(buf)? {
                 self.set_pos(line.end());
-                if !self.sink_matched(buf, &line)? {
+                if !self.sink_matched(buf, &line, crosses_line)? {
                     return Ok(false);
                 }
             } else {
@@ -80,7 +85,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     }
 
     #[inline(always)]
-    fn find_by_line(&mut self, buf: &[u8]) -> Result<Option<Range>, S::Error> {
+    fn find_by_line(&mut self, buf: &[u8]) -> Result<Option<(Range, bool)>, S::Error> {
         let mut pos = self.pos();
         while !buf[pos..].is_empty() {
             let mat = match self
@@ -100,13 +105,20 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
                 pos = buf.len();
                 continue;
             }
-            return Ok(Some(line));
+            let crosses_line =
+                buf[mat.start()..mat.end()].contains(&self.config.line_term.as_byte());
+            return Ok(Some((line, crosses_line)));
         }
         Ok(None)
     }
 
     #[inline(always)]
-    fn sink_matched(&mut self, buf: &[u8], range: &Range) -> Result<bool, S::Error> {
+    fn sink_matched(
+        &mut self,
+        buf: &[u8],
+        range: &Range,
+        crosses_line: bool,
+    ) -> Result<bool, S::Error> {
         self.count_lines(buf, range.start());
         let offset = self.absolute_byte_offset + range.start() as u64;
         let linebuf = &buf[*range];
@@ -114,6 +126,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
             self.searcher,
             &SinkMatch {
                 bytes: linebuf,
+                crosses_line,
                 absolute_byte_offset: offset,
                 line_number: self.line_number,
                 buffer: buf,

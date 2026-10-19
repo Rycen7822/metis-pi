@@ -1,12 +1,12 @@
-// Metis private Linux x64 ABI v5. Rust owns each envelope and its payload;
+// Metis private Linux x64 ABI v6. Rust owns each envelope and its payload;
 // decode into detached JS values before freeing the envelope in finally.
 import { DataType, type FieldType, isNullPointer, type JsExternal, load, open, restorePointer, wrapPointer } from "ffi-rs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { err, type FileItem, type GrepOptions, type GrepResult, type HealthCheck, type InitOptions, type MixedItem, type MixedSearchResult, type MultiGrepOptions, type Result, type ScanProgress, type SearchResult } from "./api.ts";
 
-const LIBRARY_KEY = "metis_neural_search_v5";
-const ABI_VERSION = 5;
+const LIBRARY_KEY = "metis_neural_search_v6";
+const ABI_VERSION = 6;
 const CREATE = {
   version: DataType.U32, base_path: DataType.String, frecency_db_path: DataType.String, history_db_path: DataType.String,
   enable_fs_root_scanning: DataType.U8, enable_home_dir_scanning: DataType.U8, follow_symlinks: DataType.U8,
@@ -25,7 +25,7 @@ const MATCH = {
 } as const;
 const GREP = {
   items: DataType.External, count: DataType.U32, total_files_searched: DataType.U32, total_files: DataType.U32,
-  filtered_file_count: DataType.U32, next_file_offset: DataType.U32, regex_fallback_error: DataType.External, index_version: DataType.U64,
+  filtered_file_count: DataType.U32, next_file_offset: DataType.U32, output_limits: DataType.U8, regex_fallback_error: DataType.External, index_version: DataType.U64,
 } as const;
 const PROGRESS = { scanned_files_count: DataType.U64, is_scanning: DataType.U8, is_watcher_ready: DataType.U8, is_ready: DataType.U8, index_version: DataType.U64, scan_error: DataType.External, git_status_error: DataType.External, watcher_error: DataType.External } as const;
 type Raw<S> = { [K in keyof S]: S[K] extends DataType.External ? JsExternal : number };
@@ -144,6 +144,7 @@ function grep(name: "grep" | "multi_grep", handle: NativeHandle, pattern: string
   return result(name, types, values, view => {
     const raw = readStruct(view.handle, GREP);
     const indexVersion = readIndexVersion(raw.index_version);
+    if (raw.output_limits & ~3) throw new Error("Invalid native output-limit flags.");
     const items: GrepResult["items"] = [];
     for (let index = 0; index < raw.count; index++) {
       const entry = element("get_match", view.handle, index, MATCH);
@@ -154,7 +155,7 @@ function grep(name: "grep" | "multi_grep", handle: NativeHandle, pattern: string
       });
     }
     const regexFallbackError = readString(raw.regex_fallback_error);
-    return { items, indexVersion, totalMatched: items.length, totalFiles: raw.total_files, totalFilesSearched: raw.total_files_searched,
+    return { items, indexVersion, nativeMultilineLimited: !!(raw.output_limits & 1), nativeOutputTruncated: !!(raw.output_limits & 2), totalMatched: items.length, totalFiles: raw.total_files, totalFilesSearched: raw.total_files_searched,
       filteredFileCount: raw.filtered_file_count, nextCursor: raw.next_file_offset ? { _offset: raw.next_file_offset, _indexVersion: indexVersion } : null,
       ...(regexFallbackError ? { regexFallbackError } : {}),
     };

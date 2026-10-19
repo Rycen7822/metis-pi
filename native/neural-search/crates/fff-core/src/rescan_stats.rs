@@ -21,10 +21,12 @@ pub enum RescanReason {
     IndexUpdateRejected,
     /// The post-scan overflow region ran out of slots.
     OverflowCapacity,
+    /// Close a scan-publication or newly installed monitoring coverage gap.
+    Reconcile,
 }
 
 impl RescanReason {
-    pub const ALL: [RescanReason; 7] = [
+    pub const ALL: [RescanReason; 8] = [
         RescanReason::Explicit,
         RescanReason::KernelEventLoss,
         RescanReason::IgnoreFileChanged,
@@ -32,6 +34,7 @@ impl RescanReason {
         RescanReason::IndexUpdateRejected,
         RescanReason::OverflowCapacity,
         RescanReason::WatcherFailure,
+        RescanReason::Reconcile,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -43,6 +46,7 @@ impl RescanReason {
             RescanReason::IndexUpdateRejected => "index_update_rejected",
             RescanReason::OverflowCapacity => "overflow_capacity",
             RescanReason::WatcherFailure => "watcher_failure",
+            RescanReason::Reconcile => "reconcile",
         }
     }
 
@@ -55,6 +59,7 @@ impl RescanReason {
             RescanReason::IndexUpdateRejected => 4,
             RescanReason::OverflowCapacity => 5,
             RescanReason::WatcherFailure => 6,
+            RescanReason::Reconcile => 7,
         }
     }
 }
