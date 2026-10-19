@@ -1,5 +1,5 @@
 /// Largest file whose full content fff will touch: the default grep read cap
-/// (`GrepSearchOptions::max_file_size`) and the content-cache mmap cap
+/// (`GrepSearchOptions::max_file_size`) and the content-cache read cap
 /// (`ContentCacheBudget::max_file_size`). Binary detection also streams up to
 /// this far so nothing grep would read is left unclassified.
 pub const MAX_FFFILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -8,12 +8,12 @@ pub const MAX_FFFILE_SIZE: u64 = 10 * 1024 * 1024;
 /// layout and inherited stable tie order even without a content index.
 pub const MAX_INDEXABLE_FILE_SIZE: usize = 2 * 1024 * 1024;
 
-/// Total bytes the persistent content mmap cache may hold for a small repo.
+/// Total bytes the persistent immutable content cache may hold for a small repo.
 pub const MAX_CACHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Files below one page waste the remainder when mmapped, so the cache skips
-/// them and falls back to chunked reads on Linux x64.
-pub const MMAP_THRESHOLD: u64 = 4 * 1024;
+/// Preserve small-file cache admission: sub-4 KiB reads use scratch buffers
+/// without consuming the finite persistent-entry budget.
+pub const MIN_CACHED_CONTENT_SIZE: u64 = 4 * 1024;
 
 /// Watcher overflow capacity reserved after the initial scan
 pub const MAX_OVERFLOW_FILES: usize = 1024;
@@ -27,9 +27,5 @@ pub const RESCAN_MIN_INTERVAL_LARGE_INDEX: std::time::Duration =
 
 /// Live-file count at which [`RESCAN_MIN_INTERVAL_LARGE_INDEX`] takes over.
 pub const LARGE_INDEX_FILE_COUNT: usize = 1_000_000;
-
-/// Fresh-mmap threshold: files at or above this size get mmapped directly on
-/// cache miss instead of chunked reads into Vec. Preserve the Linux x64 cutoff.
-pub const FRESH_MMAP_THRESHOLD: u64 = 256 * 1024;
 
 pub const PATH_BUF_SIZE: usize = libc::PATH_MAX as usize;

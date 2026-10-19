@@ -25,7 +25,6 @@ git2 = { version = "0.21.0", default-features = false, features = [
 ] }
 glidesort = "0.1"
 heed = "0.22.0"
-memmap2 = "0.9"
 zlob = { version = "=1.6.5" }
 
 neo_frizbee = { version = "0.13.3", features = ["match_end_col"] }

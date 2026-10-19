@@ -17,7 +17,19 @@ use std::sync::atomic::AtomicBool;
 /// Finds the first occurrence of any pattern starting at the given offset.
 /// Always reports `\n` as the line terminator for the fast candidate-line path.
 struct AhoCorasickMatcher<'a> {
-    ac: &'a AhoCorasick,
+    ac: AhoCorasick,
+    // Only mixed casing needs candidate verification; IDs preserve input order.
+    exact: Vec<Option<&'a [u8]>>,
+}
+
+impl AhoCorasickMatcher<'_> {
+    fn accepts(&self, haystack: &[u8], found: &aho_corasick::Match) -> bool {
+        self.exact
+            .get(found.pattern().as_usize())
+            .copied()
+            .flatten()
+            .is_none_or(|pattern| &haystack[found.start()..found.end()] == pattern)
+    }
 }
 
 impl Matcher for AhoCorasickMatcher<'_> {
@@ -25,9 +37,17 @@ impl Matcher for AhoCorasickMatcher<'_> {
 
     #[inline]
     fn find_at(&self, haystack: &[u8], at: usize) -> std::result::Result<Option<Match>, NoError> {
-        let hay = &haystack[at..];
-        let found: Option<aho_corasick::Match> = self.ac.find(hay);
-        Ok(found.map(|m| Match::new(at + m.start(), at + m.end())))
+        let haystack = &haystack[at..];
+        let found = if self.exact.is_empty() {
+            self.ac.find(haystack)
+        } else {
+            // Overlap is necessary: an invalid folded candidate must not hide
+            // a valid pattern starting inside it. Scan once, not once per group.
+            self.ac
+                .find_overlapping_iter(haystack)
+                .find(|found| self.accepts(haystack, found))
+        };
+        Ok(found.map(|found| Match::new(at + found.start(), at + found.end())))
     }
 
     #[inline]
@@ -41,7 +61,7 @@ impl Matcher for AhoCorasickMatcher<'_> {
 /// Collects all pattern match positions on each matched line for highlighting.
 struct AhoCorasickSink<'a> {
     state: SinkState,
-    ac: &'a AhoCorasick,
+    matcher: &'a AhoCorasickMatcher<'a>,
 }
 
 impl Sink for AhoCorasickSink<'_> {
@@ -62,7 +82,7 @@ impl Sink for AhoCorasickSink<'_> {
         let mut col = 0usize;
         let mut first = true;
 
-        for m in self.ac.find_iter(display_bytes as &[u8]) {
+        let mut collect_match = |m: aho_corasick::Match| {
             let abs_start = m.start() as u32;
             let abs_end = (m.end() as u32).min(display_len);
             if first {
@@ -70,6 +90,19 @@ impl Sink for AhoCorasickSink<'_> {
                 first = false;
             }
             match_byte_offsets.push((abs_start, abs_end));
+        };
+        if self.matcher.exact.is_empty() {
+            for found in self.matcher.ac.find_iter(display_bytes) {
+                collect_match(found);
+            }
+        } else {
+            let mut at = 0;
+            for found in self.matcher.ac.find_overlapping_iter(display_bytes) {
+                if found.start() >= at && self.matcher.accepts(display_bytes, &found) {
+                    at = found.end();
+                    collect_match(found);
+                }
+            }
         }
 
         let (context_before, context_after) = self.state.extract_context(mat);
@@ -92,9 +125,9 @@ impl Sink for AhoCorasickSink<'_> {
 
 /// Multi-pattern OR search using Aho-Corasick.
 ///
-/// Builds a single automaton from all patterns and searches each file in one
-/// pass. This is significantly faster than regex alternation for literal text
-/// searches because Aho-Corasick uses SIMD-accelerated multi-needle matching.
+/// A single automaton retains the uniform-casing fast path. Mixed smart-case
+/// uses ASCII-folded candidates with per-pattern exact verification, rather
+/// than repeated suffix scans or regex OR.
 ///
 /// Returns the same `GrepResult` type as `grep_search_pattern`.
 #[allow(clippy::too_many_arguments)]
@@ -128,10 +161,23 @@ pub(crate) fn multi_grep_search<'a>(
     }
 
     let casing = options.effective_casing();
-    let case_insensitive = patterns.iter().all(|p| casing.is_insensitive_for(p));
-
+    let insensitive = patterns
+        .iter()
+        .any(|pattern| casing.is_insensitive_for(pattern));
+    let mixed = insensitive
+        && patterns
+            .iter()
+            .any(|pattern| !casing.is_insensitive_for(pattern));
+    let exact = if mixed {
+        patterns
+            .iter()
+            .map(|pattern| (!casing.is_insensitive_for(pattern)).then_some(pattern.as_bytes()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let ac = aho_corasick::AhoCorasickBuilder::new()
-        .ascii_case_insensitive(case_insensitive)
+        .ascii_case_insensitive(insensitive)
         .build(&patterns)?;
 
     let searcher = {
@@ -141,7 +187,7 @@ pub(crate) fn multi_grep_search<'a>(
     }
     .build();
 
-    let ac_matcher = AhoCorasickMatcher { ac: &ac };
+    let ac_matcher = AhoCorasickMatcher { ac, exact };
     Ok(perform_grep(
         &files_to_search,
         options,
@@ -164,7 +210,10 @@ pub(crate) fn multi_grep_search<'a>(
                 after_context: options.after_context,
             };
 
-            let mut sink = AhoCorasickSink { state, ac: &ac };
+            let mut sink = AhoCorasickSink {
+                state,
+                matcher: &ac_matcher,
+            };
 
             if let Err(e) = searcher.search_slice(&ac_matcher, file_bytes, &mut sink) {
                 tracing::error!(error = %e, "Grep (aho-corasick multi) search failed");

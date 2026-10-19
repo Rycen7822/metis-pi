@@ -297,16 +297,17 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
     }
 
     let parsed_query = context.query;
-    // Ghost dirs (all files tombstoned) never surface in search results.
+    // Ghost dirs and the empty root bookkeeping sentinel are not searchable.
+    let searchable = |dir: &&DirItem| !dir.is_deleted() && dir.path.byte_len != 0;
     let working_dirs: Vec<&DirItem> = if parsed_query.constraints.is_empty() {
-        dirs.iter().filter(|d| !d.is_deleted()).collect()
+        dirs.iter().filter(searchable).collect()
     } else {
         match apply_constraints(dirs, &parsed_query.constraints, arena, overflow_arena) {
             Some(filtered) if !filtered.is_empty() => {
-                filtered.into_iter().filter(|d| !d.is_deleted()).collect()
+                filtered.into_iter().filter(searchable).collect()
             }
             Some(_) => return (vec![], vec![], 0),
-            None => dirs.iter().filter(|d| !d.is_deleted()).collect(),
+            None => dirs.iter().filter(searchable).collect(),
         }
     };
 

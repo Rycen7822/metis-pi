@@ -1,5 +1,5 @@
 use crate::simd_path::ArenaPtr;
-use crate::types::{ContentCacheBudget, FileItem, MmapSlot};
+use crate::types::{ContentCacheBudget, FileItem};
 use fff_grep::lines::LineStep;
 use rayon::prelude::*;
 use std::path::Path;
@@ -136,20 +136,13 @@ pub(super) fn fuzzy_grep_search<'a>(
         chunk_size = (chunk_size * growth).min(max_chunk);
 
         // Parallel phase with `map_init`: each rayon worker thread clones the
-        // matcher once and gets a reusable read buffer + mmap slot. Buffer holds
-        // small files, slot holds fresh mmap for cache-miss files ≥ FRESH_MMAP_THRESHOLD.
+        // matcher once and gets a reusable bounded content-read buffer.
         let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
             .par_iter()
             .enumerate()
             .map_init(
-                || {
-                    (
-                        matcher.clone(),
-                        Vec::with_capacity(64 * 1024),
-                        MmapSlot::default(),
-                    )
-                },
-                |(matcher, buf, mmap_slot), (local_idx, file)| {
+                || (matcher.clone(), Vec::with_capacity(64 * 1024)),
+                |(matcher, buf), (local_idx, file)| {
                     // File 0 is never skipped so a page always consumes at least one
                     // file (cursor 0 means "done").
                     let idx = chunk_offset + local_idx;
@@ -168,7 +161,7 @@ pub(super) fn fuzzy_grep_search<'a>(
                     };
 
                     let file_bytes =
-                        file.get_content_for_search(buf, mmap_slot, file_arena, base_path, budget)?;
+                        file.get_content_for_search(buf, file_arena, base_path, budget)?;
 
                     if min_chars_required > 0 {
                         let mut chars_found = 0usize;

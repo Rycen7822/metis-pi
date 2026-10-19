@@ -34,7 +34,6 @@ fff-grep = { workspace = true }
 aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }
-memmap2 = { workspace = true }
 neo_frizbee = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }

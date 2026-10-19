@@ -103,7 +103,7 @@ pub(crate) struct FileSync {
     /// scan-built region, `dirs[base_dirs_count..]` holds watcher-appended dirs.
     dirs: StableVec<DirItem>,
     base_dirs_count: usize,
-    /// Number of dirs with at least one live file (mirrors `live_count`).
+    /// Number of live directory rows, including empty directories and the root.
     live_dirs_count: usize,
     /// Shared builder for overflow file paths. Each overflow file's ChunkedString
     /// uses `arena_override` pointing into this builder's arena.
@@ -334,7 +334,11 @@ impl FileSync {
     /// `None` when the dir table's overflow capacity is exhausted.
     fn find_or_add_dir(&mut self, dir_rel: &str) -> Option<u32> {
         if let Some(idx) = self.find_dir_index(dir_rel) {
+            self.revive_dir(idx as u32);
             return Some(idx as u32);
+        }
+        if self.dirs.len() - self.base_dirs_count >= MAX_OVERFLOW_FILES {
+            return None;
         }
 
         let builder = self.overflow_builder.get_or_insert_with(|| {
@@ -1676,10 +1680,23 @@ impl FilePicker {
         self.sync_data.files().get(pos)
     }
 
+    /// Admit/revive a walked directory without requiring a file beneath it.
+    pub(crate) fn add_directory(&mut self, path: &Path) -> Option<()> {
+        let relative = path.strip_prefix(&self.base_path).ok()?.to_str()?;
+        let mut relative = crate::path_utils::to_canonical_slashes(relative);
+        if !relative.is_empty() && !relative.ends_with('/') {
+            relative.to_mut().push('/');
+        }
+        self.sync_data.find_or_add_dir(&relative).map(|_| ())
+    }
+
     /// Adds a new file to picker, if the file can not be added returns `None`
     /// which indicates that it's time to trigger a new sync
     #[tracing::instrument(skip(self))]
     pub fn add_new_file(&mut self, path: &Path) -> Option<&FileItem> {
+        if self.sync_data.files.len() - self.sync_data.base_count >= MAX_OVERFLOW_FILES {
+            return None;
+        }
         let metadata = std::fs::metadata(path).ok()?;
         if !metadata.is_file() {
             return None;
@@ -1687,33 +1704,23 @@ impl FilePicker {
         let (mut file_item, rel_path) =
             FileItem::new_with_metadata(path.to_path_buf(), &self.base_path, None, Some(&metadata));
 
-        let builder = self.sync_data.overflow_builder.get_or_insert_with(|| {
-            // we know that overflow would never create more files during the file
-            crate::simd_path::ChunkedPathStoreBuilder::new(MAX_OVERFLOW_FILES)
-        });
-
-        file_item.set_path(builder.add_file_immediate(&rel_path, file_item.path.filename_offset));
-        file_item.set_overflow(true);
-
-        // Keep the dir table consistent: register (or revive) the parent dir
-        // so directory search reflects watcher-added files immediately.
+        // A file must never be published with an absent/default parent row.
+        // Register the parent before allocating its overflow file path.
         let dir_rel = crate::path_utils::to_canonical_slashes(
             &rel_path[..file_item.path.filename_offset as usize],
         );
+        file_item.parent_dir_index = self.sync_data.find_or_add_dir(&dir_rel)?;
 
-        if let Some(dir_idx) = self.sync_data.find_or_add_dir(&dir_rel) {
-            file_item.parent_dir_index = dir_idx;
-        }
-        let parent_dir = file_item.parent_dir_index;
+        let builder = self.sync_data.overflow_builder.get_or_insert_with(|| {
+            crate::simd_path::ChunkedPathStoreBuilder::new(MAX_OVERFLOW_FILES)
+        });
+        file_item.set_path(builder.add_file_immediate(&rel_path, file_item.path.filename_offset));
+        file_item.set_overflow(true);
 
         if !self.sync_data.files.push(file_item) {
             return None;
         }
-
         self.sync_data.live_count += 1;
-        // Dir may have been tombstoned by an earlier removal; a new file
-        // under it proves it exists again.
-        self.sync_data.revive_dir(parent_dir);
         self.classify_file(self.sync_data.files.len() - 1);
         self.sync_data.files.last()
     }
@@ -1729,7 +1736,7 @@ impl FilePicker {
             .checked_add(1)
             .expect("content revision exhausted");
         file.set_deleted(true);
-        file.invalidate_mmap(&self.cache_budget);
+        file.invalidate_content(&self.cache_budget);
         file.git_status = None;
 
         self.sync_data.live_count -= 1;
@@ -1798,7 +1805,7 @@ impl FilePicker {
                     .iter()
                     .any(|prefix| file.relative_path_starts_with(arena, prefix))
             },
-            |file, _arena| file.invalidate_mmap(cache_budget),
+            |file, _arena| file.invalidate_content(cache_budget),
         );
 
         // The whole subtree is gone: tombstone the dirs too so directory

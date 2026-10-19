@@ -232,7 +232,7 @@ impl BackgroundWatcher {
                         .and_then(|guard| guard.as_ref().map(|picker| picker.follows_symlinks()))
                         .unwrap_or(false);
                     // Real I/O errors still go through watcher recovery below.
-                    if let Ok(metadata) = entry_metadata(&dir, follow_symlinks)
+                    if let Ok(metadata) = entry_metadata(&dir, &owner_base_path, follow_symlinks)
                         && metadata.is_none_or(|metadata| !metadata.is_dir())
                     {
                         continue;
@@ -304,6 +304,26 @@ impl BackgroundWatcher {
                         let Some(file_picker) = file_picker.upgrade() else {
                             return;
                         };
+
+                        // A new inode at the same pathname does not restore a
+                        // detached inotify root subscription. Retire this resource
+                        // before handling any other paths from the stale batch.
+                        let root_lost = events.iter().any(|event| {
+                            matches!(
+                                event.event.kind,
+                                EventKind::Remove(_)
+                                    | EventKind::Modify(ModifyKind::Name(
+                                        RenameMode::From | RenameMode::Both
+                                    ))
+                            ) && event.event.paths.first() == Some(&base_path_for_handler)
+                        });
+                        if root_lost {
+                            if needs_watcher_recovery(&file_picker, &shared_frecency, &healthy) {
+                                let _ =
+                                    watch_tx.send(WatchTask::Rescan(RescanReason::WatcherFailure));
+                            }
+                            return;
+                        }
 
                         let new_dirs = handle_debounced_events(
                             events,
@@ -605,7 +625,21 @@ pub(crate) fn handle_debounced_events(
                 EventKind::Remove(notify::event::RemoveKind::Folder)
             );
 
-            let metadata = entry_metadata(path, follow_symlinks).ok().flatten();
+            let metadata = match entry_metadata(path, base_path, follow_symlinks) {
+                Ok(metadata) => metadata,
+                Err(error) if is_removal || error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    warn!(
+                        ?path,
+                        ?error,
+                        "Cannot inspect changed path; retaining index and retrying scan"
+                    );
+                    if try_trigger_full_rescan(RescanReason::KernelEventLoss) {
+                        return Vec::new();
+                    }
+                    continue;
+                }
+            };
             let is_removed = is_folder_removal || is_removal || metadata.is_none();
             let is_dir = metadata.as_ref().is_some_and(|meta| meta.is_dir());
             let is_file = metadata.as_ref().is_some_and(|meta| meta.is_file());
@@ -901,6 +935,9 @@ fn index_new_directory(
     // TODO: figure out a better optimized way for zlob to rerun the directory walk using existing
     // ignore rules, but currently we have to filter out ignored files on our own
     let filter = IgnoreFilter::new(&base_path, walker_rules, repo.as_ref());
+    if filter.is_ignored(dir) {
+        return Vec::new();
+    }
     let join_unless_ignored = |relative_path: &str| -> Option<PathBuf> {
         let path = dir.join(relative_path);
         (!filter.is_ignored(&path)).then_some(path)
@@ -918,9 +955,16 @@ fn index_new_directory(
         .filter_map(|path| join_unless_ignored(path.trim_end_matches('/')))
         .collect();
 
-    if files_to_add.is_empty() {
-        return subdirs;
-    }
+    // Local rules are relative to this walk, not the indexed root. Rebuild
+    // the root policy rather than publishing an incorrectly rebased matcher.
+    // A rules handle alone is not evidence: even empty walks allocate one.
+    let policy_changed = std::iter::once(dir)
+        .chain(subdirs.iter().map(PathBuf::as_path))
+        .any(|directory| {
+            [".gitignore", ".ignore"]
+                .iter()
+                .any(|name| directory.join(name).try_exists().unwrap_or(true))
+        });
 
     let mut indexed_files = Vec::with_capacity(files_to_add.len());
     let mut index_update_rejected = false;
@@ -932,6 +976,12 @@ fn index_new_directory(
         let Some(ref mut picker) = *guard else {
             return subdirs;
         };
+
+        for directory in std::iter::once(dir).chain(subdirs.iter().map(PathBuf::as_path)) {
+            if picker.add_directory(directory).is_none() {
+                index_update_rejected = true;
+            }
+        }
 
         for path in files_to_add {
             // Match the ordinary event path's admission check before pushing:
@@ -954,11 +1004,15 @@ fn index_new_directory(
 
     // Rescanning takes picker locks: never request it from inside the write
     // guard above. Use the same admission/throttle mechanism as file events.
-    let rescan_started = if index_update_rejected {
-        let reason = RescanReason::IndexUpdateRejected;
+    let reason = if index_update_rejected {
+        Some(RescanReason::IndexUpdateRejected)
+    } else {
+        policy_changed.then_some(RescanReason::IgnoreFileChanged)
+    };
+    let rescan_started = if let Some(reason) = reason {
         match shared_picker.trigger_full_rescan_with_reason(shared_frecency, reason) {
             Ok(true) => {
-                warn!(%reason, dir = %dir.display(), "New directory exceeded index capacity; triggering rescan");
+                debug!(%reason, dir = %dir.display(), "New directory requires root refresh");
                 true
             }
             Ok(false) => {
@@ -1017,8 +1071,25 @@ fn watch_dirs_nonrecursive<'a>(
 
 fn entry_metadata(
     path: &Path,
+    base_path: &Path,
     follow_symlinks: bool,
 ) -> std::io::Result<Option<std::fs::Metadata>> {
+    if !follow_symlinks {
+        let Ok(relative) = path.strip_prefix(base_path) else {
+            return Ok(None);
+        };
+        // lstat on the leaf still follows intermediate symlinks. A queued
+        // child event may outlive the directory it originally came from.
+        let mut ancestor = base_path.to_path_buf();
+        if let Some(parent) = relative.parent() {
+            for component in parent.components() {
+                ancestor.push(component);
+                if std::fs::symlink_metadata(&ancestor)?.is_symlink() {
+                    return Ok(None);
+                }
+            }
+        }
+    }
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_symlink() {
         Ok(Some(metadata))
@@ -1093,9 +1164,21 @@ pub(crate) fn is_git_file(path: &Path) -> bool {
 }
 
 fn is_git_metadata(path: &Path, repo: Option<&Repository>) -> bool {
-    is_git_file(path)
-        || repo
-            .is_some_and(|repo| path.starts_with(repo.path()) || path.starts_with(repo.commondir()))
+    let Some(repo) = repo else {
+        return is_git_file(path);
+    };
+    let workdir = repo.workdir();
+    // A linked worktree can itself live inside the common directory. Only
+    // metadata outside that data subtree (or nested beneath it) is metadata.
+    let in_metadata = |directory: &Path| {
+        path.starts_with(directory)
+            && !workdir
+                .is_some_and(|workdir| workdir.starts_with(directory) && path.starts_with(workdir))
+    };
+    let relative = workdir
+        .and_then(|workdir| path.strip_prefix(workdir).ok())
+        .unwrap_or(path);
+    is_git_file(relative) || in_metadata(repo.path()) || in_metadata(repo.commondir())
 }
 
 fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) -> bool {

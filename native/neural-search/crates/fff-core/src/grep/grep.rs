@@ -3,7 +3,7 @@ use super::regex::{RegexMatcher, RegexSink, build_regex};
 use super::sink::{SinkState, debug_assert_newline_terminator};
 use super::types::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
 use crate::simd_string_utils::memmem;
-use crate::types::{ContentCacheBudget, FileItem, FileSliceExt, MmapSlot};
+use crate::types::{ContentCacheBudget, FileItem, FileSliceExt};
 use fff_grep::{
     Searcher, SearcherBuilder, Sink, SinkMatch,
     matcher::{Match, Matcher, NoError},
@@ -439,8 +439,8 @@ where
                 // tested it out a few times, this is just fine for rayon worker in this specific
                 // case it doesn't reallocate this many times and it is actually faster than using
                 // scoped threads with a predefined local scratch buffers because of spawn cost
-                || (Vec::with_capacity(64 * 1024), MmapSlot::default(), false),
-                |(buf, mmap_slot, aborted), (local_idx, file)| {
+                || (Vec::with_capacity(64 * 1024), false),
+                |(buf, aborted), (local_idx, file)| {
                     // check the clock on every 8th file only; `aborted` latches for the
                     // rest of this worker's range. File 0 is never skipped so a page
                     // always consumes at least one file (cursor 0 means "done").
@@ -456,7 +456,6 @@ where
 
                     let content = file.get_content_for_search(
                         buf,
-                        mmap_slot,
                         ctx.arena_for_file(file),
                         ctx.base_path,
                         ctx.budget,

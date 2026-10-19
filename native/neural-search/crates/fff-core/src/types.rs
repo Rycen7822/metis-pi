@@ -1,10 +1,10 @@
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicPtr;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use crate::constants::{FRESH_MMAP_THRESHOLD, MMAP_THRESHOLD};
+use crate::constants::MIN_CACHED_CONTENT_SIZE;
 use crate::constants::{MAX_CACHED_CONTENT_BYTES, MAX_FFFILE_SIZE, PATH_BUF_SIZE};
 use crate::index::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
@@ -256,15 +256,8 @@ pub struct FileItem {
     /// equal-size rewrites within the same mtime second. Never an IO timestamp.
     pub(crate) content_revision: u64,
     flags: AtomicU8,
-    /// Lazy mmap cache (boxed, set once). Only populated by the actual file
-    /// read, controlled by the budget. Null while empty.
-    content: AtomicPtr<memmap2::Mmap>,
-}
-
-impl Drop for FileItem {
-    fn drop(&mut self) {
-        self.take_content();
-    }
+    /// Lazy immutable content snapshot, bounded by the shared cache budget.
+    content: OnceLock<Box<[u8]>>,
 }
 
 impl Clone for FileItem {
@@ -280,8 +273,8 @@ impl Clone for FileItem {
             git_recency_score: self.git_recency_score,
             git_status: self.git_status,
             flags: AtomicU8::new(self.flags.load(Ordering::Relaxed)),
-            // on clone we have to reset the content cache
-            content: AtomicPtr::new(std::ptr::null_mut()),
+            // Clones never duplicate retained content.
+            content: OnceLock::new(),
         }
     }
 }
@@ -325,7 +318,7 @@ impl FileItem {
             git_recency_score: 0,
             git_status,
             flags: AtomicU8::new(flags),
-            content: AtomicPtr::new(std::ptr::null_mut()),
+            content: OnceLock::new(),
         }
     }
 
@@ -480,29 +473,11 @@ impl FileItem {
 }
 
 impl FileItem {
-    /// Invalidate the cached mmap content, has to be called every time the file is updated.
-    ///
-    /// Call this when the background watcher detects that the file has been modified.
-    /// Invalidation prevents stale mappings being reused on the next read. It
-    /// does not make external truncation of an in-use mmap safe from SIGBUS.
-    pub fn invalidate_mmap(&mut self, budget: &ContentCacheBudget) {
-        if self.take_content().is_some() {
-            budget.cached_count.fetch_sub(1, Ordering::Relaxed);
-            budget.cached_bytes.fetch_sub(self.size, Ordering::Relaxed);
+    /// Retire the immutable snapshot under the picker write lock.
+    pub fn invalidate_content(&mut self, budget: &ContentCacheBudget) {
+        if let Some(content) = self.content.take() {
+            budget.release(content.len() as u64);
         }
-    }
-
-    #[inline]
-    fn cached_content(&self) -> Option<&[u8]> {
-        let ptr = self.content.load(Ordering::Acquire);
-        // SAFETY: a non-null pointer is a leaked Box owned by this item until `take_content`.
-        (!ptr.is_null()).then(|| unsafe { (&*ptr).as_ref() })
-    }
-
-    fn take_content(&mut self) -> Option<Box<memmap2::Mmap>> {
-        let ptr = self.content.swap(std::ptr::null_mut(), Ordering::AcqRel);
-        // SAFETY: non-null pointers always come from `Box::into_raw` in `get_cached_content`.
-        (!ptr.is_null()).then(|| unsafe { Box::from_raw(ptr) })
     }
 
     pub fn update_metadata(
@@ -515,117 +490,54 @@ impl FileItem {
             .content_revision
             .checked_add(1)
             .expect("content revision exhausted");
-        if let Some(modified) = modified_secs
-            && self.modified < modified
-        {
+        if let Some(modified) = modified_secs {
             self.modified = modified;
         }
 
-        self.invalidate_mmap(budget);
+        self.invalidate_content(budget);
 
         if let Some(size) = new_size {
             self.size = size;
         }
     }
 
-    /// Get the cached file contents or lazily load and cache them.
-    ///
-    /// Returns `None` if the file is too large, empty, can't be opened, **or
-    /// the cache budget is exhausted**. Callers that need content regardless
-    /// of the budget should use [`get_content_for_search`].
-    ///
-    /// After the first call, this is lock-free (just an atomic load + pointer deref).
-
-    /// Returns a reference to a cached mmap of the file's contents.
-    ///
-    /// SAFETY-CRITICAL: callers must hold the picker read lock for as long as the returned slice is in use.
-    pub(crate) fn get_cached_content(
-        &self,
-        arena: ArenaPtr,
-        base_path: &Path,
-        budget: &ContentCacheBudget,
-    ) -> Option<&[u8]> {
-        if let Some(content) = self.cached_content() {
-            return Some(content);
-        }
-
-        if self.size < MMAP_THRESHOLD || self.size > budget.max_file_size {
-            return None;
-        }
-
-        // Check cache budget before creating a new persistent cache entry.
-        let count = budget.cached_count.load(Ordering::Relaxed);
-        let bytes = budget.cached_bytes.load(Ordering::Relaxed);
-        let max_files = budget.max_files;
-        let max_bytes = budget.max_bytes;
-        if count >= max_files || bytes + self.size > max_bytes {
-            return None;
-        }
-
-        let path = self.absolute_path(arena, base_path);
-        let file = open_regular_file(&path).ok()?;
-        // SAFETY: the mmap is backed by the kernel page cache and reflects
-        // file updates; the only risk is SIGBUS on a concurrent truncate,
-        // which the watcher mitigates by invalidating on modification.
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-        let fresh = Box::into_raw(Box::new(mmap));
-        match self.content.compare_exchange(
-            std::ptr::null_mut(),
-            fresh,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                budget.cached_count.fetch_add(1, Ordering::Relaxed);
-                budget.cached_bytes.fetch_add(self.size, Ordering::Relaxed);
-            }
-            // Lost the race: another thread cached first, keep theirs.
-            Err(_) => drop(unsafe { Box::from_raw(fresh) }),
-        }
-
-        self.cached_content()
-    }
-
-    /// Get file content for searching — **always returns content** for eligible
-    /// files, even when the persistent cache budget is exhausted.
-    ///
-    /// The caller provides a reusable `path_buf` (pre-filled with `base_path/`)
-    /// and its `base_len` to avoid allocations when constructing the absolute path.
+    /// Read an indexed-length immutable snapshot of an eligible regular file.
+    /// Cache exhaustion disables retention, not searching. A concurrent shrink
+    /// yields a short-read miss; growth is observed after managed invalidation.
     #[inline]
     pub(crate) fn get_content_for_search<'a>(
         &'a self,
         buf: &'a mut Vec<u8>,
-        mmap_slot: &'a mut MmapSlot,
         arena: ArenaPtr,
         base_path: &Path,
         budget: &ContentCacheBudget,
     ) -> Option<&'a [u8]> {
-        // Grep holds the picker read lock for the returned slice's lifetime.
-        if let Some(cached) = self.get_cached_content(arena, base_path, budget) {
-            return Some(cached);
+        if let Some(content) = self.content.get() {
+            return Some(content);
         }
-
-        let max_file_size = budget.max_file_size;
-        if self.is_binary() || self.size == 0 || self.size > max_file_size {
+        if self.is_binary() || self.size == 0 || self.size > budget.max_file_size {
             return None;
         }
 
-        let abs = self.absolute_path(arena, base_path);
-
-        if self.size >= FRESH_MMAP_THRESHOLD {
-            let file = open_regular_file(&abs).ok()?;
-            let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-            let stored = mmap_slot.insert(mmap);
-            return Some(&stored[..]);
-        } else {
-            let _ = (mmap_slot, arena);
-        }
-
-        let len = self.size as usize;
+        let len = usize::try_from(self.size).ok()?;
+        let mut file = open_regular_file(&self.absolute_path(arena, base_path)).ok()?;
+        buf.clear();
+        buf.try_reserve_exact(len).ok()?;
         buf.resize(len, 0);
-
-        let mut file = open_regular_file(&abs).ok()?;
         file.read_exact(buf).ok()?;
+
+        if self.size >= MIN_CACHED_CONTENT_SIZE && budget.try_reserve(self.size) {
+            // Move, rather than copy, the successful read into the cache.
+            if self
+                .content
+                .set(std::mem::take(buf).into_boxed_slice())
+                .is_err()
+            {
+                // Another reader published first; its reservation owns the entry.
+                budget.release(self.size);
+            }
+            return self.content.get().map(|content| content.as_ref());
+        }
         Some(buf.as_slice())
     }
 }
@@ -645,10 +557,6 @@ pub(crate) fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
     }
     Ok(file)
 }
-
-/// Per-thread scratch slot owning a transient mmap returned from
-/// [`FileItem::get_content_for_search`].
-pub type MmapSlot = Option<memmap2::Mmap>;
 
 impl Constrainable for FileItem {
     #[inline]
@@ -781,6 +689,36 @@ pub struct ContentCacheBudget {
 }
 
 impl ContentCacheBudget {
+    /// Reserve both caps before publication; concurrent readers cannot exceed them.
+    fn try_reserve(&self, bytes: u64) -> bool {
+        if self
+            .cached_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.checked_add(1).filter(|&next| next <= self.max_files)
+            })
+            .is_err()
+        {
+            return false;
+        }
+        if self
+            .cached_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(bytes)
+                    .filter(|&next| next <= self.max_bytes)
+            })
+            .is_err()
+        {
+            self.cached_count.fetch_sub(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    fn release(&self, bytes: u64) {
+        self.cached_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        self.cached_count.fetch_sub(1, Ordering::Relaxed);
+    }
+
     pub fn unlimited() -> Self {
         Self {
             max_files: usize::MAX,
@@ -835,7 +773,7 @@ impl ContentCacheBudget {
 
     /// Apply an explicit file cap verbatim, keeping the default byte caps.
     /// `0` means no persistent caching at all — files stay searchable through
-    /// the temporary mmaps that grep releases after each call.
+    /// the temporary owned buffers that grep releases after each call.
     pub fn with_max_files(max_files: usize) -> Self {
         Self {
             max_files,
@@ -901,7 +839,7 @@ mod content_cache_budget_tests {
         let budget = ContentCacheBudget::with_max_files(0);
         assert_eq!(budget.max_files, 0);
         assert!(budget.is_exhausted());
-        // temporary-mmap grep is gated on max_file_size, which must survive
+        // Uncached grep is gated on max_file_size, which must survive
         assert_eq!(budget.max_file_size, MAX_FFFILE_SIZE);
         assert!(budget.max_bytes > 0);
     }
