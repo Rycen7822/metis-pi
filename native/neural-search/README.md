@@ -166,6 +166,7 @@ Verification checks paired Rust/header/build and TS binding sources, exported AB
 Packing a source/Git checkout also requires Linux x64 and GNU binutils; delivery checks are not skipped on unsupported hosts.
 `prepack` verifies without compiling Rust; this checks declared source, library, ABI and notice consistency, not proof that the library was compiled from those sources.
 CI also rebuilds with the pinned toolchain and rejects any difference from the checked-in library, manifest or notices.
+A successfully compiled CI candidate is retained even if that comparison fails; a failed-run artifact is diagnostic, not release approval.
 Rust source locations are remapped to stable workspace, Cargo-home and target prefixes so local checkout paths do not become shipped bytes.
 
 ### Checks

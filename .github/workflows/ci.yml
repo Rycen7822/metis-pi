@@ -135,6 +135,7 @@ jobs:
       - run: cargo install cargo-zigbuild --locked --version 0.23.4
       - run: npm run verify:neural-engine
       - run: npm run build:neural-engine
+        id: rebuild
       - name: Require the rebuilt payload to match the checkout
         run: git diff --exit-code -- assets/neural-search
       - name: Run inherited Rust unit checks
@@ -145,6 +146,7 @@ jobs:
           mkdir -p "$TMPDIR"
           cargo test --manifest-path native/neural-search/Cargo.toml --workspace --lib --locked
       - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.rebuild.outcome == 'success' }}
         with:
           name: neural-search-linux-x64
           path: assets/neural-search/
