@@ -56,8 +56,8 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         self.sink.begin(self.searcher)
     }
 
-    pub(crate) fn finish(&mut self, byte_count: u64) -> Result<(), S::Error> {
-        self.sink.finish(self.searcher, &SinkFinish { byte_count })
+    pub(crate) fn finish(&mut self) -> Result<(), S::Error> {
+        self.sink.finish(self.searcher, &SinkFinish)
     }
 
     pub(crate) fn match_by_line(&mut self, buf: &[u8]) -> Result<bool, S::Error> {

@@ -133,7 +133,7 @@ pub unsafe extern "C" fn metis_search_create(options: *const CreateOptions) -> *
             fff::FilePickerOptions {
                 base_path,
                 watch: true,
-                cache_budget: fff::ContentCacheBudget::from_overrides(0, 0, 0),
+                cache_budget: None,
                 follow_symlinks: options.follow_symlinks,
                 enable_fs_root_scanning: options.enable_fs_root_scanning,
                 enable_home_dir_scanning: options.enable_home_dir_scanning,
@@ -280,7 +280,11 @@ pub unsafe extern "C" fn metis_search_grep(
             max_file_size
         },
         max_matches_per_file: max_matches_per_file as usize,
-        smart_case,
+        casing: if smart_case {
+            fff::Casing::Smart
+        } else {
+            fff::Casing::Sensitive
+        },
         file_offset: file_offset as usize,
         page_limit: limit(page_limit, 50),
         mode: match mode {
@@ -344,7 +348,11 @@ pub unsafe extern "C" fn metis_search_multi_grep(
             max_file_size
         },
         max_matches_per_file: max_matches_per_file as usize,
-        smart_case,
+        casing: if smart_case {
+            fff::Casing::Smart
+        } else {
+            fff::Casing::Sensitive
+        },
         file_offset: file_offset as usize,
         page_limit: limit(page_limit, 50),
         time_budget_ms,

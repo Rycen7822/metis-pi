@@ -114,15 +114,11 @@ pub(super) fn fuzzy_grep_search<'a>(
     // if we have a few candidates -> likely we have a lot of matches, so verify the check faster
     // if we have a lot of candidates -> rely on a larger chunk pipelining more parallel lines at once
     let page_limit = options.page_limit;
-    let base_chunk = rayon::current_num_threads() * 4;
-    let prefilter_strong = total_files > 0 && files_to_search.len() * 2 < total_files;
-    let max_chunk = if prefilter_strong {
-        base_chunk
-    } else {
-        (base_chunk * 256).max(8 * 1024)
-    };
-
-    let growth = if prefilter_strong { 1 } else { 2 };
+    let (base_chunk, max_chunk, growth) = super::chunk_plan(
+        rayon::current_num_threads(),
+        files_to_search.len(),
+        total_files,
+    );
     let mut chunk_size = base_chunk;
     let mut chunk_start = 0;
     let mut running_matches = 0usize;

@@ -22,7 +22,7 @@ export class FileFinder implements FileFinderApi {
     const guard = this.alive();
     return guard.ok ? ffiSearch(guard.value, query, options?.offset ?? 0, options?.pageSize ?? 0) : guard;
   }
-  mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult> {
+  mixedSearch(query: string, options?: Pick<SearchOptions, "pageSize">): Result<MixedSearchResult> {
     const guard = this.alive();
     return guard.ok ? ffiSearchMixed(guard.value, query, options?.pageSize ?? 0) : guard;
   }

@@ -116,7 +116,7 @@ pub(crate) fn multi_grep_search<'a>(
         return Ok(GrepResult::empty(total_files, filtered_file_count));
     }
 
-    let casing = options.effective_casing();
+    let casing = options.casing;
     let insensitive = patterns
         .iter()
         .any(|pattern| casing.is_insensitive_for(pattern));

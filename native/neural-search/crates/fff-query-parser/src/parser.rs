@@ -226,74 +226,12 @@ impl Default for QueryParser<crate::FileSearchConfig> {
 
 #[inline]
 fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constraint<'a>> {
-    // Backslash escape: \token → treat as literal text, skip all constraint parsing.
-    // File/mixed search keeps the original token; content needles bypass this parser.
-    if token.starts_with('\\') && token.len() > 1 {
-        return None;
-    }
-
-    let first_byte = token.as_bytes().first()?;
-
-    match first_byte {
-        b'*' if config.enable_extension() => {
-            // Ignore incomplete patterns like "*" or "*."
-            if token == "*" || token == "*." {
-                return None;
-            }
-
-            // Try extension first (*.rs) - simple patterns without additional wildcards
-            if let Some(constraint) = parse_extension(token) {
-                // Only return Extension if the rest doesn't have wildcards
-                // e.g., *.rs is Extension, but *.test.* should be Glob
-                let ext_part = &token[2..];
-                if !has_wildcards(ext_part) {
-                    return Some(constraint);
-                }
-            }
-            // Has wildcards -> use config-specific glob detection
-            if config.is_glob_pattern(token) {
-                return Some(Constraint::Glob(token));
-            }
-            None
-        }
+    match token.as_bytes().first()? {
         b'!' => parse_negation(token, config),
-        b'/' if config.enable_path_segments() => parse_path_segment(token),
-        // Handle trailing slash syntax: www/ -> PathSegment("www")
-        _ if config.enable_path_segments() && token.ends_with('/') => {
-            parse_path_segment_trailing(token)
-        }
-        // tokens like `file.rs` *if enabled*
-        _ if config.enable_filename_constraint()
-            && !token.ends_with('/')
-            && Constraint::is_filename_constraint_token(token) =>
-        {
-            Some(Constraint::FilePath(token))
-        }
-        _ => {
-            // Check for glob patterns using config-specific detection
-            if config.is_glob_pattern(token) {
-                return Some(Constraint::Glob(token));
-            }
-
-            // Check for key:value patterns
-            if let Some(colon_idx) = memchr(b':', token.as_bytes()) {
-                let (key, value_with_colon) = token.split_at(colon_idx);
-                let value = &value_with_colon[1..]; // Skip the colon
-
-                match key {
-                    "type" if config.enable_type_filter() => {
-                        return Some(Constraint::FileType(value));
-                    }
-                    "status" | "st" | "g" | "git" if config.enable_git_status() => {
-                        return parse_git_status(value);
-                    }
-                    _ => {}
-                }
-            }
-
-            // No supported constraint matched.
-            None
-        }
+        // Positive incomplete extension patterns stay text. Negated patterns
+        // deliberately still reach glob detection (e.g. !* in file search).
+        b'*' if config.enable_extension() && (token == "*" || token == "*.") => None,
+        _ => parse_constraint_token(token, config, TokenContext::Positive),
     }
 }
 
@@ -325,7 +263,9 @@ fn parse_negation<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Con
     let inner_token = &token[1..];
 
     // Try to parse the inner token as any constraint
-    if let Some(inner_constraint) = parse_token_without_negation(inner_token, config) {
+    if let Some(inner_constraint) =
+        parse_constraint_token(inner_token, config, TokenContext::Negated)
+    {
         // Wrap it in a Not constraint
         return Some(Constraint::Not(Box::new(inner_constraint)));
     }
@@ -338,13 +278,22 @@ fn parse_negation<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Con
     Some(Constraint::Not(Box::new(Constraint::Text(inner_token))))
 }
 
-/// Parse a token without checking for negation (to avoid infinite recursion)
+enum TokenContext {
+    Positive,
+    Negated,
+}
+
+/// Shared, non-recursive constraint grammar. Filename precedence deliberately
+/// differs: positive tokens prefer filenames over globs/key:value, while
+/// negated tokens only try filenames after those forms have been considered.
 #[inline]
-fn parse_token_without_negation<'a, C: ParserConfig>(
+fn parse_constraint_token<'a, C: ParserConfig>(
     token: &'a str,
     config: &C,
+    context: TokenContext,
 ) -> Option<Constraint<'a>> {
-    // Backslash escape applies here too
+    // Backslash escape: \token stays literal, including its original backslash.
+    // Content needles bypass this parser entirely.
     if token.starts_with('\\') && token.len() > 1 {
         return None;
     }
@@ -371,6 +320,13 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
             // Handle trailing slash syntax: www/ -> PathSegment("www")
             parse_path_segment_trailing(token)
         }
+        _ if matches!(context, TokenContext::Positive)
+            && config.enable_filename_constraint()
+            && !token.ends_with('/')
+            && Constraint::is_filename_constraint_token(token) =>
+        {
+            Some(Constraint::FilePath(token))
+        }
         _ => {
             // Check for glob patterns using config-specific detection
             if config.is_glob_pattern(token) {
@@ -393,7 +349,8 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                 }
             }
 
-            if config.enable_filename_constraint()
+            if matches!(context, TokenContext::Negated)
+                && config.enable_filename_constraint()
                 && Constraint::is_filename_constraint_token(token)
             {
                 return Some(Constraint::FilePath(token));

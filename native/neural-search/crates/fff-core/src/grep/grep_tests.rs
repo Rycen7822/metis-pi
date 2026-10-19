@@ -153,8 +153,7 @@ fn test_multi_grep_search() {
     let options = super::GrepSearchOptions {
         max_file_size: MAX_FFFILE_SIZE,
         max_matches_per_file: 0,
-        smart_case: true,
-        casing: None,
+        casing: super::Casing::Smart,
         file_offset: 0,
         page_limit: 100,
         mode: super::GrepMode::PlainText,
@@ -344,8 +343,7 @@ fn test_grep_no_duplicates_with_overflow() {
     let options = super::GrepSearchOptions {
         max_file_size: MAX_FFFILE_SIZE,
         max_matches_per_file: 0,
-        smart_case: true,
-        casing: None,
+        casing: super::Casing::Smart,
         file_offset: 0,
         page_limit: 100,
         mode: super::GrepMode::PlainText,
@@ -418,8 +416,7 @@ fn regex_fallback_keeps_file_path_scope_issue_756() {
 
     let options = crate::GrepSearchOptions {
         mode: super::GrepMode::Regex,
-        smart_case: true,
-        casing: None,
+        casing: super::Casing::Smart,
         max_matches_per_file: 80,
         page_limit: 100,
         ..Default::default()

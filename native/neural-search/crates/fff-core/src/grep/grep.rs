@@ -112,7 +112,7 @@ pub(crate) fn grep_search_pattern<'a>(
         return GrepResult::empty(total_files, total_files);
     }
 
-    let casing = options.effective_casing();
+    let casing = options.casing;
     let case_insensitive = casing.is_insensitive_for(grep_text);
     let regex = match options.mode {
         GrepMode::PlainText => None,
@@ -284,14 +284,11 @@ where
     //
     // So only grow when the prefilter is weak (large candidate set);
     // when constraints cut the set in half, keep small chunks for cheap page-fill termination.
-    let base_chunk = rayon::current_num_threads() * 4;
-    let prefilter_strong = ctx.total_files > 0 && files_to_search.len() * 2 < ctx.total_files;
-    let max_chunk = if prefilter_strong {
-        base_chunk
-    } else {
-        (base_chunk * 256).max(8 * 1024)
-    };
-    let growth = if prefilter_strong { 1 } else { 2 };
+    let (base_chunk, max_chunk, growth) = super::chunk_plan(
+        rayon::current_num_threads(),
+        files_to_search.len(),
+        ctx.total_files,
+    );
     let mut chunk_size = base_chunk;
     let mut chunk_start = 0;
 

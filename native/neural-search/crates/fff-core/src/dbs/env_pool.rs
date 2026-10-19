@@ -25,6 +25,7 @@ pub(crate) struct PooledEnv {
     label: &'static str,
     map_size: usize,
     max_dbs: u32,
+    // SharedEnv handles borrow this state; its lifetime is exactly the env's.
     health: DbHealth,
     gc_started: AtomicBool,
     dbi_lock: Mutex<()>,

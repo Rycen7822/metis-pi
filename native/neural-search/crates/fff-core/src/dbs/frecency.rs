@@ -2,7 +2,7 @@ use super::db_healthcheck::DbHealthChecker;
 use super::env_pool::SharedEnv;
 use crate::error::{Error, Result};
 use crate::git::is_modified_status;
-use crate::lmdb::{DbHealth, LmdbStore, is_map_full};
+use crate::lmdb::{LmdbStore, is_map_full};
 use heed::Database;
 use heed::types::{Bytes, SerdeBincode};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,7 +20,6 @@ const AI_MAX_HISTORY_DAYS: f64 = 7.0; // Only consider accesses within 7 days
 pub struct FrecencyTracker {
     env: SharedEnv,
     db: Database<Bytes, SerdeBincode<VecDeque<u64>>>,
-    health: DbHealth,
 }
 
 // AI mode: compressed thresholds since AI edits happen in rapid bursts
@@ -38,7 +37,7 @@ impl DbHealthChecker for FrecencyTracker {
     }
 
     fn is_healthy(&self) -> bool {
-        self.health.is_healthy()
+        self.env.health().is_healthy()
     }
 
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>> {
@@ -72,10 +71,6 @@ impl LmdbStore for FrecencyTracker {
         &self.env
     }
 
-    fn health(&self) -> &DbHealth {
-        &self.health
-    }
-
     fn purge_stale_data(env: &SharedEnv) -> Result<()> {
         let (deleted, pruned) = Self::purge_stale_entries(env)?;
         if deleted > 0 || pruned > 0 {
@@ -89,10 +84,10 @@ impl LmdbStore for FrecencyTracker {
 impl FrecencyTracker {
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
-        let (env, health) = Self::open_env(db_path)?;
+        let env = Self::open_env(db_path)?;
 
         let db = Self::open_database_safe(&env, None)?;
-        Ok(FrecencyTracker { db, env, health })
+        Ok(FrecencyTracker { db, env })
     }
 
     /// Removes entries where all timestamps are older than MAX_HISTORY_DAYS,
@@ -270,7 +265,7 @@ impl FrecencyTracker {
         tracing::debug!(?path, accesses = accesses.len(), "Tracking access");
         if let Err(e) = self.db.put(&mut wtxn, &key_hash, &accesses) {
             if is_map_full(&e) {
-                self.health.mark_unhealthy("MDB_MAP_FULL on put");
+                self.env.health().mark_unhealthy("MDB_MAP_FULL on put");
                 tracing::error!(
                     ?path,
                     "Frecency DB hit MDB_MAP_FULL; dropping write — existing history is preserved"
@@ -287,7 +282,7 @@ impl FrecencyTracker {
         wtxn.commit()
             .inspect_err(|e| {
                 if is_map_full(e) {
-                    self.health.mark_unhealthy("MDB_MAP_FULL on commit");
+                    self.env.health().mark_unhealthy("MDB_MAP_FULL on commit");
                     tracing::error!(
                         ?path,
                         "Frecency DB hit MDB_MAP_FULL on commit; dropping write"
@@ -344,7 +339,7 @@ impl FrecencyTracker {
 
         if let Err(e) = self.db.put(&mut wtxn, &target_key, &source) {
             if is_map_full(&e) {
-                self.health.mark_unhealthy("MDB_MAP_FULL");
+                self.env.health().mark_unhealthy("MDB_MAP_FULL");
                 tracing::error!(?to, "Frecency DB is full on commit");
                 return Ok(false);
             }
@@ -356,7 +351,7 @@ impl FrecencyTracker {
 
         if let Err(e) = wtxn.commit() {
             if is_map_full(&e) {
-                self.health.mark_unhealthy("MDB_MAP_FULL on commit");
+                self.env.health().mark_unhealthy("MDB_MAP_FULL on commit");
                 tracing::error!(?to, "Frecency DB is full on commit");
                 return Ok(false);
             }

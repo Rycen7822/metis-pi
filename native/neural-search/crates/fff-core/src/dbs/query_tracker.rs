@@ -1,7 +1,7 @@
 use super::db_healthcheck::DbHealthChecker;
 use super::env_pool::SharedEnv;
 use crate::error::Error;
-use crate::lmdb::{DbHealth, LmdbStore};
+use crate::lmdb::LmdbStore;
 use heed::types::{Bytes, SerdeBincode};
 use heed::{Database, Env};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,6 @@ pub struct QueryTracker {
     // their original bytes. Health only counts keys, never decodes values.
     query_history_db: Database<Bytes, Bytes>,
     grep_query_history_db: Database<Bytes, Bytes>,
-    health: DbHealth,
 }
 
 impl DbHealthChecker for QueryTracker {
@@ -32,7 +31,7 @@ impl DbHealthChecker for QueryTracker {
         &self.env
     }
     fn is_healthy(&self) -> bool {
-        self.health.is_healthy()
+        self.env.health().is_healthy()
     }
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
         let rtxn = self
@@ -79,14 +78,11 @@ impl LmdbStore for QueryTracker {
     fn shared_env(&self) -> &SharedEnv {
         &self.env
     }
-    fn health(&self) -> &DbHealth {
-        &self.health
-    }
 }
 
 impl QueryTracker {
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self, Error> {
-        let (env, health) = Self::open_env(db_path.as_ref())?;
+        let env = Self::open_env(db_path.as_ref())?;
         let query_file_db = Self::open_database_safe(&env, Some("query_file_associations"))?;
         let query_history_db = Self::open_database_safe(&env, Some("query_history"))?;
         let grep_query_history_db = Self::open_database_safe(&env, Some("grep_query_history"))?;
@@ -95,7 +91,6 @@ impl QueryTracker {
             query_file_db,
             query_history_db,
             grep_query_history_db,
-            health,
         })
     }
 

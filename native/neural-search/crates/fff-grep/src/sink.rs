@@ -74,19 +74,9 @@ impl<S: Sink> Sink for &mut S {
     }
 }
 
-/// Summary data reported at the end of a search.
+/// Completion notification reported at the end of a search.
 #[derive(Clone, Debug)]
-pub struct SinkFinish {
-    pub(crate) byte_count: u64,
-}
-
-impl SinkFinish {
-    /// Return the total number of bytes searched.
-    #[inline]
-    pub fn byte_count(&self) -> u64 {
-        self.byte_count
-    }
-}
+pub struct SinkFinish;
 
 /// A type that describes a match reported by a searcher.
 #[derive(Clone, Debug)]
@@ -110,14 +100,6 @@ impl<'b> SinkMatch<'b> {
     /// conservative for LF-capable matchers, even if this match stays on a line.
     pub fn may_cross_line(&self) -> bool {
         self.crosses_line
-    }
-
-    /// Returns the absolute byte offset of the start of this match. This
-    /// offset is absolute in that it is relative to the very beginning of the
-    /// input in a search.
-    #[inline]
-    pub fn absolute_byte_offset(&self) -> u64 {
-        self.bytes_range_in_buffer.start as u64
     }
 
     /// Returns the 1-based line number of the first line in this match.

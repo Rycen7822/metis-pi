@@ -43,15 +43,6 @@ impl Match {
         Match { end, ..*self }
     }
 
-    /// Shift both offsets forward by `amount`.
-    #[inline]
-    pub fn offset(&self, amount: usize) -> Match {
-        Match {
-            start: self.start + amount,
-            end: self.end + amount,
-        }
-    }
-
     /// Byte length of the match.
     #[inline]
     pub fn len(&self) -> usize {
@@ -71,13 +62,6 @@ impl std::ops::Index<Match> for [u8] {
     #[inline]
     fn index(&self, index: Match) -> &[u8] {
         &self[index.start..index.end]
-    }
-}
-
-impl std::ops::IndexMut<Match> for [u8] {
-    #[inline]
-    fn index_mut(&mut self, index: Match) -> &mut [u8] {
-        &mut self[index.start..index.end]
     }
 }
 
@@ -105,12 +89,6 @@ impl LineTerminator {
     #[inline]
     pub fn as_byte(&self) -> u8 {
         self.0
-    }
-
-    /// Return the terminator as a single-element byte slice.
-    #[inline]
-    pub fn as_bytes(&self) -> &[u8] {
-        std::slice::from_ref(&self.0)
     }
 }
 

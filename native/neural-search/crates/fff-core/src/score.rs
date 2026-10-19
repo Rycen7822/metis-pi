@@ -11,7 +11,7 @@ use neo_frizbee::Scoring;
 use rayon::prelude::*;
 use std::{
     borrow::Cow,
-    path::{Component, MAIN_SEPARATOR, Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 // Legacy associations may contain lexical dot segments. Do not resolve
@@ -77,21 +77,13 @@ fn match_fuzzy_parts(
     max_threads: usize,
     arena: ArenaPtr,
 ) -> Vec<neo_frizbee::Match> {
-    let valid_parts: Vec<&str> = fuzzy_parts
-        .iter()
-        .copied()
-        .filter(|p| p.len() >= 2)
-        .collect();
-
-    if valid_parts.is_empty() {
-        tracing::debug!("match_fuzzy_parts: no valid parts after filtering, returning empty");
-        return vec![];
-    }
+    // The caller normalizes parts once for matching and filename scoring.
+    debug_assert!(!fuzzy_parts.is_empty() && fuzzy_parts.iter().all(|p| p.len() >= 2));
 
     // Index-based resolver: no `Vec<&FileItem>` materialization for either the
     // full list or the per-part subsets, and a single monomorphized hot loop.
     let first_part_matches = neo_frizbee::match_range_parallel_resolved(
-        valid_parts[0],
+        fuzzy_parts[0],
         working_files.len(),
         &|index, buf: &mut [*const u8; MAX_PATH_CHUNKS]| {
             resolve_file_chunks(working_files.index(index as usize), arena, buf)
@@ -100,14 +92,14 @@ fn match_fuzzy_parts(
         max_threads,
     );
 
-    if valid_parts.len() == 1 {
+    if fuzzy_parts.len() == 1 {
         return first_part_matches;
     }
 
-    let total_parts = valid_parts.len() as u64;
+    let total_parts = fuzzy_parts.len() as u64;
     let mut totals: Vec<u64> = first_part_matches.iter().map(|m| m.score as u64).collect();
     let mut matches = first_part_matches;
-    for part in valid_parts[1..].iter() {
+    for part in fuzzy_parts[1..].iter() {
         let mut part_options = *options;
         part_options.max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
 
@@ -470,15 +462,21 @@ fn match_and_score_in_arena<'a>(
         }
     };
 
-    debug_assert!(!fuzzy_parts.is_empty());
+    // Preserve raw-query case/path intent, but use the same effective parts
+    // for path positions and filename bonuses. All-short Parts still match nothing.
+    let valid_parts: Vec<&str> = fuzzy_parts
+        .iter()
+        .copied()
+        .filter(|p| p.len() >= 2)
+        .collect();
+    if valid_parts.is_empty() {
+        return vec![];
+    }
+
     let has_uppercase = fuzzy_parts
         .iter()
         .any(|p| p.chars().any(|c| c.is_uppercase()));
-    // Users type `/` regardless of platform. Checking the OS separator alone
-    // would miss forward-slash queries on Windows.
-    let query_contains_path_separator = fuzzy_parts
-        .iter()
-        .any(|p| p.contains('/') || p.contains(MAIN_SEPARATOR));
+    let query_contains_path_separator = fuzzy_parts.iter().any(|p| p.contains('/'));
 
     let options = neo_frizbee::Config {
         max_typos: Some(context.max_typos),
@@ -492,14 +490,14 @@ fn match_and_score_in_arena<'a>(
     };
 
     let path_matches = match_fuzzy_parts(
-        fuzzy_parts,
+        &valid_parts,
         &working_files,
         &options,
         context.max_threads,
         arena,
     );
 
-    let main_needle = fuzzy_parts[0].as_bytes(); // safe
+    let main_needle = valid_parts[0].as_bytes();
     let main_needle_len = main_needle.len() as u16;
 
     let mut fallback_indices: Vec<u32> = Vec::new();
@@ -526,7 +524,7 @@ fn match_and_score_in_arena<'a>(
             // Match on `&str` so frizbee reuses the instantiation its index
             // resolver already emits instead of a separate `Cow<str>` copy.
             let filename_strs: Vec<&str> = fallback_filenames.iter().map(Cow::as_ref).collect();
-            let mut matches = neo_frizbee::Matcher::new(fuzzy_parts[0], &options)
+            let mut matches = neo_frizbee::Matcher::new(valid_parts[0], &options)
                 .match_list_parallel(
                     &filename_strs,
                     if path_matches.len() > 4096 {

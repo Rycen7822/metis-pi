@@ -4,30 +4,6 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path)
 }
 
-/// Stored Linux paths retain literal backslashes; `/` is the only separator.
-#[inline]
-pub fn to_canonical_slashes(rel: &str) -> std::borrow::Cow<'_, str> {
-    std::borrow::Cow::Borrowed(rel)
-}
-
-/// Linux path reconstruction needs no separator rewriting.
-#[inline]
-pub fn nativize_slashes_in_place(_bytes: &mut [u8]) {}
-
-pub fn normalize(path: PathBuf) -> PathBuf {
-    path
-}
-
-pub fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(stripped) = path.strip_prefix("~/")
-        && let Some(home_dir) = dirs::home_dir()
-    {
-        return home_dir.join(stripped);
-    }
-
-    PathBuf::from(path)
-}
-
 /// Calculate distance penalty based on directory proximity.
 /// Returns a negative penalty score based on how far the candidate is from the current file.
 ///

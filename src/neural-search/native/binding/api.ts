@@ -83,7 +83,7 @@ export interface FileFinderApi {
   readonly isDestroyed: boolean;
   destroy(): void;
   fileSearch(query: string, options?: SearchOptions): Result<SearchResult>;
-  mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult>;
+  mixedSearch(query: string, options?: Pick<SearchOptions, "pageSize">): Result<MixedSearchResult>;
   grep(pattern: string, options?: GrepOptions): Result<GrepResult>;
   multiGrep(options: MultiGrepOptions): Result<GrepResult>;
   scanFiles(): Result<void>;

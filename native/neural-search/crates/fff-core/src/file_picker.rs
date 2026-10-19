@@ -71,7 +71,7 @@ use crate::parallelism::{BACKGROUND_THREAD_POOL, SEARCH_THREAD_POOL};
 
 /// Configuration for a single fuzzy search invocation.
 ///
-/// Passed to [`FilePicker::search`] to control threading, pagination,
+/// Passed to [`FilePicker::fuzzy_search`] to control threading, pagination,
 /// and scoring behavior.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FuzzySearchOptions<'a> {
@@ -385,9 +385,8 @@ impl FileItem {
         metadata: Option<&std::fs::Metadata>,
     ) -> (Self, String) {
         let path_buf = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
-        // The index is '/'-canonical on every platform; fold native separators.
-        let relative_path =
-            crate::path_utils::to_canonical_slashes(&path_buf.to_string_lossy()).into_owned();
+        // Linux paths keep literal backslashes; only `/` is a separator.
+        let relative_path = path_buf.to_string_lossy().into_owned();
 
         let (size, modified) = match metadata {
             Some(metadata) => {
@@ -590,7 +589,7 @@ impl FilePicker {
 
     /// Get all indexed files sorted by path.
     /// Note: Files are stored sorted by PATH for efficient insert/remove.
-    /// For frecency-sorted results, use search() which sorts matched results.
+    /// For frecency-sorted results, use fuzzy_search() which sorts matched results.
     pub fn get_files(&self) -> &[FileItem] {
         self.sync_data.files()
     }
@@ -608,18 +607,6 @@ impl FilePicker {
     /// Get the directory table (sorted by path).
     pub fn get_dirs(&self) -> &[DirItem] {
         &self.sync_data.dirs
-    }
-
-    /// Actual heap bytes used: (chunked_path_store, 0, 0).
-    /// The second element is 0 because leaked overflow stores aren't tracked.
-    pub fn arena_bytes(&self) -> (usize, usize, usize) {
-        let chunked = self
-            .sync_data
-            .chunked_paths
-            .as_ref()
-            .map_or(0, |s| s.heap_bytes());
-
-        (chunked, 0, 0)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -911,8 +898,6 @@ impl FilePicker {
         );
 
         let total_files = self.live_file_count();
-        let location = query.location;
-
         // Get effective query for max_typos calculation (without location suffix)
         let effective_query = match &query.fuzzy_query {
             fff_query_parser::FuzzyQuery::Text(t) => *t,
@@ -975,7 +960,6 @@ impl FilePicker {
             scores,
             total_matched,
             total_files,
-            location,
         }
     }
 
@@ -1048,7 +1032,7 @@ impl FilePicker {
     ///
     /// If the raw query ends with a path separator (`/`), only directories
     /// are searched — files are skipped entirely. The caller should parse the
-    /// query with `DirSearchConfig` so that trailing `/` is kept as fuzzy
+    /// query with `MixedSearchConfig` so that trailing `/` is kept as fuzzy
     /// text instead of becoming a `PathSegment` constraint.
     pub fn fuzzy_search_mixed<'q>(
         &self,
@@ -1056,7 +1040,6 @@ impl FilePicker {
         query_tracker: Option<&QueryTracker>,
         options: FuzzySearchOptions<'q>,
     ) -> MixedSearchResult<'_> {
-        let location = query.location;
         let page_offset = options.pagination.offset;
         let page_limit = if options.pagination.limit > 0 {
             options.pagination.limit
@@ -1064,8 +1047,7 @@ impl FilePicker {
             100
         };
 
-        let dirs_only =
-            query.raw_query.ends_with(std::path::MAIN_SEPARATOR) || query.raw_query.ends_with('/');
+        let dirs_only = query.raw_query.ends_with('/');
 
         // Run file search and dir search with no pagination (we merge then paginate).
         let internal_limit = page_offset.saturating_add(page_limit).saturating_mul(2);
@@ -1096,7 +1078,6 @@ impl FilePicker {
                     total_matched,
                     total_files: self.live_file_count(),
                     total_dirs,
-                    location,
                 };
             }
 
@@ -1110,7 +1091,6 @@ impl FilePicker {
                 total_matched,
                 total_files: self.live_file_count(),
                 total_dirs,
-                location,
             };
         }
 
@@ -1149,7 +1129,6 @@ impl FilePicker {
                 total_matched,
                 total_files,
                 total_dirs,
-                location,
             };
         }
 
@@ -1163,34 +1142,7 @@ impl FilePicker {
             total_matched,
             total_files,
             total_dirs,
-            location,
         }
-    }
-
-    /// Glob search: filter indexed files by a single glob pattern, rank by
-    /// frecency, and paginate. Bypasses the regular query parser entirely —
-    /// useful when callers already have a literal glob (`*.rs`, `**/*.test.ts`)
-    /// and want neither fuzzy matching nor multi-token constraint parsing.
-    ///
-    /// Pipeline: `apply_constraints(Glob) → score_filtered_by_frecency → sort_and_paginate`.
-    /// Same ranking semantics as `fuzzy_search` when the fuzzy query is empty.
-    pub fn glob<'p>(
-        &'p self,
-        pattern: &'p str,
-        options: FuzzySearchOptions<'p>,
-    ) -> SearchResult<'p> {
-        let query = FFFQuery {
-            raw_query: pattern,
-            constraints: vec![fff_query_parser::Constraint::Glob(pattern)],
-            fuzzy_query: fff_query_parser::FuzzyQuery::Empty,
-            location: None,
-        };
-
-        // `fuzzy_search` short-circuits to `score_filtered_by_frecency` when
-        // `fuzzy_query` is `Empty`, then runs the same `sort_and_paginate`
-        // path. Reusing it keeps the ranking guarantees identical without
-        // exposing the private scoring helpers.
-        self.fuzzy_search(&query, None, options)
     }
 
     /// Search an explicit content pattern and already-parsed file constraints.
@@ -1577,22 +1529,14 @@ impl FilePicker {
         let path = path.as_ref();
 
         if let Some(idx) = self.sync_data.find_file_index(path, &self.base_path) {
-            let slot = if idx < self.sync_data.base_count {
-                FileSlot::Base(idx)
-            } else {
-                FileSlot::Overflow(idx)
-            };
-
-            return self.handle_file_modify(path, slot);
+            return self.handle_file_modify(path, idx);
         }
 
         self.add_new_file(path)
     }
 
     #[tracing::instrument(skip_all, fields(path = ?path), level = Level::DEBUG)]
-    fn handle_file_modify(&mut self, path: &Path, slot: FileSlot) -> Option<&FileItem> {
-        let pos = slot.index();
-
+    fn handle_file_modify(&mut self, path: &Path, pos: usize) -> Option<&FileItem> {
         // this is the only way to actually know if the file is on disk, we CAN NOT
         // rely on the watcher to proive the latest state of the file, do the actual check
         let metadata = match std::fs::metadata(path) {
@@ -1635,7 +1579,7 @@ impl FilePicker {
     /// Admit/revive a walked directory without requiring a file beneath it.
     pub(crate) fn add_directory(&mut self, path: &Path) -> Option<bool> {
         let relative = path.strip_prefix(&self.base_path).ok()?.to_str()?;
-        let mut relative = crate::path_utils::to_canonical_slashes(relative);
+        let mut relative = std::borrow::Cow::Borrowed(relative);
         if !relative.is_empty() && !relative.ends_with('/') {
             relative.to_mut().push('/');
         }
@@ -1660,10 +1604,8 @@ impl FilePicker {
 
         // A file must never be published with an absent/default parent row.
         // Register the parent before allocating its overflow file path.
-        let dir_rel = crate::path_utils::to_canonical_slashes(
-            &rel_path[..file_item.path.filename_offset as usize],
-        );
-        file_item.parent_dir_index = self.sync_data.find_or_add_dir(&dir_rel)?.0;
+        let dir_rel = &rel_path[..file_item.path.filename_offset as usize];
+        file_item.parent_dir_index = self.sync_data.find_or_add_dir(dir_rel)?.0;
 
         let builder = self.sync_data.overflow_builder.get_or_insert_with(|| {
             crate::simd_path::ChunkedPathStoreBuilder::new(MAX_OVERFLOW_FILES)
@@ -1801,7 +1743,7 @@ impl FilePicker {
             && let Some(s) = stripped.to_str()
         {
             // Callers compare against '/'-canonical stored paths.
-            return Some(crate::path_utils::to_canonical_slashes(s));
+            return Some(std::borrow::Cow::Borrowed(s));
         }
 
         None
@@ -1816,20 +1758,6 @@ impl Drop for FilePicker {
         // Wake the git-status consumer so it exits; never joined (it takes
         // the picker write lock, a blocking join here could deadlock).
         self.git_status_worker.signal_shutdown();
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FileSlot {
-    Base(usize),
-    Overflow(usize),
-}
-
-impl FileSlot {
-    fn index(self) -> usize {
-        match self {
-            FileSlot::Base(i) | FileSlot::Overflow(i) => i,
-        }
     }
 }
 
@@ -1887,8 +1815,7 @@ impl FileSync {
     pub(crate) fn discover_git_workdir(base_path: &Path) -> Option<PathBuf> {
         let git_workdir = crate::git::discover_repository(base_path)
             .ok()
-            .and_then(|repo| repo.workdir().map(Path::to_path_buf))
-            .map(crate::path_utils::normalize);
+            .and_then(|repo| repo.workdir().map(Path::to_path_buf));
 
         match &git_workdir {
             Some(workdir) => debug!("Git repository found at: {}", workdir.display()),
@@ -2228,7 +2155,7 @@ fn is_binary_extension_str(ext: &str) -> bool {
 ///   `"lib/deep"` vs `"lib/deeper"`        → 4  (only `"lib/"` is shared)
 ///   `"lib"` vs `"src"`                    → 0
 ///
-/// Used by [`FilePicker::for_each_watch_dir`] to avoid re-emitting
+/// Used by [`FilePicker::for_each_dir`] to avoid re-emitting
 /// ancestors that were already yielded for the previous (sorted) sibling.
 fn common_dir_prefix_len(a: &str, b: &str) -> usize {
     let max = a.len().min(b.len());

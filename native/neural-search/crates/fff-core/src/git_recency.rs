@@ -134,9 +134,8 @@ pub(crate) fn compute_git_recency(
 }
 
 fn base_path_within_repo(repo: &Repository, base_path: &Path) -> Option<String> {
-    let workdir = crate::path_utils::normalize(repo.workdir()?.to_path_buf());
-    let subdir = base_path.strip_prefix(workdir).ok()?;
-    let subdir = crate::path_utils::to_canonical_slashes(&subdir.to_string_lossy()).into_owned();
+    let subdir = base_path.strip_prefix(repo.workdir()?).ok()?;
+    let subdir = subdir.to_string_lossy().into_owned();
     (!subdir.is_empty()).then_some(subdir)
 }
 

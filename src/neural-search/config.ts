@@ -20,7 +20,7 @@ export function loadConfig(agentDir = getAgentDir()): NeuralSearchConfig {
     if (typeof value[key] !== "boolean") throw new Error(`${label}.${key} must be a boolean.`);
   }
   // All boolean fields were validated above; database fields are filled below.
-  const config = { ...value, frecencyDbPath: "", historyDbPath: "" } as NeuralSearchConfig;
+  const config = { ...value } as NeuralSearchConfig;
   for (const key of Object.keys(DATABASES) as (keyof typeof DATABASES)[]) {
     const raw = value[key] ?? path.join("metis", "neural-search", DATABASES[key]);
     if (typeof raw !== "string" || !raw.trim() || raw.includes("\0")) {

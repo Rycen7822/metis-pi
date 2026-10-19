@@ -32,12 +32,12 @@ impl DbHealthState {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DbHealth(Arc<AtomicU8>);
+#[derive(Debug, Default)]
+pub(crate) struct DbHealth(AtomicU8);
 
 impl DbHealth {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(AtomicU8::new(DbHealthState::Pending as u8)))
+        Self(AtomicU8::new(DbHealthState::Pending as u8))
     }
 
     pub(crate) fn is_healthy(&self) -> bool {
@@ -85,14 +85,15 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
             };
             // Trackers attaching to an already-pooled env must not repeat the
             // GC; the first opener's run flips the shared health flag.
-            if !tracker.shared_env().try_start_gc() {
+            let env = tracker.shared_env();
+            if !env.try_start_gc() {
                 return;
             }
 
-            match T::purge_stale_data(tracker.shared_env()) {
-                Ok(()) => tracker.health().mark_healthy(),
+            match T::purge_stale_data(env) {
+                Ok(()) => env.health().mark_healthy(),
                 Err(error) => {
-                    tracker.health().mark_unhealthy("startup cleanup failed");
+                    env.health().mark_unhealthy("startup cleanup failed");
                     tracing::debug!(%error, "purge_stale_data failed");
                 }
             }
@@ -105,6 +106,7 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
             && let Some(ref tracker) = *guard
         {
             tracker
+                .shared_env()
                 .health()
                 .mark_unhealthy("startup cleanup thread unavailable");
         }
@@ -123,8 +125,6 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
 
     /// Borrow the pooled env handle shared by every tracker of this path.
     fn shared_env(&self) -> &SharedEnv;
-    /// Borrow the health flag from the tracker.
-    fn health(&self) -> &DbHealth;
 
     /// Override to purge stale rows, compact, etc. Default no-op. Runs on
     /// the GC thread while a read lock is held against the shared handle,
@@ -136,8 +136,8 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     /// Open (or join) the process-shared LMDB env for `db_path`. The health
     /// flag is per-env: the GC of the first opener flips it for everyone.
     #[tracing::instrument]
-    fn open_env(db_path: &Path) -> Result<(SharedEnv, DbHealth)> {
-        let shared = SharedEnv::get_or_open(
+    fn open_env(db_path: &Path) -> Result<SharedEnv> {
+        SharedEnv::get_or_open(
             db_path,
             &EnvSpec {
                 label: Self::LABEL,
@@ -145,9 +145,7 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
                 max_dbs: Self::MAX_DBS,
                 size_cap_bytes: Self::SIZE_CAP_BYTES,
             },
-        )?;
-        let health = shared.health().clone();
-        Ok((shared, health))
+        )
     }
 
     /// Open or create a database without blocking on the LMDB writer mutex

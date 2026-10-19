@@ -89,13 +89,11 @@ impl GitStatusCache {
             return Ok(Self(AHashMap::new())); // repo is bare
         };
 
-        let repo_path = crate::path_utils::normalize(repo_path.to_path_buf());
-
         let mut entries = AHashMap::with_capacity(statuses.len());
         for entry in &statuses {
             if let Ok(entry_path) = entry.path() {
                 // libgit2 paths are relative to the repository workdir.
-                let full_path = crate::path_utils::normalize(repo_path.join(entry_path));
+                let full_path = repo_path.join(entry_path);
                 entries.insert(full_path, entry.status());
             }
         }
@@ -135,13 +133,12 @@ impl GitStatusCache {
         let Some(workdir) = repo.workdir() else {
             return Ok(Self(AHashMap::new()));
         };
-        let workdir = crate::path_utils::normalize(workdir.to_path_buf());
 
         // git pathspec is pretty slow and requires to walk the whole directory
         // so for a single file which is the most general use case we query directly the file
         if paths.len() == 1 {
             let full_path = paths[0].as_ref();
-            let relative_path = full_path.strip_prefix(&workdir)?;
+            let relative_path = full_path.strip_prefix(workdir)?;
             let status = repo.status_file(relative_path)?;
 
             let mut map = AHashMap::with_capacity(1);
@@ -151,7 +148,7 @@ impl GitStatusCache {
 
         let mut status_options = default_status_options();
         for path in paths {
-            status_options.pathspec(path.as_ref().strip_prefix(&workdir)?);
+            status_options.pathspec(path.as_ref().strip_prefix(workdir)?);
         }
 
         let git_status_cache = Self::read_status(repo, &mut status_options)?;
@@ -170,39 +167,30 @@ pub fn is_modified_status(status: Status) -> bool {
     )
 }
 
-pub fn format_git_status_opt(status: Option<Status>) -> Option<&'static str> {
-    match status {
-        None => Some("clean"),
-        Some(status) => {
-            if status.contains(Status::WT_NEW) {
-                Some("untracked")
-            } else if status.contains(Status::WT_MODIFIED) {
-                Some("modified")
-            } else if status.contains(Status::WT_DELETED) {
-                Some("deleted")
-            } else if status.contains(Status::WT_RENAMED) {
-                Some("renamed")
-            } else if status.contains(Status::INDEX_NEW) {
-                Some("staged_new")
-            } else if status.contains(Status::INDEX_MODIFIED) {
-                Some("staged_modified")
-            } else if status.contains(Status::INDEX_DELETED) {
-                Some("staged_deleted")
-            } else if status.contains(Status::IGNORED) {
-                Some("ignored")
-            // `Status::CURRENT` is 0, so `contains` is true for every status:
-            // testing it here labelled conflicted/typechanged files "clean".
-            } else if status.is_empty() {
-                Some("clean")
-            } else {
-                None
-            }
-        }
-    }
-}
-
 pub fn format_git_status(status: Option<Status>) -> &'static str {
-    format_git_status_opt(status).unwrap_or("unknown")
+    let Some(status) = status else { return "clean" };
+    if status.contains(Status::WT_NEW) {
+        "untracked"
+    } else if status.contains(Status::WT_MODIFIED) {
+        "modified"
+    } else if status.contains(Status::WT_DELETED) {
+        "deleted"
+    } else if status.contains(Status::WT_RENAMED) {
+        "renamed"
+    } else if status.contains(Status::INDEX_NEW) {
+        "staged_new"
+    } else if status.contains(Status::INDEX_MODIFIED) {
+        "staged_modified"
+    } else if status.contains(Status::INDEX_DELETED) {
+        "staged_deleted"
+    } else if status.contains(Status::IGNORED) {
+        "ignored"
+    // CURRENT is zero: contains(CURRENT) would also mislabel conflicts as clean.
+    } else if status.is_empty() {
+        "clean"
+    } else {
+        "unknown"
+    }
 }
 
 #[cfg(test)]
@@ -228,30 +216,20 @@ mod tests {
     #[test]
     fn unclassified_status_is_not_reported_as_clean() {
         // A merge-conflicted file must not claim to be clean.
-        assert_eq!(format_git_status_opt(Some(Status::CONFLICTED)), None);
         assert_eq!(format_git_status(Some(Status::CONFLICTED)), "unknown");
         assert_eq!(format_git_status(Some(Status::WT_TYPECHANGE)), "unknown");
 
         // Every already-classified state keeps its label.
-        assert_eq!(format_git_status_opt(None), Some("clean"));
-        assert_eq!(format_git_status_opt(Some(Status::empty())), Some("clean"));
-        assert_eq!(format_git_status_opt(Some(Status::CURRENT)), Some("clean"));
+        assert_eq!(format_git_status(None), "clean");
+        assert_eq!(format_git_status(Some(Status::empty())), "clean");
+        assert_eq!(format_git_status(Some(Status::CURRENT)), "clean");
+        assert_eq!(format_git_status(Some(Status::WT_NEW)), "untracked");
+        assert_eq!(format_git_status(Some(Status::WT_MODIFIED)), "modified");
         assert_eq!(
-            format_git_status_opt(Some(Status::WT_NEW)),
-            Some("untracked")
+            format_git_status(Some(Status::INDEX_MODIFIED)),
+            "staged_modified"
         );
-        assert_eq!(
-            format_git_status_opt(Some(Status::WT_MODIFIED)),
-            Some("modified")
-        );
-        assert_eq!(
-            format_git_status_opt(Some(Status::INDEX_MODIFIED)),
-            Some("staged_modified")
-        );
-        assert_eq!(
-            format_git_status_opt(Some(Status::IGNORED)),
-            Some("ignored")
-        );
+        assert_eq!(format_git_status(Some(Status::IGNORED)), "ignored");
     }
 
     /// Regression: on case-insensitive filesystems libgit2 returns

@@ -9,7 +9,7 @@ use crate::constants::{MAX_CACHED_CONTENT_BYTES, MAX_FFFILE_SIZE, PATH_BUF_SIZE}
 use crate::index::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
 use crate::simd_path::ArenaPtr;
-use fff_query_parser::{FFFQuery, FuzzyQuery, Location};
+use fff_query_parser::FFFQuery;
 
 /// Different sources of the string storage used by FFF
 /// implements as a deduplicated 16-bytes alined heap
@@ -159,12 +159,6 @@ impl DirItem {
         self.max_access_frecency.fetch_max(score, Ordering::Relaxed);
     }
 
-    /// Reset frecency to zero (used before full recomputation).
-    #[inline]
-    pub fn reset_frecency(&self) {
-        self.max_access_frecency.store(0, Ordering::Relaxed);
-    }
-
     pub(crate) fn read_relative_path<'a>(&self, arena: ArenaPtr, buf: &'a mut [u8]) -> &'a str {
         self.path.read_to_buf(arena, buf)
     }
@@ -209,16 +203,6 @@ impl DirItem {
         };
         self.write_dir_name(ptr, &mut out);
         out
-    }
-
-    /// A path = base_path + "/" + relative. Cold path, allocates.
-    pub fn absolute_path(&self, arena: impl FFFStringStorage, base_path: &Path) -> PathBuf {
-        let rel = self.relative_path(arena);
-        if rel.is_empty() {
-            base_path.to_path_buf()
-        } else {
-            base_path.join(&rel)
-        }
     }
 }
 
@@ -336,12 +320,6 @@ impl FileItem {
         self.path = path;
     }
 
-    pub fn dir_str(&self, arena: impl FFFStringStorage) -> String {
-        let mut s = String::with_capacity(64);
-        self.path.write_dir_to(arena.arena_for(self), &mut s);
-        s
-    }
-
     pub(crate) fn write_dir_str(&self, arena: ArenaPtr, out: &mut String) {
         self.path.write_dir_to(arena, out);
     }
@@ -364,10 +342,6 @@ impl FileItem {
 
     pub(crate) fn write_relative_path_from_arena(&self, arena: ArenaPtr, out: &mut String) {
         self.path.write_to_string(arena, out);
-    }
-
-    pub fn relative_path_len(&self) -> usize {
-        self.path.byte_len as usize
     }
 
     pub fn filename_offset_in_relative_path(&self) -> usize {
@@ -412,10 +386,7 @@ impl FileItem {
         let relative_portion_str = self.path.read_to_buf(arena, &mut buf[base_end_idx..]);
         let rel_len = relative_portion_str.len();
         let total = base_end_idx + rel_len;
-        // Stored relative paths are '/'-canonical; rewrite to the OS-native
-        // separator so the result matches git-cache keys, the frecency DB, and
-        // Win32 file APIs. No-op off Windows.
-        crate::path_utils::nativize_slashes_in_place(&mut buf[base_end_idx..total]);
+        // Linux uses the same stored bytes for IO, Git keys and frecency paths.
         Path::new(unsafe { std::str::from_utf8_unchecked(&buf[..total]) })
     }
 
@@ -619,23 +590,12 @@ pub struct ScoringContext<'a> {
     pub pagination: PaginationArgs,
 }
 
-impl ScoringContext<'_> {
-    pub fn effective_query(&self) -> &str {
-        match &self.query.fuzzy_query {
-            FuzzyQuery::Text(t) => t,
-            FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
-            _ => self.query.raw_query.trim(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct SearchResult<'a> {
     pub items: Vec<&'a FileItem>,
     pub scores: Vec<Score>,
     pub total_matched: usize,
     pub total_files: usize,
-    pub location: Option<Location>,
 }
 
 /// Search result for directory-only fuzzy search.
@@ -663,14 +623,6 @@ pub struct MixedSearchResult<'a> {
     pub total_matched: usize,
     pub total_files: usize,
     pub total_dirs: usize,
-    pub location: Option<Location>,
-}
-
-impl Default for MixedItemRef<'_> {
-    fn default() -> Self {
-        // Should never be used, exists only for Default derive on MixedSearchResult
-        unreachable!("MixedItemRef::default should not be called")
-    }
 }
 
 #[derive(Debug)]

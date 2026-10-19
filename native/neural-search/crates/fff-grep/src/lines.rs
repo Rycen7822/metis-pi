@@ -2,7 +2,7 @@
 A collection of routines for performing operations on lines.
 */
 
-use crate::matcher::{LineTerminator, Match};
+use crate::matcher::Match;
 
 /// An explicit iterator over lines in a particular slice of bytes.
 ///
@@ -64,17 +64,6 @@ impl LineStep {
 /// Count the number of occurrences of `line_term` in `bytes`.
 pub fn count(bytes: &[u8], line_term: u8) -> u64 {
     memchr::memchr_iter(line_term, bytes).count() as u64
-}
-
-/// Given a line that possibly ends with a terminator, return that line without the terminator.
-#[inline(always)]
-pub fn without_terminator(bytes: &[u8], line_term: LineTerminator) -> &[u8] {
-    let line_term = line_term.as_bytes();
-    let start = bytes.len().saturating_sub(line_term.len());
-    if bytes.get(start..) == Some(line_term) {
-        return &bytes[..bytes.len() - line_term.len()];
-    }
-    bytes
 }
 
 /// Return the start and end offsets of the lines containing the given range

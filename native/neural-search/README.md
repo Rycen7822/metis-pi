@@ -42,6 +42,8 @@ Never remove `data.mdb` or `lock.mdb` as automatic recovery.
 Database health preserves the store's healthy flag and errors.
 An opened store is not necessarily healthy: false can mean pending/failed startup maintenance or failed writes, not proof of permanent data loss.
 Cleanup success alone marks initialization healthy; cleanup or worker-start failure remains degraded.
+The pooled environment owns that shared state; trackers borrow it for as long as they hold the environment.
+Opening another tracker does not restart cleanup or reset a degraded state.
 
 ### Reader capacity
 
@@ -107,7 +109,17 @@ Subscriptions use the actual repository directory for worktrees/submodules and r
 - A recorded Git failure stays degraded until a successful full refresh.
   A successful path subset cannot establish recovery.
 
+### Fuzzy file ranking
+
+Multi-word file queries use the same effective parts (at least two bytes) for path matching and filename bonuses.
+Ignored one-byte terms cannot become fallback filename needles or distort the matched span.
+Original query case/path intent, typo limits and history keys remain unchanged.
+
 ## Content queries
+
+Content case policy has one internal three-state representation: smart, sensitive or insensitive.
+The private ABI's existing smart-case boolean still selects smart or sensitive at the C boundary.
+Forced-insensitive matching remains available inside the engine, including uppercase patterns.
 
 ### Owned bytes and cache limits
 
