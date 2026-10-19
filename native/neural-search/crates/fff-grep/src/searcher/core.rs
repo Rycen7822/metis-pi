@@ -105,8 +105,11 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
                 pos = buf.len();
                 continue;
             }
-            let crosses_line =
-                buf[mat.start()..mat.end()].contains(&self.config.line_term.as_byte());
+            // A later alternative on this output line can cross the boundary
+            // even when the first match does not. Preserve the extraction policy
+            // but conservatively flag LF-capable matchers without another scan.
+            let crosses_line = self.matcher.line_terminator() != Some(self.config.line_term)
+                || buf[mat.start()..mat.end()].contains(&self.config.line_term.as_byte());
             return Ok(Some((line, crosses_line)));
         }
         Ok(None)

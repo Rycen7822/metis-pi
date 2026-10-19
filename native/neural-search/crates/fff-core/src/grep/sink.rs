@@ -66,8 +66,11 @@ impl SinkState {
         context_truncated: bool,
     ) {
         let raw = strip_line_terminators(mat.bytes());
+        // Exclude only the structural final LF when measuring covered lines;
+        // trimming every terminator first would hide coalesced empty matches.
+        let covered = mat.bytes().strip_suffix(b"\n").unwrap_or(mat.bytes());
         self.matches.push(GrepMatch {
-            native_multiline_limited: mat.crosses_line() || raw.contains(&b'\n'),
+            native_multiline_limited: mat.may_cross_line() || covered.contains(&b'\n'),
             native_output_truncated: context_truncated
                 || raw.len() > truncate_display_bytes(raw).len(),
             file_index: self.file_index,

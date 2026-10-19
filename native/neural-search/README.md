@@ -121,7 +121,9 @@ Cache limits are **not a total RSS ceiling**.
 
 ### Output limitations
 
-Emitted native rows carry facts about actual cross-line matches, coalesced regions and native byte projection loss.
+Native regex compilation determines whether an expression can consume LF; by-line projections conservatively report limitations for that capability, including alternatives after the first match.
+A warning can therefore remain when only an ordinary branch matched; row counts and paging do not change, and no second content scan is needed.
+Coalesced line coverage is measured before trailing terminators are trimmed; actual native byte/context clipping remains a separate fact.
 The SDK no longer guesses multiline limitations from regex source syntax.
 These facts survive buffered pages and cause explicit notices and conservative `outputTruncated` metadata.
 Ordinary single-line matches keep their row counts; this does not promise complete per-occurrence multiline extraction.

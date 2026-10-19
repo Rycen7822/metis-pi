@@ -52,8 +52,9 @@ By explicit user decision, arrays containing any real LF fail with split-query g
 Needles and filters cross private ABI v6 separately: no token transport, whitespace split or second backslash+n decoder.
 Literal backslashes/source whitespace remain data, invalid-regex fallback reuses the original literal, and NUL inputs fail explicitly.
 
-Native rows record actual cross-line geometry before line reduction and clipping, plus display/context projection loss.
-The emitted batch carries `nativeMultilineLimited` and `nativeOutputTruncated`; the SDK does not infer these facts from pattern syntax.
+One compiled native regex owns its matcher and LF capability, derived from the same native syntax and flags; no per-line secondary content scan is used.
+By-line `nativeMultilineLimited` is conservative for LF-capable expressions, even when only an ordinary branch matches; coalesced blank-row coverage is retained before terminator trimming.
+The emitted batch separately carries actual `nativeOutputTruncated` byte/context loss; the SDK does not guess these facts from JavaScript pattern syntax.
 Both content actions disclose limited multiline/block counts and conservative outputTruncated, not complete per-occurrence pagination.
 Ordinary single-line rows retain their count; byte clipping must be reported even if a multibyte line is below the JS character limit.
 

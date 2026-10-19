@@ -40,6 +40,7 @@ notify-debouncer-full = { workspace = true }
 parking_lot = { workspace = true }
 pathdiff = { workspace = true }
 regex = { workspace = true }
+regex-syntax = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 zlob = { workspace = true }
 

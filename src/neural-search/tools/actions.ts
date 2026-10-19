@@ -15,7 +15,7 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
 const FIND_PAGE_SIZE_MAX = 100;
 const GREP_TIME_BUDGET_MS = 10_000;
-const NATIVE_MULTILINE_NOTICE = "Native cross-line projections are LIMITED, not individual-hit counts: later matched lines may be omitted, adjacent blocks may coalesce and text may be clipped before reaching the SDK. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
+const NATIVE_MULTILINE_NOTICE = "LF-capable expressions or cross-line blocks use LIMITED native projections, not individual-hit counts: warnings can remain when only an ordinary branch matched; later matched lines may be omitted and adjacent blocks may coalesce. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
 const pathSchema = Type.Optional(Type.String({ description:
   "Include path: directory prefix (src/), filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Matches the whole root-relative path. Existing absolute files are literal, including glob metacharacters. Outside-workspace paths and existing directory paths containing spaces use a separate local index. Filename/glob filters containing whitespace are unsupported; search the containing directory instead.",
 }));

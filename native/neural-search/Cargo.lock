@@ -352,6 +352,7 @@ dependencies = [
  "rand 0.8.5",
  "rayon",
  "regex",
+ "regex-syntax",
  "serde",
  "smallvec",
  "tempfile",

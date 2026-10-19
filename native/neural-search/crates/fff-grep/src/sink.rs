@@ -107,8 +107,9 @@ impl<'b> SinkMatch<'b> {
         self.bytes
     }
 
-    /// Whether an actual match consumed a line terminator, before line projection.
-    pub fn crosses_line(&self) -> bool {
+    /// Whether line projection may omit cross-line matches. This can be
+    /// conservative for LF-capable matchers, even if this match stays on a line.
+    pub fn may_cross_line(&self) -> bool {
         self.crosses_line
     }
 

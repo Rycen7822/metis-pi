@@ -1,5 +1,5 @@
 use super::prefilter::prefilter_files;
-use super::regex::{RegexMatcher, RegexSink, build_regex};
+use super::regex::{RegexSink, build_regex};
 use super::sink::{SinkState, debug_assert_newline_terminator};
 use super::types::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
 use crate::simd_string_utils::memmem;
@@ -245,8 +245,10 @@ pub(crate) fn grep_search_pattern<'a>(
         .position(|&b| b == b'\n');
     // Detect regex LF syntax for the existing limited multiline strategy, but
     // never decode the explicit pattern (including invalid-regex fallback).
-    let is_multiline =
-        multiline_segment_len.is_some() || (regex.is_some() && has_newline_escape(grep_text));
+    let is_multiline = multiline_segment_len.is_some()
+        || regex
+            .as_ref()
+            .is_some_and(|compiled| compiled.legacy_multiline);
 
     // when there is multiple line requested automatically expand the context to include all the lines
     let after_context = if is_multiline && regex.is_none() && options.after_context == 0 {
@@ -309,13 +311,12 @@ pub(crate) fn grep_search_pattern<'a>(
             };
 
             match regex {
-                Some(ref re) => {
-                    let regex_matcher = RegexMatcher {
-                        regex: re,
-                        is_multiline,
+                Some(ref compiled) => {
+                    let mut sink = RegexSink {
+                        state,
+                        re: &compiled.regex,
                     };
-                    let mut sink = RegexSink { state, re };
-                    if let Err(e) = searcher.search_slice(&regex_matcher, file_bytes, &mut sink) {
+                    if let Err(e) = searcher.search_slice(compiled, file_bytes, &mut sink) {
                         tracing::error!(error = %e, "Grep (regex) search failed");
                     }
                     sink.state.matches
@@ -337,19 +338,6 @@ pub(crate) fn grep_search_pattern<'a>(
     );
     result.regex_fallback_error = regex_fallback_error;
     result
-}
-
-/// Whether the regex source contains an unescaped LF escape. This only
-/// selects the limited multiline strategy; the regex engine owns decoding.
-fn has_newline_escape(text: &str) -> bool {
-    let mut escaped = false;
-    for byte in text.bytes() {
-        if escaped && byte == b'n' {
-            return true;
-        }
-        escaped = byte == b'\\' && !escaped;
-    }
-    false
 }
 
 #[derive(Clone, Copy)]
