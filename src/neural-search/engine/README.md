@@ -19,7 +19,10 @@ Metis maintains a specialized fork, not a byte-identical copy or a standalone FF
   Its borrowed prefix is 24 bytes; Rust alone owns the payload-release tail.
 - `src/neural-search/native/binding/`: one Linux Node/Bun binding.
   Only consumed display/continuation data crosses it, not detailed rank/highlight objects.
-- `assets/neural-search/`: bundled library, paired source/binding/build/ABI/hash manifest and redistribution notices.
+- `src/neural-search/assets/`: bundled library, paired source/binding/build/ABI/hash manifest and redistribution notices.
+
+The Rust workspace, TS adapter and bundled assets all live under `src/neural-search/`.
+The package scripts and CI refer to this module; `extensions/neural-search.ts` is only its host entry.
 
 Only **Linux x64 with glibc >=2.31** is delivered. There are no other-platform builds or upstream binary fallbacks.
 Runtime CPU detection and scalar fallbacks remain: x64 does not imply AVX2.
@@ -212,7 +215,7 @@ mkdir -p .work/neural-engine/tmp
 TMPDIR="$PWD/.work/neural-engine/tmp" \
   CARGO_TARGET_DIR="$PWD/.work/neural-engine/target" \
   cargo +1.94.0 test \
-    --manifest-path native/neural-search/Cargo.toml \
+    --manifest-path src/neural-search/engine/Cargo.toml \
     --workspace --lib --locked
 ```
 

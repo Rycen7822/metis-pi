@@ -122,12 +122,12 @@ Copyright (c) 2025 Dmitriy Kovalenko. MIT License (src/neural-search/LICENSE).
 Metis owns the Pi integration, configuration, lifecycle, aggregated deferred
 neural_search entry, discovery catalogue and rendering. The necessary Rust
 engine crates and reduced Linux Node/Bun binding from the same source are now
-maintained in native/neural-search and src/neural-search/native/binding.
+maintained in src/neural-search/engine and src/neural-search/native/binding.
 The bundled Linux x64 library is built from those owned sources, not supplied
 by upstream npm engine packages. Rust/C dependency and standard-library notices
-are retained in assets/neural-search/THIRD_PARTY_NOTICES.txt and
-assets/neural-search/RUST-STDLIB-NOTICES.html. Provenance, build and maintenance
-boundaries are in src/neural-search/METIS.md and native/neural-search/README.md.
+are retained in src/neural-search/assets/THIRD_PARTY_NOTICES.txt and
+src/neural-search/assets/RUST-STDLIB-NOTICES.html. Provenance, build and maintenance
+boundaries are in src/neural-search/METIS.md and src/neural-search/engine/README.md.
 
 The standalone web MCP bundle also includes typebox 1.3.27 (MIT).
 Its upstream copyright and full license are retained in

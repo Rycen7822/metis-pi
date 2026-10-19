@@ -9,318 +9,318 @@
   },
   "source": {
     "roots": [
-      "native/neural-search",
+      "src/neural-search/engine",
       "src/neural-search/native/binding"
     ],
-    "sha256": "6b5fc4efb963ff6cc58033203793416c8e6812525523e8d05a9f58dbd2c18da8",
+    "sha256": "d9e22e3eced44d40d2ca0fe66ce6e58abcfb57e37291afe9fe32280473dd6707",
     "inputs": [
       {
-        "path": "native/neural-search/Cargo.lock",
+        "path": "src/neural-search/engine/Cargo.lock",
         "sha256": "9df7f11f80b39f8593e6e11e0a40523e675186b524ad6c42876185e2a0307166"
       },
       {
-        "path": "native/neural-search/Cargo.toml",
+        "path": "src/neural-search/engine/Cargo.toml",
         "sha256": "a2e240cd80274af320b6f7c9a212555ce00f33bd7a63318673197d5db09a27f8"
       },
       {
-        "path": "native/neural-search/LICENSE",
+        "path": "src/neural-search/engine/LICENSE",
         "sha256": "f8264de82db188834a5711d7e348dc08c33db14f79bb587ccb42616fd694ee81"
       },
       {
-        "path": "native/neural-search/build-linux-x64.mjs",
-        "sha256": "7a12c8c93658f1670cc607f77d6df7edee9fc9364df515272182d350e49522fc"
+        "path": "src/neural-search/engine/build-linux-x64.mjs",
+        "sha256": "1ff739c8c3715e8f3d77d280e51588efbc9131dbcad70bf2bc786bf647906c9b"
       },
       {
-        "path": "native/neural-search/crates/fff-c/Cargo.toml",
+        "path": "src/neural-search/engine/crates/fff-c/Cargo.toml",
         "sha256": "41c60e2962e552f70191e616c0ab39010e680b44bc08a2f54f6573074b414638"
       },
       {
-        "path": "native/neural-search/crates/fff-c/include/fff.h",
+        "path": "src/neural-search/engine/crates/fff-c/include/fff.h",
         "sha256": "7e5319475c68ffe567d9aec3e82ec8cbd469c6474011d32d8486f891f91ee429"
       },
       {
-        "path": "native/neural-search/crates/fff-c/src/ffi_types.rs",
+        "path": "src/neural-search/engine/crates/fff-c/src/ffi_types.rs",
         "sha256": "e3f12e6bafe76d37a7234806a14e060d51b425c6ab1f1acfd9d6d23ef9023bad"
       },
       {
-        "path": "native/neural-search/crates/fff-c/src/lib.rs",
+        "path": "src/neural-search/engine/crates/fff-c/src/lib.rs",
         "sha256": "ba9c00ebff0e062c5c38c9e5c7ff1b31cdd847516ee0cda04a5bdd35c4e28336"
       },
       {
-        "path": "native/neural-search/crates/fff-core/Cargo.toml",
+        "path": "src/neural-search/engine/crates/fff-core/Cargo.toml",
         "sha256": "db43418e4967e54338fa85f914046b197e806bda62c1ff5dfaad48864cc07b88"
       },
       {
-        "path": "native/neural-search/crates/fff-core/build.rs",
+        "path": "src/neural-search/engine/crates/fff-core/build.rs",
         "sha256": "fdc62d6bd1c5be891e35a75e75f3f2bd213dd80e5ef678e553199d6ee146a91a"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/binary_classifier.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/binary_classifier.rs",
         "sha256": "585239edacb6d488dc7b219704aea234ffe784a6cc3361160f9c99373e081cb2"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/constants.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/constants.rs",
         "sha256": "6d5dcc933b3dc6a5e035b4490cc7ba17fec0e3371e8ddbb1c426b8080ef604d2"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/dbs/db_healthcheck.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/dbs/db_healthcheck.rs",
         "sha256": "d98611d492717b865816d9af97e1f3ef11d3c355743ea103aeb9c1ebf478f73f"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/dbs/env_pool.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/dbs/env_pool.rs",
         "sha256": "128415c0b00938f6e4866f1abf3f958df3f163df63e1d3990d3a24ea607c03c7"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/dbs/frecency.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/dbs/frecency.rs",
         "sha256": "ffe587a2b7df88ea174b1d3fb9db29a3bf2f264b6ef55686eac8eaf6909336a6"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/dbs/lmdb.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/dbs/lmdb.rs",
         "sha256": "0b251a15c928c6c209fe7d842e3b6a6ce07041f2fc41f1ff9ec52d62fe184903"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/dbs/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/dbs/mod.rs",
         "sha256": "b3d75bdeef870bb76df3a422cf4a7eea77ceabac552536e2d266a2a5c2462ed4"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/dbs/query_tracker.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/dbs/query_tracker.rs",
         "sha256": "f0304a7d92ef94dd1febfdb8056fb67a2c689c3c6555a8f237e6530926132a2e"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/error.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/error.rs",
         "sha256": "58c511fe1e8cfda18385b56d2f3e4c7cba4d4ff5adedbe86607c17bb314234d3"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/file_picker.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/file_picker.rs",
         "sha256": "07cec9bc8540001cf372878d1625e791a037436b73c997984257654f29f2d7ae"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/git.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/git.rs",
         "sha256": "0e691bbe463e86ac113431239c83ec877d95dfdc32ffe8e0ceac4acb2ac6f01e"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/git_recency.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/git_recency.rs",
         "sha256": "b44feeb4057dbdf2407bc2ce0bbd1e03f9028ea4fc439b68511d181fea986fcf"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/git_status_worker.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/git_status_worker.rs",
         "sha256": "f02c44f30899e85cba31021919095ab975a0ab7eadb9e43814ad94ba7eea6dfd"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/fuzzy_grep.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/fuzzy_grep.rs",
         "sha256": "bb28bbf77468080ac3c24913db205b856ad989a397ff621cb7e418226df2028a"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/grep.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/grep.rs",
         "sha256": "7634f1a760291216c6b850cf72c9ffa191fcc739b4a992ca87c82048596915b7"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/grep_tests.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/grep_tests.rs",
         "sha256": "d60909672032d4ddc047091935e7abc254844185c6ae72cd24b1dfe739b24d6a"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/mod.rs",
         "sha256": "d6b29c9b4bcc137e4833f9b9d57078b64f28249616701b79a52984a0de9d44a6"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/multi_pattern.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/multi_pattern.rs",
         "sha256": "6032a0a050e591e6116146d3d9e8892729bd169bf2d3b131241c96c7fec7b550"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/prefilter.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/prefilter.rs",
         "sha256": "b24133ef12e49a066c88ae2ec9d9385e22b0da4b8e114dfa5305588618b820d3"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/regex.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/regex.rs",
         "sha256": "5b225ee8551c3c2dfc8b6497fff657941641abf41ff589a2b4883f67d900dfca"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/sink.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/sink.rs",
         "sha256": "653fe766f9313932b4d60c0a3636cb3a3d9ac460312d0c239ed6a81fbd7bb51d"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/grep/types.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/grep/types.rs",
         "sha256": "101558e8ac7b8cbe7676e2fc29696d6a26a47997f0491c0a2c8cfc1ffb3f3c0e"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/ignore.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/ignore.rs",
         "sha256": "161df311fadab1ad654985627f5ae7e0d44364430472b5a3add3d1b76eb018b6"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/index/constraints.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/index/constraints.rs",
         "sha256": "92da497cdedeb84fe0b3a770be6a1d01f26caf931f724156575600673477f3cc"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/index/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/index/mod.rs",
         "sha256": "0c708dea2989988fbd8e6f5dbc204229c7e508712fadd2899c23bcf105dbda33"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/lib.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/lib.rs",
         "sha256": "2b09098dcbb9144bb108c6cf6398c1212a3afbcebc01c94fb7ca0653e8d58fa0"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/log.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/log.rs",
         "sha256": "da684f2453295838a1794f7fa5c776ce7dc88866c2b3ac733b839341ea436c73"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/parallelism.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/parallelism.rs",
         "sha256": "bfd054f5574ab9c09219e232a9374e55f56ddec38fc38c95d9c5cf87e61f51a3"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/path_utils.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/path_utils.rs",
         "sha256": "e5b9656e23a69d2f13af628e9640d50dd0ae50136976d445a7b035d60580165d"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/rescan_stats.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/rescan_stats.rs",
         "sha256": "e9714354aa5c347b2ef3237d8875c4afde97bfc6b474579b423241ae7a9bbf1d"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/rescan_throttle.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/rescan_throttle.rs",
         "sha256": "c8bd1ee5bd4d174d4dbf169f48124960aeeddb725812dd287805906496b498cd"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/scan.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/scan.rs",
         "sha256": "6fca6507a99d40c12394230950612118e260478b9e6f8ed05e9f54199cce4c75"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/score.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/score.rs",
         "sha256": "1f9616eb93e2d5f0f2f58de2a95e1518ce58d46fd128ac6a65dfe35915bb49d5"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/shared.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/shared.rs",
         "sha256": "aec1f510567c2dac4c3b49c966116b3cd2299967f6039297abdd3eab624a58a7"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/simd_path.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/simd_path.rs",
         "sha256": "c93ecbb91219a0f09c676d1663b59d1a46aa9ceba66a01eaebdbc9332a376d29"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/simd_string_utils/case.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/simd_string_utils/case.rs",
         "sha256": "04f44b1833fb4971fa9ea0599f952f282b71e35518890d98dd5e726267bba95e"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/simd_string_utils/memmem.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/simd_string_utils/memmem.rs",
         "sha256": "28c6475d97fdfa75e4bf3d377f9558a449b6b2e7549648817e584b9b18badf93"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/simd_string_utils/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/simd_string_utils/mod.rs",
         "sha256": "da2edcdb4a6fc3a68ac8ace9820371561631c6c0eef33011639152f2a4d533c6"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/sort_buffer.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/sort_buffer.rs",
         "sha256": "73af6547e3ba6645d8aecbbbaf0da9e49f0a15d267c27b02714b548dc4ae937c"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/stable_vec.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/stable_vec.rs",
         "sha256": "85c691294c8adb70520480c564bcd30a24227e8a85964f0ccf790fdde8e9a8e8"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/types.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/types.rs",
         "sha256": "0d9a3b545907f23234ee48906d715dbc8282e42456df9c0ffe90f116130b4767"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/walk/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/walk/mod.rs",
         "sha256": "4849ca0c9b35b952aabce82488cd65c9eb2f982660af0f642d386eae217cd674"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/walk/zlob.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/walk/zlob.rs",
         "sha256": "516b9d237175c5a136e879be59e7640ac16eb56a1da74e7c05bf57279a706b34"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/watcher/background_watcher.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/watcher/background_watcher.rs",
         "sha256": "7346c023929bccbeaf8abd2c529bed081729392ab72fb0f7f9c456dd72397c75"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/watcher/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/watcher/mod.rs",
         "sha256": "bb3ad497c6bcb07ab0f59a669ad6aeb23c80c15a2de80b2f8f5533007d285742"
       },
       {
-        "path": "native/neural-search/crates/fff-core/src/watcher/rescan_tests.rs",
+        "path": "src/neural-search/engine/crates/fff-core/src/watcher/rescan_tests.rs",
         "sha256": "7a6334a48cf8e0dfac91d8b417948bc189b50bff15e9629e60eb655a50e48f3b"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/Cargo.toml",
+        "path": "src/neural-search/engine/crates/fff-grep/Cargo.toml",
         "sha256": "25c55658611bd76b3b89fb6f0417967db11a6e8210d40675b470e3ba21686273"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/lib.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/lib.rs",
         "sha256": "c79f9a80d16633e69ff36bc32b2ea651a1b8a77cbdbb3e01b18c8531644f14b5"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/lines.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/lines.rs",
         "sha256": "8765a742133d3cbf4ed7c3307b60a554b9ed82c2a7e9ab133ae18f6c69dcef05"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/matcher.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/matcher.rs",
         "sha256": "c4977c23300c734933bb99c7af4e6d2ffb319706ba30f9303a77a313f4da15c4"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/searcher/core.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/searcher/core.rs",
         "sha256": "40dab74b30b08d9a2adc5541354600648c459d729f373b64ba71aae05c82a6e8"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/searcher/glue.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/searcher/glue.rs",
         "sha256": "ed23b5bcd291e71836d3d4cd8f6907b66db8a55d4196f191eb7ec10fa7efd976"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/searcher/mod.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/searcher/mod.rs",
         "sha256": "d105ba60670c0985b599a5c3cf29ba0d623bd2f961af8edc784f9a47c0776e2b"
       },
       {
-        "path": "native/neural-search/crates/fff-grep/src/sink.rs",
+        "path": "src/neural-search/engine/crates/fff-grep/src/sink.rs",
         "sha256": "18e829f83cdd655f05c1f9c14773d052b07ac9e3d8fc876ba9c069dc2d8f5245"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/Cargo.toml",
+        "path": "src/neural-search/engine/crates/fff-query-parser/Cargo.toml",
         "sha256": "8781e0ad8eda41678b5f90edc909b993ae238c5721fa189b68f27f5a3935e762"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/src/config.rs",
+        "path": "src/neural-search/engine/crates/fff-query-parser/src/config.rs",
         "sha256": "85d7c201cb72a34c51d6bc62ef6a456ac5985225666540c11ca100d4f83c57a8"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/src/constraints.rs",
+        "path": "src/neural-search/engine/crates/fff-query-parser/src/constraints.rs",
         "sha256": "6e4b87ca79637630c8c1ed57571e5bd97fb17d9d2d6a3cab322d89d1ee2c01db"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/src/glob_detect.rs",
+        "path": "src/neural-search/engine/crates/fff-query-parser/src/glob_detect.rs",
         "sha256": "255469f4c6201285db3625b192108e78b901c15736698fe92f182e055488b482"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/src/lib.rs",
+        "path": "src/neural-search/engine/crates/fff-query-parser/src/lib.rs",
         "sha256": "832ef9b958e7a295dc6b1d8661265183d0ad9ef8e1ed9d90b2fbb4a1f41bfca1"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/src/location.rs",
+        "path": "src/neural-search/engine/crates/fff-query-parser/src/location.rs",
         "sha256": "127197536f308ab1d6df56f5bbcc766ff08c2a4ac05290d059384ecbf4283ef1"
       },
       {
-        "path": "native/neural-search/crates/fff-query-parser/src/parser.rs",
+        "path": "src/neural-search/engine/crates/fff-query-parser/src/parser.rs",
         "sha256": "d58e6c73286c350859e04cc970b0b843d3128f82e2180bbaf7216a27d7cbf122"
       },
       {
-        "path": "native/neural-search/licenses/glidesort-0.1.2/LICENSE-APACHE",
+        "path": "src/neural-search/engine/licenses/glidesort-0.1.2/LICENSE-APACHE",
         "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
       },
       {
-        "path": "native/neural-search/licenses/heed-0.22.0/LICENSE",
+        "path": "src/neural-search/engine/licenses/heed-0.22.0/LICENSE",
         "sha256": "6d4e3db586416994db32596f0a256eaeee6c3f79e783bf6ac0fab3cc2e36759b"
       },
       {
-        "path": "native/neural-search/licenses/heed-traits-0.20.0/LICENSE",
+        "path": "src/neural-search/engine/licenses/heed-traits-0.20.0/LICENSE",
         "sha256": "c4ea684839984235efcebff570a4d253dcc456789edbd4fdf3e96ca15004e730"
       },
       {
-        "path": "native/neural-search/licenses/heed-types-0.21.0/LICENSE",
+        "path": "src/neural-search/engine/licenses/heed-types-0.21.0/LICENSE",
         "sha256": "c4ea684839984235efcebff570a4d253dcc456789edbd4fdf3e96ca15004e730"
       },
       {
-        "path": "native/neural-search/licenses/zlob-1.6.5/LICENSE",
+        "path": "src/neural-search/engine/licenses/zlob-1.6.5/LICENSE",
         "sha256": "b58a537ce812184628abbf3283377f7d2447ef8c9940699f72a73d4edd9633b3"
       },
       {
-        "path": "native/neural-search/notices.mjs",
-        "sha256": "69411ce00d2546e2ccbcdba2d4201ed4b9dfb236979c9b8baff7fe84e5e253bc"
+        "path": "src/neural-search/engine/notices.mjs",
+        "sha256": "0adbc66374572ee5a53e59fffbadb105cba72f07afc4a920b304c44bffcab9b4"
       },
       {
         "path": "src/neural-search/native/binding/api.ts",
@@ -328,7 +328,7 @@
       },
       {
         "path": "src/neural-search/native/binding/ffi.ts",
-        "sha256": "86c6261184cbcd345059d722f04b60a9edb8358e2af643027d1b0a8c2c28918e"
+        "sha256": "ce041870115bacab5b3a8cd9de1fb27e9ce876b05925bc8d8fc80820246bd7df"
       },
       {
         "path": "src/neural-search/native/binding/finder.ts",
@@ -341,7 +341,7 @@
       "cargo",
       "zigbuild",
       "--manifest-path",
-      "native/neural-search/Cargo.toml",
+      "src/neural-search/engine/Cargo.toml",
       "--profile",
       "ci",
       "--locked",
@@ -366,7 +366,7 @@
     "zlobZigCpu": "baseline"
   },
   "asset": {
-    "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
+    "path": "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
     "sha256": "5287f2e0c0615082462edd2c0e6761358c0c21ca433bf3b20203082eacf8e497",
     "bytes": 10463488,
     "abi": {
@@ -421,11 +421,11 @@
   },
   "notices": [
     {
-      "path": "assets/neural-search/THIRD_PARTY_NOTICES.txt",
+      "path": "src/neural-search/assets/THIRD_PARTY_NOTICES.txt",
       "sha256": "c6ce9135022582b0b911194c79d226554debf01551a6391ae2dd9799faa7c8e5"
     },
     {
-      "path": "assets/neural-search/RUST-STDLIB-NOTICES.html",
+      "path": "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
       "sha256": "af70aaabed1b73e872f14f9130db37e09f3f4d73a5f7c598b9173697a5d2729f"
     }
   ]

@@ -8,7 +8,12 @@ The pristine, sparse reference checkout is `references/pi-fff/packages/pi-fff/`.
 
 Metis owns the Pi integration, configuration, native finder lifetime, bounded auxiliary finders and cursors, editor autocomplete, maintenance commands, tool schemas and display. Do not reinstall the standalone Pi wrapper to update this component. Compare upstream changes against the pinned source, port intentionally and verify affected behavior before updating this provenance.
 
-Metis also maintains the necessary Rust engine closure in `native/neural-search/`, its reduced Linux `ffi-rs` binding in `native/binding/`, and the built library plus provenance/notices under `assets/neural-search/`. No upstream FFF npm package or binary download remains. The engine is a Metis-specialized Rust fork of 0.11.0, with the original zlob semantics and existing LMDB format. It retains AI search/ranking and live indexing, not upstream editor/SDK compatibility. Delivery targets Linux x64 glibc >=2.31 only; other platforms are out of scope. See `native/neural-search/README.md` at the repository root for builds and redistribution. The product name does not imply embeddings, vector indexing or model-assisted semantic search; searches run locally.
+The owned Rust workspace is in `engine/`, the reduced Linux `ffi-rs` adapter in `native/`, and the bundled library plus manifest/notices in `assets/`.
+All engine implementation and delivery files live under `src/neural-search/`; `extensions/neural-search.ts` is only the host entry.
+No upstream FFF npm package or binary download remains. The engine is a Metis-specialized Rust fork of 0.11.0, with the original zlob semantics and existing LMDB format.
+It retains AI search/ranking and live indexing, not upstream editor/SDK compatibility. Delivery targets Linux x64 glibc >=2.31 only; other platforms are out of scope.
+See [engine/README.md](engine/README.md) for builds and redistribution.
+The product name does not imply embeddings, vector indexing or model-assisted semantic search; searches run locally.
 
 ## Architecture
 

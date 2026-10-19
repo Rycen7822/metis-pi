@@ -35,7 +35,7 @@ export function writeNotices(root, source) {
     sections.push(`\n${"=".repeat(72)}\n${pkg.name} ${pkg.version}\nLicense: ${pkg.license ?? "see supplied license"}\n${pkg.repository ?? ""}\n${(pkg.authors ?? []).join("; ")}`);
     for (const file of files) sections.push(`--- ${file.name} ---\n${file.text}`);
   }
-  const output = join(root, "assets/neural-search");
+  const output = join(source, "../assets");
   mkdirSync(output, { recursive: true });
   writeFileSync(join(output, "THIRD_PARTY_NOTICES.txt"), sections.join("\n\n") + "\n");
   const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();

@@ -129,7 +129,7 @@ jobs:
           version: '0.16.0'
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native/neural-search -> ../../.work/neural-engine/target
+          workspaces: src/neural-search/engine -> ../../../.work/neural-engine/target
           cache-all-crates: true
           cache-targets: true
       - run: cargo install cargo-zigbuild --locked --version 0.23.4
@@ -137,19 +137,19 @@ jobs:
       - run: npm run build:neural-engine
         id: rebuild
       - name: Require the rebuilt payload to match the checkout
-        run: git diff --exit-code -- assets/neural-search
+        run: git diff --exit-code -- src/neural-search/assets
       - name: Run inherited Rust unit checks
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.work/neural-engine/target
           TMPDIR: ${{ github.workspace }}/.work/neural-engine/tmp
         run: |
           mkdir -p "$TMPDIR"
-          cargo test --manifest-path native/neural-search/Cargo.toml --workspace --lib --locked
+          cargo test --manifest-path src/neural-search/engine/Cargo.toml --workspace --lib --locked
       - uses: actions/upload-artifact@v4
         if: ${{ always() && steps.rebuild.outcome == 'success' }}
         with:
           name: neural-search-linux-x64
-          path: assets/neural-search/
+          path: src/neural-search/assets/
   retire-feature-push:
     name: Retire duplicate feature push
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository

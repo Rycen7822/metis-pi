@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 import { writeNotices } from "./notices.mjs";
 
 const source = dirname(fileURLToPath(import.meta.url));
-const root = resolve(source, "../..");
+const root = resolve(source, "../../..");
 const target = "x86_64-unknown-linux-gnu";
-const asset = "assets/neural-search/linux-x64/libmetis_neural_search.so";
-const manifestPath = join(root, "assets/neural-search/linux-x64-manifest.json");
-const notices = ["assets/neural-search/THIRD_PARTY_NOTICES.txt", "assets/neural-search/RUST-STDLIB-NOTICES.html"];
+const asset = "src/neural-search/assets/linux-x64/libmetis_neural_search.so";
+const manifestPath = join(root, "src/neural-search/assets/linux-x64-manifest.json");
+const notices = ["src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/RUST-STDLIB-NOTICES.html"];
 const mode = process.argv[2] ?? "build";
-if (process.argv.length > 3 || !["build", "verify"].includes(mode)) throw new Error("Usage: node native/neural-search/build-linux-x64.mjs [build|verify]");
+if (process.argv.length > 3 || !["build", "verify"].includes(mode)) throw new Error("Usage: node src/neural-search/engine/build-linux-x64.mjs [build|verify]");
 if (process.platform !== "linux" || process.arch !== "x64") throw new Error("The owned search library targets Linux x64 glibc only.");
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const fileHash = path => hash(readFileSync(path));
@@ -78,7 +78,7 @@ if (mode === "verify") {
   const zig = command(zigPath, ["version"]);
   const zigbuild = command("cargo-zigbuild", ["--version"]);
   if (!rustc.startsWith("rustc 1.94.0 ") || zig !== "0.16.0" || !zigbuild.endsWith("0.23.4"))
-    throw new Error("Publish builds require Rust 1.94.0, Zig 0.16.0 and cargo-zigbuild 0.23.4; see native/neural-search/README.md.");
+    throw new Error("Publish builds require Rust 1.94.0, Zig 0.16.0 and cargo-zigbuild 0.23.4; see src/neural-search/engine/README.md.");
   // zigbuild otherwise prefers Python's ziglang over the binary just checked.
   // Pin both linker wrappers and zlob, including inherited wrapper caches.
   const toolEnv = { ...process.env, ZIG: zigPath, CARGO_ZIGBUILD_ZIG_COMMAND: zigPath, CARGO_ZIGBUILD_ZIG_COMMAND_ARGS: "", CARGO_ZIGBUILD_ZIG_VERSION: zig };
@@ -101,14 +101,14 @@ if (mode === "verify") {
   // of the shipped bytes. Keep recorded policy independent of host prefixes.
   const remapPaths = [[root, "/metis-neural-search"], [realpathSync(resolve(root, process.env.CARGO_HOME ?? join(homedir(), ".cargo"))), "/cargo"], [output, "/metis-target"]];
   const compileFlags = [...flags, ...remapPaths.map(([from, to]) => `--remap-path-prefix=${from}=${to}`)];
-  const args = ["zigbuild", "--manifest-path", "native/neural-search/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
+  const args = ["zigbuild", "--manifest-path", "src/neural-search/engine/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
   execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...toolEnv, CARGO_ZIGBUILD_CACHE_DIR: output, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: compileFlags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });
   if (JSON.stringify(inputs()) !== JSON.stringify(before)) throw new Error("Search source changed during compilation; packaged bytes were not updated.");
   const candidate = join(output, target, "ci/libmetis_neural_search.so");
   const manifest = {
     schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 7,
     upstream: { version: "0.11.0", commit: "95fd777c2529fc7b4d7572dabff64cc07268f2c5" },
-    source: { roots: ["native/neural-search", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
+    source: { roots: ["src/neural-search/engine", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
     build: { command: ["cargo", ...args], rustc, zig, zigbuild, zigCc, rustFlags: flags, pathRemapping: remapPaths.map(([, to]) => to), cFlags: cflags, zlobZigCpu: "baseline" },
     asset: { path: asset, sha256: fileHash(candidate), bytes: statSync(candidate).size, abi: abi(candidate) },
     notices: notices.map(path => ({ path, sha256: fileHash(join(root, path)) })),

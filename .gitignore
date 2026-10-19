@@ -15,9 +15,9 @@ CODEX_STATE.md
 
 .worktree/
 
-# Local native build outputs; packaged binaries are tracked under assets.
+# Local native build outputs; packaged binaries stay tracked with their component.
 native/tools/target/
-native/neural-search/target/
+src/neural-search/engine/target/
 
 # Condense retains its public entry; runtime sources are TS.
 

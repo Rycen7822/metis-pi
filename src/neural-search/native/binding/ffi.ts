@@ -38,7 +38,7 @@ function invoke(name: string, paramsType: FieldType[], paramsValue: unknown[], r
 function loadLibrary(): void {
   if (loaded) return;
   if (process.platform !== "linux" || process.arch !== "x64") throw new Error("Metis Neural Search requires Linux x64 (glibc).");
-  const path = fileURLToPath(new URL("../../../../assets/neural-search/linux-x64/libmetis_neural_search.so", import.meta.url));
+  const path = fileURLToPath(new URL("../../assets/linux-x64/libmetis_neural_search.so", import.meta.url));
   if (!existsSync(path)) throw new Error("Metis Neural Search library is missing; reinstall the complete Metis package.");
   open({ library: LIBRARY_KEY, path });
   if (invoke("abi_version", [], [], DataType.U32) !== ABI_VERSION)
