@@ -1,4 +1,4 @@
-import type { GrepResult, SearchResult } from "@ff-labs/fff-node";
+import type { GrepResult, SearchResult } from "../native/binding/api.ts";
 import { truncateHead } from "@earendil-works/pi-coding-agent";
 
 export function fileAnnotation(item: { gitStatus?: string; totalFrecencyScore?: number; accessFrecencyScore?: number }): string {

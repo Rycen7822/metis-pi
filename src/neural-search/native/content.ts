@@ -1,7 +1,7 @@
-import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from "@ff-labs/fff-node";
+import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from "./binding/api.ts";
 
 export const MATCHES_PER_FILE = 200;
-export interface ContentResult extends GrepResult { nativeMultilineLimited?: boolean; }
+export type ContentResult = GrepResult;
 /** The native cursor skips whole files; retain an immutable batch and its next unread row. */
 export interface ContentProgress { batch: ContentResult; offset: number; }
 
@@ -16,8 +16,8 @@ export function searchContent(
   const { mode = "plain", ...shared } = options;
   if (Array.isArray(pattern) || mode === "plain") return searchLiterals(finder, Array.isArray(pattern) ? pattern : [pattern], constraints, shared);
   const found = mode === "fuzzy"
-    ? finder.grep([constraints, pattern].filter(Boolean).join(" "), { ...shared, mode })
-    : searchRegex(finder, pattern, constraints, shared);
+    ? finder.grep(pattern, { ...shared, mode, constraints })
+    : finder.grep(pattern, { ...shared, mode: "regex", constraints });
   if (!found.ok || !found.value.regexFallbackError) return found;
   const literal = searchLiterals(finder, [pattern], constraints, shared);
   if (literal.ok) literal.value.regexFallbackError = found.value.regexFallbackError;
@@ -32,30 +32,22 @@ function searchLiterals(finder: FileFinderApi, patterns: string[], constraints: 
   if (patterns.every(pattern => !pattern.includes("\n"))) return finder.multiGrep({ ...options, patterns, constraints: constraints || undefined });
   // The guard leaves exactly one LF-containing literal here.
   const expression = patterns[0]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const found = searchRegex(finder, expression, constraints, options);
+  const found = finder.grep(expression, { ...options, mode: "regex", constraints });
   return found.ok && found.value.regexFallbackError
     ? { ok: false, error: `Cannot encode multiline literal search: ${found.value.regexFallbackError}` } : found;
 }
 
-function searchRegex(finder: FileFinderApi, pattern: string, constraints: string, options: GrepOptions): Result<ContentResult> {
-  // Leading regex escape bypasses FFF constraint parsing; optional word boundary
-  // is zero-width and always succeeds. Keep the expression in one native token.
-  // Native build_regex blindly decodes \\n again, even inside \\\\n.
-  // Hex-encode literal backslash atoms before transporting the expression.
-  const encoded = pattern.replace(/\\\\/g, "\\x5c").replace(/(\\*)\p{White_Space}/gu, (token, escapes: string) => {
-    const char = token.at(-1)!;
-    const prefix = escapes.slice(0, escapes.length - escapes.length % 2);
-    return prefix + (char === "\n" ? "\\n" : `\\x{${char.codePointAt(0)!.toString(16)}}`);
-  });
-  const found = finder.grep([constraints, `\\b?(?:${encoded})`].filter(Boolean).join(" "), { ...options, mode: "regex" });
-  return found.ok && encoded.includes("\\n") && found.value.items.length
-    ? { ok: true, value: { ...found.value, nativeMultilineLimited: true } } : found;
-}
 
 export function contentPage(
-  search: (cursor: GrepCursor | null) => Result<ContentResult>, limit: number, previous?: ContentProgress,
+  finder: FileFinderApi, search: (cursor: GrepCursor | null) => Result<ContentResult>, limit: number, previous?: ContentProgress,
 ): { result: ContentResult; progress?: ContentProgress; cappedFiles: string[] } {
   const buffered = previous && previous.offset < previous.batch.items.length;
+  if (buffered) {
+    const progress = finder.getScanProgress();
+    if (!progress.ok) throw new Error(progress.error);
+    if (progress.value.indexVersion !== previous.batch.indexVersion)
+      throw new Error("Content index changed; restart the query without a cursor.");
+  }
   const found = buffered ? { ok: true as const, value: previous.batch } : search(previous?.batch.nextCursor ?? null);
   if (!found.ok) throw new Error(found.error);
   const batch = found.value;

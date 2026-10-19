@@ -1,4 +1,4 @@
-import type { FileFinderApi, InitOptions, Result } from "@ff-labs/fff-node";
+import type { FileFinderApi, InitOptions, Result } from "./binding/api.ts";
 import { loadSdk, SCAN_TIMEOUT_MS, type FileFinderStatic } from "./sdk.ts";
 
 type PickerOptions = Required<Pick<InitOptions, "enableHomeDirScanning" | "enableFsRootScanning" | "followSymlinks" | "frecencyDbPath" | "historyDbPath">>;
@@ -11,7 +11,7 @@ export class FilePickerFactory {
 
   async create(basePath: string, signal?: AbortSignal, persistent = true): Promise<FileFinderApi> {
     signal?.throwIfAborted();
-    const { FileFinder } = await loadSdk(this.options.followSymlinks);
+    const { FileFinder } = await loadSdk();
     signal?.throwIfAborted();
     const result = this.open(FileFinder, basePath, persistent);
     if (!result.ok) throw new Error(`Failed to create neural-search index for ${basePath}: ${result.error}`);
@@ -26,7 +26,8 @@ export class FilePickerFactory {
         signal?.addEventListener("abort", onAbort, { once: true });
         if (signal?.aborted) onAbort();
       });
-      // A false readiness result is a timeout, not an incomplete-index error.
+      // Timeout or unavailable monitoring may leave a usable partial index.
+      // Only a failed walk/commit makes the initialization result fatal.
       const scanned = await Promise.race([finder.waitForScan(SCAN_TIMEOUT_MS), aborted]);
       signal?.throwIfAborted();
       if (!scanned.ok) throw new Error(scanned.error);
@@ -42,9 +43,7 @@ export class FilePickerFactory {
   private open(FileFinder: FileFinderStatic, basePath: string, persistent: boolean): Result<FileFinderApi> {
     // Explicit fields keep database paths out of auxiliary and fallback indexes.
     const { enableHomeDirScanning, enableFsRootScanning, followSymlinks } = this.options;
-    // FFF 0.11's content-index prefilter drops valid multiGrep OR candidates.
-    const init = { basePath, enableHomeDirScanning, enableFsRootScanning, followSymlinks,
-      aiMode: true, disableContentIndexing: true };
+    const init = { basePath, enableHomeDirScanning, enableFsRootScanning, followSymlinks };
     if (!persistent || this.dbDisabled) return FileFinder.create(init);
     const result = FileFinder.create({ ...init,
       frecencyDbPath: this.options.frecencyDbPath, historyDbPath: this.options.historyDbPath,

@@ -1,42 +1,26 @@
-import type { FileFinderApi, InitOptions, Result } from "@ff-labs/fff-node";
+import type { FileFinderApi, InitOptions, Result } from "./binding/api.ts";
 
 export const SCAN_TIMEOUT_MS = 15_000;
 export type FileFinderStatic = { create(options: InitOptions): Result<FileFinderApi> };
 type Sdk = { FileFinder: FileFinderStatic };
-// Pi reloads extensions with jiti's module cache disabled. Keep native imports
-// process-wide; re-importing fff-bun can hang in a compiled Bun host.
-// Version this cache when the binding-selection policy changes.
+// Reload must not re-import native modules in a compiled Bun host. Cache the
+// binding, never live finders; a new engine ABI requires a new cache version.
 const sdkGlobal = globalThis as typeof globalThis & {
-  __metisNeuralSearchSdkPromisesV1?: Map<string, Promise<Sdk>>;
+  __metisNeuralSearchSdkPromisesV6?: Map<string, Promise<Sdk>>;
 };
-const sdkPromises = sdkGlobal.__metisNeuralSearchSdkPromisesV1 ??= new Map<string, Promise<Sdk>>();
+const sdkPromises = sdkGlobal.__metisNeuralSearchSdkPromisesV6 ??= new Map<string, Promise<Sdk>>();
 
-export function sdkCandidates(followSymlinks: boolean): readonly string[] {
-  const bun = process.versions.bun || typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
-  // Published fff-bun 0.11 uses ABI v1 and silently ignores followSymlinks.
-  if (bun && followSymlinks) return ["@ff-labs/fff-node"];
-  return bun ? ["@ff-labs/fff-bun", "@ff-labs/fff-node"] : ["@ff-labs/fff-node"];
-}
-
-export function loadSdk(followSymlinks: boolean): Promise<Sdk> {
-  const candidates = sdkCandidates(followSymlinks);
-  const key = candidates.join(",");
+export function loadSdk(): Promise<Sdk> {
+  if (process.platform !== "linux" || process.arch !== "x64")
+    return Promise.reject(new Error("Metis Neural Search requires Linux x64 (glibc)."));
+  const key = import.meta.url;
   let pending = sdkPromises.get(key);
   if (!pending) {
-    pending = loadFirst(candidates).catch(error => { sdkPromises.delete(key); throw error; });
+    pending = import("./binding/finder.ts").catch(error => {
+      sdkPromises.delete(key);
+      throw new Error(`Neural Search could not load its Linux binding: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    });
     sdkPromises.set(key, pending);
   }
   return pending;
-}
-
-async function loadFirst(candidates: readonly string[]): Promise<Sdk> {
-  const errors: string[] = [];
-  for (const name of candidates) {
-    try {
-      const sdk = name === "@ff-labs/fff-bun" ? await import("@ff-labs/fff-bun") : await import("@ff-labs/fff-node");
-      if (typeof sdk.FileFinder?.create !== "function") throw new Error("Missing FileFinder.create");
-      return sdk;
-    } catch (error) { errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`); }
-  }
-  throw new Error(`Neural search could not load a native FFF binding. ${errors.join("; ")}`);
 }

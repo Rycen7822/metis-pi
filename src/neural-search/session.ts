@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { FileFinderApi } from "@ff-labs/fff-node";
+import type { FileFinderApi } from "./native/binding/api.ts";
 import { AuxFinderPool, type FinderLease } from "./native/aux-finders.ts";
 import type { NeuralSearchConfig } from "./config.ts";
 import { CursorStore, type SearchCursor } from "./cursors.ts";

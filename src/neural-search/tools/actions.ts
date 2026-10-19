@@ -1,5 +1,5 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { GrepMode, SearchResult } from "@ff-labs/fff-node";
+import type { GrepMode, SearchResult } from "../native/binding/api.ts";
 import { Type } from "typebox";
 import type { ActionTool } from "../../deferred-action-tool.ts";
 import { formatFindOutput, formatGrepOutput } from "./format.ts";
@@ -15,7 +15,7 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
 const FIND_PAGE_SIZE_MAX = 100;
 const GREP_TIME_BUDGET_MS = 10_000;
-const NATIVE_MULTILINE_NOTICE = "Native multiline results are LIMITED blocks, not individual-hit counts: adjacent hits may coalesce and blocks may be clipped at 512 bytes before reaching the SDK. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
+const NATIVE_MULTILINE_NOTICE = "LF-capable expressions or cross-line blocks use LIMITED native projections, not individual-hit counts: warnings can remain when only an ordinary branch matched; later matched lines may be omitted and adjacent blocks may coalesce. outputTruncated=true conservatively marks potential incompleteness, not measured truncation. Refine the query or read matching files.";
 const pathSchema = Type.Optional(Type.String({ description:
   "Include path: directory prefix (src/), filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Matches the whole root-relative path. Existing absolute files are literal, including glob metacharacters. Outside-workspace paths and existing directory paths containing spaces use a separate local index. Filename/glob filters containing whitespace are unsupported; search the containing directory instead.",
 }));
@@ -24,7 +24,7 @@ const excludeSchema = Type.Optional(Type.Union([Type.String(), Type.Array(Type.S
 }));
 const contextSchema = Type.Optional(Type.Integer({ minimum: 0, maximum: 20, description: "Context lines before and after each match (0-20)." }));
 const cursorSchema = Type.Optional(Type.String({ description:
-  "Opaque cursor from this action in the same session/cwd. Repeat the original pattern(s); other original parameters may be omitted, but must not be changed.",
+  "Opaque cursor from this action in the same session/cwd. Repeat the original pattern(s); other original parameters may be omitted, but must not be changed. Content cursors may become stale on index updates; restart without cursor.",
 }));
 const caseSchema = Type.Optional(Type.Boolean({ description: "Force case-sensitive matching with true; otherwise smart-case (lowercase is insensitive)." }));
 const grepLimitSchema = Type.Optional(Type.Integer({ minimum: 1, description: "Max matches per page (default 20, capped at 50)." }));
@@ -92,7 +92,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         let snapshot = resumed?.snapshot;
         if (!snapshot) {
           const query = buildQuery(lease.constraint, pattern, request.exclude, lease.root);
-          const searched = lease.finder.fileSearch(query, { pageIndex: 0, pageSize });
+          const searched = lease.finder.fileSearch(query, { offset: 0, pageSize });
           if (!searched.ok) throw new Error(searched.error);
           snapshot = searched.value;
           if (snapshot.totalMatched > FIND_SNAPSHOT_LIMIT)
@@ -100,7 +100,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
           if (snapshot.items.length < snapshot.totalMatched && !isWeakFind(snapshot, pattern)) {
             // Native offset queries can reorder ties. Even page one must come
             // from the same complete snapshot as every later page.
-            const captured = lease.finder.fileSearch(query, { pageIndex: 0, pageSize: snapshot.totalMatched });
+            const captured = lease.finder.fileSearch(query, { offset: 0, pageSize: snapshot.totalMatched });
             if (!captured.ok) throw new Error(captured.error);
             if (captured.value.totalMatched !== snapshot.totalMatched || captured.value.items.length !== snapshot.totalMatched)
               throw new Error("Find index changed during snapshot creation. Retry or narrow the query; no partial pagination was created.");
@@ -164,15 +164,15 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const query = resumed?.query ?? buildQuery(lease.constraint, "", request.exclude, lease.root);
         const options = { mode, smartCase: request.caseSensitive !== true, maxMatchesPerFile: MATCHES_PER_FILE,
           pageSize, beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS };
-        let page = contentPage(cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
+        let page = contentPage(lease.finder, cursor => searchContent(lease.finder, pattern, query, { ...options, cursor }),
           pageSize, resumed?.progress);
-        // Fuzzy suggestions are optional; only unambiguous identifier tokens
-        // can cross the native fuzzy API's combined pattern/filter grammar.
+        // Fuzzy suggestions are optional; limit them to unambiguous identifiers,
+        // rather than treating phrases or punctuation as typo candidates.
         if (!page.result.items.length && !page.progress && !resumed && mode === "plain" && /^[\p{L}\p{N}_-]+$/u.test(pattern)) {
           const fuzzy = searchContent(lease.finder, pattern, query, { ...options,
             mode: "fuzzy", cursor: null, beforeContext: 0, afterContext: 0 });
-          if (fuzzy.ok && fuzzy.value.items.length) {
-            page = contentPage(() => fuzzy, pageSize);
+          if (fuzzy.ok && fuzzy.value.indexVersion === page.result.indexVersion && fuzzy.value.items.length) {
+            page = contentPage(lease.finder, () => fuzzy, pageSize);
             mode = "fuzzy";
           }
         }
@@ -222,7 +222,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         const pageSize = Math.min(positiveLimit(request.limit, DEFAULT_GREP_LIMIT), GREP_PAGE_SIZE_MAX);
         const context = clampContext(request.context);
         const query = resumed?.query ?? [buildQuery(lease.constraint, "", request.exclude, lease.root), request.constraints].filter(Boolean).join(" ");
-        const page = contentPage(cursor => searchContent(lease.finder, request.patterns!, query, {
+        const page = contentPage(lease.finder, cursor => searchContent(lease.finder, request.patterns!, query, {
           maxMatchesPerFile: MATCHES_PER_FILE, pageSize, smartCase: request.caseSensitive !== true, cursor,
           beforeContext: context, afterContext: context, timeBudgetMs: GREP_TIME_BUDGET_MS,
         }), pageSize, resumed?.progress);
@@ -254,8 +254,15 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
 function searchNotices(lease: SearchLease): string[] {
   const notices = lease.auxiliary ? [`Search root: ${lease.root}`] : [];
   const progress = lease.finder.getScanProgress();
-  if (progress.ok && progress.value.isScanning)
-    notices.push("Index scan is still running; results cover only currently indexed files. Retry after the scan finishes.");
+  if (!progress.ok) throw new Error(progress.error);
+  if (!progress.value.isScanning && progress.value.scanError) throw new Error(progress.value.scanError);
+  if (!progress.value.isReady) {
+    if (!progress.value.isScanning && !progress.value.isWatcherReady)
+      notices.push(`File monitoring is unavailable; results cover only the indexed snapshot and changes may not appear until monitoring recovers. Run /neural-search rescan to retry.${progress.value.watcherError ? ` ${progress.value.watcherError}` : ""}`);
+    else notices.push("Index initialization or refresh is incomplete; results cover only currently indexed files. Retry after scanning, subscriptions and metadata initialization finish, or check /neural-search health.");
+  }
+  if (progress.value.gitStatusError)
+    notices.push(`Git metadata is unavailable; status annotations and ranking may be incomplete: ${progress.value.gitStatusError}`);
   return notices;
 }
 
@@ -263,13 +270,15 @@ function searchNotices(lease: SearchLease): string[] {
 function contentPageResult(page: ReturnType<typeof contentPage>, notices: string[]) {
   const { result, cappedFiles } = page;
   const nativeMultilineLimited = result.nativeMultilineLimited === true;
+  const nativeOutputTruncated = result.nativeOutputTruncated === true;
   if (nativeMultilineLimited) notices.push(NATIVE_MULTILINE_NOTICE);
+  if (nativeOutputTruncated) notices.push("Native result or context text was clipped at the byte display limit. Read the source for complete text.");
   if (result.regexFallbackError) notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
   if (cappedFiles.length) notices.push(`Native per-file match limit (${MATCHES_PER_FILE}) reached in ${cappedFiles.join(", ")}; additional matches may be omitted. Refine the query or read those files.`);
   const formatted = formatGrepOutput(result);
   return { output: formatted.output, details: {
     totalMatched: result.totalMatched, totalFiles: result.totalFiles, hasMore: !!page.progress,
-    perFileLimitReached: cappedFiles.length > 0, outputTruncated: formatted.truncated || nativeMultilineLimited, nativeMultilineLimited,
+    perFileLimitReached: cappedFiles.length > 0, outputTruncated: formatted.truncated || nativeMultilineLimited || nativeOutputTruncated, nativeMultilineLimited, nativeOutputTruncated,
   } };
 }
 
@@ -288,5 +297,5 @@ function wildcardOnly(pattern: string): boolean {
 }
 function isWeakFind(result: SearchResult, pattern: string): boolean {
   const fuzzy = pattern.trim().split(/\s+/).some(token => token && !hasGlobSyntax(token) && !token.startsWith("!"));
-  return result.items.length > 0 && fuzzy && (result.scores[0]?.total ?? 0) < Math.floor(pattern.length * 6);
+  return result.items.length > 0 && fuzzy && result.topScore < Math.floor(pattern.length * 6);
 }

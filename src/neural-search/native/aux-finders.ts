@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { FileFinderApi } from "@ff-labs/fff-node";
+import type { FileFinderApi } from "./binding/api.ts";
 import type { FilePickerFactory } from "./file-picker.ts";
 import { coversHomeDir, scanOptOutReason } from "./paths.ts";
 
