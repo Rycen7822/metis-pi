@@ -12,7 +12,7 @@
       "native/neural-search",
       "src/neural-search/native/binding"
     ],
-    "sha256": "3b7f79924af5e61e09ba338e0e11f37048cdeb0fd98d930af5cb44bd3a3d532a",
+    "sha256": "2cbf51d521d2bd849649d3def96b3e8979dbdb155f58be3446c19e02a719edc6",
     "inputs": [
       {
         "path": "native/neural-search/Cargo.lock",
@@ -28,7 +28,7 @@
       },
       {
         "path": "native/neural-search/build-linux-x64.mjs",
-        "sha256": "5a1f5e2e0f777bcb26b243e014d7cecb70ccb151f7cbbe10d86f7f6490cd9838"
+        "sha256": "d0f5b55381089c7c6a7e9f828b38c3d034c39ea647650d9fc88c88073177ea49"
       },
       {
         "path": "native/neural-search/crates/fff-c/Cargo.toml",
@@ -228,7 +228,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "60957e8b89a4d219d8dba1934042a5094246f133f8750b0b6ffb85b0ddcd297e"
+        "sha256": "1d54b5454c60169b8fba99fa89af80993fe0d0341e6a0783ac1a68d673afb178"
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/mod.rs",
@@ -236,7 +236,7 @@
       },
       {
         "path": "native/neural-search/crates/fff-core/src/watcher/rescan_tests.rs",
-        "sha256": "3afa950d0633e15ecab1a33e43cef31414dc2996fbc00a616fecce8db6f1f6ef"
+        "sha256": "7a6334a48cf8e0dfac91d8b417948bc189b50bff15e9629e60eb655a50e48f3b"
       },
       {
         "path": "native/neural-search/crates/fff-grep/Cargo.toml",
@@ -356,13 +356,18 @@
     "rustFlags": [
       "-Ctarget-cpu=x86-64"
     ],
+    "pathRemapping": [
+      "/metis-neural-search",
+      "/cargo",
+      "/metis-target"
+    ],
     "cFlags": "",
     "zlobZigCpu": "baseline"
   },
   "asset": {
     "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
-    "sha256": "f25a23aef15fc6094d599c0e59fe745c38333c1d711af4e7b6f4dca5c99e25b8",
-    "bytes": 10487328,
+    "sha256": "02925966fd1a1051c27f71ee4d5f9b4d31fb7ce490c32e90497f70de4ba7e86f",
+    "bytes": 10486112,
     "abi": {
       "version": 6,
       "machine": "x86-64",

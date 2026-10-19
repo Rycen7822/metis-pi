@@ -436,7 +436,7 @@ fn an_explicit_request_is_never_throttled() {
 }
 
 #[test]
-fn events_after_a_suppressed_kernel_rescan_are_still_applied() {
+fn events_after_a_kernel_loss_marker_are_reconciled() {
     let f = Fixture::new();
     f.write("src/main.rs", "fn main() {}");
     f.index();
@@ -452,10 +452,13 @@ fn events_after_a_suppressed_kernel_rescan_are_still_applied() {
         create(f.path("src/added.rs")),
     ]);
 
-    f.assert_no_rescan(&delta, "a dropped-events flag over a single tracked file");
+    // A known path cannot establish coverage after loss. Recovery must also
+    // cover the remaining batch, even when it returns before incremental work.
+    assert_eq!(delta.count(RescanReason::KernelEventLoss), 1);
+    assert!(f.picker.wait_for_indexing_complete(Duration::from_secs(10)));
     assert!(
         f.is_indexed("src/added.rs"),
-        "suppressing the rescan must not drop the rest of the batch"
+        "reconciliation must not drop the rest of the batch"
     );
 }
 

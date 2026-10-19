@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { writeNotices } from "./notices.mjs";
 
@@ -89,15 +90,19 @@ if (mode === "verify") {
   writeNotices(root, source);
   const before = inputs();
   const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target");
+  // Panic/source locations must not make checkout or Cargo-home paths part
+  // of the shipped bytes. Keep recorded policy independent of host prefixes.
+  const remapPaths = [[root, "/metis-neural-search"], [realpathSync(resolve(root, process.env.CARGO_HOME ?? join(homedir(), ".cargo"))), "/cargo"], [output, "/metis-target"]];
+  const compileFlags = [...flags, ...remapPaths.map(([from, to]) => `--remap-path-prefix=${from}=${to}`)];
   const args = ["zigbuild", "--manifest-path", "native/neural-search/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
-  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });
+  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: compileFlags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });
   if (JSON.stringify(inputs()) !== JSON.stringify(before)) throw new Error("Search source changed during compilation; packaged bytes were not updated.");
   const candidate = join(output, target, "ci/libmetis_neural_search.so");
   const manifest = {
     schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 6,
     upstream: { version: "0.11.0", commit: "95fd777c2529fc7b4d7572dabff64cc07268f2c5" },
     source: { roots: ["native/neural-search", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
-    build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, cFlags: cflags, zlobZigCpu: "baseline" },
+    build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, pathRemapping: remapPaths.map(([, to]) => to), cFlags: cflags, zlobZigCpu: "baseline" },
     asset: { path: asset, sha256: fileHash(candidate), bytes: statSync(candidate).size, abi: abi(candidate) },
     notices: notices.map(path => ({ path, sha256: fileHash(join(root, path)) })),
   };

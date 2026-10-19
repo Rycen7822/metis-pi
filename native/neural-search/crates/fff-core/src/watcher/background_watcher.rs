@@ -567,19 +567,13 @@ pub(crate) fn handle_debounced_events(
         // Kernel event loss can require rebuilding the subtree rather than
         // interpreting the partial event list as complete.
         if debounced_event.event.need_rescan() {
-            let small_and_known = debounced_event.event.paths.len() < 16 // this should be usually one event
-                && debounced_event
-                    .paths
-                    .iter()
-                    // but we are smart enough and not falling into the paths
-                    .all(|p| !p.is_dir() && !filter.is_ignored(p));
-
-            if !small_and_known && try_trigger_full_rescan(RescanReason::KernelEventLoss) {
+            // Listed paths do not establish coverage after event loss; even a
+            // small or empty batch has already invalidated watcher health.
+            if try_trigger_full_rescan(RescanReason::KernelEventLoss) {
                 return Vec::new();
             }
 
-            // Small batches and throttled rescans fall through: the listed
-            // paths are still applied incrementally below.
+            // Throttled recovery can still apply the listed paths below.
         }
 
         tracing::debug!(event = ?debounced_event.event, "Processing FS event");
@@ -950,7 +944,8 @@ fn index_new_directory(
         Ok(walk) => walk,
         Err(e) => {
             warn!(?e, dir = %dir.display(), "Failed to walk new directory");
-            return (Vec::new(), false);
+            // The parent subscription cannot recover pre-existing descendants.
+            return (Vec::new(), true);
         }
     };
 

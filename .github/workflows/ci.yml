@@ -135,6 +135,8 @@ jobs:
       - run: cargo install cargo-zigbuild --locked --version 0.23.4
       - run: npm run verify:neural-engine
       - run: npm run build:neural-engine
+      - name: Require the rebuilt payload to match the checkout
+        run: git diff --exit-code -- assets/neural-search
       - name: Run inherited Rust unit checks
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.work/neural-engine/target
