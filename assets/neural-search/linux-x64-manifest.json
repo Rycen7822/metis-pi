@@ -12,7 +12,7 @@
       "native/neural-search",
       "src/neural-search/native/binding"
     ],
-    "sha256": "2cbf51d521d2bd849649d3def96b3e8979dbdb155f58be3446c19e02a719edc6",
+    "sha256": "0592d2c4e350708c8d97cdddf4dad2878b8cdb025b2f34e4b9bf1b6ade15bba6",
     "inputs": [
       {
         "path": "native/neural-search/Cargo.lock",
@@ -28,7 +28,7 @@
       },
       {
         "path": "native/neural-search/build-linux-x64.mjs",
-        "sha256": "d0f5b55381089c7c6a7e9f828b38c3d034c39ea647650d9fc88c88073177ea49"
+        "sha256": "6b6dc954bb15d9d245452c283a1c9820fa30db4ac1279ca7553624c7d699e495"
       },
       {
         "path": "native/neural-search/crates/fff-c/Cargo.toml",
@@ -353,6 +353,7 @@
     "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
     "zig": "0.16.0",
     "zigbuild": "cargo-zigbuild 0.23.4",
+    "zigCc": "clang version 21.1.0",
     "rustFlags": [
       "-Ctarget-cpu=x86-64"
     ],
@@ -366,8 +367,8 @@
   },
   "asset": {
     "path": "assets/neural-search/linux-x64/libmetis_neural_search.so",
-    "sha256": "02925966fd1a1051c27f71ee4d5f9b4d31fb7ce490c32e90497f70de4ba7e86f",
-    "bytes": 10486112,
+    "sha256": "f02ea88fde0818f3b88f888d183cc14d967ee791316616b962f1bf0f3552e1ea",
+    "bytes": 10485568,
     "abi": {
       "version": 6,
       "machine": "x86-64",

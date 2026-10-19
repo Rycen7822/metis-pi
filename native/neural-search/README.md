@@ -168,6 +168,8 @@ Packing a source/Git checkout also requires Linux x64 and GNU binutils; delivery
 CI also rebuilds with the pinned toolchain and rejects any difference from the checked-in library, manifest or notices.
 A successfully compiled CI candidate is retained even if that comparison fails; a failed-run artifact is diagnostic, not release approval.
 Rust source locations are remapped to stable workspace, Cargo-home and target prefixes so local checkout paths do not become shipped bytes.
+The verified PATH Zig executable is also fixed for cargo-zigbuild and zlob; Python's bundled Zig cannot silently override it.
+Native release objects and linker wrappers use a toolchain-specific subdirectory beneath the selected Cargo target directory, separate from objects built with an earlier compiler-selection policy.
 
 ### Checks
 

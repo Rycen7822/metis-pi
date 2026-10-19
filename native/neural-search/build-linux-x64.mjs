@@ -74,10 +74,16 @@ if (mode === "verify") {
   verify(JSON.parse(readFileSync(manifestPath, "utf8")));
 } else {
   const rustc = command("rustc", ["--version"]);
-  const zig = command("zig", ["version"]);
+  const zigPath = realpathSync(resolve(root, command("sh", ["-c", "command -v zig"])));
+  const zig = command(zigPath, ["version"]);
   const zigbuild = command("cargo-zigbuild", ["--version"]);
   if (!rustc.startsWith("rustc 1.94.0 ") || zig !== "0.16.0" || !zigbuild.endsWith("0.23.4"))
     throw new Error("Publish builds require Rust 1.94.0, Zig 0.16.0 and cargo-zigbuild 0.23.4; see native/neural-search/README.md.");
+  // zigbuild otherwise prefers Python's ziglang over the binary just checked.
+  // Pin both linker wrappers and zlob, including inherited wrapper caches.
+  const toolEnv = { ...process.env, ZIG: zigPath, CARGO_ZIGBUILD_ZIG_COMMAND: zigPath, CARGO_ZIGBUILD_ZIG_COMMAND_ARGS: "", CARGO_ZIGBUILD_ZIG_VERSION: zig };
+  const zigCc = command("cargo-zigbuild", ["zig", "cc", "--", "--version"], { env: toolEnv }).split("\n")[0];
+  if (!zigCc.startsWith("clang version 21.1.0")) throw new Error("The selected Zig 0.16.0 compiler must use Clang 21.1.0.");
   // A shipped library must not silently inherit a developer's native CPU flags.
   // Local profiling can use cargo directly; the packaged target stays baseline x64.
   const supplied = process.env.CARGO_ENCODED_RUSTFLAGS;
@@ -89,20 +95,21 @@ if (mode === "verify") {
   flags.push("-Ctarget-cpu=x86-64");
   writeNotices(root, source);
   const before = inputs();
-  const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target");
+  // Do not reuse objects produced by an older compiler-selection policy.
+  const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target", "owned-rust1.94.0-zig0.16.0-zigbuild0.23.4");
   // Panic/source locations must not make checkout or Cargo-home paths part
   // of the shipped bytes. Keep recorded policy independent of host prefixes.
   const remapPaths = [[root, "/metis-neural-search"], [realpathSync(resolve(root, process.env.CARGO_HOME ?? join(homedir(), ".cargo"))), "/cargo"], [output, "/metis-target"]];
   const compileFlags = [...flags, ...remapPaths.map(([from, to]) => `--remap-path-prefix=${from}=${to}`)];
   const args = ["zigbuild", "--manifest-path", "native/neural-search/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
-  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: compileFlags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });
+  execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...toolEnv, CARGO_ZIGBUILD_CACHE_DIR: output, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: compileFlags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });
   if (JSON.stringify(inputs()) !== JSON.stringify(before)) throw new Error("Search source changed during compilation; packaged bytes were not updated.");
   const candidate = join(output, target, "ci/libmetis_neural_search.so");
   const manifest = {
     schemaVersion: 2, target, minGlibc: "2.31", abiVersion: 6,
     upstream: { version: "0.11.0", commit: "95fd777c2529fc7b4d7572dabff64cc07268f2c5" },
     source: { roots: ["native/neural-search", "src/neural-search/native/binding"], sha256: hash(JSON.stringify(before)), inputs: before },
-    build: { command: ["cargo", ...args], rustc, zig, zigbuild, rustFlags: flags, pathRemapping: remapPaths.map(([, to]) => to), cFlags: cflags, zlobZigCpu: "baseline" },
+    build: { command: ["cargo", ...args], rustc, zig, zigbuild, zigCc, rustFlags: flags, pathRemapping: remapPaths.map(([, to]) => to), cFlags: cflags, zlobZigCpu: "baseline" },
     asset: { path: asset, sha256: fileHash(candidate), bytes: statSync(candidate).size, abi: abi(candidate) },
     notices: notices.map(path => ({ path, sha256: fileHash(join(root, path)) })),
   };
