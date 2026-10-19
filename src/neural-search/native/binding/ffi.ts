@@ -1,19 +1,19 @@
-// Metis private Linux x64 ABI v6. Rust owns each envelope and its payload;
+// Metis private Linux x64 ABI v7. Rust owns each envelope and its payload;
 // decode into detached JS values before freeing the envelope in finally.
 import { DataType, type FieldType, isNullPointer, type JsExternal, load, open, restorePointer, wrapPointer } from "ffi-rs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { err, type FileItem, type GrepOptions, type GrepResult, type HealthCheck, type InitOptions, type MixedItem, type MixedSearchResult, type MultiGrepOptions, type Result, type ScanProgress, type SearchResult } from "./api.ts";
 
-const LIBRARY_KEY = "metis_neural_search_v6";
-const ABI_VERSION = 6;
+const LIBRARY_KEY = "metis_neural_search_v7";
+const ABI_VERSION = 7;
 const CREATE = {
   version: DataType.U32, base_path: DataType.String, frecency_db_path: DataType.String, history_db_path: DataType.String,
   enable_fs_root_scanning: DataType.U8, enable_home_dir_scanning: DataType.U8, follow_symlinks: DataType.U8,
 };
-// This is only the borrowed 32-byte prefix; the native envelope also contains
+// This is only the borrowed 24-byte prefix; the native envelope also contains
 // a private Rust payload owner, never read or freed through JS/libc.
-const ENVELOPE = { success: DataType.U8, error: DataType.External, handle: DataType.External, int_value: DataType.I64 } as const;
+const ENVELOPE = { success: DataType.U8, error: DataType.External, handle: DataType.External } as const;
 const FILE = { relative_path: DataType.External, git_status: DataType.External, total_frecency_score: DataType.I64 } as const;
 const FILES = { items: DataType.External, count: DataType.U32, total_matched: DataType.U32, total_files: DataType.U32, top_score: DataType.I32 } as const;
 const MIXED_ITEM = { relative_path: DataType.External, display_name: DataType.External, item_type: DataType.U8 } as const;
@@ -162,10 +162,6 @@ function grep(name: "grep" | "multi_grep", handle: NativeHandle, pattern: string
   });
 }
 export function ffiScanFiles(handle: NativeHandle): Result<void> { return result("scan", [DataType.External], [handle], () => undefined); }
-export function ffiIsScanning(handle: NativeHandle): boolean {
-  const found = result("is_scanning", [DataType.External], [handle], view => Number(view.int_value) !== 0);
-  return found.ok && found.value;
-}
 export function ffiGetScanProgress(handle: NativeHandle): Result<ScanProgress> {
   return result("progress", [DataType.External], [handle], view => {
     const raw = readStruct(view.handle, PROGRESS);

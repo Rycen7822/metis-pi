@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use super::sink::{byte_indices_to_byte_offsets, strip_line_terminators, truncate_display_bytes};
+use super::sink::{strip_line_terminators, truncate_display_bytes};
 use super::types::{GrepMatch, GrepResult, GrepSearchOptions};
 
 #[allow(clippy::too_many_arguments)]
@@ -135,13 +135,12 @@ pub(super) fn fuzzy_grep_search<'a>(
         chunk_start = chunk_end;
         chunk_size = (chunk_size * growth).min(max_chunk);
 
-        // Parallel phase with `map_init`: each rayon worker thread clones the
-        // matcher once and gets a reusable bounded content-read buffer.
+        // Each Rayon job owns a matcher and lazily initialized content scratch.
         let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
             .par_iter()
             .enumerate()
             .map_init(
-                || (matcher.clone(), Vec::with_capacity(64 * 1024)),
+                || (matcher.clone(), None),
                 |(matcher, buf), (local_idx, file)| {
                     // File 0 is never skipped so a page always consumes at least one
                     // file (cursor 0 means "done").
@@ -186,11 +185,10 @@ pub(super) fn fuzzy_grep_search<'a>(
                     let mut stepper = LineStep::new(b'\n', 0, file_bytes.len());
                     let estimated_lines = (file_bytes.len() / 40).max(64);
                     let mut file_lines: Vec<&str> = Vec::with_capacity(estimated_lines);
-                    let mut line_meta: Vec<(u64, u64)> = Vec::with_capacity(estimated_lines);
+                    let mut line_numbers: Vec<u64> = Vec::with_capacity(estimated_lines);
 
                     let mut line_number: u64 = 1;
                     while let Some(line_match) = stepper.next_match(file_bytes) {
-                        let byte_offset = line_match.start() as u64;
                         let trimmed = strip_line_terminators(&file_bytes[line_match]);
 
                         if !trimmed.is_empty() {
@@ -204,7 +202,7 @@ pub(super) fn fuzzy_grep_search<'a>(
                                 continue;
                             };
                             file_lines.push(line_str);
-                            line_meta.push((line_number, byte_offset));
+                            line_numbers.push(line_number);
                         }
 
                         line_number += 1;
@@ -287,24 +285,12 @@ pub(super) fn fuzzy_grep_search<'a>(
                             }
                         }
 
-                        let (ln, bo) = line_meta[idx];
-                        let match_byte_offsets =
-                            byte_indices_to_byte_offsets(display_line, &match_indices.indices);
-                        let col = match_byte_offsets
-                            .first()
-                            .map(|r| r.0 as usize)
-                            .unwrap_or(0);
-
                         file_matches.push(GrepMatch {
                             native_multiline_limited: false,
                             native_output_truncated: truncated.len() < raw_line.len(),
                             file_index: 0,
-                            line_number: ln,
-                            col,
-                            byte_offset: bo,
+                            line_number: line_numbers[idx],
                             line_content: display_line.to_string(),
-                            match_byte_offsets,
-                            fuzzy_score: Some(match_indices.score),
                             context_before: Vec::new(),
                             context_after: Vec::new(),
                         });

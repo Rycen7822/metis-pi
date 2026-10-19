@@ -5,7 +5,7 @@ use crate::walk::{WalkIgnoreRules, WalkOutput};
 use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use zlob::walk::{WalkBuilder, WalkFlags, WalkMetadata, WalkState};
 
 const PROGRESS_STEP: usize = 13;
@@ -17,7 +17,11 @@ pub(crate) fn walk_collect_files(
     follow_symlinks: bool,
     threads: usize,
     synced_files_count: &Arc<AtomicUsize>,
+    cancelled: &AtomicBool,
 ) -> crate::Result<WalkOutput> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err(crate::Error::WalkFailed("Walk cancelled".into()));
+    }
     // gitignore on; skip hidden on non-git roots (so `~/` doesn't recurse into
     // ~/.cache, ~/.config, etc.); optionally follow symlinks.
     let mut flags = WalkFlags::GITIGNORE;
@@ -50,7 +54,10 @@ pub(crate) fn walk_collect_files(
     // dir, so this keeps one mutex acquisition per entry.
     let collected = Mutex::new((Vec::new(), Vec::new()));
 
-    let outcome = match builder.run(|entry| {
+    let outcome = builder.run(|entry| {
+        if cancelled.load(Ordering::Acquire) {
+            return WalkState::Quit;
+        }
         if !entry.is_file() {
             // unlike ripgrep walker zlob doesnt show .git files
             if entry.is_dir() {
@@ -94,11 +101,15 @@ pub(crate) fn walk_collect_files(
         }
 
         WalkState::Continue
-    }) {
+    });
+    // Quit can return a normal (partial) outcome. Never publish that candidate
+    // or turn shutdown into a walk error/readiness failure in the scan owner.
+    if cancelled.load(Ordering::Acquire) {
+        return Err(crate::Error::WalkFailed("Walk cancelled".into()));
+    }
+    let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(e) => {
-            // Preserve whatever we collected before the failure so the caller
-            // can still surface a partial index instead of nothing.
             tracing::error!(?e, "zlob walk failed");
             return Err(crate::Error::WalkFailed(format!("{e:?}")));
         }

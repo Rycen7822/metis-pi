@@ -38,6 +38,7 @@ use crate::git::GitStatusCache;
 use crate::git_recency;
 use crate::git_recency::GitRecencyConfig;
 use crate::grep::{GrepResult, GrepSearchOptions, multi_grep_search};
+use crate::index::constraints::Constrainable;
 use crate::query_tracker::QueryTracker;
 use crate::scan::{ScanConfig, ScanJob, ScanSignals};
 use crate::score::fuzzy_match_and_score_files;
@@ -109,7 +110,7 @@ pub(crate) struct FileSync {
     /// uses `arena_override` pointing into this builder's arena.
     overflow_builder: Option<crate::simd_path::ChunkedPathStoreBuilder>,
     /// Immutable chunk-level deduped path store, read under the picker lock.
-    chunked_paths: Option<Arc<crate::simd_path::ChunkedPathStore>>,
+    chunked_paths: Option<crate::simd_path::ChunkedPathStore>,
     /// Walker ignore rules, shared with the background filesystem watcher.
     pub(crate) ignore_rules: Option<Arc<crate::walk::WalkIgnoreRules>>,
 }
@@ -208,22 +209,23 @@ impl FileSync {
 
         if let Some(dir_idx) = dir_idx {
             let dir_idx = dir_idx as u32;
-            let cmp_key = |f: &FileItem| {
+            let mut filename_buf = String::new();
+            let mut cmp_key = |f: &FileItem| {
                 f.parent_dir_index.cmp(&dir_idx).then_with(|| {
-                    let fname = f.file_name(arena);
-                    fname.as_str().cmp(filename)
+                    f.write_file_name(arena, &mut filename_buf);
+                    filename_buf.as_str().cmp(filename)
                 })
             };
 
             if self.indexable_count > 0
-                && let Ok(pos) = self.files[..self.indexable_count].binary_search_by(cmp_key)
+                && let Ok(pos) = self.files[..self.indexable_count].binary_search_by(&mut cmp_key)
             {
                 return Some(pos);
             }
 
             if self.indexable_count < self.base_count
                 && let Ok(rel_pos) =
-                    self.files[self.indexable_count..self.base_count].binary_search_by(cmp_key)
+                    self.files[self.indexable_count..self.base_count].binary_search_by(&mut cmp_key)
             {
                 return Some(self.indexable_count + rel_pos);
             }
@@ -367,6 +369,7 @@ impl FileSync {
 }
 
 impl FileItem {
+    #[cfg(test)]
     pub fn new(path: PathBuf, base_path: &Path, git_status: Option<Status>) -> (Self, String) {
         let metadata = std::fs::metadata(&path).ok();
         Self::new_with_metadata(path, base_path, git_status, metadata.as_ref())
@@ -374,7 +377,7 @@ impl FileItem {
 
     /// Create a FileItem using pre-fetched metadata to avoid a redundant stat syscall.
     /// Returns `(FileItem, relative_path)`. The FileItem's `path` field is
-    /// empty; callers must populate it via `set_path` or `build_chunked_path_store_and_assign`.
+    /// empty; callers must populate it from the owning path store via `set_path`.
     fn new_with_metadata(
         path: PathBuf,
         base_path: &Path,
@@ -409,92 +412,6 @@ impl FileItem {
 
         let item = Self::new_raw(filename_start, size, modified, git_status, is_binary);
         (item, relative_path)
-    }
-
-    /// Create a FileItem with an empty ChunkedString from a path on disk.
-    ///
-    /// Returns `(file_item, relative_path_string)`. The relative path must be
-    /// kept alongside the FileItem until `build_chunked_path_store_and_assign`
-    /// populates each item's `path` field from the shared arena.
-    pub fn new_from_walk(
-        path: &Path,
-        base_path: &Path,
-        git_status: Option<Status>,
-        metadata: Option<&std::fs::Metadata>,
-    ) -> (Self, String) {
-        let (size, modified) = match metadata {
-            Some(metadata) => {
-                let size = metadata.len();
-                let modified = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_secs());
-                (size, modified)
-            }
-            None => (0, 0),
-        };
-
-        Self::new_from_walk_parts(path, base_path, git_status, size, modified)
-    }
-
-    /// Like [`Self::new_from_walk`] but takes already-extracted size and
-    /// modification time (Unix seconds) instead of a `std::fs::Metadata`.
-    /// Used by the zlob walker backend, which fetches metadata in bulk.
-    pub fn new_from_walk_parts(
-        path: &Path,
-        base_path: &Path,
-        git_status: Option<Status>,
-        size: u64,
-        modified: u64,
-    ) -> (Self, String) {
-        let is_binary = is_known_binary_extension(path);
-
-        let rel = pathdiff::diff_paths(path, base_path).unwrap_or_else(|| path.to_path_buf());
-        // The index is '/'-canonical on every platform; fold native separators.
-        let rel_str = crate::path_utils::to_canonical_slashes(&rel.to_string_lossy()).into_owned();
-        let fname_offset = rel_str
-            .rfind(std::path::is_separator)
-            .map(|i| i + 1)
-            .unwrap_or(0) as u16;
-
-        let item = Self::new_raw(fname_offset, size, modified, git_status, is_binary);
-        (item, rel_str)
-    }
-
-    /// Zlob-walker fast path: skip the `pathdiff::diff_paths` PathBuf alloc by
-    /// taking the already-relative slice and the basename-offset that zlob's
-    /// scanner computed during traversal. ~80–120 ms saved on a chromium scan
-    /// (500k entries × one fewer alloc + no component walk).
-    ///
-    /// `relative_path` is root-relative bytes; `basename_offset` is the byte
-    /// offset where the basename begins (e.g. zlob's `entry.path_bytes().len()
-    /// - entry.file_name().as_os_str().as_encoded_bytes().len()` minus the
-    /// `relative_offset`).
-    pub fn new_from_walk_bytes(
-        path: &Path,
-        relative_path: &[u8],
-        basename_offset: u16,
-        git_status: Option<Status>,
-        size: u64,
-        modified: u64,
-    ) -> (Self, String) {
-        let is_binary = is_known_binary_extension(path);
-        // SAFETY-ish: paths on macOS/Linux are bytes; lossy conversion mirrors
-        // the existing `to_string_lossy()` behavior on non-UTF8 names.
-        let decoded = String::from_utf8_lossy(relative_path).into_owned();
-        // The caller's offset indexes the raw bytes; re-measure it against the
-        // decoded string so it never lands inside a U+FFFD (#799).
-        let dir_bytes = relative_path
-            .get(..basename_offset as usize)
-            .unwrap_or(relative_path);
-        let basename_offset = if std::str::from_utf8(dir_bytes).is_ok() {
-            basename_offset
-        } else {
-            String::from_utf8_lossy(dir_bytes).len() as u16
-        };
-        let item = Self::new_raw(basename_offset, size, modified, git_status, is_binary);
-        (item, decoded)
     }
 
     pub(crate) fn update_frecency_scores(
@@ -562,7 +479,7 @@ pub struct FilePicker {
     /// FFI). Owned by the picker so it exists before the first scan; its
     /// consumer thread is spawned lazily once a git workdir is discovered.
     pub(crate) git_status_worker: Arc<crate::git_status_worker::GitStatusWorker>,
-    cache_budget: Arc<ContentCacheBudget>,
+    cache_budget: ContentCacheBudget,
     has_explicit_cache_budget: bool,
     scanned_files_count: Arc<AtomicUsize>,
     watch: bool,
@@ -839,7 +756,7 @@ impl FilePicker {
             background_watcher: None,
             git_status_worker: crate::git_status_worker::GitStatusWorker::new(),
             base_path: path,
-            cache_budget: Arc::new(initial_budget),
+            cache_budget: initial_budget,
             has_explicit_cache_budget: has_explicit_budget,
             signals: crate::scan::ScanSignals::default(),
             index_version: 1,
@@ -931,6 +848,7 @@ impl FilePicker {
             &self.scanned_files_count,
             &empty_frecency,
             self.follow_symlinks,
+            &self.signals.cancelled,
         )?;
 
         self.commit_new_sync(sync);
@@ -1277,8 +1195,8 @@ impl FilePicker {
 
     /// Search an explicit content pattern and already-parsed file constraints.
     /// This entry does not infer filenames, split/trim the pattern,
-    /// decode escapes, or retry without constraints. Invalid regex syntax still
-    /// falls back to the unchanged literal pattern with a compilation error.
+    /// decode escapes, or retry without constraints. Invalid regex syntax returns
+    /// compilation metadata without scanning; the Metis adapter owns literal retry.
     pub fn grep_pattern(
         &self,
         pattern: &str,
@@ -1535,8 +1453,7 @@ impl FilePicker {
         self.sync_data = sync;
         self.cache_budget.reset();
         if !self.has_explicit_cache_budget {
-            self.cache_budget =
-                Arc::new(ContentCacheBudget::new_for_repo(self.sync_data.live_count));
+            self.cache_budget = ContentCacheBudget::new_for_repo(self.sync_data.live_count);
         }
     }
 
@@ -2000,6 +1917,7 @@ impl FileSync {
         synced_files_count: &Arc<AtomicUsize>,
         shared_frecency: &SharedFrecency,
         follow_symlinks: bool,
+        cancelled: &AtomicBool,
     ) -> Result<FileSync, Error> {
         let scan_start = std::time::Instant::now();
         info!("SCAN: Starting filesystem walk");
@@ -2029,6 +1947,7 @@ impl FileSync {
             follow_symlinks,
             bg_threads,
             synced_files_count,
+            cancelled,
         )?;
         check_root()?;
         let ignore_rules = ignore_rules.map(Arc::new);
@@ -2101,10 +2020,7 @@ impl FileSync {
         let file_item_size = std::mem::size_of::<FileItem>();
         let files_vec_bytes = files.len() * file_item_size;
         let dir_table_bytes = dirs.len() * std::mem::size_of::<DirItem>()
-            + dirs
-                .iter()
-                .map(|d| d.relative_path(arena).len())
-                .sum::<usize>();
+            + dirs.iter().map(|d| d.path.byte_len as usize).sum::<usize>();
 
         let total_time = scan_start.elapsed();
         info!(
@@ -2133,7 +2049,7 @@ impl FileSync {
             live_dirs_count: base_dirs_count,
             overflow_builder: None,
             git_workdir,
-            chunked_paths: Some(Arc::new(chunked_paths)),
+            chunked_paths: Some(chunked_paths),
             ignore_rules,
         })
     }

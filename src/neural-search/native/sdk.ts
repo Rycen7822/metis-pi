@@ -6,9 +6,9 @@ type Sdk = { FileFinder: FileFinderStatic };
 // Reload must not re-import native modules in a compiled Bun host. Cache the
 // binding, never live finders; a new engine ABI requires a new cache version.
 const sdkGlobal = globalThis as typeof globalThis & {
-  __metisNeuralSearchSdkPromisesV6?: Map<string, Promise<Sdk>>;
+  __metisNeuralSearchSdkPromisesV7?: Map<string, Promise<Sdk>>;
 };
-const sdkPromises = sdkGlobal.__metisNeuralSearchSdkPromisesV6 ??= new Map<string, Promise<Sdk>>();
+const sdkPromises = sdkGlobal.__metisNeuralSearchSdkPromisesV7 ??= new Map<string, Promise<Sdk>>();
 
 export function loadSdk(): Promise<Sdk> {
   if (process.platform !== "linux" || process.arch !== "x64")

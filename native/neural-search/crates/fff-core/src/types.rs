@@ -182,18 +182,21 @@ impl DirItem {
         out
     }
 
-    /// Write the last segment (dirname) of this directory path to `out`.
-    pub fn write_dir_name(&self, arena: ArenaPtr, out: &mut String) {
-        out.clear();
+    pub(crate) fn read_dir_name<'a>(&self, arena: ArenaPtr, buf: &'a mut [u8]) -> &'a str {
         let total = self.path.byte_len as usize;
         let offset = self.last_segment_offset as usize;
         if offset >= total {
-            return;
+            return "";
         }
-        // Read the full path, then slice from last_segment_offset
+        let full = self.path.read_to_buf(arena, buf);
+        &full[offset..]
+    }
+
+    /// Write the last segment (dirname) of this directory path to `out`.
+    pub fn write_dir_name(&self, arena: ArenaPtr, out: &mut String) {
+        out.clear();
         let mut buf = [0u8; PATH_BUF_SIZE];
-        let full = self.path.read_to_buf(arena, &mut buf);
-        out.push_str(&full[offset..]);
+        out.push_str(self.read_dir_name(arena, &mut buf));
     }
 
     /// The dirname (last segment) as an owned String. Cold path.
@@ -507,7 +510,7 @@ impl FileItem {
     #[inline]
     pub(crate) fn get_content_for_search<'a>(
         &'a self,
-        buf: &'a mut Vec<u8>,
+        buf: &'a mut Option<Vec<u8>>,
         arena: ArenaPtr,
         base_path: &Path,
         budget: &ContentCacheBudget,
@@ -521,6 +524,9 @@ impl FileItem {
 
         let len = usize::try_from(self.size).ok()?;
         let mut file = open_regular_file(&self.absolute_path(arena, base_path)).ok()?;
+        // Retain the first cold read's capacity policy, but allocate nothing for
+        // a cache-only job. Some(empty) remains after transferring bytes to cache.
+        let buf = buf.get_or_insert_with(|| Vec::with_capacity(64 * 1024));
         buf.clear();
         buf.try_reserve_exact(len).ok()?;
         buf.resize(len, 0);
@@ -583,18 +589,6 @@ impl Constrainable for FileItem {
 #[derive(Debug, Clone, Default)]
 pub struct Score {
     pub total: i32,
-    pub base_score: i32,
-    pub filename_bonus: i32,
-    pub special_filename_bonus: i32,
-    pub frecency_boost: i32,
-    pub git_status_boost: i32,
-    pub git_recency_boost: i32,
-    pub distance_penalty: i32,
-    pub current_file_penalty: i32,
-    pub combo_match_boost: i32,
-    pub path_alignment_bonus: i32,
-    pub exact_match: bool,
-    pub match_type: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]

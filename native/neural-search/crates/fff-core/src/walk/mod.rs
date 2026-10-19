@@ -48,7 +48,7 @@ mod tests {
     use super::walk_collect_files;
     use std::fs;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     // The walker must respect .gitignore and surface the expected file set
     // with a correct synced count.
@@ -66,7 +66,8 @@ mod tests {
         fs::write(root.join("target/out.bin"), "bin").unwrap();
 
         let counter = Arc::new(AtomicUsize::new(0));
-        let out = walk_collect_files(root, true, false, 1, &counter).unwrap();
+        let out =
+            walk_collect_files(root, true, false, 1, &counter, &AtomicBool::new(false)).unwrap();
 
         let mut names: Vec<String> = out.pairs.into_iter().map(|(_, rel)| rel).collect();
         names.sort();
@@ -90,7 +91,8 @@ mod tests {
         fs::write(root.join("index.js"), "x").unwrap();
 
         let counter = Arc::new(AtomicUsize::new(0));
-        let out = walk_collect_files(root, false, false, 1, &counter).unwrap();
+        let out =
+            walk_collect_files(root, false, false, 1, &counter, &AtomicBool::new(false)).unwrap();
         let names: Vec<String> = out.pairs.into_iter().map(|(_, rel)| rel).collect();
 
         assert!(names.iter().any(|n| n.ends_with("index.js")));
@@ -109,7 +111,8 @@ mod tests {
         fs::write(root.join("Cargo.toml"), "x").unwrap();
 
         let counter = Arc::new(AtomicUsize::new(0));
-        let out = walk_collect_files(root, true, false, 1, &counter).unwrap();
+        let out =
+            walk_collect_files(root, true, false, 1, &counter, &AtomicBool::new(false)).unwrap();
 
         let rules = out.ignore_rules.expect("zlob surfaces ignore rules");
         assert!(rules.is_ignored(Path::new("target/")));

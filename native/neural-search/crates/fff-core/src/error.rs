@@ -3,8 +3,6 @@ use std::path::StripPrefixError;
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Thread panicked")]
-    ThreadPanic,
     #[error("Invalid path {0}")]
     InvalidPath(std::path::PathBuf),
     #[error(
@@ -15,10 +13,6 @@ pub enum Error {
     FilePickerMissing,
     #[error("Failed to acquire lock for frecency")]
     AcquireFrecencyLock,
-    #[error("Failed to acquire lock for items by provider")]
-    AcquireItemLock,
-    #[error("Failed to acquire lock for path cache")]
-    AcquirePathCacheLock,
     #[error("Failed to create directory: {0}")]
     CreateDir(#[from] std::io::Error),
     #[error("Something is wrong with the local db instance: {0}")]
@@ -49,13 +43,6 @@ pub enum Error {
         #[source]
         source: heed::Error,
     },
-    #[error("Failed to clear stale readers for {db} database: {source}")]
-    DbClearStaleReaders {
-        db: &'static str,
-        #[source]
-        source: heed::Error,
-    },
-
     #[error("Failed to start read transaction for {db} database: {source}")]
     DbStartReadTxn {
         db: &'static str,

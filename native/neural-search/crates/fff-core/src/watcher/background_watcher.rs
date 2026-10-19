@@ -807,12 +807,8 @@ pub(crate) fn handle_debounced_events(
         overflow_count, "File index changes applied",
     );
 
-    if index_update_rejected || overflow_count > MAX_OVERFLOW_FILES {
-        let reason = if index_update_rejected {
-            RescanReason::IndexUpdateRejected
-        } else {
-            RescanReason::OverflowCapacity
-        };
+    if index_update_rejected {
+        let reason = RescanReason::IndexUpdateRejected;
 
         info!(%reason, "Watcher faced limit of index overflow. Triggering rescan");
         try_trigger_full_rescan(reason);
@@ -920,18 +916,20 @@ fn index_new_directory(
     pending_rescan: &mut Option<(RescanReason, Instant)>,
 ) -> (Vec<PathBuf>, bool) {
     // Prefer the walker's ignore rules; read base_path + rules from the picker.
-    let (base_path, walker_rules, follow_symlinks) = match shared_picker.read().ok().and_then(|g| {
-        g.as_ref().map(|p| {
-            (
-                p.base_path().to_path_buf(),
-                p.ignore_rules(),
-                p.follows_symlinks(),
-            )
-        })
-    }) {
-        Some(triple) => triple,
-        None => return (Vec::new(), false),
-    };
+    let (base_path, walker_rules, follow_symlinks, cancelled) =
+        match shared_picker.read().ok().and_then(|g| {
+            g.as_ref().map(|p| {
+                (
+                    p.base_path().to_path_buf(),
+                    p.ignore_rules(),
+                    p.follows_symlinks(),
+                    Arc::clone(&p.signals.cancelled),
+                )
+            })
+        }) {
+            Some(triple) => triple,
+            None => return (Vec::new(), false),
+        };
 
     let repo = discover_working_repository(&base_path);
     let walk = match crate::walk::walk_collect_files(
@@ -940,8 +938,10 @@ fn index_new_directory(
         follow_symlinks,
         1,
         &Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        &cancelled,
     ) {
         Ok(walk) => walk,
+        Err(_) if cancelled.load(Ordering::Acquire) => return (Vec::new(), false),
         Err(e) => {
             warn!(?e, dir = %dir.display(), "Failed to walk new directory");
             // The parent subscription cannot recover pre-existing descendants.

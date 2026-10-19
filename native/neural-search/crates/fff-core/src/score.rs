@@ -357,7 +357,7 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
     let main_needle_len = main_needle.len() as u16;
 
     let mut dir_buf = String::with_capacity(64);
-    let mut dirname_buf = String::with_capacity(32);
+    let mut dirname_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
 
     let results: Vec<(&DirItem, Score)> = path_matches
         .into_iter()
@@ -384,11 +384,11 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
             let match_start_approx = path_match.end_col.saturating_sub(main_needle_len - 1);
             let is_dirname_match = match_start_approx >= last_seg_offset;
 
-            dir.write_dir_name(dir_arena, &mut dirname_buf);
-            let dirname_len = dirname_buf.len();
+            // Preserve the writer's bounds/truncation behavior without materializing a String.
+            let dirname = dir.read_dir_name(dir_arena, &mut dirname_buf);
             let is_exact_dirname = is_dirname_match
-                && main_needle_len as usize == dirname_len
-                && main_needle.eq_ignore_ascii_case(dirname_buf.as_bytes());
+                && main_needle_len as usize == dirname.len()
+                && main_needle.eq_ignore_ascii_case(dirname.as_bytes());
 
             let filename_bonus = if is_exact_dirname {
                 base_score / 5 * 2 // 40% bonus for exact dirname match
@@ -403,29 +403,7 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
                 .saturating_add(distance_penalty)
                 .saturating_add(filename_bonus);
 
-            let score = Score {
-                total,
-                base_score,
-                filename_bonus,
-                special_filename_bonus: 0,
-                frecency_boost,
-                git_status_boost: 0,
-                git_recency_boost: 0,
-                distance_penalty,
-                current_file_penalty: 0,
-                combo_match_boost: 0,
-                path_alignment_bonus: 0,
-                exact_match: is_exact_dirname || path_match.exact,
-                match_type: if is_exact_dirname {
-                    "exact_dirname"
-                } else if is_dirname_match {
-                    "fuzzy_dirname"
-                } else if path_match.exact {
-                    "exact_path"
-                } else {
-                    "fuzzy_path"
-                },
-            };
+            let score = Score { total };
 
             (dir, score)
         })
@@ -443,9 +421,6 @@ fn score_dirs_by_frecency<'a>(
         .map(|&dir| {
             let score = Score {
                 total: dir.max_access_frecency(),
-                frecency_boost: dir.max_access_frecency(),
-                match_type: "frecency",
-                ..Default::default()
             };
 
             (dir, score)
@@ -601,7 +576,7 @@ fn match_and_score_in_arena<'a>(
             };
             let git_recency_boost = file.git_recency_score as i32;
 
-            if context.current_file.is_some() || context.last_same_query_match.is_some() {
+            if context.current_file.is_some() {
                 file.write_dir_str(arena, &mut dir_buf);
             }
 
@@ -639,7 +614,6 @@ fn match_and_score_in_arena<'a>(
                     main_needle.eq_ignore_ascii_case(fname_buf.as_bytes())
                 });
 
-            let mut has_special_filename_bonus = false;
             let filename_bonus = if is_exact_filename {
                 base_score / 5 * 2 // 40% bonus for exact filename match
             } else if is_filename_match {
@@ -661,7 +635,6 @@ fn match_and_score_in_arena<'a>(
                 // 5% bonus for special file but not as much as file name to avoid situations
                 // when you have /user_service/server.rs and /user_service/server/mod.rs
                 if is_special_entry_point_file(&fname_buf) {
-                    has_special_filename_bonus = true;
                     base_score * 5 / 100
                 } else {
                     0
@@ -730,33 +703,7 @@ fn match_and_score_in_arena<'a>(
                 .saturating_add(combo_match_boost)
                 .saturating_add(path_alignment_bonus);
 
-            let score = Score {
-                total,
-                base_score,
-                current_file_penalty,
-                filename_bonus,
-                special_filename_bonus: if has_special_filename_bonus {
-                    filename_bonus
-                } else {
-                    0
-                },
-                frecency_boost,
-                git_status_boost,
-                git_recency_boost,
-                distance_penalty,
-                combo_match_boost,
-                path_alignment_bonus,
-                exact_match: is_exact_filename || path_match.exact,
-                match_type: if is_exact_filename {
-                    "exact_filename"
-                } else if is_filename_match {
-                    "fuzzy_filename"
-                } else if path_match.exact {
-                    "exact_path"
-                } else {
-                    "fuzzy_path"
-                },
-            };
+            let score = Score { total };
 
             (file, score)
         })
@@ -812,21 +759,7 @@ fn score_filtered_by_frecency<'a>(
             .saturating_add(git_recency_boost)
             .saturating_add(current_file_penalty);
 
-        let score = Score {
-            total,
-            base_score: 0,
-            filename_bonus: 0,
-            distance_penalty: 0,
-            special_filename_bonus: 0,
-            combo_match_boost: 0,
-            path_alignment_bonus: 0,
-            current_file_penalty,
-            frecency_boost: total_frecency_score,
-            git_status_boost,
-            git_recency_boost,
-            exact_match: false,
-            match_type: "frecency",
-        };
+        let score = Score { total };
 
         (file, score)
     };
@@ -939,21 +872,7 @@ mod tests {
                     .unwrap_or(0) as u16;
                 let mut file = FileItem::new_raw(filename_start, 0, modified, None, false);
                 file.set_path(strings[i].clone());
-                let score_obj = Score {
-                    total: score,
-                    base_score: score,
-                    filename_bonus: 0,
-                    distance_penalty: 0,
-                    special_filename_bonus: 0,
-                    current_file_penalty: 0,
-                    frecency_boost: 0,
-                    git_status_boost: 0,
-                    git_recency_boost: 0,
-                    exact_match: false,
-                    match_type: "test",
-                    combo_match_boost: 0,
-                    path_alignment_bonus: 0,
-                };
+                let score_obj = Score { total: score };
                 (file, score_obj)
             })
             .collect();
@@ -1213,12 +1132,8 @@ mod filename_bonus_tests {
             "filename match should rank first"
         );
         assert!(
-            results[0].1.filename_bonus > 0,
-            "username.rs should have filename bonus"
-        );
-        assert_eq!(
-            results[1].1.filename_bonus, 0,
-            "handler.rs should have no filename bonus"
+            results[0].1.total > results[1].1.total,
+            "filename bonus must produce a strict ranking advantage"
         );
     }
 
@@ -1233,8 +1148,10 @@ mod filename_bonus_tests {
             results[0].0, "src/username.rs",
             "exact filename should rank first"
         );
-        assert_eq!(results[0].1.match_type, "exact_filename");
-        assert!(results[0].1.filename_bonus > results[1].1.filename_bonus);
+        assert!(
+            results[0].1.total > results[1].1.total,
+            "exact filename must have the higher total"
+        );
     }
 
     #[test]
@@ -1245,10 +1162,9 @@ mod filename_bonus_tests {
 
         assert!(results.len() >= 2);
         assert_eq!(results[0].0, "src/models/item.rs");
-        assert_eq!(results[0].1.match_type, "exact_filename");
-        assert_ne!(
-            results[1].1.match_type, "exact_filename",
-            "file.rs should not get exact_filename"
+        assert!(
+            results[0].1.total > results[1].1.total,
+            "same-length non-exact filename must not tie the exact match"
         );
     }
 
@@ -1259,8 +1175,9 @@ mod filename_bonus_tests {
         let results = search(&files, "src/user", arena);
 
         assert!(!results.is_empty());
+        // Frozen baseline: all other fixture boosts are zero; only the path match contributes.
         assert_eq!(
-            results[0].1.filename_bonus, 0,
+            results[0].1.total, 96,
             "path-like query should not get filename bonus"
         );
     }
@@ -1311,8 +1228,8 @@ mod filename_bonus_tests {
         assert_eq!(
             results[0].0, "test-utils/test-cases/completion/condition-key/yaml_partial-svc.yml",
             "near-exact full-path match should rank first, but got: {} \
-             (total={}, base={}, frecency={})",
-            results[0].0, results[0].1.total, results[0].1.base_score, results[0].1.frecency_boost,
+             (total={})",
+            results[0].0, results[0].1.total,
         );
     }
 
@@ -1449,8 +1366,6 @@ mod git_recency_scoring_tests {
 
         assert!(results.len() >= 2);
         assert_eq!(results[0].0, "src/yyy/handler.rs");
-        assert_eq!(results[0].1.git_recency_boost, 5);
-        assert_eq!(results[1].1.git_recency_boost, 0);
         assert_eq!(
             results[0].1.total - results[1].1.total,
             5,
@@ -1465,9 +1380,7 @@ mod git_recency_scoring_tests {
         let results = search(&files, "", arena);
 
         assert_eq!(results[0].0, "committed.rs");
-        assert_eq!(results[0].1.git_recency_boost, 7);
         assert_eq!(results[0].1.total, 7);
-        assert_eq!(results[0].1.match_type, "frecency");
     }
 }
 

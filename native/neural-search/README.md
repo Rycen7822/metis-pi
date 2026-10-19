@@ -12,15 +12,19 @@ Metis maintains a specialized fork, not a byte-identical copy or a standalone FF
 - `crates/fff-query-parser`: file/mixed query grammar and explicit content filters, using the single `zlob` backend.
   Content needles are not filter expressions. Unsupported `type:` filters fail explicitly; use extensions/globs.
 - `crates/fff-grep`: slice searching, matcher/sink interfaces and line/context collection.
-- `crates/fff-c`: private **ABI v6** in `libmetis_neural_search.so`, with `metis_search_*` symbols.
+- `crates/fff-c`: private **ABI v7** in `libmetis_neural_search.so`, with `metis_search_*` symbols.
   Rust owns result envelopes and payloads; JS copies a borrowed view and releases the envelope in `finally`.
   Only creation transfers an instance, subsequently destroyed once. This is not a public C SDK.
+  ABI v7 removes the separate scanning probe and integer envelope slot; progress still reports scanning/readiness/errors.
+  Its borrowed prefix is 24 bytes; Rust alone owns the payload-release tail.
 - `src/neural-search/native/binding/`: one Linux Node/Bun binding.
   Only consumed display/continuation data crosses it, not detailed rank/highlight objects.
 - `assets/neural-search/`: bundled library, paired source/binding/build/ABI/hash manifest and redistribution notices.
 
 Only **Linux x64 with glibc >=2.31** is delivered. There are no other-platform builds or upstream binary fallbacks.
 Runtime CPU detection and scalar fallbacks remain: x64 does not imply AVX2.
+Private Rust source APIs are specialized too: scores retain totals, grep results retain display/context/limit facts, and constant parser/searcher extension hooks are retired.
+Detailed rank breakdowns and highlight coordinates are not supported Rust or wire contracts; their removal does not remove ranking or fuzzy quality checks.
 
 Ordinary installation uses the bundled library, needs **no Rust/Zig compiler** and performs no engine download.
 Missing optional `ffi-rs`, missing library bytes or an ABI mismatch fail on index use, not during tool discovery.
@@ -64,6 +68,8 @@ Busy requests coalesce without an idle handoff gap.
   They are not discarded and do not create new timer threads.
 
 Classification copies immutable inputs under the index lock, performs IO outside it, then checks index identity/content revision before publishing results.
+Full and watcher-subtree walks share the owning picker's existing shutdown token.
+Cancellation quits cooperatively at walker callbacks, discards partial candidates and does not publish a scan error or request recovery; it cannot force-abort an OS call already in progress.
 
 A separate filesystem-mutation epoch detects live updates that a candidate walk could overwrite.
 New monitoring coverage is reconciled after subscription, including newly imported descendants.
@@ -116,8 +122,17 @@ Cache admission retains its 4 KiB cutoff, file-count caps, 10 MiB per-file limit
 Concurrent reservations cannot exceed those caps.
 Fresh-index commit owns cache reset and automatic sizing together; explicit limits remain authoritative, with no independent budget replacement.
 
-Owned snapshots consume private heap rather than file-backed pages. Each active worker can also hold a bounded read buffer.
+Owned snapshots consume private heap rather than file-backed pages. Each active Rayon job can also hold a bounded read buffer.
+Scratch allocation starts only after an uncached regular file opens successfully; cache-only jobs need no read buffer.
+The first cold buffer and post-cache-transfer capacity policies remain unchanged.
 Cache limits are **not a total RSS ceiling**.
+
+### Regex fallback ownership
+
+Native regex compilation failure returns the existing error metadata without a literal scan.
+The Metis content adapter owns the single canonical literal retry, preserving filters and LF/backslash encoding.
+This intentionally narrows the private Rust `grep_pattern` error path; direct Rust callers must choose their own explicit retry instead of assuming native literal results.
+Valid regex searches do not construct a literal finder or pattern buffer.
 
 ### Output limitations
 
@@ -195,6 +210,9 @@ TMPDIR="$PWD/.work/neural-engine/tmp" \
 Native modules are process-cached; `/reload` alone does not unload them. ABI/cache guards reject mismatched layouts rather than reinterpret old pointers.
 
 Finder instances release resources when their session/cwd lifetime ends.
+Auxiliary roots also expire actively after five idle minutes, using one unref'd pool timer rather than waiting for the next request.
+Busy/pending leases are not evicted; release starts the idle deadline, and shutdown clears the timer.
+Returning to an expired root creates a cold index; a continuation cannot silently substitute that new finder.
 Readiness comes from the current watcher instance, not a shared success latch; failed registrations stay unhealthy and rescan can retry them.
 
 Deploy source, binding, manifest and library as **one package**, not independently.

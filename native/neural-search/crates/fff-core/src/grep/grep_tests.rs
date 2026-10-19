@@ -266,9 +266,6 @@ fn test_grep_multiline_and_escaped_newline_e2e() {
     assert_eq!(m.line_content, "hello unicorn");
     // Auto after-context: the rest of the matched span is returned
     assert_eq!(m.context_after, vec!["rainbow world"]);
-    // First needle segment highlighted as the line suffix
-    assert_eq!(m.match_byte_offsets.as_slice(), &[(6, 13)]);
-    assert_eq!(m.col, 6);
 
     // 2. PlainText + `\\n`: literal backslash + n, must NOT be mangled to newline
     let result = picker.grep_pattern(r"\\nvim-data", &[], &options);
@@ -298,8 +295,6 @@ fn test_grep_multiline_and_escaped_newline_e2e() {
     // Blob is normalized: single-line content + remaining lines as context
     assert_eq!(m.line_content, "hello unicorn");
     assert_eq!(m.context_after, vec!["rainbow world"]);
-    // Highlight clamped to the visible first line
-    assert_eq!(m.match_byte_offsets.as_slice(), &[(6, 13)]);
 }
 
 /// Base and watcher-appended overflow files must each be searched once.

@@ -1,25 +1,9 @@
-use crate::constraints::Constraint;
 use crate::glob_detect::has_wildcards;
-
-/// Check if a token looks like a filename/path for use as a `FilePath` constraint.
-#[deprecated(note = "use `Constraint::is_filename_constraint_token`")]
-pub fn is_filename_constraint_token(token: &str) -> bool {
-    Constraint::is_filename_constraint_token(token)
-}
 
 /// Parser configuration trait - allows different picker types to customize parsing
 pub trait ParserConfig {
-    fn enable_glob(&self) -> bool {
-        true
-    }
-
     /// Should parse extension shortcuts (e.g., *.rs)
     fn enable_extension(&self) -> bool {
-        true
-    }
-
-    /// Should parse exclusion patterns (e.g., !test)
-    fn enable_exclude(&self) -> bool {
         true
     }
 
@@ -56,26 +40,12 @@ pub trait ParserConfig {
         has_wildcards(token)
     }
 
-    /// If `true`, a PathSegment constraint that is the ONLY token in the
-    /// query is demoted to fuzzy text to avoid over filtering
-    fn treat_lone_path_as_text(&self) -> bool {
-        true
-    }
-
     /// If `true`, tokens that look like filenames (`score.rs`, `src/main.rs`)
     /// become `FilePath` constraints that scope the search to matching paths.
     /// Off by default: a partial filename like `vite.conf` would otherwise
     /// filter out `vite.config.ts` and yield zero results.
     fn enable_filename_constraint(&self) -> bool {
         false
-    }
-
-    /// Custom constraint parsers for picker-specific needs.
-    ///
-    /// Returns `None` by default. Filename-token detection is handled
-    /// separately by the parser via `enable_filename_constraint`.
-    fn parse_custom<'a>(&self, _input: &'a str) -> Option<Constraint<'a>> {
-        None
     }
 }
 

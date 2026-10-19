@@ -15,7 +15,6 @@ mod sink;
 mod types;
 
 pub(crate) use multi_pattern::multi_grep_search;
-pub use regex::has_regex_metacharacters;
 pub use types::*;
 
 #[cfg(test)]

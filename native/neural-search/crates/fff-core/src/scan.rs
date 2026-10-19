@@ -213,8 +213,10 @@ impl ScanJob {
             &scanned_files_counter,
             &shared_frecency,
             config.follow_symlinks,
+            &signals.cancelled,
         ) {
             Ok(sync) => sync,
+            Err(_) if signals.cancelled.load(Ordering::Acquire) => return,
             Err(e) => {
                 *signals.error.lock() = Some(e.to_string());
                 // The root may have disappeared, invalidating inotify watches.

@@ -48,8 +48,6 @@ impl std::fmt::Display for ConfigError {
 pub(crate) struct Config {
     /// The line terminator to use.
     pub(crate) line_term: LineTerminator,
-    /// Whether to count line numbers.
-    pub(crate) line_number: bool,
     /// Whether to enable matching across multiple lines.
     multi_line: bool,
 }
@@ -58,7 +56,6 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             line_term: LineTerminator::default(),
-            line_number: true,
             multi_line: false,
         }
     }
@@ -89,12 +86,6 @@ impl SearcherBuilder {
         Searcher {
             config: self.config.clone(),
         }
-    }
-
-    /// Whether to count and include line numbers with matching lines.
-    pub fn line_number(&mut self, yes: bool) -> &mut SearcherBuilder {
-        self.config.line_number = yes;
-        self
     }
 
     /// Whether to enable multi line search or not.
@@ -162,13 +153,6 @@ impl Searcher {
     #[inline]
     pub fn line_terminator(&self) -> LineTerminator {
         self.config.line_term
-    }
-
-    /// Returns true if and only if this searcher is configured to count line
-    /// numbers.
-    #[inline]
-    pub fn line_number(&self) -> bool {
-        self.config.line_number
     }
 
     /// Returns true if and only if this searcher is configured to perform

@@ -1,4 +1,4 @@
-/* Metis private Linux x64 ABI v6. Not a standalone SDK or allocation API.
+/* Metis private Linux x64 ABI v7. Not a standalone SDK or allocation API.
  * Maintained with src/ffi_types.rs and the ffi-rs layout. Derived from FFF
  * 0.11.0 (MIT), Copyright (c) 2025 Dmitriy Kovalenko; see ../../../LICENSE.
  * All result views and their strings/arrays are borrowed until free_result.
@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define METIS_SEARCH_ABI_VERSION 6
+#define METIS_SEARCH_ABI_VERSION 7
 
 typedef struct {
   uint32_t version;
@@ -17,10 +17,10 @@ typedef struct {
   bool enable_fs_root_scanning, enable_home_dir_scanning, follow_symlinks;
 } MetisCreateOptions;
 
-/* Opaque owner with the following borrowed 32-byte prefix. Do not allocate
+/* Opaque owner with the following borrowed 24-byte prefix. Do not allocate
  * this view or free individual payloads; the native owner has a private tail. */
 typedef struct MetisResult MetisResult;
-typedef struct { bool success; char *error; void *handle; int64_t int_value; } MetisResultView;
+typedef struct { bool success; char *error; void *handle; } MetisResultView;
 typedef struct { char *relative_path, *git_status; int64_t total_frecency_score; } MetisFile;
 typedef struct { MetisFile *items; uint32_t count, total_matched, total_files; int32_t top_score; } MetisFiles;
 typedef struct { char *relative_path, *display_name; uint8_t item_type; } MetisMixedItem;
@@ -69,7 +69,6 @@ MetisResult *metis_search_multi_grep(void *handle, const char *patterns, const c
   uint32_t page_limit, uint64_t time_ms, bool enforce_time_budget, uint32_t before, uint32_t after,
   uint64_t expected_index_version);
 MetisResult *metis_search_scan(void *handle);
-MetisResult *metis_search_is_scanning(void *handle);
 MetisResult *metis_search_progress(void *handle);
 MetisResult *metis_search_health(void *handle, const char *test_path);
 void metis_search_free_result(MetisResult *result);

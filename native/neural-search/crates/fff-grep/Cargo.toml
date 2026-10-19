@@ -10,5 +10,4 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-bstr = { version = "1.6.2", default-features = false, features = ["std"] }
 memchr = "2.6.3"

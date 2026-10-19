@@ -93,8 +93,7 @@ impl SinkFinish {
 pub struct SinkMatch<'b> {
     pub(crate) bytes: &'b [u8],
     pub(crate) crosses_line: bool,
-    pub(crate) absolute_byte_offset: u64,
-    pub(crate) line_number: Option<u64>,
+    pub(crate) line_number: u64,
     pub(crate) buffer: &'b [u8],
     pub(crate) bytes_range_in_buffer: std::ops::Range<usize>,
 }
@@ -118,15 +117,12 @@ impl<'b> SinkMatch<'b> {
     /// input in a search.
     #[inline]
     pub fn absolute_byte_offset(&self) -> u64 {
-        self.absolute_byte_offset
+        self.bytes_range_in_buffer.start as u64
     }
 
-    /// Returns the line number of the first line in this match, if available.
-    ///
-    /// Line numbers are only available when the search builder is instructed
-    /// to compute them.
+    /// Returns the 1-based line number of the first line in this match.
     #[inline]
-    pub fn line_number(&self) -> Option<u64> {
+    pub fn line_number(&self) -> u64 {
         self.line_number
     }
 

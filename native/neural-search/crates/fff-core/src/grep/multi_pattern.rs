@@ -5,10 +5,9 @@ use super::types::{GrepResult, GrepSearchOptions};
 use crate::types::{ContentCacheBudget, FileItem, FileSliceExt};
 use aho_corasick::AhoCorasick;
 use fff_grep::{
-    Searcher, SearcherBuilder, Sink, SinkMatch,
+    Searcher, Sink, SinkMatch,
     matcher::{Match, Matcher, NoError},
 };
-use smallvec::SmallVec;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -58,13 +57,12 @@ impl Matcher for AhoCorasickMatcher<'_> {
 
 /// Sink for Aho-Corasick multi-pattern mode.
 ///
-/// Collects all pattern match positions on each matched line for highlighting.
-struct AhoCorasickSink<'a> {
+/// Collects display rows after the matcher has verified the actual needles.
+struct AhoCorasickSink {
     state: SinkState,
-    matcher: &'a AhoCorasickMatcher<'a>,
 }
 
-impl Sink for AhoCorasickSink<'_> {
+impl Sink for AhoCorasickSink {
     type Error = std::io::Error;
 
     fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
@@ -72,56 +70,12 @@ impl Sink for AhoCorasickSink<'_> {
         if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
             return Ok(false);
         }
-
-        let line_bytes = mat.bytes();
-        let (display_bytes, display_len, line_number, byte_offset) =
-            SinkState::prepare_line(line_bytes, mat);
-
-        let line_content = String::from_utf8_lossy(display_bytes).into_owned();
-        let mut match_byte_offsets: SmallVec<[(u32, u32); 4]> = SmallVec::new();
-        let mut col = 0usize;
-        let mut first = true;
-
-        let mut collect_match = |m: aho_corasick::Match| {
-            let abs_start = m.start() as u32;
-            let abs_end = (m.end() as u32).min(display_len);
-            if first {
-                col = abs_start as usize;
-                first = false;
-            }
-            match_byte_offsets.push((abs_start, abs_end));
-        };
-        if self.matcher.exact.is_empty() {
-            for found in self.matcher.ac.find_iter(display_bytes) {
-                collect_match(found);
-            }
-        } else {
-            let mut at = 0;
-            for found in self.matcher.ac.find_overlapping_iter(display_bytes) {
-                if found.start() >= at && self.matcher.accepts(display_bytes, &found) {
-                    at = found.end();
-                    collect_match(found);
-                }
-            }
-        }
-
-        let (context_before, context_after, context_truncated) = self.state.extract_context(mat);
-        self.state.push_match(
-            mat,
-            line_number,
-            col,
-            byte_offset,
-            line_content,
-            match_byte_offsets,
-            context_before,
-            context_after,
-            context_truncated,
-        );
+        let (display, line_number) = SinkState::prepare_line(mat);
+        let line_content = String::from_utf8_lossy(display).into_owned();
+        let (before, after, truncated) = self.state.extract_context(mat);
+        self.state
+            .push_match(mat, line_number, line_content, before, after, truncated);
         Ok(true)
-    }
-
-    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
-        Ok(())
     }
 }
 
@@ -182,12 +136,7 @@ pub(crate) fn multi_grep_search<'a>(
         .ascii_case_insensitive(insensitive)
         .build(&patterns)?;
 
-    let searcher = {
-        let mut b = SearcherBuilder::new();
-        b.line_number(true);
-        b
-    }
-    .build();
+    let searcher = Searcher::new();
 
     let ac_matcher = AhoCorasickMatcher { ac, exact };
     Ok(perform_grep(
@@ -204,18 +153,9 @@ pub(crate) fn multi_grep_search<'a>(
             abort_signal,
         },
         |file_bytes: &[u8], max_matches: usize| {
-            let state = SinkState {
-                file_index: 0,
-                matches: Vec::with_capacity(4),
-                max_matches,
-                before_context: options.before_context,
-                after_context: options.after_context,
-            };
+            let state = SinkState::new(max_matches, options.before_context, options.after_context);
 
-            let mut sink = AhoCorasickSink {
-                state,
-                matcher: &ac_matcher,
-            };
+            let mut sink = AhoCorasickSink { state };
 
             if let Err(e) = searcher.search_slice(&ac_matcher, file_bytes, &mut sink) {
                 tracing::error!(error = %e, "Grep (aho-corasick multi) search failed");

@@ -87,7 +87,6 @@ export interface FileFinderApi {
   grep(pattern: string, options?: GrepOptions): Result<GrepResult>;
   multiGrep(options: MultiGrepOptions): Result<GrepResult>;
   scanFiles(): Result<void>;
-  isScanning(): boolean;
   getScanProgress(): Result<ScanProgress>;
   waitForScan(timeoutMs?: number): Promise<Result<boolean>>;
   healthCheck(testPath?: string): Result<HealthCheck>;

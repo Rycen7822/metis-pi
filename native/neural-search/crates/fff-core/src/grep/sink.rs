@@ -1,6 +1,5 @@
 use super::types::GrepMatch;
 use fff_grep::{Searcher, SinkMatch};
-use smallvec::SmallVec;
 
 /// Maximum bytes of a matched line to keep for display. Prevents minified
 /// JS or huge single-line files from blowing up memory.
@@ -25,7 +24,6 @@ pub(super) fn strip_line_terminators(bytes: &[u8]) -> &[u8] {
 }
 
 pub(super) struct SinkState {
-    pub(super) file_index: usize,
     pub(super) matches: Vec<GrepMatch>,
     pub(super) max_matches: usize,
     pub(super) before_context: usize,
@@ -33,22 +31,19 @@ pub(super) struct SinkState {
 }
 
 impl SinkState {
+    pub(super) fn new(max_matches: usize, before_context: usize, after_context: usize) -> Self {
+        Self {
+            matches: Vec::with_capacity(4),
+            max_matches,
+            before_context,
+            after_context,
+        }
+    }
+
     #[inline]
-    pub(super) fn prepare_line<'a>(
-        line_bytes: &'a [u8],
-        mat: &SinkMatch<'_>,
-    ) -> (&'a [u8], u32, u64, u64) {
-        let line_number = mat.line_number().unwrap_or(0);
-        let byte_offset = mat.absolute_byte_offset();
-
-        // Trim trailing newline/CR directly on bytes to avoid UTF-8 conversion.
-        let trimmed_bytes = strip_line_terminators(line_bytes);
-
-        // Truncate for display (floor to a char boundary).
-        let display_bytes = truncate_display_bytes(trimmed_bytes);
-
-        let display_len = display_bytes.len() as u32;
-        (display_bytes, display_len, line_number, byte_offset)
+    pub(super) fn prepare_line<'a>(mat: &'a SinkMatch<'_>) -> (&'a [u8], u64) {
+        let trimmed = strip_line_terminators(mat.bytes());
+        (truncate_display_bytes(trimmed), mat.line_number())
     }
 
     #[inline]
@@ -57,29 +52,21 @@ impl SinkState {
         &mut self,
         mat: &SinkMatch<'_>,
         line_number: u64,
-        col: usize,
-        byte_offset: u64,
         line_content: String,
-        match_byte_offsets: SmallVec<[(u32, u32); 4]>,
         context_before: Vec<String>,
         context_after: Vec<String>,
         context_truncated: bool,
     ) {
         let raw = strip_line_terminators(mat.bytes());
-        // Exclude only the structural final LF when measuring covered lines;
-        // trimming every terminator first would hide coalesced empty matches.
+        // Exclude only the structural final LF; coalesced blank rows still count.
         let covered = mat.bytes().strip_suffix(b"\n").unwrap_or(mat.bytes());
         self.matches.push(GrepMatch {
             native_multiline_limited: mat.may_cross_line() || covered.contains(&b'\n'),
             native_output_truncated: context_truncated
                 || raw.len() > truncate_display_bytes(raw).len(),
-            file_index: self.file_index,
+            file_index: 0,
             line_number,
-            col,
-            byte_offset,
             line_content,
-            match_byte_offsets,
-            fuzzy_score: None,
             context_before,
             context_after,
         });
@@ -185,32 +172,6 @@ pub(super) fn split_multiline_blob(display_bytes: &[u8]) -> (&[u8], Vec<String>)
             (first, extra)
         }
     }
-}
-
-/// Merge sorted byte indices from neo_frizbee 0.13.3 into highlight ranges.
-/// The matcher already expands UTF-8 characters to their original byte indices;
-/// treating them as character positions would apply the UTF-8 mapping twice.
-pub(super) fn byte_indices_to_byte_offsets(
-    line: &str,
-    byte_indices: &[u32],
-) -> SmallVec<[(u32, u32); 4]> {
-    let mut result: SmallVec<[(u32, u32); 4]> = SmallVec::new();
-
-    for &start in byte_indices {
-        if start as usize >= line.len() {
-            continue;
-        }
-        let end = start + 1;
-        if let Some(last) = result.last_mut()
-            && last.1 >= start
-        {
-            last.1 = last.1.max(end);
-            continue;
-        }
-        result.push((start, end));
-    }
-
-    result
 }
 
 // copied from the rust u8 private method

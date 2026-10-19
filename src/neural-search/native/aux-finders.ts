@@ -12,6 +12,7 @@ export interface FinderLease { finder: FileFinderApi; root: string; release(): v
 export class AuxFinderPool {
   private readonly entries = new Map<string, Entry>();
   private readonly controller = new AbortController();
+  private eviction?: { timer: ReturnType<typeof setTimeout>; deadline: number };
   constructor(private readonly options: {
     pickers: FilePickerFactory;
     enableFsRootScanning: boolean;
@@ -37,6 +38,7 @@ export class AuxFinderPool {
     }
     entry.users++;
     entry.lastUsed = Date.now();
+    this.scheduleEviction();
     if (!entry.finder) await entry.promise;
     return this.lease(entry);
   }
@@ -48,6 +50,7 @@ export class AuxFinderPool {
     if (!entry || entry.finder !== finder || finder.isDestroyed) return;
     entry.users++;
     entry.lastUsed = Date.now();
+    this.scheduleEviction();
     return this.lease(entry);
   }
 
@@ -55,6 +58,8 @@ export class AuxFinderPool {
 
   destroy(): void {
     this.controller.abort();
+    if (this.eviction) clearTimeout(this.eviction.timer);
+    this.eviction = undefined;
     for (const entry of this.entries.values()) this.remove(entry);
   }
 
@@ -87,6 +92,7 @@ export class AuxFinderPool {
 
   private remove(entry: Entry): void {
     if (this.entries.get(entry.root) === entry) this.entries.delete(entry.root);
+    this.scheduleEviction();
     if (entry.finder && !entry.finder.isDestroyed) entry.finder.destroy();
   }
 
@@ -96,6 +102,28 @@ export class AuxFinderPool {
       if (entry.finder && (entry.finder.isDestroyed || entry.users === 0 && now - entry.lastUsed >= IDLE_TTL_MS)) this.remove(entry);
     }
     this.trim(MAX_AUX);
+    this.scheduleEviction();
+  }
+
+  /** Only ready, idle indexes have deadlines; busy and pending leases own theirs. */
+  private scheduleEviction(): void {
+    let deadline = Infinity;
+    if (!this.controller.signal.aborted) {
+      for (const entry of this.entries.values()) {
+        if (entry.finder && !entry.finder.isDestroyed && entry.users === 0)
+          deadline = Math.min(deadline, entry.lastUsed + IDLE_TTL_MS);
+      }
+    }
+    if (this.eviction?.deadline === deadline) return;
+    if (this.eviction) clearTimeout(this.eviction.timer);
+    this.eviction = undefined;
+    if (deadline === Infinity) return;
+    const timer = setTimeout(() => {
+      this.eviction = undefined;
+      this.sweep();
+    }, Math.max(0, deadline - Date.now()));
+    timer.unref();
+    this.eviction = { timer, deadline };
   }
 
   private trim(limit: number): void {

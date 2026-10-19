@@ -10,7 +10,6 @@ use fff_grep::{
 };
 use fff_query_parser::Constraint;
 use rayon::prelude::*;
-use smallvec::SmallVec;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tracing::Level;
@@ -46,40 +45,6 @@ impl<'a> NeedleFinder<'a> {
             Self::CaseInsensitive(needle_lower) => needle_lower,
         }
     }
-
-    /// Compare `haystack` against a slice of the needle with the same case
-    /// semantics as `find`.
-    #[inline]
-    fn eq_fold(&self, haystack: &[u8], needle_seg: &[u8]) -> bool {
-        match self {
-            Self::CaseSensitive(_) => haystack == needle_seg,
-            Self::CaseInsensitive(_) => {
-                haystack.len() == needle_seg.len() && memmem::find(haystack, needle_seg) == Some(0)
-            }
-        }
-    }
-
-    /// Collect highlight spans for every needle occurrence within a line.
-    /// The case branch is resolved once per line, not once per occurrence.
-    #[inline]
-    fn for_each_occurrence(&self, haystack: &[u8], mut on_match: impl FnMut(usize)) {
-        match self {
-            Self::CaseSensitive(finder) => {
-                let mut start_pos = 0usize;
-                while let Some(pos) = finder.find(&haystack[start_pos..]) {
-                    on_match(start_pos + pos);
-                    start_pos += pos + 1;
-                }
-            }
-            Self::CaseInsensitive(needle_lower) => {
-                let mut start_pos = 0usize;
-                while let Some(pos) = memmem::find(&haystack[start_pos..], needle_lower) {
-                    on_match(start_pos + pos);
-                    start_pos += pos + 1;
-                }
-            }
-        }
-    }
 }
 
 struct PlainTextMatcher<'a> {
@@ -106,85 +71,30 @@ impl Matcher for PlainTextMatcher<'_> {
     }
 }
 
-struct PlainTextSink<'r> {
+struct PlainTextSink {
     state: SinkState,
-    finder: &'r NeedleFinder<'r>,
-    pattern_len: u32,
-    multiline_segment_len: Option<usize>,
 }
 
-impl Sink for PlainTextSink<'_> {
+impl Sink for PlainTextSink {
     type Error = std::io::Error;
 
-    fn matched(
-        &mut self,
-        searcher: &Searcher,
-        sink_match: &SinkMatch<'_>,
-    ) -> Result<bool, Self::Error> {
+    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         debug_assert_newline_terminator(searcher);
         if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
             return Ok(false);
         }
-
-        let line_bytes = sink_match.bytes();
-        let (display_bytes, display_len, line_number, byte_offset) =
-            SinkState::prepare_line(line_bytes, sink_match);
-
-        let line_content = String::from_utf8_lossy(display_bytes).into_owned();
-        let mut match_byte_offsets: SmallVec<[(u32, u32); 4]> = SmallVec::new();
-        let mut col = 0usize;
-        let mut first = true;
-
-        if let Some(seg_len) = self.multiline_segment_len {
-            // Multiline needle: the match starts on this line, so the needle's
-            // first segment must be a suffix of the line. Highlight that suffix.
-            let seg = &self.finder.needle()[..seg_len];
-            if !seg.is_empty()
-                && display_bytes.len() >= seg.len()
-                && self
-                    .finder
-                    .eq_fold(&display_bytes[display_bytes.len() - seg.len()..], seg)
-            {
-                col = display_bytes.len() - seg.len();
-                match_byte_offsets.push((col as u32, display_len));
-            }
-        } else {
-            let pattern_len = self.pattern_len;
-            self.finder.for_each_occurrence(display_bytes, |pos| {
-                let abs_start = pos as u32;
-                let abs_end = (abs_start + pattern_len).min(display_len);
-                if first {
-                    col = pos;
-                    first = false;
-                }
-                match_byte_offsets.push((abs_start, abs_end));
-            });
-        }
-
-        let (context_before, context_after, context_truncated) =
-            self.state.extract_context(sink_match);
-        self.state.push_match(
-            sink_match,
-            line_number,
-            col,
-            byte_offset,
-            line_content,
-            match_byte_offsets,
-            context_before,
-            context_after,
-            context_truncated,
-        );
+        let (display, line_number) = SinkState::prepare_line(mat);
+        let line_content = String::from_utf8_lossy(display).into_owned();
+        let (before, after, truncated) = self.state.extract_context(mat);
+        self.state
+            .push_match(mat, line_number, line_content, before, after, truncated);
         Ok(true)
-    }
-
-    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
-        Ok(())
     }
 }
 
-/// Search an explicit content pattern without query grammar or escape decoding.
-/// Invalid regex patterns fall back to the original literal pattern, retaining
-/// the same constraints and exposing the compilation error on the result.
+/// Search an explicit pattern without decoding or interpreting file-filter syntax.
+/// Regex compilation failure is metadata only: the Metis adapter owns the one
+/// canonical literal retry, including its LF encoding and unchanged constraints.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn grep_search_pattern<'a>(
     files: &'a [FileItem],
@@ -204,18 +114,14 @@ pub(crate) fn grep_search_pattern<'a>(
 
     let casing = options.effective_casing();
     let case_insensitive = casing.is_insensitive_for(grep_text);
-
-    let mut regex_fallback_error: Option<String> = None;
     let regex = match options.mode {
         GrepMode::PlainText => None,
         GrepMode::Fuzzy => {
             let (files_to_search, filtered_file_count) =
                 prefilter_files(files, constraints, options, arena, overflow_arena);
-
             if files_to_search.is_empty() {
                 return GrepResult::empty(total_files, filtered_file_count);
             }
-
             return super::fuzzy_grep::fuzzy_grep_search(
                 grep_text,
                 &files_to_search,
@@ -230,114 +136,90 @@ pub(crate) fn grep_search_pattern<'a>(
                 overflow_arena,
             );
         }
-        GrepMode::Regex => build_regex(grep_text, casing)
-            .inspect_err(|err| {
-                tracing::warn!("Regex compilation failed for {}. Error {}", grep_text, err);
-                regex_fallback_error = Some(err.to_string());
-            })
-            .ok(),
+        GrepMode::Regex => match build_regex(grep_text, casing) {
+            Ok(compiled) => Some(compiled),
+            Err(error) => {
+                tracing::warn!(
+                    "Regex compilation failed for {}. Error {}",
+                    grep_text,
+                    error
+                );
+                let mut result = GrepResult::empty(total_files, 0);
+                result.regex_fallback_error = Some(error);
+                return result;
+            }
+        },
     };
 
-    let effective_pattern = grep_text;
-    let multiline_segment_len = effective_pattern
-        .as_bytes()
-        .iter()
-        .position(|&b| b == b'\n');
-    // Detect regex LF syntax for the existing limited multiline strategy, but
-    // never decode the explicit pattern (including invalid-regex fallback).
-    let is_multiline = multiline_segment_len.is_some()
+    let has_literal_lf = grep_text.contains('\n');
+    let is_multiline = has_literal_lf
         || regex
             .as_ref()
             .is_some_and(|compiled| compiled.legacy_multiline);
-
-    // when there is multiple line requested automatically expand the context to include all the lines
-    let after_context = if is_multiline && regex.is_none() && options.after_context == 0 {
-        effective_pattern.bytes().filter(|&b| b == b'\n').count()
+    let after_context = if has_literal_lf && regex.is_none() && options.after_context == 0 {
+        grep_text.bytes().filter(|&b| b == b'\n').count()
     } else {
         options.after_context
     };
-
-    let finder_pattern: Vec<u8> = if case_insensitive {
-        effective_pattern.as_bytes().to_ascii_lowercase()
-    } else {
-        effective_pattern.as_bytes().to_vec()
-    };
-    let finder = NeedleFinder::new(&finder_pattern, case_insensitive);
-    let pattern_len = finder_pattern.len() as u32;
-
     let (files_to_search, filtered_file_count) =
         prefilter_files(files, constraints, options, arena, overflow_arena);
-
     if files_to_search.is_empty() {
-        let mut result = GrepResult::empty(total_files, filtered_file_count);
-        result.regex_fallback_error = regex_fallback_error;
-        return result;
+        return GrepResult::empty(total_files, filtered_file_count);
     }
+    let searcher = SearcherBuilder::new().multi_line(is_multiline).build();
+    let context = GrepContext {
+        total_files,
+        filtered_file_count,
+        budget,
+        base_path,
+        arena,
+        overflow_arena,
+        prefilter: None,
+        abort_signal,
+    };
 
-    // `PlainTextMatcher` is used by the grep-searcher engine for line detection.
-    // `PlainTextSink` / `RegexSink` handle highlight extraction independently via ripgrep create
-    let plain_matcher = PlainTextMatcher { finder: &finder };
-
-    let searcher = {
-        let mut b = SearcherBuilder::new();
-        b.line_number(true).multi_line(is_multiline);
-        b
+    if let Some(compiled) = regex {
+        perform_grep(
+            &files_to_search,
+            options,
+            &context,
+            |file_bytes, max_matches| {
+                let mut sink = RegexSink {
+                    state: SinkState::new(max_matches, options.before_context, after_context),
+                };
+                if let Err(error) = searcher.search_slice(&compiled, file_bytes, &mut sink) {
+                    tracing::error!(%error, "Grep (regex) search failed");
+                }
+                sink.state.matches
+            },
+        )
+    } else {
+        // Only literal searches need the pattern buffer, finder and prefilter.
+        let pattern = if case_insensitive {
+            grep_text.as_bytes().to_ascii_lowercase()
+        } else {
+            grep_text.as_bytes().to_vec()
+        };
+        let finder = NeedleFinder::new(&pattern, case_insensitive);
+        let matcher = PlainTextMatcher { finder: &finder };
+        perform_grep(
+            &files_to_search,
+            options,
+            &GrepContext {
+                prefilter: Some(&finder),
+                ..context
+            },
+            |file_bytes, max_matches| {
+                let mut sink = PlainTextSink {
+                    state: SinkState::new(max_matches, options.before_context, after_context),
+                };
+                if let Err(error) = searcher.search_slice(&matcher, file_bytes, &mut sink) {
+                    tracing::error!(%error, "Grep (plain text) search failed");
+                }
+                sink.state.matches
+            },
+        )
     }
-    .build();
-
-    let should_prefilter = regex.is_none();
-    let mut result = perform_grep(
-        &files_to_search,
-        options,
-        &GrepContext {
-            total_files,
-            filtered_file_count,
-            budget,
-            base_path,
-            arena,
-            overflow_arena,
-            prefilter: should_prefilter.then_some(&finder),
-            abort_signal,
-        },
-        // The single sink-selection point: every mode's matcher/sink pairing
-        // is decided here based on the compiled pattern.
-        |file_bytes: &[u8], max_matches: usize| {
-            let state = SinkState {
-                file_index: 0,
-                matches: Vec::with_capacity(4),
-                max_matches,
-                before_context: options.before_context,
-                after_context,
-            };
-
-            match regex {
-                Some(ref compiled) => {
-                    let mut sink = RegexSink {
-                        state,
-                        re: &compiled.regex,
-                    };
-                    if let Err(e) = searcher.search_slice(compiled, file_bytes, &mut sink) {
-                        tracing::error!(error = %e, "Grep (regex) search failed");
-                    }
-                    sink.state.matches
-                }
-                None => {
-                    let mut sink = PlainTextSink {
-                        state,
-                        finder: &finder,
-                        pattern_len,
-                        multiline_segment_len,
-                    };
-                    if let Err(e) = searcher.search_slice(&plain_matcher, file_bytes, &mut sink) {
-                        tracing::error!(error = %e, "Grep (plain text) search failed");
-                    }
-                    sink.state.matches
-                }
-            }
-        },
-    );
-    result.regex_fallback_error = regex_fallback_error;
-    result
 }
 
 #[derive(Clone, Copy)]
@@ -427,10 +309,8 @@ where
             .par_iter()
             .enumerate()
             .map_init(
-                // tested it out a few times, this is just fine for rayon worker in this specific
-                // case it doesn't reallocate this many times and it is actually faster than using
-                // scoped threads with a predefined local scratch buffers because of spawn cost
-                || (Vec::with_capacity(64 * 1024), false),
+                // Rayon job-local scratch is initialized only for an uncached read.
+                || (None, false),
                 |(buf, aborted), (local_idx, file)| {
                     // check the clock on every 8th file only; `aborted` latches for the
                     // rest of this worker's range. File 0 is never skipped so a page

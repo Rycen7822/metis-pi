@@ -86,8 +86,7 @@ impl<C: ParserConfig> QueryParser<C> {
                         .all(|b| b.is_ascii_digit());
 
                 // for grep we don't want to treat a part of path like pathname
-                let treat_as_text = matches!(constraint, Constraint::PathSegment(_))
-                    && config.treat_lone_path_as_text();
+                let treat_as_text = matches!(constraint, Constraint::PathSegment(_));
 
                 if !matches!(constraint, Constraint::FilePath(_))
                     && !has_location_suffix
@@ -252,12 +251,12 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
                 }
             }
             // Has wildcards -> use config-specific glob detection
-            if config.enable_glob() && config.is_glob_pattern(token) {
+            if config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
             None
         }
-        b'!' if config.enable_exclude() => parse_negation(token, config),
+        b'!' => parse_negation(token, config),
         b'/' if config.enable_path_segments() => parse_path_segment(token),
         // Handle trailing slash syntax: www/ -> PathSegment("www")
         _ if config.enable_path_segments() && token.ends_with('/') => {
@@ -272,7 +271,7 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
         }
         _ => {
             // Check for glob patterns using config-specific detection
-            if config.enable_glob() && config.is_glob_pattern(token) {
+            if config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
 
@@ -292,8 +291,8 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
                 }
             }
 
-            // Try custom parsers
-            config.parse_custom(token)
+            // No supported constraint matched.
+            None
         }
     }
 }
@@ -362,7 +361,7 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                 }
             }
             // Has wildcards -> use config-specific glob detection
-            if config.enable_glob() && config.is_glob_pattern(token) {
+            if config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
             None
@@ -374,7 +373,7 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
         }
         _ => {
             // Check for glob patterns using config-specific detection
-            if config.enable_glob() && config.is_glob_pattern(token) {
+            if config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
 
@@ -400,7 +399,7 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                 return Some(Constraint::FilePath(token));
             }
 
-            config.parse_custom(token)
+            None
         }
     }
 }

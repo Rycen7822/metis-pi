@@ -3,7 +3,7 @@ import type { FileFinderApi, GrepCursor, GrepOptions, GrepResult, Result } from 
 export const MATCHES_PER_FILE = 200;
 export type ContentResult = GrepResult;
 /** The native cursor skips whole files; retain an immutable batch and its next unread row. */
-export interface ContentProgress { batch: ContentResult; offset: number; }
+export interface ContentProgress { batch: ContentResult; offset: number; cappedFiles?: readonly string[]; }
 
 export function multilineOrError(patterns: readonly string[]): string | undefined {
   if (patterns.length > 1 && patterns.some(pattern => pattern.includes("\n")))
@@ -54,11 +54,15 @@ export function contentPage(
   const start = buffered ? previous.offset : 0;
   const items = batch.items.slice(start, start + limit);
   const offset = start + items.length;
-  const counts = new Map<string, number>();
-  for (const item of batch.items) counts.set(item.relativePath, (counts.get(item.relativePath) ?? 0) + 1);
+  let cappedFiles = buffered ? previous.cappedFiles : undefined;
+  if (cappedFiles === undefined) {
+    const counts = new Map<string, number>();
+    for (const item of batch.items) counts.set(item.relativePath, (counts.get(item.relativePath) ?? 0) + 1);
+    cappedFiles = [...counts].filter(([, count]) => count >= MATCHES_PER_FILE).map(([file]) => file);
+  }
   return {
     result: { ...batch, items, totalMatched: items.length },
-    progress: offset < batch.items.length || batch.nextCursor ? { batch, offset } : undefined,
-    cappedFiles: [...counts].filter(([, count]) => count >= MATCHES_PER_FILE).map(([file]) => file),
+    progress: offset < batch.items.length || batch.nextCursor ? { batch, offset, cappedFiles } : undefined,
+    cappedFiles: [...cappedFiles],
   };
 }

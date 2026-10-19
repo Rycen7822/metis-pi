@@ -1,5 +1,4 @@
 use crate::types::FileItem;
-use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -43,29 +42,16 @@ pub enum GrepMode {
 /// A single content match within a file
 #[derive(Debug, Clone)]
 pub struct GrepMatch {
-    /// Index into the deduplicated `files` vec of the GrepResult.
+    /// Index into the deduplicated files vector, assigned during collection.
     pub file_index: usize,
-    /// 1-based line number.
+    /// 1-based source line number.
     pub line_number: u64,
-    /// 0-based byte column of first match start within the line.
-    pub col: usize,
-    /// Absolute byte offset of the matched line from the start of the file.
-    /// Can be used by the preview to seek directly without scanning from the top.
-    pub byte_offset: u64,
-    /// The matched line text, truncated to `MAX_LINE_DISPLAY_LEN`.
     pub line_content: String,
-    /// Byte offsets `(start, end)` within `line_content` for each match.
-    /// Stack-allocated for the common case of ≤4 spans per line.
-    pub match_byte_offsets: SmallVec<[(u32, u32); 4]>,
-    /// Fuzzy match score from neo_frizbee (only set in Fuzzy grep mode).
-    pub fuzzy_score: Option<u16>,
-    /// Lines before the match (for context display). Empty when context is 0.
     pub context_before: Vec<String>,
-    /// Lines after the match (for context display). Empty when context is 0.
     pub context_after: Vec<String>,
-    /// An actual cross-line match or coalesced region has limited line projection.
+    /// Conservative LF-capability or coalesced-region projection limitation.
     pub native_multiline_limited: bool,
-    /// Native display or context bytes were clipped before crossing the ABI.
+    /// Display or context bytes were clipped before crossing the ABI.
     pub native_output_truncated: bool,
 }
 
@@ -150,9 +136,8 @@ pub struct GrepResult<'a> {
     /// The file offset to pass for the next page. `0` if there are no more files.
     /// Callers should store this and pass it as `file_offset` in the next call.
     pub next_file_offset: usize,
-    /// When regex mode fails to compile the pattern, the search falls back to
-    /// literal matching and this field contains the compilation error message.
-    /// The UI can display this to inform the user their regex was invalid.
+    /// Regex compilation failed without scanning. The Metis adapter uses this
+    /// metadata for its canonical literal retry and preserves it for the UI.
     pub regex_fallback_error: Option<String>,
 }
 

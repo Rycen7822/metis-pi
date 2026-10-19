@@ -1,5 +1,5 @@
 // Derived from FFF 0.11.0 (MIT), copyright Dmitriy Kovalenko.
-// Metis private ABI v6: expose only the projections actually used by Metis.
+// Metis private ABI v7: expose only the projections actually used by Metis.
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
@@ -7,7 +7,7 @@ use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
 use fff::types::{MixedItemRef, MixedSearchResult, SearchResult};
 
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 #[repr(C)]
 pub struct CreateOptions {
@@ -47,8 +47,7 @@ pub struct Envelope {
     pub success: bool,
     pub error: *mut c_char,
     pub handle: *mut c_void,
-    pub int_value: i64,
-    // The first 32 bytes are a borrowed view; only Rust owns this tail. The
+    // The first 24 bytes are a borrowed view; only Rust owns this tail. The
     // envelope frees its payload even if JS fails before decoding that view.
     release: Option<unsafe fn(*mut c_void)>,
 }
@@ -68,7 +67,6 @@ impl Envelope {
             success: true,
             error: ptr::null_mut(),
             handle,
-            int_value: 0,
             release,
         }))
     }
@@ -82,19 +80,14 @@ impl Envelope {
         self.release = None;
         std::mem::replace(&mut self.handle, ptr::null_mut())
     }
-    pub fn integer(value: i64) -> *mut Self {
-        let result = Self::value(ptr::null_mut(), None);
-        unsafe {
-            (*result).int_value = value;
-        }
-        result
+    pub fn success() -> *mut Self {
+        Self::value(ptr::null_mut(), None)
     }
     pub fn error(message: &str) -> *mut Self {
         Box::into_raw(Box::new(Self {
             success: false,
             error: string(message),
             handle: ptr::null_mut(),
-            int_value: 0,
             release: None,
         }))
     }
@@ -378,9 +371,9 @@ const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<CreateOptions>() == 40 && offset_of!(CreateOptions, base_path) == 8);
     assert!(
-        size_of::<Envelope>() == 40
+        size_of::<Envelope>() == 32
             && offset_of!(Envelope, handle) == 16
-            && offset_of!(Envelope, release) == 32
+            && offset_of!(Envelope, release) == 24
     );
     assert!(size_of::<FileItem>() == 24 && size_of::<Files>() == 24);
     assert!(offset_of!(Files, top_score) == 20);

@@ -379,18 +379,10 @@ pub unsafe extern "C" fn metis_search_scan(handle: *mut c_void) -> *mut Envelope
             .picker
             .trigger_full_rescan_async(&instance.frecency)
         {
-            Ok(()) => Envelope::integer(0),
+            Ok(()) => Envelope::success(),
             Err(error) => Envelope::error(&error.to_string()),
         }
     })
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn metis_search_is_scanning(handle: *mut c_void) -> *mut Envelope {
-    unsafe {
-        with_picker(handle, |_, picker| {
-            Envelope::integer(i64::from(picker.is_scan_active()))
-        })
-    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn metis_search_progress(handle: *mut c_void) -> *mut Envelope {

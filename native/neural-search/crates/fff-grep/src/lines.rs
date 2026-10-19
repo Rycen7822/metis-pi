@@ -2,8 +2,6 @@
 A collection of routines for performing operations on lines.
 */
 
-use bstr::ByteSlice;
-
 use crate::matcher::{LineTerminator, Match};
 
 /// An explicit iterator over lines in a particular slice of bytes.
@@ -40,7 +38,7 @@ impl LineStep {
     #[inline(always)]
     fn next_impl(&mut self, mut bytes: &[u8]) -> Option<(usize, usize)> {
         bytes = &bytes[..self.end];
-        match bytes[self.pos..].find_byte(self.line_term) {
+        match memchr::memchr(self.line_term, &bytes[self.pos..]) {
             None => {
                 if self.pos < bytes.len() {
                     let m = (self.pos, bytes.len());
@@ -85,14 +83,11 @@ pub fn without_terminator(bytes: &[u8], line_term: LineTerminator) -> &[u8] {
 /// Line terminators are considered part of the line they terminate.
 #[inline(always)]
 pub fn locate(bytes: &[u8], line_term: u8, range: Match) -> Match {
-    let line_start = bytes[..range.start()]
-        .rfind_byte(line_term)
-        .map_or(0, |i| i + 1);
+    let line_start = memchr::memrchr(line_term, &bytes[..range.start()]).map_or(0, |i| i + 1);
     let line_end = if range.end() > line_start && bytes[range.end() - 1] == line_term {
         range.end()
     } else {
-        bytes[range.end()..]
-            .find_byte(line_term)
+        memchr::memchr(line_term, &bytes[range.end()..])
             .map_or(bytes.len(), |i| range.end() + i + 1)
     };
     Match::new(line_start, line_end)
