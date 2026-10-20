@@ -1,5 +1,5 @@
 use super::types::GrepMatch;
-use fff_grep::{Searcher, SinkMatch};
+use fff_grep::{Searcher, Sink, SinkMatch};
 
 /// Maximum bytes of a matched line to keep for display. Prevents minified
 /// JS or huge single-line files from blowing up memory.
@@ -28,6 +28,22 @@ pub(super) struct SinkState {
     pub(super) max_matches: usize,
     pub(super) before_context: usize,
     pub(super) after_context: usize,
+}
+
+impl Sink for SinkState {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        debug_assert_newline_terminator(searcher);
+        if self.max_matches != 0 && self.matches.len() >= self.max_matches {
+            return Ok(false);
+        }
+        let (display, line_number) = Self::prepare_line(mat);
+        let line_content = String::from_utf8_lossy(display).into_owned();
+        let (before, after, truncated) = self.extract_context(mat);
+        self.push_match(mat, line_number, line_content, before, after, truncated);
+        Ok(true)
+    }
 }
 
 impl SinkState {

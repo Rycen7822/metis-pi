@@ -1,11 +1,11 @@
 use super::grep::{GrepContext, perform_grep};
 use super::prefilter::prefilter_files;
-use super::sink::{SinkState, debug_assert_newline_terminator};
+use super::sink::SinkState;
 use super::types::{GrepResult, GrepSearchOptions};
 use crate::types::{ContentCacheBudget, FileItem, FileSliceExt};
 use aho_corasick::AhoCorasick;
 use fff_grep::{
-    Searcher, Sink, SinkMatch,
+    Searcher,
     matcher::{Match, Matcher, NoError},
 };
 use std::path::Path;
@@ -52,30 +52,6 @@ impl Matcher for AhoCorasickMatcher<'_> {
     #[inline]
     fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
         Some(fff_grep::LineTerminator::byte(b'\n'))
-    }
-}
-
-/// Sink for Aho-Corasick multi-pattern mode.
-///
-/// Collects display rows after the matcher has verified the actual needles.
-struct AhoCorasickSink {
-    state: SinkState,
-}
-
-impl Sink for AhoCorasickSink {
-    type Error = std::io::Error;
-
-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        debug_assert_newline_terminator(searcher);
-        if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
-            return Ok(false);
-        }
-        let (display, line_number) = SinkState::prepare_line(mat);
-        let line_content = String::from_utf8_lossy(display).into_owned();
-        let (before, after, truncated) = self.state.extract_context(mat);
-        self.state
-            .push_match(mat, line_number, line_content, before, after, truncated);
-        Ok(true)
     }
 }
 
@@ -153,15 +129,14 @@ pub(crate) fn multi_grep_search<'a>(
             abort_signal,
         },
         |file_bytes: &[u8], max_matches: usize| {
-            let state = SinkState::new(max_matches, options.before_context, options.after_context);
-
-            let mut sink = AhoCorasickSink { state };
+            let mut sink =
+                SinkState::new(max_matches, options.before_context, options.after_context);
 
             if let Err(e) = searcher.search_slice(&ac_matcher, file_bytes, &mut sink) {
                 tracing::error!(error = %e, "Grep (aho-corasick multi) search failed");
             }
 
-            sink.state.matches
+            sink.matches
         },
     ))
 }

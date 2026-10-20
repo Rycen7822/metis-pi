@@ -1,11 +1,11 @@
 use super::prefilter::prefilter_files;
 use super::regex::{RegexSink, build_regex};
-use super::sink::{SinkState, debug_assert_newline_terminator};
+use super::sink::SinkState;
 use super::types::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
 use crate::simd_string_utils::memmem;
 use crate::types::{ContentCacheBudget, FileItem, FileSliceExt};
 use fff_grep::{
-    Searcher, SearcherBuilder, Sink, SinkMatch,
+    SearcherBuilder,
     matcher::{Match, Matcher, NoError},
 };
 use fff_query_parser::Constraint;
@@ -68,27 +68,6 @@ impl Matcher for PlainTextMatcher<'_> {
     #[inline]
     fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
         Some(fff_grep::LineTerminator::byte(b'\n'))
-    }
-}
-
-struct PlainTextSink {
-    state: SinkState,
-}
-
-impl Sink for PlainTextSink {
-    type Error = std::io::Error;
-
-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        debug_assert_newline_terminator(searcher);
-        if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
-            return Ok(false);
-        }
-        let (display, line_number) = SinkState::prepare_line(mat);
-        let line_content = String::from_utf8_lossy(display).into_owned();
-        let (before, after, truncated) = self.state.extract_context(mat);
-        self.state
-            .push_match(mat, line_number, line_content, before, after, truncated);
-        Ok(true)
     }
 }
 
@@ -210,13 +189,11 @@ pub(crate) fn grep_search_pattern<'a>(
                 ..context
             },
             |file_bytes, max_matches| {
-                let mut sink = PlainTextSink {
-                    state: SinkState::new(max_matches, options.before_context, after_context),
-                };
+                let mut sink = SinkState::new(max_matches, options.before_context, after_context);
                 if let Err(error) = searcher.search_slice(&matcher, file_bytes, &mut sink) {
                     tracing::error!(%error, "Grep (plain text) search failed");
                 }
-                sink.state.matches
+                sink.matches
             },
         )
     }
