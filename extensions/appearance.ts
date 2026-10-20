@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "../src/extension.ts";
-import { createDiffComponent, createShellFactories } from "../src/chrome/tool-components.ts";
+import { createDiffComponent, createDiffPainter, createShellFactories } from "../src/chrome/tool-components.ts";
 import { registerCompactionPresentation } from "../src/chrome/compaction-presentation.ts";
 import type { LayoutOps } from "../src/shell.ts";
+import type { Palette } from "../src/tool-names.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
 import { makeSurfaceOps } from "../src/surface.ts";
 import { loadConfig } from "../src/config.ts";
@@ -57,6 +58,11 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     const lines = Pi.highlightCode(text, language);
     return Array.isArray(lines) ? lines.join("\n") : String(lines);
   };
+  const diffPainter = createDiffPainter(highlight);
+  // Do not capture factory input/context: lastComponent would chain old bodies.
+  const paintDiff = (theme: Palette) => (text: string, language: string) => diffPainter.paint(text, language, theme);
+  pi.on("session_start", () => { diffPainter.clear(); });
+  pi.on("session_shutdown", () => { diffPainter.clear(); });
   // Resolve host Tui capabilities here; the surface painters use one color context.
   const surface = makeSurfaceOps(
     colorLevel,
@@ -89,7 +95,8 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     prototype,
     makeText: (text) => new Tui.Text(text, 0, 0),
     makeDiff: (input) => createDiffComponent({
-      rows: input.rows, filePath: input.filePath, paint: highlight,
+      rows: input.rows, filePath: input.filePath,
+      paint: paintDiff(input.theme),
       colorLevel,
     }, layoutOps()),
     makeShell: createShellFactories(layoutOps()),
