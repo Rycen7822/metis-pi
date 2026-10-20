@@ -12,7 +12,7 @@
       "src/neural-search/engine",
       "src/neural-search/native/binding"
     ],
-    "sha256": "095484b1f43491a8be852e5387a9458e071acb6d826a0149c34e55e664ce1ca5",
+    "sha256": "11c9368ddc6b39ced9db70635c4a7296373a1372d800a4ef0a2f6af1f3dc8ee3",
     "inputs": [
       {
         "path": "src/neural-search/engine/Cargo.lock",
@@ -184,7 +184,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/score.rs",
-        "sha256": "92d944e09127bb94a3b26482f5eb56b964b6efea01205e04df5da03df6873918"
+        "sha256": "0f43b9c11f3dd53671f9f2175810187bde9f420d26607a3d27e96c35abba1799"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/shared.rs",
@@ -367,8 +367,8 @@
   },
   "asset": {
     "path": "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
-    "sha256": "f34679bae2d6a862fe8a465a2cb3e7d004194193cf35c92c0f56752cec3ab321",
-    "bytes": 10456848,
+    "sha256": "b461e7e87eb3f04fff6d12fd057961b23206416fac1d7f0b12a104319a9a6834",
+    "bytes": 10456304,
     "abi": {
       "version": 7,
       "machine": "x86-64",

@@ -70,24 +70,24 @@ fn resolve_file_chunks(
 }
 
 #[inline]
-fn match_fuzzy_parts(
+fn match_fuzzy_parts<F>(
     fuzzy_parts: &[&str],
-    working_files: &FileItems<'_>,
+    count: usize,
+    resolve: F,
     options: &neo_frizbee::Config,
     max_threads: usize,
-    arena: ArenaPtr,
-) -> Vec<neo_frizbee::Match> {
-    // The caller normalizes parts once for matching and filename scoring.
+) -> Vec<neo_frizbee::Match>
+where
+    F: Fn(u32, &mut [*const u8; MAX_PATH_CHUNKS]) -> Option<(usize, u16)> + Sync,
+{
+    // Callers normalize parts once for matching and name scoring.
     debug_assert!(!fuzzy_parts.is_empty() && fuzzy_parts.iter().all(|p| p.len() >= 2));
 
-    // Index-based resolver: no `Vec<&FileItem>` materialization for either the
-    // full list or the per-part subsets, and a single monomorphized hot loop.
+    // Keep original indexes across parts without collecting candidate subsets.
     let first_part_matches = neo_frizbee::match_range_parallel_resolved(
         fuzzy_parts[0],
-        working_files.len(),
-        &|index, buf: &mut [*const u8; MAX_PATH_CHUNKS]| {
-            resolve_file_chunks(working_files.index(index as usize), arena, buf)
-        },
+        count,
+        &resolve,
         options,
         max_threads,
     );
@@ -103,22 +103,20 @@ fn match_fuzzy_parts(
         let mut part_options = *options;
         part_options.max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
 
-        // Match only the files that survived the previous round, addressed
-        // through the previous matches without collecting a subset.
+        // Resolve each survivor through its original index.
         let survivors = &matches;
         let sub_matches = neo_frizbee::match_range_parallel_resolved(
             part,
             survivors.len(),
             &|index, buf: &mut [*const u8; MAX_PATH_CHUNKS]| {
-                let file = working_files.index(survivors[index as usize].index as usize);
-                resolve_file_chunks(file, arena, buf)
+                resolve(survivors[index as usize].index, buf)
             },
             &part_options,
             max_threads,
         );
 
         if sub_matches.is_empty() {
-            return vec![]; // break early! 
+            return vec![];
         }
 
         // Carry unrounded totals for each surviving original index. Never
@@ -134,7 +132,7 @@ fn match_fuzzy_parts(
                 neo_frizbee::Match {
                     index: prev.index,
                     score: (sum / total_parts).min(u16::MAX as u64) as u16,
-                    end_col: prev.end_col, // keep first part's position for filename bonus
+                    end_col: prev.end_col, // keep the first part's position for the name bonus
                     exact: prev.exact && sm.exact,
                 }
             })
@@ -192,79 +190,6 @@ fn resolve_dir_chunks(
     };
     let ptrs = dir.path.resolve_ptrs(arena, buf);
     Some((ptrs.len(), dir.path.byte_len))
-}
-
-/// Run SIMD fuzzy match across directory items, narrowing the candidate set
-/// through each query part — same pipeline as file matching.
-fn match_fuzzy_parts_dirs(
-    fuzzy_parts: &[&str],
-    working_dirs: &[&DirItem],
-    options: &neo_frizbee::Config,
-    max_threads: usize,
-    arena: ArenaPtr,
-    overflow_arena: ArenaPtr,
-) -> Vec<neo_frizbee::Match> {
-    debug_assert!(!fuzzy_parts.is_empty() && fuzzy_parts.iter().all(|p| p.len() >= 2));
-
-    let first_part_matches = neo_frizbee::match_range_parallel_resolved(
-        fuzzy_parts[0],
-        working_dirs.len(),
-        &|index, buf: &mut [*const u8; MAX_PATH_CHUNKS]| {
-            resolve_dir_chunks(working_dirs[index as usize], arena, overflow_arena, buf)
-        },
-        options,
-        max_threads,
-    );
-
-    if fuzzy_parts.len() == 1 {
-        return first_part_matches;
-    }
-
-    let mut totals: Vec<u64> = first_part_matches.iter().map(|m| m.score as u64).collect();
-    let mut matches = first_part_matches;
-    let total_parts = fuzzy_parts.len() as u64;
-    for part in fuzzy_parts[1..].iter() {
-        let mut part_options = *options;
-        part_options.max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
-
-        // Match only the dirs that survived the previous round, addressed
-        // through the previous matches without collecting a subset.
-        let survivors = &matches;
-        let sub_matches = neo_frizbee::match_range_parallel_resolved(
-            part,
-            survivors.len(),
-            &|index, buf: &mut [*const u8; MAX_PATH_CHUNKS]| {
-                let dir = working_dirs[survivors[index as usize].index as usize];
-                resolve_dir_chunks(dir, arena, overflow_arena, buf)
-            },
-            &part_options,
-            max_threads,
-        );
-
-        if sub_matches.is_empty() {
-            return vec![];
-        }
-
-        let mut next_totals = Vec::with_capacity(sub_matches.len());
-        matches = sub_matches
-            .into_iter()
-            .map(|sm| {
-                let prev = &matches[sm.index as usize];
-                let sum = totals[sm.index as usize].saturating_add(sm.score as u64);
-                next_totals.push(sum);
-
-                neo_frizbee::Match {
-                    index: prev.index,
-                    score: (sum / total_parts).min(u16::MAX as u64) as u16,
-                    end_col: prev.end_col, // keep first part's position for dirname bonus
-                    exact: prev.exact && sm.exact,
-                }
-            })
-            .collect();
-        totals = next_totals;
-    }
-
-    matches
 }
 
 /// Match + score directories against a fuzzy query.
@@ -328,13 +253,12 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
         ..Default::default()
     };
 
-    let path_matches = match_fuzzy_parts_dirs(
+    let path_matches = match_fuzzy_parts(
         &valid_parts,
-        &working_dirs,
+        working_dirs.len(),
+        |index, buf| resolve_dir_chunks(working_dirs[index as usize], arena, overflow_arena, buf),
         &options,
         context.max_threads,
-        arena,
-        overflow_arena,
     );
 
     let main_needle = valid_parts[0].as_bytes();
@@ -483,10 +407,10 @@ fn match_and_score_in_arena<'a>(
 
     let path_matches = match_fuzzy_parts(
         &valid_parts,
-        &working_files,
+        working_files.len(),
+        |index, buf| resolve_file_chunks(working_files.index(index as usize), arena, buf),
         &options,
         context.max_threads,
-        arena,
     );
 
     let main_needle = valid_parts[0].as_bytes();
