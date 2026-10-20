@@ -8,21 +8,11 @@ pub trait SinkError: Sized {
     /// A constructor for converting any value that satisfies the
     /// `std::fmt::Display` trait into an error.
     fn error_message<T: std::fmt::Display>(message: T) -> Self;
-
-    /// A constructor for converting I/O errors that occur while searching into
-    /// an error of this type.
-    fn error_io(err: io::Error) -> Self {
-        Self::error_message(err)
-    }
 }
 
 impl SinkError for io::Error {
     fn error_message<T: std::fmt::Display>(message: T) -> io::Error {
         io::Error::other(message.to_string())
-    }
-
-    fn error_io(err: io::Error) -> io::Error {
-        err
     }
 }
 

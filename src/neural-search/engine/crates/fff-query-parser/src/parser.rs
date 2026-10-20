@@ -73,25 +73,12 @@ impl<C: ParserConfig> QueryParser<C> {
                 // queries — the user is fuzzy-searching, not filtering. FilePath constraints
                 // are only useful as filters in multi-token queries like "score.rs search".
                 //
-                // Also skip PathSegment constraints when the token looks like an absolute
-                // file path with a location suffix (e.g. /Users/.../file.rs:12). Without
-                // this, the leading `/` causes the entire path to be consumed as a
-                // PathSegment, preventing location parsing from running.
-                let has_location_suffix = matches!(constraint, Constraint::PathSegment(_))
-                    && query.bytes().any(|b| b == b':')
-                    && query
-                        .bytes()
-                        .rev()
-                        .take_while(|&b| b != b':')
-                        .all(|b| b.is_ascii_digit());
-
-                // for grep we don't want to treat a part of path like pathname
-                let treat_as_text = matches!(constraint, Constraint::PathSegment(_));
-
-                if !matches!(constraint, Constraint::FilePath(_))
-                    && !has_location_suffix
-                    && !treat_as_text
-                {
+                // Path segments also stay text, so absolute paths can reach
+                // location parsing below instead of becoming filters.
+                if !matches!(
+                    constraint,
+                    Constraint::FilePath(_) | Constraint::PathSegment(_)
+                ) {
                     constraints.push(constraint);
                     return FFFQuery {
                         raw_query,
@@ -131,24 +118,20 @@ impl<C: ParserConfig> QueryParser<C> {
         let mut text_parts = TextPartsBuffer::new();
         let tokens = query.split_whitespace();
 
-        let mut has_file_path = false;
         // Track the FilePath token position in constraints so we can promote
         // it back to text if the final query ends up with no fuzzy text.
-        let mut file_path_constraint_idx: Option<usize> = None;
-        let mut file_path_token: Option<&str> = None;
+        let mut file_path: Option<(usize, &str)> = None;
         for token in tokens {
             match parse_token(token, config) {
                 Some(Constraint::FilePath(_)) => {
-                    if has_file_path {
+                    if file_path.is_some() {
                         // Only one FilePath constraint allowed; treat extra path
                         // tokens as literal text (e.g. an import path the user is
                         // searching for).
                         text_parts.push(token);
                     } else {
-                        file_path_constraint_idx = Some(constraints.len());
-                        file_path_token = Some(token);
+                        file_path = Some((constraints.len(), token));
                         constraints.push(Constraint::FilePath(token));
-                        has_file_path = true;
                     }
                 }
                 Some(constraint) => {
@@ -168,8 +151,7 @@ impl<C: ParserConfig> QueryParser<C> {
         // alongside `chrome/browser/profiles/` fuzzy-matches all `profile*.h`
         // files instead of only one file literally ending in `/profile.h`.
         if text_parts.is_empty()
-            && let Some(idx) = file_path_constraint_idx
-            && let Some(tok) = file_path_token
+            && let Some((idx, tok)) = file_path
         {
             constraints.remove(idx);
             text_parts.push(tok);

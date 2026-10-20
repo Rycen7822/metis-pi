@@ -66,7 +66,7 @@ fn poll_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
 /// ```ignore
 /// let shared_picker = SharedFilePicker::default();
 ///
-/// if let Some(picker) = shared_picker.read()?.as_ref() {
+/// if let Some(picker) = shared_picker.read().as_ref() {
 ///     let files = picker.fuzzy_search(&query, options);
 ///     println!("Found {} files", files.len());
 /// } else {
@@ -114,24 +114,22 @@ impl std::fmt::Debug for SharedFilePicker {
 }
 
 impl SharedFilePicker {
-    pub fn read(&self) -> Result<parking_lot::RwLockReadGuard<'_, Option<FilePicker>>, Error> {
-        Ok(self.0.picker.read())
+    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, Option<FilePicker>> {
+        self.0.picker.read()
     }
 
-    pub fn write(&self) -> Result<parking_lot::RwLockWriteGuard<'_, Option<FilePicker>>, Error> {
+    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Option<FilePicker>> {
         let mut guard = self.0.picker.write();
         if let Some(picker) = guard.as_mut() {
             picker.advance_index_version();
         }
-        Ok(guard)
+        guard
     }
 
     /// Signal the background scan to cancel. Non-blocking: post-scan
     /// threads check this flag and bail out at their next cancellation point.
     pub fn cancel(&self) {
-        if let Ok(guard) = self.read()
-            && let Some(picker) = guard.as_ref()
-        {
+        if let Some(picker) = self.read().as_ref() {
             picker.cancel();
         }
     }
@@ -239,12 +237,8 @@ impl SharedFilePicker {
     fn check_rescan_throttle(&self, reason: RescanReason) -> bool {
         let (live_files, has_git) = self
             .read()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(|picker| (picker.live_file_count(), picker.has_git_repo()))
-            })
+            .as_ref()
+            .map(|picker| (picker.live_file_count(), picker.has_git_repo()))
             .unwrap_or((0, false));
 
         if self.0.rescan_throttle.admit(live_files, has_git) {
@@ -261,7 +255,7 @@ impl SharedFilePicker {
     pub fn refresh_git_status(&self, shared_frecency: &SharedFrecency) -> Result<usize, Error> {
         let (git_root, recency_config, base_path, picker_id) = {
             // we do the libgit2 off lock cause it might take quite some time on very large repos
-            let guard = self.read()?;
+            let guard = self.read();
             let Some(ref picker) = *guard else {
                 return Err(Error::FilePickerMissing);
             };
@@ -291,7 +285,7 @@ impl SharedFilePicker {
             .as_ref()
             .and_then(|repo| git_recency::compute_git_recency(repo, &recency_config, &base_path));
 
-        let mut guard = self.write()?;
+        let mut guard = self.write();
         let picker = guard.as_mut().ok_or(Error::FilePickerMissing)?;
 
         // ensure consistency
@@ -323,7 +317,7 @@ impl SharedFilePicker {
         }
 
         let git_root = {
-            let guard = self.read()?;
+            let guard = self.read();
             let Some(ref picker) = *guard else {
                 return Err(Error::FilePickerMissing);
             };
@@ -338,7 +332,7 @@ impl SharedFilePicker {
         let repo = Repository::open(&git_root)?;
         let status = GitStatusCache::git_status_for_paths(&repo, paths)?;
 
-        let mut guard = self.write()?;
+        let mut guard = self.write();
         let picker = guard.as_mut().ok_or(Error::FilePickerMissing)?;
         picker.update_git_statuses(status, shared_frecency)
     }

@@ -100,16 +100,7 @@ impl Default for LineTerminator {
 }
 
 /// An error type for matchers that never produce errors.
-#[derive(Debug, Eq, PartialEq)]
-pub struct NoError(());
-
-impl std::error::Error for NoError {}
-
-impl std::fmt::Display for NoError {
-    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        unreachable!("NoError should never be instantiated")
-    }
-}
+pub use std::convert::Infallible as NoError;
 
 /// A matcher finds byte-level matches in a haystack.
 pub trait Matcher {

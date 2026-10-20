@@ -498,7 +498,6 @@ fn a_throttled_ignore_file_event_retains_its_rescan() {
     assert!(
         !f.picker
             .read()
-            .unwrap()
             .as_ref()
             .unwrap()
             .get_scan_progress()
@@ -768,7 +767,7 @@ impl Fixture {
     }
 
     fn indexed_access_score(&self, rel: &str) -> i16 {
-        let guard = self.picker.read().unwrap();
+        let guard = self.picker.read();
         guard
             .as_ref()
             .and_then(|p| p.get_file_by_path(self.path(rel)))
@@ -784,7 +783,7 @@ impl Fixture {
         })
         .unwrap();
         picker.collect_files().unwrap();
-        *self.picker.write().unwrap() = Some(picker);
+        *self.picker.write() = Some(picker);
     }
 
     fn feed(&self, events: impl IntoIterator<Item = DebouncedEvent>) -> RescanStats {
@@ -820,7 +819,7 @@ impl Fixture {
     }
 
     fn is_indexed(&self, rel: &str) -> bool {
-        let guard = self.picker.read().unwrap();
+        let guard = self.picker.read();
         guard
             .as_ref()
             .and_then(|p| p.get_file_by_path(self.path(rel)))
@@ -832,7 +831,7 @@ impl Fixture {
     }
 
     fn overflow_len(&self) -> usize {
-        let guard = self.picker.read().unwrap();
+        let guard = self.picker.read();
         guard
             .as_ref()
             .map(|p| p.get_overflow_files().len())

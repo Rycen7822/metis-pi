@@ -283,11 +283,6 @@ pub(crate) struct ChunkedPathStore {
     indices: Vec<u32>,
 }
 
-// SAFETY: arena is immutable after construction. Pointers derived from it are
-// only read during scoring (no mutation, no reallocation).
-unsafe impl Send for ChunkedPathStore {}
-unsafe impl Sync for ChunkedPathStore {}
-
 impl ChunkedPathStore {
     pub fn heap_bytes(&self) -> usize {
         self.arena.len() * SIMD_CHUNK_BYTES + self.indices.len() * std::mem::size_of::<u32>()

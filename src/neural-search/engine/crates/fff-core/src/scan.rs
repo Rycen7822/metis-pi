@@ -68,7 +68,7 @@ impl ScanJob {
     ) -> Result<Option<Self>, Error> {
         // Admission and completion use the same lock: a busy request is queued
         // before the current job can drain pending work and release its slot.
-        let guard = shared_picker.write()?;
+        let guard = shared_picker.write();
         let picker = guard.as_ref().ok_or(Error::FilePickerMissing)?;
         let signals = picker.scan_signals();
         if signals.cancelled.load(Ordering::Acquire) {
@@ -150,7 +150,7 @@ impl ScanJob {
             }
             // Keep the same reservation across queued passes, including an
             // error retry. Readiness cannot observe an idle handoff gap.
-            let guard = self.shared_picker.write().ok();
+            let guard = self.shared_picker.write();
             let pending = self.signals.rescan_pending.swap(false, Ordering::AcqRel);
             if !self.signals.cancelled.load(Ordering::Acquire) {
                 if pending {
@@ -158,7 +158,6 @@ impl ScanJob {
                 }
                 let watcher = guard
                     .as_ref()
-                    .and_then(|guard| guard.as_ref())
                     .filter(|picker| picker.is_watcher_ready())
                     .and_then(|picker| picker.background_watcher.as_ref());
                 if self.signals.reconcile_pending.load(Ordering::Acquire)
@@ -193,16 +192,16 @@ impl ScanJob {
         *signals.watcher_error.lock() = None;
         scanned_files_counter.store(0, Ordering::Relaxed);
 
-        let filesystem_epoch = match shared_picker.write() {
-            Ok(mut guard) => match guard.as_mut() {
+        let filesystem_epoch = {
+            let mut guard = shared_picker.write();
+            match guard.as_mut() {
                 Some(picker) => {
                     // Only the pass that starts covering the debt consumes it.
                     signals.reconcile_pending.store(false, Ordering::Release);
                     picker.filesystem_epoch()
                 }
                 None => return,
-            },
-            Err(_) => return,
+            }
         };
 
         // 1. Walk the file system and collect the list of files
@@ -221,9 +220,7 @@ impl ScanJob {
                 *signals.error.lock() = Some(e.to_string());
                 // The root may have disappeared, invalidating inotify watches.
                 // A later successful retry must construct fresh subscriptions.
-                if let Ok(mut guard) = shared_picker.write()
-                    && let Some(picker) = guard.as_mut()
-                {
+                if let Some(picker) = shared_picker.write().as_mut() {
                     picker.stop_background_monitor();
                 }
                 error!(?e, "scan walk failed");
@@ -233,9 +230,7 @@ impl ScanJob {
 
         // 2. Populate the file list
         let git_status_worker;
-        if let Ok(mut guard) = shared_picker.write()
-            && let Some(picker) = guard.as_mut()
-        {
+        if let Some(picker) = shared_picker.write().as_mut() {
             if signals.cancelled.load(Ordering::Acquire) {
                 info!("scan cancelled between walk and commit, discarding");
                 return;
@@ -258,11 +253,10 @@ impl ScanJob {
         // The scan reservation stays active through classification and watcher
         // installation; no second job may publish a competing snapshot.
         let snapshot = if !signals.cancelled.load(Ordering::Acquire) {
-            shared_picker.read().ok().and_then(|guard| {
-                guard
-                    .as_ref()
-                    .and_then(|picker| picker.post_scan_snapshot())
-            })
+            shared_picker
+                .read()
+                .as_ref()
+                .and_then(|picker| picker.post_scan_snapshot())
         } else {
             None
         };
@@ -288,15 +282,12 @@ impl ScanJob {
         }
 
         // Health may change after admission or while registering directories.
-        let needs_watcher = shared_picker.read().ok().is_some_and(|guard| {
-            guard
-                .as_ref()
-                .is_some_and(|picker| !picker.is_watcher_ready())
-        });
+        let needs_watcher = shared_picker
+            .read()
+            .as_ref()
+            .is_some_and(|picker| !picker.is_watcher_ready());
         if needs_watcher && config.watch && !signals.cancelled.load(Ordering::Acquire) {
-            if let Ok(mut guard) = shared_picker.write()
-                && let Some(picker) = guard.as_mut()
-            {
+            if let Some(picker) = shared_picker.write().as_mut() {
                 // Release failed/partial subscriptions before a retry.
                 picker.background_watcher.take();
             }
@@ -314,8 +305,7 @@ impl ScanJob {
                 tracing::Span::current(),
             ) {
                 Ok(watcher) => {
-                    if let Ok(mut guard) = shared_picker.write()
-                        && let Some(picker) = guard.as_mut()
+                    if let Some(picker) = shared_picker.write().as_mut()
                         && picker.base_path() == base_path
                         && !signals.cancelled.load(Ordering::Acquire)
                     {
@@ -372,13 +362,11 @@ impl ScanJob {
             if signals.cancelled.load(Ordering::Acquire) {
                 return;
             }
-            let batch = shared_picker.read().ok().and_then(|guard| {
-                guard.as_ref().map(|picker| {
-                    picker.binary_batch(
-                        snapshot,
-                        start..(start + BATCH_SIZE).min(snapshot.base_count),
-                    )
-                })
+            let batch = shared_picker.read().as_ref().map(|picker| {
+                picker.binary_batch(
+                    snapshot,
+                    start..(start + BATCH_SIZE).min(snapshot.base_count),
+                )
             });
             let Some(batch) = batch else { return };
             let classified: Vec<_> = batch
@@ -388,9 +376,7 @@ impl ScanJob {
             if signals.cancelled.load(Ordering::Acquire) {
                 return;
             }
-            if let Ok(mut guard) = shared_picker.write()
-                && let Some(picker) = guard.as_mut()
-            {
+            if let Some(picker) = shared_picker.write().as_mut() {
                 for result in classified {
                     picker.apply_classification(result);
                 }
@@ -422,7 +408,7 @@ impl Drop for ScanningGuard {
 fn resubscribe_watcher_post_scan(
     shared_picker: &SharedFilePicker,
 ) -> Option<crate::watch::WatchBarrier> {
-    let guard = shared_picker.read().ok()?;
+    let guard = shared_picker.read();
     let picker = guard.as_ref()?;
     let watcher = picker.background_watcher.as_ref()?;
 

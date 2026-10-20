@@ -37,15 +37,6 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         self.pos = pos;
     }
 
-    pub(crate) fn matched(
-        &mut self,
-        buf: &[u8],
-        range: &Range,
-        crosses_line: bool,
-    ) -> Result<bool, S::Error> {
-        self.sink_matched(buf, range, crosses_line)
-    }
-
     pub(crate) fn find_at(&mut self, buf: &[u8], at: usize) -> Result<Option<Range>, S::Error> {
         self.matcher
             .find_at(buf, at)
@@ -64,7 +55,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         while !buf[self.pos()..].is_empty() {
             if let Some((line, crosses_line)) = self.find_by_line(buf)? {
                 self.set_pos(line.end());
-                if !self.sink_matched(buf, &line, crosses_line)? {
+                if !self.matched(buf, &line, crosses_line)? {
                     return Ok(false);
                 }
             } else {
@@ -107,7 +98,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     }
 
     #[inline(always)]
-    fn sink_matched(
+    pub(crate) fn matched(
         &mut self,
         buf: &[u8],
         range: &Range,
@@ -115,7 +106,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     ) -> Result<bool, S::Error> {
         self.count_lines(buf, range.start());
         let linebuf = &buf[*range];
-        let keepgoing = self.sink.matched(
+        self.sink.matched(
             self.searcher,
             &SinkMatch {
                 bytes: linebuf,
@@ -124,11 +115,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
                 buffer: buf,
                 bytes_range_in_buffer: range.start()..range.end(),
             },
-        )?;
-        if !keepgoing {
-            return Ok(false);
-        }
-        Ok(true)
+        )
     }
 
     fn count_lines(&mut self, buf: &[u8], upto: usize) {

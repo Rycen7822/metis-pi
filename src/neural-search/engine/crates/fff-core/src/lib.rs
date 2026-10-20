@@ -24,10 +24,10 @@
 //!
 //! ## Shared State
 //!
-//! [`SharedFilePicker`], [`SharedFrecency`], and [`SharedQueryTracker`] are
-//! newtype wrappers around `Arc<RwLock<Option<T>>>` for thread-safe shared
-//! access. They provide `read()` / `write()` methods with built-in error
-//! conversion and convenience helpers like `wait_for_scan()`.
+//! [`SharedFilePicker`] uses a non-poisoning lock; its `read()` / `write()`
+//! return guards directly. [`SharedFrecency`] and [`SharedQueryTracker`] retain
+//! poisonable database locks and return `Result` from those methods.
+//! The picker also provides completion helpers like `wait_for_scan()`.
 //!
 //! ## Quick Start
 //!
@@ -68,7 +68,7 @@
 //! shared_picker.wait_for_scan(std::time::Duration::from_secs(10));
 //!
 //! // 4. Search: lock the picker and query tracker
-//! let picker_guard = shared_picker.read()?;
+//! let picker_guard = shared_picker.read();
 //! let picker = picker_guard.as_ref().unwrap();
 //! let qt_guard = shared_query_tracker.read()?;
 //!

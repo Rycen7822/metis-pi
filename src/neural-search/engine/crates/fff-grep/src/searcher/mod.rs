@@ -62,23 +62,15 @@ impl Default for Config {
 }
 
 /// A builder for configuring a searcher.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SearcherBuilder {
     config: Config,
-}
-
-impl Default for SearcherBuilder {
-    fn default() -> SearcherBuilder {
-        SearcherBuilder::new()
-    }
 }
 
 impl SearcherBuilder {
     /// Create a new searcher builder with a default configuration.
     pub fn new() -> SearcherBuilder {
-        SearcherBuilder {
-            config: Config::default(),
-        }
+        Self::default()
     }
 
     /// Build a searcher.

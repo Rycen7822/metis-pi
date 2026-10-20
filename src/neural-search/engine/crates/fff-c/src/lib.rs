@@ -29,9 +29,7 @@ struct Instance {
 }
 impl Drop for Instance {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.picker.write() {
-            drop(guard.take());
-        }
+        drop(self.picker.write().take());
         if let Ok(mut guard) = self.frecency.write() {
             *guard = None;
         }
@@ -66,10 +64,7 @@ unsafe fn with_picker(
     let Some(instance) = (unsafe { handle.cast::<Instance>().as_ref() }) else {
         return Envelope::error("Neural Search instance is null");
     };
-    let guard = match instance.picker.read() {
-        Ok(guard) => guard,
-        Err(error) => return Envelope::error(&error.to_string()),
-    };
+    let guard = instance.picker.read();
     match guard.as_ref() {
         Some(picker) => guarded(|| action(instance, picker)),
         None => Envelope::error("Neural Search instance is closed"),

@@ -204,18 +204,10 @@ fn match_fuzzy_parts_dirs(
     arena: ArenaPtr,
     overflow_arena: ArenaPtr,
 ) -> Vec<neo_frizbee::Match> {
-    let valid_parts: Vec<&str> = fuzzy_parts
-        .iter()
-        .copied()
-        .filter(|p| p.len() >= 2)
-        .collect();
-
-    if valid_parts.is_empty() {
-        return vec![];
-    }
+    debug_assert!(!fuzzy_parts.is_empty() && fuzzy_parts.iter().all(|p| p.len() >= 2));
 
     let first_part_matches = neo_frizbee::match_range_parallel_resolved(
-        valid_parts[0],
+        fuzzy_parts[0],
         working_dirs.len(),
         &|index, buf: &mut [*const u8; MAX_PATH_CHUNKS]| {
             resolve_dir_chunks(working_dirs[index as usize], arena, overflow_arena, buf)
@@ -224,14 +216,14 @@ fn match_fuzzy_parts_dirs(
         max_threads,
     );
 
-    if valid_parts.len() == 1 {
+    if fuzzy_parts.len() == 1 {
         return first_part_matches;
     }
 
     let mut totals: Vec<u64> = first_part_matches.iter().map(|m| m.score as u64).collect();
     let mut matches = first_part_matches;
-    let total_parts = valid_parts.len() as u64;
-    for part in valid_parts[1..].iter() {
+    let total_parts = fuzzy_parts.len() as u64;
+    for part in fuzzy_parts[1..].iter() {
         let mut part_options = *options;
         part_options.max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
 
@@ -337,7 +329,7 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
     };
 
     let path_matches = match_fuzzy_parts_dirs(
-        fuzzy_parts,
+        &valid_parts,
         &working_dirs,
         &options,
         context.max_threads,

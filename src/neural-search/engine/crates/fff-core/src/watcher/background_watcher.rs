@@ -151,11 +151,9 @@ impl BackgroundWatcher {
                         if owner_debouncer.lock().is_none() {
                             break;
                         }
-                        let dirty = strong_picker.read().ok().is_some_and(|guard| {
-                            guard.as_ref().is_some_and(|picker| {
-                                picker.signals.rescan_pending.load(Ordering::Acquire)
-                                    || picker.signals.reconcile_pending.load(Ordering::Acquire)
-                            })
+                        let dirty = strong_picker.read().as_ref().is_some_and(|picker| {
+                            picker.signals.rescan_pending.load(Ordering::Acquire)
+                                || picker.signals.reconcile_pending.load(Ordering::Acquire)
                         });
                         if reason != RescanReason::WatcherFailure && !dirty {
                             pending_rescan = None; // Another scan already consumed it.
@@ -229,8 +227,8 @@ impl BackgroundWatcher {
                     // Recheck queued data paths before subscription, not just at admission.
                     let follow_symlinks = strong_picker
                         .read()
-                        .ok()
-                        .and_then(|guard| guard.as_ref().map(|picker| picker.follows_symlinks()))
+                        .as_ref()
+                        .map(|picker| picker.follows_symlinks())
                         .unwrap_or(false);
                     // Real I/O errors still go through watcher recovery below.
                     if let Ok(metadata) = entry_metadata(&dir, &owner_base_path, follow_symlinks)
@@ -264,9 +262,7 @@ impl BackgroundWatcher {
                             defer_local_rescan(&mut pending_rescan, RescanReason::WatcherFailure);
                         }
                         if reconcile_after_subscribe {
-                            if let Ok(mut guard) = strong_picker.write()
-                                && let Some(picker) = guard.as_mut()
-                            {
+                            if let Some(picker) = strong_picker.write().as_mut() {
                                 picker
                                     .signals
                                     .reconcile_pending
@@ -382,7 +378,7 @@ impl BackgroundWatcher {
             let mut watched = 0usize;
             let mut failure = None;
             {
-                let guard = shared_picker_for_watching.read()?;
+                let guard = shared_picker_for_watching.read();
                 let picker = guard.as_ref().ok_or(Error::FilePickerMissing)?;
                 picker.for_each_dir(|dir| {
                     use std::ops::ControlFlow;
@@ -489,15 +485,13 @@ pub(crate) fn handle_debounced_events(
     // Repository identity is live, not the snapshot captured at watcher creation.
     let (indexed_git_root, walker_rules, follow_symlinks) = shared_picker
         .read()
-        .ok()
-        .and_then(|guard| {
-            guard.as_ref().map(|picker| {
-                (
-                    picker.git_root().map(Path::to_path_buf),
-                    picker.ignore_rules(),
-                    picker.follows_symlinks(),
-                )
-            })
+        .as_ref()
+        .map(|picker| {
+            (
+                picker.git_root().map(Path::to_path_buf),
+                picker.ignore_rules(),
+                picker.follows_symlinks(),
+            )
         })
         .unwrap_or_default();
     let filter = IgnoreFilter::new(base_path, walker_rules, repo.as_ref());
@@ -737,10 +731,7 @@ pub(crate) fn handle_debounced_events(
             paths_to_add_or_modify.len(),
         );
 
-        let Ok(mut guard) = shared_picker.write() else {
-            error!("Failed to acquire file picker write lock");
-            return new_dirs_to_watch;
-        };
+        let mut guard = shared_picker.write();
         let Some(ref mut picker) = *guard else {
             error!("File picker not initialized");
             return new_dirs_to_watch;
@@ -837,13 +828,12 @@ pub(crate) fn handle_debounced_events(
 
         if !carried.is_empty() {
             info!(count = carried.len(), "Carried frecency across renames");
-            if let Ok(mut picker_guard) = shared_picker.write()
-                && let Some(ref mut picker) = *picker_guard
+            if let Some(picker) = shared_picker.write().as_mut()
                 && let Ok(frecency_guard) = shared_frecency.read()
                 && let Some(ref frecency) = *frecency_guard
             {
                 for path in &carried {
-                    let _ = picker.update_single_file_frecency(path, frecency);
+                    picker.update_single_file_frecency(path, frecency);
                 }
             }
         }
@@ -882,13 +872,12 @@ pub(crate) fn handle_debounced_events(
 
         // Update in-memory frecency scores for tracked files
         if tracked_count > 0
-            && let Ok(mut picker_guard) = shared_picker.write()
-            && let Some(ref mut picker) = *picker_guard
+            && let Some(picker) = shared_picker.write().as_mut()
             && let Ok(frecency_guard) = shared_frecency.read()
             && let Some(ref frecency) = *frecency_guard
         {
             for path in &paths_to_add_or_modify {
-                let _ = picker.update_single_file_frecency(path, frecency);
+                picker.update_single_file_frecency(path, frecency);
             }
         }
     }
@@ -917,15 +906,13 @@ fn index_new_directory(
 ) -> (Vec<PathBuf>, bool) {
     // Prefer the walker's ignore rules; read base_path + rules from the picker.
     let (base_path, walker_rules, follow_symlinks, cancelled) =
-        match shared_picker.read().ok().and_then(|g| {
-            g.as_ref().map(|p| {
-                (
-                    p.base_path().to_path_buf(),
-                    p.ignore_rules(),
-                    p.follows_symlinks(),
-                    Arc::clone(&p.signals.cancelled),
-                )
-            })
+        match shared_picker.read().as_ref().map(|p| {
+            (
+                p.base_path().to_path_buf(),
+                p.ignore_rules(),
+                p.follows_symlinks(),
+                Arc::clone(&p.signals.cancelled),
+            )
         }) {
             Some(triple) => triple,
             None => return (Vec::new(), false),
@@ -987,9 +974,7 @@ fn index_new_directory(
     let mut uncovered_descendants = false;
     let mut index_update_rejected = false;
     {
-        let Ok(mut guard) = shared_picker.write() else {
-            return (subdirs, false);
-        };
+        let mut guard = shared_picker.write();
 
         let Some(ref mut picker) = *guard else {
             return (subdirs, false);
@@ -1273,9 +1258,7 @@ fn missing_path_error(error: &notify::Error) -> bool {
 }
 
 fn retain_deferred_reconciliation(shared_picker: &SharedFilePicker) -> bool {
-    let Ok(guard) = shared_picker.write() else {
-        return false;
-    };
+    let guard = shared_picker.write();
     let Some(picker) = guard.as_ref() else {
         return false;
     };
@@ -1523,7 +1506,7 @@ mod tests {
         })
         .unwrap();
         picker.collect_files().unwrap();
-        *shared_picker.write().unwrap() = Some(picker);
+        *shared_picker.write() = Some(picker);
 
         std::fs::write(&path, "after").unwrap();
         let now = Instant::now();
@@ -1552,7 +1535,7 @@ mod tests {
             &GitStatusWorker::new(),
         );
 
-        let guard = shared_picker.read().unwrap();
+        let guard = shared_picker.read();
         let picker = guard.as_ref().unwrap();
         assert_eq!(picker.live_file_count(), 1);
         assert_eq!(picker.get_file_by_path(&path).unwrap().size, 5);

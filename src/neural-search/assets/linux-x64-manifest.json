@@ -12,7 +12,7 @@
       "src/neural-search/engine",
       "src/neural-search/native/binding"
     ],
-    "sha256": "d9e22e3eced44d40d2ca0fe66ce6e58abcfb57e37291afe9fe32280473dd6707",
+    "sha256": "c9cfcaff08f0a40175fa77782cb46877dad6323c4e4e622d7c7c8db1a8612ce1",
     "inputs": [
       {
         "path": "src/neural-search/engine/Cargo.lock",
@@ -44,7 +44,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-c/src/lib.rs",
-        "sha256": "ba9c00ebff0e062c5c38c9e5c7ff1b31cdd847516ee0cda04a5bdd35c4e28336"
+        "sha256": "6dc17e05fa040757134fd028d2b531ae97b752cc2a0a83bf1cb5556799ca1026"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/Cargo.toml",
@@ -92,7 +92,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/file_picker.rs",
-        "sha256": "07cec9bc8540001cf372878d1625e791a037436b73c997984257654f29f2d7ae"
+        "sha256": "e383597712ca2418d6f9d110f7e9a7ca2b69c32ba8ddd3518c378f11cd836ba4"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/git.rs",
@@ -148,7 +148,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/index/constraints.rs",
-        "sha256": "92da497cdedeb84fe0b3a770be6a1d01f26caf931f724156575600673477f3cc"
+        "sha256": "1d0646321807e8a4d63fa7d0fc6a8b25e4fb42c71b17f777fbb4b8d1e8b561bd"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/index/mod.rs",
@@ -156,7 +156,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/lib.rs",
-        "sha256": "2b09098dcbb9144bb108c6cf6398c1212a3afbcebc01c94fb7ca0653e8d58fa0"
+        "sha256": "3bfdcf42730cd813a58b0e69fd4092278da3927dd839eb9ab50046bf26c8dea8"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/log.rs",
@@ -180,19 +180,19 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/scan.rs",
-        "sha256": "6fca6507a99d40c12394230950612118e260478b9e6f8ed05e9f54199cce4c75"
+        "sha256": "818705f8faff6880e7435118743c5934f48e4f6f88e1737ebcc7757052c72d90"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/score.rs",
-        "sha256": "1f9616eb93e2d5f0f2f58de2a95e1518ce58d46fd128ac6a65dfe35915bb49d5"
+        "sha256": "92d944e09127bb94a3b26482f5eb56b964b6efea01205e04df5da03df6873918"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/shared.rs",
-        "sha256": "aec1f510567c2dac4c3b49c966116b3cd2299967f6039297abdd3eab624a58a7"
+        "sha256": "d74547136e5f2f190349e3358980114938aa21234a605aedae657d53312668cb"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/simd_path.rs",
-        "sha256": "c93ecbb91219a0f09c676d1663b59d1a46aa9ceba66a01eaebdbc9332a376d29"
+        "sha256": "0e23a003ace4e399a8bb2d16a8a957037e6a6c898c66dea0c944ea7a9e2f79c2"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/simd_string_utils/case.rs",
@@ -216,7 +216,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/types.rs",
-        "sha256": "0d9a3b545907f23234ee48906d715dbc8282e42456df9c0ffe90f116130b4767"
+        "sha256": "60bca9f11bdf1baf66d277b97ba26a43c422f00675a1020f3c8585c94fc18f9f"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/walk/mod.rs",
@@ -228,7 +228,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "7346c023929bccbeaf8abd2c529bed081729392ab72fb0f7f9c456dd72397c75"
+        "sha256": "70b69a5d78e1083ac64a91430d4de2eeb7999b15b124ffe089ee0cb965bee0fe"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/watcher/mod.rs",
@@ -236,7 +236,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/watcher/rescan_tests.rs",
-        "sha256": "7a6334a48cf8e0dfac91d8b417948bc189b50bff15e9629e60eb655a50e48f3b"
+        "sha256": "53829c6374ce8acedc80a241f384eb5763761f5aa77ea988dadb2100c3cbbbbc"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/Cargo.toml",
@@ -252,11 +252,11 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/matcher.rs",
-        "sha256": "c4977c23300c734933bb99c7af4e6d2ffb319706ba30f9303a77a313f4da15c4"
+        "sha256": "410f70806b1779c7b6a6c380df61ba8f22f888eb78cb90375c32e69a2f937abb"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/searcher/core.rs",
-        "sha256": "40dab74b30b08d9a2adc5541354600648c459d729f373b64ba71aae05c82a6e8"
+        "sha256": "3a961fc0051fbc764ca43c7be8e8e99b3c198a63e1875b527a8fbc15979ed7c1"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/searcher/glue.rs",
@@ -264,11 +264,11 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/searcher/mod.rs",
-        "sha256": "d105ba60670c0985b599a5c3cf29ba0d623bd2f961af8edc784f9a47c0776e2b"
+        "sha256": "894bc6cbe231c46a3ce641389c366703b4a0eee2db4ea7524c68fb218b157b72"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/sink.rs",
-        "sha256": "18e829f83cdd655f05c1f9c14773d052b07ac9e3d8fc876ba9c069dc2d8f5245"
+        "sha256": "9dec3ff7e071fc806de57cfafde8fd5d621f1722aaf6eb9780d24de5310f6361"
       },
       {
         "path": "src/neural-search/engine/crates/fff-query-parser/Cargo.toml",
@@ -296,7 +296,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-query-parser/src/parser.rs",
-        "sha256": "d58e6c73286c350859e04cc970b0b843d3128f82e2180bbaf7216a27d7cbf122"
+        "sha256": "3abaf0f7d7cd322caf5046ba2a61bdf21caa0d6af47614f362918f9a30554625"
       },
       {
         "path": "src/neural-search/engine/licenses/glidesort-0.1.2/LICENSE-APACHE",
@@ -367,8 +367,8 @@
   },
   "asset": {
     "path": "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
-    "sha256": "5287f2e0c0615082462edd2c0e6761358c0c21ca433bf3b20203082eacf8e497",
-    "bytes": 10463488,
+    "sha256": "057e3e2185f7e97b3eee8120e7ed4340bbfac36ba52efbf3133950e7ca977ab9",
+    "bytes": 10457952,
     "abi": {
       "version": 7,
       "machine": "x86-64",

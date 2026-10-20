@@ -22,20 +22,6 @@ fn is_path_sep(b: u8) -> bool {
     b == b'/'
 }
 
-#[inline]
-fn path_slice_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).all(|(x, y)| {
-        if is_path_sep(*x) && is_path_sep(*y) {
-            true
-        } else {
-            x.eq_ignore_ascii_case(y)
-        }
-    })
-}
-
 /// Path ends with suffix at a path-separator boundary (case-insensitive).
 #[inline]
 pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
@@ -52,7 +38,7 @@ pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
         return false;
     }
 
-    if !path_slice_eq(&path_bytes[start..], suffix_bytes) {
+    if !path_bytes[start..].eq_ignore_ascii_case(suffix_bytes) {
         return false;
     }
 
@@ -85,7 +71,7 @@ pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     if path_bytes.len() > segment_len
         && is_path_sep(path_bytes[segment_len])
         && path.is_char_boundary(segment_len)
-        && path_slice_eq(&path_bytes[..segment_len], segment_bytes)
+        && path_bytes[..segment_len].eq_ignore_ascii_case(segment_bytes)
     {
         return true;
     }
@@ -102,7 +88,7 @@ pub fn path_contains_segment(path: &str, segment: &str) -> bool {
                 && is_path_sep(path_bytes[end])
                 && path.is_char_boundary(start)
                 && path.is_char_boundary(end)
-                && path_slice_eq(&path_bytes[start..end], segment_bytes)
+                && path_bytes[start..end].eq_ignore_ascii_case(segment_bytes)
             {
                 return true;
             }

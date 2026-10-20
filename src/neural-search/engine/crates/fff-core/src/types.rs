@@ -105,17 +105,12 @@ impl DirItem {
         self.flags & DirFlags::DELETED != 0
     }
 
-    /// Marks the dir deleted/restored. Returns `true` when the state changed.
-    pub(crate) fn set_deleted(&mut self, deleted: bool) -> bool {
-        if self.is_deleted() == deleted {
-            return false;
-        }
+    pub(crate) fn set_deleted(&mut self, deleted: bool) {
         if deleted {
             self.flags |= DirFlags::DELETED;
         } else {
             self.flags &= !DirFlags::DELETED;
         }
-        true
     }
 
     pub(crate) fn new(path: crate::simd_path::ChunkedString, last_segment_offset: u16) -> Self {
@@ -603,8 +598,6 @@ pub struct SearchResult<'a> {
 pub struct DirSearchResult<'a> {
     pub items: Vec<&'a DirItem>,
     pub scores: Vec<Score>,
-    pub total_matched: usize,
-    pub total_dirs: usize,
 }
 
 /// A single item in a mixed (files + directories) search result.
@@ -619,10 +612,6 @@ pub enum MixedItemRef<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct MixedSearchResult<'a> {
     pub items: Vec<MixedItemRef<'a>>,
-    pub scores: Vec<Score>,
-    pub total_matched: usize,
-    pub total_files: usize,
-    pub total_dirs: usize,
 }
 
 #[derive(Debug)]

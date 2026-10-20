@@ -30,7 +30,7 @@
 
 use crate::FFFStringStorage;
 use crate::binary_classifier::{BinaryInput, scratch};
-use crate::constants::{MAX_OVERFLOW_FILES, PATH_BUF_SIZE};
+use crate::constants::MAX_OVERFLOW_FILES;
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
@@ -105,7 +105,6 @@ pub(crate) struct FileSync {
     dirs: StableVec<DirItem>,
     base_dirs_count: usize,
     /// Number of live directory rows, including empty directories and the root.
-    live_dirs_count: usize,
     /// Shared builder for overflow file paths. Each overflow file's ChunkedString
     /// uses `arena_override` pointing into this builder's arena.
     overflow_builder: Option<crate::simd_path::ChunkedPathStoreBuilder>,
@@ -125,7 +124,6 @@ impl FileSync {
             live_count: 0,
             dirs: StableVec::from_vec_with_reserve(Vec::new(), MAX_OVERFLOW_FILES),
             base_dirs_count: 0,
-            live_dirs_count: 0,
             overflow_builder: None,
             git_workdir: None,
             chunked_paths: None,
@@ -287,7 +285,6 @@ impl FileSync {
         let overflow_arena = self.arena_overflow_ptr();
         let base_dirs_count = self.base_dirs_count;
 
-        let mut removed = 0usize;
         for (idx, dir) in self.dirs.iter_mut().enumerate() {
             if dir.is_deleted() {
                 continue;
@@ -297,19 +294,16 @@ impl FileSync {
             } else {
                 overflow_arena
             };
-            if predicate(dir, arena) && dir.set_deleted(true) {
-                removed += 1;
+            if predicate(dir, arena) {
+                dir.set_deleted(true);
             }
         }
-        self.live_dirs_count -= removed;
     }
 
     /// Restores a dir to the live state (file appeared under it again).
     fn revive_dir(&mut self, dir_idx: u32) {
-        if let Some(dir) = self.dirs.get_mut(dir_idx as usize)
-            && dir.set_deleted(false)
-        {
-            self.live_dirs_count += 1;
+        if let Some(dir) = self.dirs.get_mut(dir_idx as usize) {
+            dir.set_deleted(false);
         }
     }
 
@@ -363,7 +357,6 @@ impl FileSync {
         if !self.dirs.push(DirItem::new_overflow(chunked, last_seg)) {
             return None;
         }
-        self.live_dirs_count += 1;
         Some((idx as u32, true))
     }
 }
@@ -418,14 +411,12 @@ impl FileItem {
         tracker: &FrecencyTracker,
         arena: ArenaPtr,
         base_path: &Path,
-    ) -> Result<(), Error> {
+    ) {
         let mut abs_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
         let abs = self.write_absolute_path(arena, base_path, &mut abs_buf);
         self.access_frecency_score = tracker.get_access_score(abs) as i16;
         self.modification_frecency_score =
             tracker.get_modification_score(self.modified, self.git_status) as i16;
-
-        Ok(())
     }
 }
 
@@ -614,97 +605,63 @@ impl FilePicker {
         let dir_table = &self.sync_data.dirs;
         let base = self.base_path.as_path();
 
-        if !dir_table.is_empty() {
-            let arena = self.arena_base_ptr();
-            let overflow_arena = self.sync_data.arena_overflow_ptr();
-            let mut path_buf = PathBuf::with_capacity(crate::simd_path::PATH_BUF_SIZE);
-            let mut prev_relative_path = String::new();
-
-            let mut scratch_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
-            for dir_item in dir_table.iter() {
-                if dir_item.is_deleted() {
-                    continue;
-                }
-                let item_arena = if dir_item.is_overflow() {
-                    overflow_arena
-                } else {
-                    arena
-                };
-                let full_relative_path = dir_item.read_relative_path(item_arena, &mut scratch_buf);
-                let relative_path = full_relative_path.trim_end_matches(std::path::is_separator);
-
-                if relative_path.is_empty() {
-                    // Files directly under base_path
-                    prev_relative_path.clear();
-                    continue;
-                }
-
-                let mut i = common_dir_prefix_len(&prev_relative_path, relative_path);
-                // If we stopped on a separator, skip it — we want to start
-                // emitting at the first unseen segment, not re-emit the
-                // already-emitted prefix path.
-                if i < relative_path.len()
-                    && std::path::is_separator(relative_path.as_bytes()[i] as char)
-                {
-                    i += 1;
-                }
-
-                // Walk the suffix of `relative_path` one segment at a time, emitting
-                // each previously unseen ancestor up to and including `relative_path`.
-                while i < relative_path.len() {
-                    let next_sep = relative_path[i..]
-                        .find(std::path::is_separator)
-                        .map(|off| i + off)
-                        .unwrap_or(relative_path.len());
-                    let ancestor_rel = &relative_path[..next_sep];
-
-                    path_buf.clear();
-                    path_buf.push(base);
-                    path_buf.push(ancestor_rel);
-
-                    // we can't really emit iterator here unfortunately
-                    if matches!(f(path_buf.as_path()), ControlFlow::Break(())) {
-                        return;
-                    }
-
-                    i = next_sep + 1;
-                }
-
-                prev_relative_path.clear();
-                prev_relative_path.push_str(relative_path);
-            }
-            return;
-        }
-
-        // fallback that should never be happening, but it is possible to get the file
-        // path from the absolute path using components api as well:
-        let files = self.sync_data.files();
         let arena = self.arena_base_ptr();
-        let mut current = self.base_path.clone();
-        let mut path_buf = [0u8; PATH_BUF_SIZE];
+        let overflow_arena = self.sync_data.arena_overflow_ptr();
+        let mut path_buf = PathBuf::with_capacity(crate::simd_path::PATH_BUF_SIZE);
+        let mut prev_relative_path = String::new();
 
-        for file in files {
-            let abs = file.write_absolute_path(arena, base, &mut path_buf);
-            let Some(parent) = abs.parent() else {
+        let mut scratch_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
+        for dir_item in dir_table.iter() {
+            if dir_item.is_deleted() {
                 continue;
+            }
+            let item_arena = if dir_item.is_overflow() {
+                overflow_arena
+            } else {
+                arena
             };
-            if parent == current.as_path() {
+            let full_relative_path = dir_item.read_relative_path(item_arena, &mut scratch_buf);
+            let relative_path = full_relative_path.trim_end_matches(std::path::is_separator);
+
+            if relative_path.is_empty() {
+                // Files directly under base_path
+                prev_relative_path.clear();
                 continue;
             }
 
-            while current.as_path() != base && !parent.starts_with(&current) {
-                current.pop();
+            let mut i = common_dir_prefix_len(&prev_relative_path, relative_path);
+            // If we stopped on a separator, skip it — we want to start
+            // emitting at the first unseen segment, not re-emit the
+            // already-emitted prefix path.
+            if i < relative_path.len()
+                && std::path::is_separator(relative_path.as_bytes()[i] as char)
+            {
+                i += 1;
             }
 
-            let Ok(remainder) = parent.strip_prefix(&current) else {
-                continue;
-            };
-            for component in remainder.components() {
-                current.push(component);
-                if matches!(f(current.as_path()), ControlFlow::Break(())) {
+            // Walk the suffix of `relative_path` one segment at a time, emitting
+            // each previously unseen ancestor up to and including `relative_path`.
+            while i < relative_path.len() {
+                let next_sep = relative_path[i..]
+                    .find(std::path::is_separator)
+                    .map(|off| i + off)
+                    .unwrap_or(relative_path.len());
+                let ancestor_rel = &relative_path[..next_sep];
+
+                path_buf.clear();
+                path_buf.push(base);
+                path_buf.push(ancestor_rel);
+
+                // we can't really emit iterator here unfortunately
+                if matches!(f(path_buf.as_path()), ControlFlow::Break(())) {
                     return;
                 }
+
+                i = next_sep + 1;
             }
+
+            prev_relative_path.clear();
+            prev_relative_path.push_str(relative_path);
         }
     }
 
@@ -803,7 +760,7 @@ impl FilePicker {
             },
         );
         {
-            let mut guard = shared_picker.write()?;
+            let mut guard = shared_picker.write();
             *guard = Some(picker);
             // Dropping the old picker cancels its background work.
         }
@@ -980,8 +937,6 @@ impl FilePicker {
             options.max_threads
         };
 
-        let total_dirs = self.sync_data.live_dirs_count;
-
         let effective_query = match &query.fuzzy_query {
             fff_query_parser::FuzzyQuery::Text(t) => *t,
             fff_query_parser::FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
@@ -1017,12 +972,7 @@ impl FilePicker {
             "Directory search completed",
         );
 
-        DirSearchResult {
-            items,
-            scores,
-            total_matched,
-            total_dirs,
-        }
+        DirSearchResult { items, scores }
     }
 
     /// Perform a mixed fuzzy search across both files and directories.
@@ -1062,35 +1012,14 @@ impl FilePicker {
         let dir_results = self.fuzzy_search_directories(query, dir_options);
 
         if dirs_only {
-            let total_matched = dir_results.total_matched;
-            let total_dirs = dir_results.total_dirs;
-
-            let mut merged: Vec<(MixedItemRef<'_>, Score)> =
-                Vec::with_capacity(dir_results.items.len());
-            for (dir, score) in dir_results.items.into_iter().zip(dir_results.scores) {
-                merged.push((MixedItemRef::Dir(dir), score));
-            }
-
-            if page_offset >= merged.len() {
-                return MixedSearchResult {
-                    items: vec![],
-                    scores: vec![],
-                    total_matched,
-                    total_files: self.live_file_count(),
-                    total_dirs,
-                };
-            }
-
-            let end = (page_offset + page_limit).min(merged.len());
-            let page = merged.drain(page_offset..end);
-            let (items, scores): (Vec<_>, Vec<_>) = page.unzip();
-
             return MixedSearchResult {
-                items,
-                scores,
-                total_matched,
-                total_files: self.live_file_count(),
-                total_dirs,
+                items: dir_results
+                    .items
+                    .into_iter()
+                    .skip(page_offset)
+                    .take(page_limit)
+                    .map(MixedItemRef::Dir)
+                    .collect(),
             };
         }
 
@@ -1102,11 +1031,6 @@ impl FilePicker {
             ..options
         };
         let file_results = self.fuzzy_search(query, query_tracker, file_options);
-
-        // Merge by score descending.
-        let total_matched = file_results.total_matched + dir_results.total_matched;
-        let total_files = file_results.total_files;
-        let total_dirs = dir_results.total_dirs;
 
         let mut merged: Vec<(MixedItemRef<'_>, Score)> =
             Vec::with_capacity(file_results.items.len() + dir_results.items.len());
@@ -1121,27 +1045,13 @@ impl FilePicker {
         // Sort merged results by total score descending.
         merged.sort_unstable_by_key(|b| std::cmp::Reverse(b.1.total));
 
-        // Paginate.
-        if page_offset >= merged.len() {
-            return MixedSearchResult {
-                items: vec![],
-                scores: vec![],
-                total_matched,
-                total_files,
-                total_dirs,
-            };
-        }
-
-        let end = (page_offset + page_limit).min(merged.len());
-        let page = merged.drain(page_offset..end);
-        let (items, scores): (Vec<_>, Vec<_>) = page.unzip();
-
         MixedSearchResult {
-            items,
-            scores,
-            total_matched,
-            total_files,
-            total_dirs,
+            items: merged
+                .into_iter()
+                .skip(page_offset)
+                .take(page_limit)
+                .map(|(item, _)| item)
+                .collect(),
         }
     }
 
@@ -1333,11 +1243,10 @@ impl FilePicker {
                 // index. Reject those before IO, but release the read guard
                 // before opening the file and revalidate again when applying.
                 let current = owner.upgrade().is_some_and(|shared| {
-                    shared.read().ok().is_some_and(|guard| {
-                        guard
-                            .as_ref()
-                            .is_some_and(|picker| picker.classification_target(&task).is_some())
-                    })
+                    shared
+                        .read()
+                        .as_ref()
+                        .is_some_and(|picker| picker.classification_target(&task).is_some())
                 });
                 if !current {
                     return;
@@ -1345,8 +1254,7 @@ impl FilePicker {
                 let classified = task.run(&cancelled);
                 if !cancelled.load(Ordering::Acquire)
                     && let Some(shared) = owner.upgrade()
-                    && let Ok(mut guard) = shared.write()
-                    && let Some(picker) = guard.as_mut()
+                    && let Some(picker) = shared.write().as_mut()
                 {
                     picker.apply_classification(classified);
                 }
@@ -1428,30 +1336,27 @@ impl FilePicker {
         let bp = self.base_path.clone();
         let frecency = shared_frecency.read()?;
 
-        status_cache
-            .into_iter()
-            .try_for_each(|(path, status)| -> Result<(), Error> {
-                if let Some((arena, file)) = self.get_mut_file_by_path(&path) {
-                    file.git_status = Some(status);
-                    if let Some(ref f) = *frecency {
-                        file.update_frecency_scores(f, arena, &bp)?;
-                    }
-                    // Update parent dir frecency inline. `DirItem` has an
-                    // interior-mutable atomic score, so `&self` access is
-                    // enough — no write aliasing against Arc clones.
-                    let score = file.access_frecency_score as i32;
-                    let dir_idx = file.parent_dir_index as usize;
-                    if let Some(dir) = self.sync_data.dirs.get(dir_idx) {
-                        dir.update_frecency_if_larger(score);
-                    }
-                } else {
-                    // Expected on sparse checkouts: git reports a status for
-                    // a path that isn't materialized on disk and therefore
-                    // isn't in the file index. Don't spam the log (#404).
-                    debug!(?path, "Git status for path not in index, skipping");
+        for (path, status) in status_cache {
+            if let Some((arena, file)) = self.get_mut_file_by_path(&path) {
+                file.git_status = Some(status);
+                if let Some(ref f) = *frecency {
+                    file.update_frecency_scores(f, arena, &bp);
                 }
-                Ok(())
-            })?;
+                // Update parent dir frecency inline. `DirItem` has an
+                // interior-mutable atomic score, so `&self` access is
+                // enough — no write aliasing against Arc clones.
+                let score = file.access_frecency_score as i32;
+                let dir_idx = file.parent_dir_index as usize;
+                if let Some(dir) = self.sync_data.dirs.get(dir_idx) {
+                    dir.update_frecency_if_larger(score);
+                }
+            } else {
+                // Expected on sparse checkouts: git reports a status for
+                // a path that isn't materialized on disk and therefore
+                // isn't in the file index. Don't spam the log (#404).
+                debug!(?path, "Git status for path not in index, skipping");
+            }
+        }
 
         Ok(())
     }
@@ -1486,15 +1391,15 @@ impl FilePicker {
         &mut self,
         file_path: impl AsRef<Path>,
         frecency_tracker: &FrecencyTracker,
-    ) -> Result<(), Error> {
+    ) {
         let path = file_path.as_ref();
 
         let Some(index) = self.sync_data.find_file_index(path, &self.base_path) else {
-            return Ok(());
+            return;
         };
 
         if let Some((arena, file)) = self.sync_data.get_file_mut(index) {
-            file.update_frecency_scores(frecency_tracker, arena, &self.base_path)?;
+            file.update_frecency_scores(frecency_tracker, arena, &self.base_path);
 
             // Update parent dir frecency inline (atomic, &self access).
             let score = file.access_frecency_score as i32;
@@ -1503,8 +1408,6 @@ impl FilePicker {
                 dir.update_frecency_if_larger(score);
             }
         }
-
-        Ok(())
     }
 
     pub fn get_file_by_path(&self, path: impl AsRef<Path>) -> Option<&FileItem> {
@@ -1913,7 +1816,7 @@ impl FileSync {
             let dirs_ref = &dirs;
             BACKGROUND_THREAD_POOL.install(|| {
                 files.par_iter_mut().for_each(|file| {
-                    let _ = file.update_frecency_scores(frecency, arena, base_path);
+                    file.update_frecency_scores(frecency, arena, base_path);
                     let score = file.access_frecency_score as i32;
                     if score > 0 {
                         let dir_idx = file.parent_dir_index as usize;
@@ -1973,7 +1876,6 @@ impl FileSync {
             live_count: base_count,
             dirs: StableVec::from_vec_with_reserve(dirs, MAX_OVERFLOW_FILES),
             base_dirs_count,
-            live_dirs_count: base_dirs_count,
             overflow_builder: None,
             git_workdir,
             chunked_paths: Some(chunked_paths),
