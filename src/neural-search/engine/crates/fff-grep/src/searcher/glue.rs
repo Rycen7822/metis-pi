@@ -6,37 +6,6 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) struct SliceByLine<'s, M, S> {
-    core: Core<'s, M, S>,
-    slice: &'s [u8],
-}
-
-impl<'s, M: Matcher, S: Sink> SliceByLine<'s, M, S> {
-    pub(crate) fn new(
-        searcher: &'s Searcher,
-        matcher: M,
-        slice: &'s [u8],
-        write_to: S,
-    ) -> SliceByLine<'s, M, S> {
-        debug_assert!(!searcher.multi_line_with_matcher(&matcher));
-
-        SliceByLine {
-            core: Core::new(searcher, matcher, write_to),
-            slice,
-        }
-    }
-
-    pub(crate) fn run(mut self) -> Result<(), S::Error> {
-        if self.core.begin()? {
-            while !self.slice[self.core.pos()..].is_empty()
-                && self.core.match_by_line(self.slice)?
-            {}
-        }
-        self.core.finish()
-    }
-}
-
-#[derive(Debug)]
 pub(crate) struct MultiLine<'s, M, S> {
     config: &'s Config,
     core: Core<'s, M, S>,

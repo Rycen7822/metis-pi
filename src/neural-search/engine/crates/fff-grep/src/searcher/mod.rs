@@ -1,6 +1,6 @@
 use crate::{
     matcher::{LineTerminator, Match, Matcher},
-    searcher::glue::{MultiLine, SliceByLine},
+    searcher::{core::Core, glue::MultiLine},
     sink::{Sink, SinkError},
 };
 
@@ -44,21 +44,12 @@ impl std::fmt::Display for ConfigError {
 }
 
 /// The internal configuration of a searcher.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Config {
     /// The line terminator to use.
     pub(crate) line_term: LineTerminator,
     /// Whether to enable matching across multiple lines.
     multi_line: bool,
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        Config {
-            line_term: LineTerminator::default(),
-            multi_line: false,
-        }
-    }
 }
 
 /// A builder for configuring a searcher.
@@ -113,7 +104,11 @@ impl Searcher {
         if self.multi_line_with_matcher(&matcher) {
             MultiLine::new(self, matcher, slice, write_to).run()
         } else {
-            SliceByLine::new(self, matcher, slice, write_to).run()
+            let mut core = Core::new(self, matcher, write_to);
+            if core.begin()? {
+                core.match_by_line(slice)?;
+            }
+            core.finish()
         }
     }
 

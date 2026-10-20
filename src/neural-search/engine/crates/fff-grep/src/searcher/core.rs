@@ -1,13 +1,12 @@
 use crate::{
     lines,
     matcher::Matcher,
-    searcher::{Config, Range, Searcher},
+    searcher::{Range, Searcher},
     sink::{Sink, SinkError, SinkFinish, SinkMatch},
 };
 
 #[derive(Debug)]
 pub(crate) struct Core<'s, M: 's, S> {
-    config: &'s Config,
     matcher: M,
     searcher: &'s Searcher,
     sink: S,
@@ -19,7 +18,6 @@ pub(crate) struct Core<'s, M: 's, S> {
 impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     pub(crate) fn new(searcher: &'s Searcher, matcher: M, sink: S) -> Core<'s, M, S> {
         Core {
-            config: &searcher.config,
             matcher,
             searcher,
             sink,
@@ -51,36 +49,32 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         self.sink.finish(self.searcher, &SinkFinish)
     }
 
-    pub(crate) fn match_by_line(&mut self, buf: &[u8]) -> Result<bool, S::Error> {
+    pub(crate) fn match_by_line(&mut self, buf: &[u8]) -> Result<(), S::Error> {
         while !buf[self.pos()..].is_empty() {
             if let Some((line, crosses_line)) = self.find_by_line(buf)? {
                 self.set_pos(line.end());
                 if !self.matched(buf, &line, crosses_line)? {
-                    return Ok(false);
+                    return Ok(());
                 }
             } else {
                 break;
             }
         }
         self.set_pos(buf.len());
-        Ok(true)
+        Ok(())
     }
 
     #[inline(always)]
     fn find_by_line(&mut self, buf: &[u8]) -> Result<Option<(Range, bool)>, S::Error> {
         let mut pos = self.pos();
         while !buf[pos..].is_empty() {
-            let mat = match self
-                .matcher
-                .find_at(buf, pos)
-                .map_err(S::Error::error_message)?
-            {
+            let mat = match self.find_at(buf, pos)? {
                 None => return Ok(None),
                 Some(m) => m,
             };
             let line = lines::locate(
                 buf,
-                self.config.line_term.as_byte(),
+                self.searcher.line_terminator().as_byte(),
                 Range::zero(mat.start()),
             );
             if line.start() == buf.len() {
@@ -90,8 +84,9 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
             // A later alternative on this output line can cross the boundary
             // even when the first match does not. Preserve the extraction policy
             // but conservatively flag LF-capable matchers without another scan.
-            let crosses_line = self.matcher.line_terminator() != Some(self.config.line_term)
-                || buf[mat.start()..mat.end()].contains(&self.config.line_term.as_byte());
+            let crosses_line = self.matcher.line_terminator()
+                != Some(self.searcher.line_terminator())
+                || buf[mat.start()..mat.end()].contains(&self.searcher.line_terminator().as_byte());
             return Ok(Some((line, crosses_line)));
         }
         Ok(None)
@@ -124,7 +119,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         }
         let count = lines::count(
             &buf[self.last_line_counted..upto],
-            self.config.line_term.as_byte(),
+            self.searcher.line_terminator().as_byte(),
         );
         self.line_number += count;
         self.last_line_counted = upto;
