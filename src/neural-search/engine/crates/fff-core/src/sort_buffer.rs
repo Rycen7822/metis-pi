@@ -6,13 +6,6 @@ use std::mem::MaybeUninit;
 // are sequential in practice and allocate ONLY when we have a parallel access
 static SORT_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
-fn ensure_capacity(buf: &mut Vec<u8>, required: usize) {
-    if buf.capacity() < required {
-        let len = buf.len();
-        buf.reserve(required - len);
-    }
-}
-
 struct SharedSortBuf {
     guard: parking_lot::MutexGuard<'static, Vec<u8>>,
 }
@@ -22,7 +15,7 @@ impl SharedSortBuf {
         let align = std::mem::align_of::<MaybeUninit<T>>();
         let size = std::mem::size_of::<MaybeUninit<T>>();
         let required = len.saturating_mul(size).saturating_add(align);
-        ensure_capacity(&mut self.guard, required);
+        self.guard.reserve(required);
 
         // SAFETY: the Vec<u8> is only 1-byte aligned, so we over-allocate by
         // `align` bytes and shift the pointer to satisfy T's alignment.

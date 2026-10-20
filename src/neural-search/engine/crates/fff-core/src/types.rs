@@ -681,20 +681,12 @@ impl ContentCacheBudget {
     }
 
     pub fn new_for_repo(file_count: usize) -> Self {
-        let max_files = if file_count > 50_000 {
-            5_000
+        let (max_files, max_bytes) = if file_count > 50_000 {
+            (5_000, 128 * 1024 * 1024)
         } else if file_count > 10_000 {
-            10_000
+            (10_000, 256 * 1024 * 1024)
         } else {
-            30_000 // effectively unlimited for small repos
-        };
-
-        let max_bytes = if file_count > 50_000 {
-            128 * 1024 * 1024 // 128 MB
-        } else if file_count > 10_000 {
-            256 * 1024 * 1024 // 256 MB
-        } else {
-            MAX_CACHED_CONTENT_BYTES // 512 MB
+            (30_000, MAX_CACHED_CONTENT_BYTES)
         };
 
         Self {

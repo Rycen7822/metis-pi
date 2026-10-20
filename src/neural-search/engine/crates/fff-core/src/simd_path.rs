@@ -270,11 +270,7 @@ impl std::fmt::Debug for ChunkedString {
 
 #[inline]
 const fn chunks_needed(byte_len: usize) -> usize {
-    if byte_len == 0 {
-        0
-    } else {
-        byte_len.div_ceil(SIMD_CHUNK_BYTES)
-    }
+    byte_len.div_ceil(SIMD_CHUNK_BYTES)
 }
 
 #[derive(Clone, Debug)]
