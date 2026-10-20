@@ -1,32 +1,8 @@
-//! Core file picker: filesystem indexing, background watching, and fuzzy search.
+//! Filesystem indexes, background monitoring, and file/directory/content search.
 //!
-//! [`FilePicker`] is the central component of fff-search. It:
-//!
-//! 1. **Indexes** a directory tree in a background thread, collecting every
-//!    non-ignored file into a path-sorted `Vec<FileItem>`.
-//! 2. **Watches** the filesystem via the `notify` crate, applying
-//!    create/modify/delete events to the index in real time.
-//! 3. **Owns files**: Provides a values for search and provides a good entry point for
-//!    fuzzy search and live grep
-//!
-//! # Lifecycle
-//!
-//! ```text
-//!   new_with_shared_state()
-//!     │
-//!     ├─> background scan thread ──> populates SharedPicker
-//!     └─> file-system watcher    ──> live updates SharedPicker
-//!
-//!   search()         <── borrows &self, delegates to fuzzy_search
-//!   grep()           <── static, borrows &[FileItem] (live content search)
-//!   trigger_rescan() <── synchronous re-index
-//!   cancel()         <── shuts down background work
-//! ```
-//!
-//! # Thread Safety
-//!
-//! `FilePicker` itself is **not** `Sync`!
-//! all concurrent access goes through [`crate::SharedFilePicker`]
+//! [`FilePicker::new_with_shared_state`] starts asynchronous indexing.
+//! [`crate::SharedFilePicker`] guards concurrent reads and updates; scan jobs
+//! and watcher workers publish changes through that shared owner.
 
 use crate::FFFStringStorage;
 use crate::binary_classifier::{BinaryInput, scratch};
@@ -104,7 +80,6 @@ pub(crate) struct FileSync {
     /// scan-built region, `dirs[base_dirs_count..]` holds watcher-appended dirs.
     dirs: StableVec<DirItem>,
     base_dirs_count: usize,
-    /// Number of live directory rows, including empty directories and the root.
     /// Shared builder for overflow file paths. Each overflow file's ChunkedString
     /// uses `arena_override` pointing into this builder's arena.
     overflow_builder: Option<crate::simd_path::ChunkedPathStoreBuilder>,

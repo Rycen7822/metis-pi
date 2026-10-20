@@ -94,7 +94,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-/// Primary entry points with thread-safe [`SharedFilePicker`](shared::FilePicker) instance
+/// Shared picker access and background work coordination. See [`SharedFilePicker`].
 pub mod shared;
 pub use shared::*;
 
