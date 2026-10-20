@@ -80,7 +80,7 @@ impl SearcherBuilder {
 
 /// A searcher executes searches over a haystack and writes results to a caller
 /// provided sink.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Searcher {
     pub(crate) config: Config,
 }
@@ -88,7 +88,7 @@ pub struct Searcher {
 impl Searcher {
     /// Create a new searcher with a default configuration.
     pub fn new() -> Searcher {
-        SearcherBuilder::new().build()
+        Self::default()
     }
 
     /// Execute a search over the given slice and write the results to the
@@ -125,12 +125,6 @@ impl Searcher {
             });
         }
         Ok(())
-    }
-}
-
-impl Default for Searcher {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

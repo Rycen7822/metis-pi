@@ -29,35 +29,19 @@ impl LineStep {
         }
     }
 
-    /// Like next, but returns a `Match` instead of a tuple.
+    /// Return the next line, including its terminator when present.
     #[inline(always)]
     pub fn next_match(&mut self, bytes: &[u8]) -> Option<Match> {
-        self.next_impl(bytes).map(|(s, e)| Match::new(s, e))
-    }
-
-    #[inline(always)]
-    fn next_impl(&mut self, mut bytes: &[u8]) -> Option<(usize, usize)> {
-        bytes = &bytes[..self.end];
-        match memchr::memchr(self.line_term, &bytes[self.pos..]) {
-            None => {
-                if self.pos < bytes.len() {
-                    let m = (self.pos, bytes.len());
-                    assert!(m.0 <= m.1);
-
-                    self.pos = m.1;
-                    Some(m)
-                } else {
-                    None
-                }
-            }
-            Some(line_end) => {
-                let m = (self.pos, self.pos + line_end + 1);
-                assert!(m.0 <= m.1);
-
-                self.pos = m.1;
-                Some(m)
-            }
+        let bytes = &bytes[..self.end];
+        if self.pos == bytes.len() {
+            return None;
         }
+        let start = self.pos;
+        let end = memchr::memchr(self.line_term, &bytes[start..])
+            .map_or(bytes.len(), |offset| start + offset + 1);
+        assert!(start <= end);
+        self.pos = end;
+        Some(Match::new(start, end))
     }
 }
 

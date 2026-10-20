@@ -44,7 +44,7 @@ impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
     }
 
     fn sink(&mut self) -> Result<bool, S::Error> {
-        let mat = match self.find()? {
+        let mat = match self.core.find_at(self.slice, self.core.pos())? {
             Some(range) => range,
             None => {
                 self.core.set_pos(self.slice.len());
@@ -80,10 +80,6 @@ impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
             return Ok(false);
         }
         self.core.matched(self.slice, range, crosses_line)
-    }
-
-    fn find(&mut self) -> Result<Option<Range>, S::Error> {
-        self.core.find_at(self.slice, self.core.pos())
     }
 
     fn advance(&mut self, range: &Range) {

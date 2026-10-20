@@ -12,7 +12,7 @@
       "src/neural-search/engine",
       "src/neural-search/native/binding"
     ],
-    "sha256": "c73dc84e444fbe0fa464302a0fd3c7db7dd3a677aed281c0a9a97c541f6a87b2",
+    "sha256": "7d0122873f1c89cc5bec3de6b652fc7c69c3d511f6a5ee2e487a32c70915a5fd",
     "inputs": [
       {
         "path": "src/neural-search/engine/Cargo.lock",
@@ -248,7 +248,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/lines.rs",
-        "sha256": "8765a742133d3cbf4ed7c3307b60a554b9ed82c2a7e9ab133ae18f6c69dcef05"
+        "sha256": "a3c450106057a25d62eaa1d85b496971d2009317907695fa213d7db2fa3b0678"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/matcher.rs",
@@ -256,15 +256,15 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/searcher/core.rs",
-        "sha256": "c43b5c59a60eecd5ef4c87851dadf10a0e7b34e74add55743a92c0b28f2dbc72"
+        "sha256": "5daa64fa53d157c5c03c5d8269c989077de16376733897157c3caf610ac9a1c9"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/searcher/glue.rs",
-        "sha256": "24626301a23246e68147ac99d36c0693b25f1818d68c78e12099bb0b56ac4c30"
+        "sha256": "c8091db82a5e105ed3ece78e84ca81cab90ad9ffb3eca44a253e320ff0f7a8c3"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/searcher/mod.rs",
-        "sha256": "db37334165d4b7c949a429b62995bc8a38627b02ba2a20d5cb41616f5e24cd87"
+        "sha256": "499aa214fd409ba39c6507ceb808e349aa87b6b9701a3560bc8e7adf11fa6d52"
       },
       {
         "path": "src/neural-search/engine/crates/fff-grep/src/sink.rs",
@@ -367,8 +367,8 @@
   },
   "asset": {
     "path": "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
-    "sha256": "5e00f1d66b0db52790d142efc5c39bf1e641beb5b9ea531e7f84d70e095f5570",
-    "bytes": 10457760,
+    "sha256": "5946cf72a285d1598f71598973e2f1691bddb5a77e4f49fb14dbbddd76e6dafc",
+    "bytes": 10457984,
     "abi": {
       "version": 7,
       "machine": "x86-64",
