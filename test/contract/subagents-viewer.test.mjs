@@ -58,7 +58,9 @@ function popup(t, options = {}) {
     const y = header ? 1 : rendered.findIndex(row => row.includes(label));
     const index = rendered[y]?.indexOf(label) ?? -1;
     assert.ok(index >= 0, `visible mouse target ${label}`);
-    return mouse(width, visibleWidth(rendered[y].slice(0, index)), y, event);
+    return mouse(width, visibleWidth(rendered[y].slice(0, index)), y, {
+      ...(event.button === "right" && process.platform !== "win32" ? { type: "press" } : {}), ...event,
+    });
   };
   return { viewer, calls, closes, rows, mouse, clickText };
 }
@@ -119,7 +121,8 @@ test("conversation popup keeps native click folds through refresh and scrolling"
   const rows = () => viewer.render(90).map(stripVTControlCharacters);
   const click = (label, button = "left") => {
     const y = rows().findIndex(row => row.includes(label)); assert.ok(y >= 0, label);
-    return viewer.handleMouse({ type: "click", button, x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 });
+    const type = button === "right" && process.platform !== "win32" ? "press" : "click";
+    return viewer.handleMouse({ type, button, x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 });
   };
   assert.ok(!rows().some(row => row.includes("OUTPUT_7")));
   assert.equal(click("Ran").handled, true);

@@ -69,6 +69,9 @@ export interface TranscriptAdapterInput {
    */
   makeClickable?: (input: {
     inner: unknown;
+    /** Existing adjacent spacers moved inside the hit area, without adding rows. */
+    before?: unknown;
+    after?: unknown;
     control: ThinkingViewControl;
     fallback: ThinkingView;
     apply: (next: ThinkingView) => void;
@@ -568,17 +571,23 @@ function coordinateSubtree(
         }
       }
 
-      // The click layer sits OUTSIDE the rail/peek/label: a click anywhere on
-      // the block (rail column included) is ours, and the gesture state lives in
-      // the run control — never in the instances this rebuild just replaced.
+      // Include the host's existing blank rows in the hit area. Move only
+      // adjacent native Spacers, never a neighboring message or separator;
+      // composing them inside the click layer preserves the visible geometry.
       if (control && input.makeClickable) {
+        const index = children.indexOf(child);
+        const isSpacer = (node: unknown) => !!node && spacerProto !== undefined && Object.getPrototypeOf(node) === spacerProto;
+        const before = index > 0 && isSpacer(children[index - 1]) ? children[index - 1] : undefined;
+        const after = index >= 0 && isSpacer(children[index + 1]) ? children[index + 1] : undefined;
         const clickable = input.makeClickable({
-          inner: node,
+          inner: node, before, after,
           control,
           fallback: view,
           apply: (next) => applyThinkingView(component, ordinal ?? 0, next, rebuild),
         });
         if (clickable && typeof clickable === "object") {
+          if (after) children.splice(index + 1, 1);
+          if (before) children.splice(index - 1, 1);
           ((clickable as Record<symbol, unknown>))[CLICK_SYMBOL] = true;
           node = clickable;
           decorated = true;

@@ -11,7 +11,7 @@ function clicks() {
     control, applied,
     click: (button: "left" | "right", visible: ThinkingView) =>
       new ThinkingClickableComponent({ render: () => [], invalidate() {} }, control, visible, (v) => applied.push(v))
-        .handleMouse({ type: "click", button, x: 10, y: 5, screenX: 10, screenY: 5 }),
+        .handleMouse({ type: button === "right" && process.platform !== "win32" ? "press" : "click", button, x: 10, y: 5, screenX: 10, screenY: 5 }),
   };
 }
 
@@ -34,17 +34,23 @@ test("left toggles collapsed/peek immediately and leaves full unchanged; right t
   assert.deepEqual(applied, ["peek", "collapsed", "peek", "full", "collapsed", "full", "collapsed"]);
 });
 
-test("right press claims the host gesture without applying it before the eventual click", () => {
+test("right activates once without requiring release, while native Windows retains its paste guard", () => {
   const control = createThinkingViewControl();
   const applied: ThinkingView[] = [];
   const component = new ThinkingClickableComponent({ render: () => [], invalidate() {} }, control, "collapsed", v => applied.push(v));
   const pointer = { button: "right" as const, x: 3, y: 0, screenX: 3, screenY: 0 };
-  assert.equal(component.handleMouse({ type: "press", ...pointer })?.handled, true, "Pi only synthesizes right click after a handled press");
-  assert.deepEqual(applied, [], "press must not rebuild the click target");
+  const result = component.handleMouse({ type: "press", ...pointer });
+  if (process.platform === "win32") {
+    assert.equal(result?.handled, true, "native Windows must not fall through to clipboard paste");
+    assert.deepEqual(applied, [], "native Windows retains its captured-click route");
+  } else {
+    assert.equal(result?.handled, undefined, "do not leave Pi waiting for a missing right release");
+    assert.equal(result?.render, true, "direct hosts can repaint without capturing the press");
+    assert.deepEqual(applied, ["full"], "right press expands immediately");
+  }
   component.handleMouse({ type: "release", ...pointer });
-  assert.deepEqual(applied, []);
   component.handleMouse({ type: "click", ...pointer });
-  assert.deepEqual(applied, ["full"], "one press/release/click gesture applies once");
+  assert.deepEqual(applied, ["full"], "a later release/click must not apply the same gesture twice");
 });
 
 test("gestures use the visible shape after a global toggle rather than an old mouse choice", () => {

@@ -251,7 +251,11 @@ export class SubagentViewer implements Component {
       if (event.type === "click") view.offset = view.renderedOffset;
       const result = item?.component.handleMouse?.({ ...event, x: event.x - this.bodyPadding,
         y: y - item.y, width: this.innerWidth, height: item.height });
-      if (result?.handled) { this.invalidate(); this.tui.requestRender(); return { handled: true, requestRender: true }; }
+      if (result?.handled || result?.render) {
+        if (event.type === "press" && result.render) view.offset = view.renderedOffset;
+        this.invalidate(); this.tui.requestRender();
+        return result.handled ? { handled: true, requestRender: true } : { render: true };
+      }
       view.offset = previous;
     }
     if (event.type === "wheel") { this.scroll(event.wheelDelta ?? 0); return { handled: true, requestRender: true }; }

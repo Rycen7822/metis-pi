@@ -116,12 +116,13 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       (text) => surface.paintGlyph(text, "dim"),
       input.onScroll,
     ),
-    makeClickable: (input) => new ThinkingClickableComponent(
-      input.inner as Tui.Component,
-      input.control,
-      input.fallback,
-      input.apply,
-    ),
+    makeClickable: (input) => {
+      const child = new Tui.Container();
+      if (input.before) child.addChild(input.before as Tui.Component);
+      child.addChild(input.inner as Tui.Component);
+      if (input.after) child.addChild(input.after as Tui.Component);
+      return new ThinkingClickableComponent(child, input.control, input.fallback, input.apply);
+    },
     // Collapsed thinking run: a real Tui.Text so selection-copy mirrors it
     // like any other host label (the hidden reasoning body is not rendered
     // anywhere and can never be copied). The host owns theme styling.

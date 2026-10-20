@@ -347,15 +347,20 @@ export class ThinkingClickableComponent implements Component {
   }
 
   handleMouse(event: TranscriptMouseEvent): TranscriptMouseResult {
-    // Pi synthesizes a right click only when its press has a component target.
-    // Claim it without rebuilding; leave left presses to native selection.
-    if (event.type === "press" && event.button === "right") return { handled: true };
-    if (event.type === "click" && (event.button === "left" || event.button === "right")) {
-      this.#control.handleClick(
-        event.button,
-        { fallback: this.#fallback, apply: this.#apply },
-      );
-      return { handled: true };
+    // Warp/WSL may send right presses without releases. Apply immediately,
+    // but leave the press unclaimed: Pi would otherwise retain an unfinished
+    // mouse target. Production apply callbacks request the repaint themselves.
+    // Native Windows keeps the original captured-click path to suppress the
+    // host's right-click paste fallback. Left presses still allow selection.
+    const button = event.button;
+    if (button === "left" || button === "right") {
+      const activateOnPress = button === "right" && process.platform !== "win32";
+      if (event.type === (activateOnPress ? "press" : "click")) {
+        this.#control.handleClick(button, { fallback: this.#fallback, apply: this.#apply });
+        // Direct hosts can repaint without Pi capturing an unfinished press.
+        return activateOnPress ? { render: true } : { handled: true };
+      }
+      if (button === "right" && (event.type === "press" || event.type === "click")) return { handled: true };
     }
     return childHandleMouse(this.#child, event);
   }

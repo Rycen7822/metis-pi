@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import { TranscriptState } from "../../src/transcript-state.ts";
 import { installTranscriptDecorations } from "../../src/transcript-adapter.ts";
 import { thoughtSummaryText } from "../../src/thinking-summary.ts";
@@ -81,6 +81,15 @@ const regionsOf = (component) => component.contentContainer.children.filter((chi
 
 const regionText = (region) => region.child.render(80).join("\n");
 
+const makeClickable = ({ inner, before, after, control, fallback, apply }) => {
+  const child = new Container();
+  if (before) child.addChild(before);
+  child.addChild(inner);
+  if (after) child.addChild(after);
+  return new ThinkingClickableComponent(child, control, fallback, apply);
+};
+const gestureType = button => button === "right" && process.platform !== "win32" ? "press" : "click";
+
 const click = (region) => {
   region.handleMouse({ type: "click", button: "left" });
 };
@@ -138,16 +147,16 @@ test("native peek gestures open the body, fold once on completion and survive la
   setup(t, state, { streaming: "peek", completed: "collapsed" }, {
     makePeek: ({ inner, control, windowLines, onScroll }) =>
       new ThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
-    makeClickable: ({ inner, control, fallback, apply }) =>
-      new ThinkingClickableComponent(inner, control, fallback, apply),
+    makeClickable,
   });
   const body = Array.from({ length: 12 }, (_, i) => `reasoning row ${i}`).join("\n\n");
   const { component, message, update } = streamingAssistant(state, [{ type: "thinking", thinking: body }]);
-  const mouse = (button) => clickRegion({ type: "click", button, x: 4, y: 4, screenX: 4, screenY: 4, width: 80, height: 8 });
+  const mouse = (button) => clickRegion({ type: gestureType(button), button, x: 4, y: 4, screenX: 4, screenY: 4, width: 80, height: 8 });
   const clickRegion = (event) => {
     const region = regionsOf(component)[0];
     assert.ok(region.child instanceof ThinkingClickableComponent);
-    assert.equal(region.handleMouse(event)?.handled, true, "the native region routes the gesture to the click layer");
+    const result = region.handleMouse(event);
+    assert.equal(result?.handled, event.type === "press" ? undefined : true, "right press applies without native capture; left click stays handled");
   };
   update();
   assert.match(regionText(regionsOf(component)[0]), /reasoning row 11/);
@@ -191,8 +200,7 @@ test("active collapsed thinking routes both buttons and host global toggles keep
   setup(t, state, { streaming: "collapsed", completed: "collapsed" }, {
     makePeek: ({ inner, control, windowLines, onScroll }) =>
       new ThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
-    makeClickable: ({ inner, control, fallback, apply }) =>
-      new ThinkingClickableComponent(inner, control, fallback, apply),
+    makeClickable,
   });
   const body = Array.from({ length: 12 }, (_, i) => `ACTIVE_${i}`).join("\n\n");
   const { component, message, update } = streamingAssistant(state, [{ type: "thinking", thinking: body }]);
@@ -200,7 +208,9 @@ test("active collapsed thinking routes both buttons and host global toggles keep
   const mouse = button => {
     const region = regionsOf(component)[0];
     assert.ok(region.child instanceof ThinkingClickableComponent);
-    assert.equal(region.handleMouse({ type: "click", button, x: 3, y: 0, screenX: 3, screenY: 0 }).handled, true);
+    const type = gestureType(button);
+    const result = region.handleMouse({ type, button, x: 3, y: 0, screenX: 3, screenY: 0 });
+    assert.equal(result?.handled, type === "press" ? undefined : true);
   };
   mouse("left");
   assert.doesNotMatch(regionText(regionsOf(component)[0]), /ACTIVE_0\b/);
