@@ -7,7 +7,6 @@ export class FilePickerFactory {
   private dbDisabled = false;
   constructor(private readonly options: PickerOptions & { onDbFailure?: (error: string) => void }) {}
 
-  get databasesDisabled(): boolean { return this.dbDisabled; }
 
   async create(basePath: string, signal?: AbortSignal, persistent = true): Promise<FileFinderApi> {
     signal?.throwIfAborted();

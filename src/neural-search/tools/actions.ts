@@ -68,11 +68,10 @@ interface SearchDetails {
   outputTruncated?: boolean;
   nativeMultilineLimited?: boolean;
 }
-const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 export function createSearchActions(runtime: SearchRuntime, toolName: string): ReadonlyMap<string, ActionTool> {
   const find: ToolDefinition<typeof findSchema, SearchDetails> = {
-    name: toolName, label: "Find", annotations,
+    name: toolName, label: "Find",
     description: `Fuzzy path and glob search, matching the whole root-relative path (not only filename). Native frecency-ranked, git-aware; multi-word is narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}. Stable snapshots allow at most ${FIND_SNAPSHOT_LIMIT} matches; narrow larger queries. For exact filenames use a glob in path; for directory listings use path='dir/**' and an empty pattern.`,
     parameters: findSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -139,7 +138,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
   };
 
   const grep: ToolDefinition<typeof grepSchema, SearchDetails> = {
-    name: toolName, label: "Search", annotations,
+    name: toolName, label: "Search",
     description: "Search file contents. Smart-case, auto-detects regex vs literal, git-aware. Native frecency order across files, source order within files. Default limit 20. LF matches are limited native blocks (coalescing/512-byte clipping), flagged nativeMultilineLimited/outputTruncated for potential incompleteness. Use path/include and exclude to reduce noise; read the top matching file after 1-2 searches. Plain no-match queries may suggest fuzzy matches.",
     parameters: grepSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -202,7 +201,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
   };
 
   const multi: ToolDefinition<typeof multiGrepSchema, SearchDetails> = {
-    name: toolName, label: "Search", annotations,
+    name: toolName, label: "Search",
     description: "Search file contents for ANY of multiple LF-free literals (native SIMD OR). A single LF-containing literal is allowed as limited native blocks (coalescing/512-byte clipping), flagged nativeMultilineLimited/outputTruncated for potential incompleteness; split LF-containing patterns into separate queries. Supports native constraints plus path/exclude, smart-case, context, and cursor pagination. Default limit 20.",
     parameters: multiGrepSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {

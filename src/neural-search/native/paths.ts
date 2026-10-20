@@ -35,10 +35,10 @@ export function scanOptOutReason(root: string, config: { enableHomeDirScanning: 
   return null;
 }
 
-/** Absolute whitespace is path data; platform separators and home shorthand share one owner. */
+/** Linux paths retain whitespace and literal backslashes; expand home shorthand once. */
 export function pathConstraintText(value: string): string {
-  const text = (path.isAbsolute(value) ? value : value.trim()).replaceAll(path.sep, "/");
-  return text === "~" || text.startsWith("~/") ? path.join(HOME_DIR, text.slice(1)).replaceAll(path.sep, "/") : text;
+  const text = path.isAbsolute(value) ? value : value.trim();
+  return text === "~" || text.startsWith("~/") ? path.join(HOME_DIR, text.slice(1)) : text;
 }
 
 export function resolveAuxRoot(absPath: string): { root: string; suffix: string } | null {

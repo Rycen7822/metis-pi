@@ -21,7 +21,7 @@ export function normalizePathConstraint(pathConstraint: string, cwd = process.cw
   // Explicit globs enforce the same directory constraint for both APIs.
   if (trimmed.endsWith("/")) return `${trimmed}**`;
   // A slash also makes basename globs unambiguous to the content parser.
-  if (trimmed.startsWith("/") || hasGlobSyntax(trimmed)) return trimmed.includes("/") ? trimmed : `./${trimmed}`;
+  if (hasGlobSyntax(trimmed)) return trimmed.includes("/") ? trimmed : `./${trimmed}`;
   const lastSegment = trimmed.split("/").pop() ?? "";
   return /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment) ? trimmed : `${trimmed}/**`;
 }
@@ -79,7 +79,7 @@ function excludeTokens(raw: string, whitespace: boolean): string[] {
 }
 
 function relativeConstraint(value: string, cwd: string): string {
-  const relative = path.relative(cwd, path.resolve(cwd, value)).replaceAll(path.sep, "/");
+  const relative = path.relative(cwd, path.resolve(cwd, value));
   if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative))
     throw new Error(`Path constraint must be relative to the search root: ${value}`);
   return relative;

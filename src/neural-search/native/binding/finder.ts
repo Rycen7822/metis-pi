@@ -1,5 +1,5 @@
 // Finder lifetime is session-owned; library modules remain process-cached.
-import { ffiCreate, ffiDestroy, ffiGetScanProgress, ffiGrep, ffiHealthCheck, ffiIsScanning, ffiMultiGrep, ffiScanFiles, ffiSearch, ffiSearchMixed, type NativeHandle } from "./ffi.ts";
+import { ffiCreate, ffiDestroy, ffiGetScanProgress, ffiGrep, ffiHealthCheck, ffiMultiGrep, ffiScanFiles, ffiSearch, ffiSearchMixed, type NativeHandle } from "./ffi.ts";
 import type { FileFinderApi, GrepOptions, GrepResult, HealthCheck, InitOptions, MixedSearchResult, MultiGrepOptions, Result, ScanProgress, SearchOptions, SearchResult } from "./api.ts";
 import { err } from "./api.ts";
 
@@ -22,7 +22,7 @@ export class FileFinder implements FileFinderApi {
     const guard = this.alive();
     return guard.ok ? ffiSearch(guard.value, query, options?.offset ?? 0, options?.pageSize ?? 0) : guard;
   }
-  mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult> {
+  mixedSearch(query: string, options?: Pick<SearchOptions, "pageSize">): Result<MixedSearchResult> {
     const guard = this.alive();
     return guard.ok ? ffiSearchMixed(guard.value, query, options?.pageSize ?? 0) : guard;
   }
@@ -40,7 +40,6 @@ export class FileFinder implements FileFinderApi {
     const guard = this.alive();
     return guard.ok ? ffiScanFiles(guard.value) : guard;
   }
-  isScanning(): boolean { return this.handle !== null && ffiIsScanning(this.handle); }
   getScanProgress(): Result<ScanProgress> {
     const guard = this.alive();
     return guard.ok ? ffiGetScanProgress(guard.value) : guard;

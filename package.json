@@ -41,8 +41,8 @@
     "check:condense": "tsc -p tsconfig.condense.json",
     "prepare:subagents": "python3 scripts/prepare-subagents.py",
     "prepare": "npm run prepare:subagents",
-    "build:neural-engine": "node native/neural-search/build-linux-x64.mjs",
-    "verify:neural-engine": "node native/neural-search/build-linux-x64.mjs verify",
+    "build:neural-engine": "node src/neural-search/engine/build-linux-x64.mjs",
+    "verify:neural-engine": "node src/neural-search/engine/build-linux-x64.mjs verify",
     "prepack": "npm run verify:neural-engine && npm run build:plugins && npm run prepare:subagents",
     "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q test/subagents -n 4 --dist=loadfile",
     "build:plugins": "npm --prefix src/pi-web-access run build",
@@ -86,6 +86,7 @@
     "metis-pi-config.md",
     "extensions",
     "src",
+    "!src/neural-search/engine/target/**",
     "!src/ask-user-question/**/*.test.ts",
     "!src/ask-user-question/test-fixtures.ts",
     "skills",
@@ -103,8 +104,6 @@
     "docs/provenance/mcp/LICENSE",
     "vendor/tree-sitter-bash",
     "assets/native-tools",
-    "assets/neural-search",
-    "native/neural-search",
     "docs/provenance/subagents/LICENSE"
   ],
   "engines": {

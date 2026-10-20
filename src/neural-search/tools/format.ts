@@ -1,10 +1,10 @@
 import type { GrepResult, SearchResult } from "../native/binding/api.ts";
 import { truncateHead } from "@earendil-works/pi-coding-agent";
 
-export function fileAnnotation(item: { gitStatus?: string; totalFrecencyScore?: number; accessFrecencyScore?: number }): string {
+export function fileAnnotation(item: { gitStatus?: string; totalFrecencyScore?: number }): string {
   const git = item.gitStatus;
   if (git && git !== "clean" && git !== "unknown") return `  [${git} in git]`;
-  const frecency = item.totalFrecencyScore ?? item.accessFrecencyScore ?? 0;
+  const frecency = item.totalFrecencyScore ?? 0;
   return frecency >= 25 ? "  [VERY often touched file]" : frecency >= 20 ? "  [often touched file]" : "";
 }
 
