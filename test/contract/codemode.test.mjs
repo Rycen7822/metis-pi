@@ -87,7 +87,8 @@ test("codemode start and timing labels use dark orange with terminal color fallb
     const colored = text => prefix ? `${prefix}${text}\x1b[39m` : text;
     assert.equal(render(codemode.renderCall({ code: "text(1)" }, theme, context)), colored("codemode"), kind);
     const expanded = render(codemode.renderCall({ code: "text(1)" }, theme, { ...context, expanded: true }));
-    assert.equal(expanded, `${colored("codemode")}\ntext(1)`, "script code keeps its own styling");
+    const rail = kind === "none" ? "|" : colored("▏");
+    assert.equal(expanded, `${colored("codemode")}\n${rail} text(1)`, "script keeps its own styling inside the orange rail");
     assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)), colored("Elapsed 0.0s"), kind);
     assert.equal(render(codemode.renderResult(scriptOutput, {}, theme, context)),
       colored("Took 0.1s"), "script output is hidden until explicitly expanded");

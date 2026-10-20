@@ -232,21 +232,33 @@ function clickRegion(component: Component, context: ViewContext, toggle?: () => 
 
 const SCRIPT_PREVIEW_ROWS = 12;
 
-/** Keep the newest physical rows and their copy boundaries, not a second source buffer. */
-function scriptPreview(component: Component): Component {
+/** Frame source rows without copying the rail or restoring a hidden preview prefix. */
+function scriptBody(component: Component, glyph: string, preview: boolean): Component {
+  let cache: { width: number; source: string[]; rows: string[] } | undefined;
   return {
     render(width) {
-      const all = component.render(width);
-      if (all.length <= SCRIPT_PREVIEW_ROWS) return all;
-      const rows = all.slice(-SCRIPT_PREVIEW_ROWS), product = productFor(all);
-      if (product && !product.children) {
-        const copy = product.rows.slice(-SCRIPT_PREVIEW_ROWS);
-        copy[0] = { ...copy[0]!, breakBefore: "gap" };
-        registerProduct(rows, { width, rows: copy });
+      // Leave room for a wide glyph when the available width is very narrow.
+      const shift = Math.min(2, Math.max(0, Math.floor(width) - 2));
+      const inner = Math.max(1, Math.floor(width) - shift), all = component.render(inner);
+      if (cache?.width === width && cache.source === all) return cache.rows;
+      let body = all, product = productFor(all);
+      if (preview && all.length > SCRIPT_PREVIEW_ROWS) {
+        body = all.slice(-SCRIPT_PREVIEW_ROWS);
+        if (product && !product.children) {
+          const copy = product.rows.slice(-SCRIPT_PREVIEW_ROWS);
+          copy[0] = { ...copy[0]!, breakBefore: "gap" };
+          product = { width: inner, rows: copy };
+        } else product = undefined;
       }
+      const prefix = shift ? `${glyph}${shift === 2 ? " " : ""}` : "";
+      const rows = body.map(line => `${prefix}${line}`);
+      if (product) registerProduct(rows, {
+        width, rows: [], children: body.map((_, rowIndex) => ({ product, rowIndex, colShift: shift })),
+      });
+      cache = { width, source: all, rows };
       return rows;
     },
-    invalidate() { component.invalidate(); },
+    invalidate() { cache = undefined; component.invalidate(); },
   };
 }
 
@@ -275,8 +287,10 @@ export function makeCodemodeRenderers(input: {
     }
     return view;
   };
-  const labelColor = foregroundAnsi("#d97706", input.colorLevel ?? detectColorLevel());
+  const colorLevel = input.colorLevel ?? detectColorLevel();
+  const labelColor = foregroundAnsi("#d97706", colorLevel);
   const label = (text: string) => labelColor ? `${labelColor}${text}${FG_DEFAULT}` : text;
+  const scriptGlyph = colorLevel.kind === "none" ? "|" : label("▏");
   return {
     renderCall(args, theme, context) {
       const timer = timerState(context);
@@ -292,9 +306,15 @@ export function makeCodemodeRenderers(input: {
         return clickRegion(input.makeText(receiving ? title : `${title} ${theme.fg("error", "[invalid arg]")}`), context);
       const expanded = view.script ?? view.expanded;
       const script = (receiving || expanded) && code ? safeText(code) : "";
-      const component = receiving && !expanded && script
-        ? stackComponents([input.makeText(title), scriptPreview(input.makeText(script))], "child-placements")
-        : input.makeText(script ? `${title}\n${input.highlight?.(script, "javascript") ?? script}` : title);
+      let component: Component = input.makeText(title);
+      if (script) {
+        const styled = receiving
+          ? colorLevel.kind === "none" ? script : theme.fg("thinkingText", script)
+          : input.highlight?.(script, "javascript") ?? script;
+        component = stackComponents([
+          component, scriptBody(input.makeText(styled), scriptGlyph, receiving && !expanded),
+        ], "child-placements");
+      }
       return clickRegion(component, context, () => { view.script = !expanded; });
     },
     renderResult(result, options, theme, context) {
