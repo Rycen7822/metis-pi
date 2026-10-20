@@ -39,6 +39,9 @@ export interface AdapterHandle {
 }
 function skipped(reason: string): AdapterHandle { return { installed: false, reason, dispose() {} }; }
 
+// Weak identities must not become a second owner of evicted tool data.
+// Invalidation also retires the reuse decision with its releasable body.
+const nestedBodies = new WeakMap<object, { inputs: unknown[]; rendered: boolean }>();
 /** Keep initialization outside the frame: only its body may retain initial
  * data, and invalidation releases it. Rebuild from the bounded source while
  * preserving committed row geometry. Other result owners stay native. */
@@ -49,8 +52,11 @@ function nestedResult(
   theme: Palette,
   snapshot: ViewContext,
   resultSource: NonNullable<ViewContext["resultSource"]>,
+  inputs: unknown[],
 ): Component {
-  return {
+  const cache = { inputs: inputs.map(input => input !== null && (typeof input === "object" || typeof input === "function")
+    ? new WeakRef(input as object) : input), rendered: false };
+  const component: Component = {
     render(width) {
       if (!body) {
         const source = resultSource();
@@ -59,15 +65,18 @@ function nestedResult(
       }
       const rows = body?.render(width)
         ?? [theme.fg("dim", "Nested output was not retained; no saved diff/output to expand.".slice(0, Math.max(0, width)))];
+      cache.rendered = true;
       publishRows(this, rows);
       return rows;
     },
     handleMouse(event) { return body?.handleMouse?.(event); },
     invalidate() {
       try { body?.invalidate(); }
-      finally { body = undefined; releaseCopyCache(this); }
+      finally { body = undefined; cache.inputs = []; cache.rendered = false; releaseCopyCache(this); }
     },
   };
+  nestedBodies.set(component, cache);
+  return component;
 }
 function supportsSelector(key: typeof SELECTORS[number], select: UiMethod): boolean {
   const field = ({ getCallRenderer: "renderCall", getResultRenderer: "renderResult", getRenderShell: "renderShell" } as const)[key];
@@ -305,10 +314,22 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (owned) return {
       renderCall: owned.renderCall,
       renderResult(value, opts, theme, ctx) {
-        const { args, lastComponent: _previous, resultSource, ...snapshot } = ctx;
+        const { args, lastComponent, resultSource, ...snapshot } = ctx;
         const initial = owned.renderResult;
+        const data = asRecord(value);
+        const inputs = [initial, asRecord(theme).colors ?? theme, theme.fg, theme.bold, args, data.content, data.details,
+          ctx.state, ctx.toolCallId, opts.expanded, opts.isPartial, ctx.expanded, ctx.isPartial, ctx.isError, ctx.durationMs, ctx.cwd, ctx.showImages,
+          ctx.executionStarted, ctx.argsComplete, ctx.hasResult, ctx.writeChanges, ctx.colorLevel?.kind, ctx.explorationPlan];
+        const previous = lastComponent && typeof lastComponent === "object" ? nestedBodies.get(lastComponent) : undefined;
+        // Never share an unrendered default-shell body with the active self-shell:
+        // the host still owns and invalidates its original fallback child tree.
+        if (resultSource && previous?.rendered && previous.inputs.length === inputs.length
+          && inputs.every((input, index) => {
+            const stored = previous.inputs[index];
+            return stored instanceof WeakRef ? input !== undefined && Object.is(input, stored.deref()) : Object.is(input, stored);
+          })) return lastComponent as Component;
         const body = initial(value, opts, theme, resultSource ? { ...snapshot, args } : ctx);
-        return resultSource ? nestedResult(resolveOwned, body, opts, theme, snapshot, resultSource) : body;
+        return resultSource ? nestedResult(resolveOwned, body, opts, theme, snapshot, resultSource, inputs) : body;
       },
     };
     const { renderCall, renderResult } = asRecord(definition);

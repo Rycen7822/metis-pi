@@ -177,9 +177,9 @@ function highlightCommandLines(row: ExecRowModel, colorLevel: ColorLevel): strin
   return logical.map((line) => shorten(line));
 }
 
-function wrapStyled(text: string, width: number, layout: LayoutOps): Pick<VisualRow, "text" | "copy">[] {
+function wrapStyled(text: string, width: number, layout: LayoutOps, measured?: readonly string[]): Pick<VisualRow, "text" | "copy">[] {
   const usable = Math.max(1, width);
-  const chunks = layout.wrap(text, usable);
+  const chunks = measured ?? layout.wrap(text, usable);
   const rows = chunks.length ? chunks : [""];
   const source = wrapWithProvenance([{ styled: text, kind: "content" }], usable, layout.visibleWidth);
   const matches = rows.length === source.length && rows.every((row, i) => stripAnsi(row).trimEnd() === stripAnsi(source[i]!.styled).trimEnd());
@@ -351,58 +351,46 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
   // (prefix + text) is dimmed through the SGR state machine: source colors
   // survive, internal resets re-acquire DIM, and our DIM never leaks out.
   const dimPolicy = { dim: true, colorLevel: input.colorLevel };
-  const wrapped: VisualRow[] = [];
-  const copyRows: CopyRow[] = [];
-  raw.forEach((logical, lineIndex) => {
-    const segments = wrapStyled(logical, outputWidth, layout);
-    segments.forEach((segment, segmentIndex) => {
-      const isFirst = lineIndex === 0 && segmentIndex === 0;
-      const prefix = isFirst ? initialPrefix : subsequentPrefix;
-      const prefixWidth = isFirst ? initialPrefixWidth : subsequentPrefixWidth;
-      wrapped.push({
-        text: styleToolOutputLine(`${prefix}${segment.text}`, dimPolicy),
-        sourceLineIndex: lineIndex,
-        continuation: lineIndex !== 0 || segmentIndex !== 0,
-      });
-      copyRows.push(gutterCopyRow(segment, prefixWidth, input));
+  type OutputRow = VisualRow & { segmentIndex: number };
+  const wrapped: OutputRow[] = [];
+  // Native wrapping still decides the exact row count/hint. Defer styling and
+  // provenance for hidden middle lines until after the physical-row budget.
+  const measured = raw.map(logical => {
+    const chunks = layout.wrap(logical, outputWidth);
+    return chunks.length ? chunks : [""];
+  });
+  measured.forEach((segments, lineIndex) => {
+    segments.forEach((text, segmentIndex) => {
+      const first = lineIndex === 0 && segmentIndex === 0;
+      wrapped.push({ text: `${first ? initialPrefix : subsequentPrefix}${text}`,
+        sourceLineIndex: lineIndex, segmentIndex, continuation: !first });
     });
   });
 
-  let kept: VisualRow[];
-  let keptCopy: CopyRow[];
-  if (row.expanded) {
-    kept = wrapped; // wrapped, never truncated: full text remains reachable
-    keptCopy = copyRows;
-  } else if (row.isPartial) {
-    // Streaming: bounded tail (Codex shows the newest rows). Only the first
-    // kept row may be mid-logical-line; soft joins among kept rows stay valid.
-    const from = Math.max(0, wrapped.length - OUTPUT_MAX_ROWS);
-    kept = wrapped.slice(from);
-    keptCopy = copyRows.slice(from).map((copyRow, index) => (index === 0 ? { ...copyRow, breakBefore: "hard" as const } : copyRow));
-  } else {
-    // Budget includes the ellipsis row's own cost.
-    const truncated = truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, subsequentPrefix, usable);
-    kept = truncated.rows;
-    keptCopy = [];
-    let afterGap = false;
-    for (const visual of truncated.rows) {
-      if (visual.sourceLineIndex === -1) {
-        // Ellipsis row: visible hint; the hidden lines behind it are a gap.
-        keptCopy.push({
-          spans: [{ colStart: 0, colEnd: usable, kind: "semantic", text: stripAnsi(visual.text) }],
-          breakBefore: "gap",
-        });
-        afterGap = true;
-        continue;
-      }
-      const original = copyRows[wrapped.indexOf(visual)];
-      if (original) {
-        keptCopy.push(afterGap ? { ...original, breakBefore: "gap" } : original);
-      }
-      afterGap = false;
+  const kept = row.expanded ? wrapped : row.isPartial
+    ? wrapped.slice(-OUTPUT_MAX_ROWS)
+    : truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, subsequentPrefix, usable).rows;
+  let sourceLine = -1, segments: Pick<VisualRow, "text" | "copy">[] = [], afterGap = false;
+  return kept.map((visual, index) => {
+    if (visual.sourceLineIndex === -1) {
+      copy?.push({ spans: [{ colStart: 0, colEnd: usable, kind: "semantic", text: stripAnsi(visual.text) }], breakBefore: "gap" });
+      afterGap = true;
+      return visual.text;
     }
-  }
-
-  copy?.push(...keptCopy);
-  return kept.map((visual) => visual.text);
+    if (copy) {
+      if (sourceLine !== visual.sourceLineIndex) {
+        sourceLine = visual.sourceLineIndex;
+        segments = wrapStyled(raw[sourceLine]!, outputWidth, layout, measured[sourceLine]);
+      }
+      // truncateMiddleRows only synthesizes sourceLineIndex=-1 notices; real
+      // rows retain their original segment coordinate even across a gap.
+      const segmentIndex = (visual as OutputRow).segmentIndex;
+      const prefixWidth = sourceLine === 0 && segmentIndex === 0 ? initialPrefixWidth : subsequentPrefixWidth;
+      const original = gutterCopyRow(segments[segmentIndex]!, prefixWidth, input);
+      copy.push(afterGap ? { ...original, breakBefore: "gap" }
+        : !row.expanded && row.isPartial && index === 0 ? { ...original, breakBefore: "hard" } : original);
+    }
+    afterGap = false;
+    return styleToolOutputLine(visual.text, dimPolicy);
+  });
 }

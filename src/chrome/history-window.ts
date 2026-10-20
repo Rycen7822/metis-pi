@@ -42,8 +42,8 @@ export interface HistoryWindowHost {
 }
 type Cursor = { component: Component; row: number };
 type RowOrigin = Cursor & { height: number; index: number };
-type CachedBlock = { rows?: string[]; unwatch: () => void };
-type WindowPiece = { component: Component; rows: string[]; index: number; start: number; end: number };
+type CachedBlock = { rows?: string[]; offset: number; height: number; unwatch: () => void };
+type WindowPiece = { component: Component; rows: string[]; index: number; offset: number; height: number; start: number; end: number };
 
 /** Copy only retained product rows. Referencing an unsliced parent product
  * would retain all of a giant boundary block's provenance after eviction. */
@@ -215,18 +215,31 @@ export class HistoryWindow {
     this.#evictedBlocks++;
   }
 
-  #block(component: Component, width: number): string[] {
+  #retainFragment(component: Component, rows: string[], offset: number, height: number): void {
+    this.#evict(component);
+    Object.assign(this.#watch(component), { rows, offset, height });
+  }
+
+  #block(component: Component, width: number, remaining: number, cursor: number | undefined, forward: boolean): Omit<WindowPiece, "component" | "index"> {
+    const range = (height: number) => {
+      const edge = cursor === undefined ? forward ? 0 : height : Math.min(cursor, height);
+      return { start: forward ? edge : Math.max(0, edge - remaining), end: forward ? Math.min(height, edge + remaining) : edge };
+    };
     const cached = this.#blocks.get(component);
-    if (cached?.rows) return cached.rows;
+    if (cached?.rows) {
+      const bounds = range(cached.height);
+      if (bounds.start >= cached.offset && bounds.end <= cached.offset + cached.rows.length)
+        return { rows: cached.rows, offset: cached.offset, height: cached.height, ...bounds };
+    }
     cached?.unwatch();
     const rows = component.render(width);
     this.#renderedBlocks++;
-    this.#watch(component).rows = rows;
-    return rows;
+    Object.assign(this.#watch(component), { rows, offset: 0, height: rows.length });
+    return { rows, offset: 0, height: rows.length, ...range(rows.length) };
   }
 
   #watch(component: Component): CachedBlock {
-    const block: CachedBlock = { unwatch: () => {} };
+    const block: CachedBlock = { offset: 0, height: 0, unwatch: () => {} };
     const restores = descendants(component).map((node) => observe(node,
       ["invalidate", "updateContent", "updateDisplay", "setText", "addChild", "removeChild", "clear"], () => {
         block.rows = undefined; this.#dirty = true;
@@ -266,41 +279,43 @@ export class HistoryWindow {
     let first = true;
     while (index >= 0 && index < items.length && remaining > 0) {
       const component = items[index]!;
-      const rows = this.#block(component, width);
-      const edge = first && this.#cursor ? Math.min(this.#cursor.row, rows.length) : forward ? 0 : rows.length;
-      const start = forward ? edge : Math.max(0, edge - remaining);
-      const end = forward ? Math.min(rows.length, edge + remaining) : edge;
-      pieces.push({ component, rows, index, start, end });
-      remaining -= end - start;
+      const piece = this.#block(component, width, remaining, first ? this.#cursor?.row : undefined, forward);
+      pieces.push({ component, index, ...piece });
+      remaining -= piece.end - piece.start;
       first = false; index += forward ? 1 : -1;
     }
     if (!forward) pieces.reverse();
     const head = pieces[0], tail = pieces.at(-1);
     this.#older = !!head && (head.index > 0 || head.start > 0);
-    this.#newer = !!tail && (tail.index < items.length - 1 || tail.end < tail.rows.length);
+    this.#newer = !!tail && (tail.index < items.length - 1 || tail.end < tail.height);
     const rows: string[] = [];
     const placements: (ChildPlacement | undefined)[] = [];
     this.#origins = [];
     const notice = (text: string) => { rows.push(text.slice(0, Math.max(1, width))); placements.push(undefined); this.#origins.push(undefined); };
     if (this.#older) notice("[Earlier history: scroll up to load | 5000-row window]");
     for (const piece of pieces) {
-      const whole = piece.start === 0 && piece.end === piece.rows.length;
+      const from = piece.start - piece.offset, to = piece.end - piece.offset;
       const sourceProduct = productFor(piece.rows);
-      const product = sourceProduct && (whole ? sourceProduct : sliceProduct(sourceProduct, piece.start, piece.end));
+      const product = sourceProduct && (from === 0 && to === piece.rows.length ? sourceProduct : sliceProduct(sourceProduct, from, to));
       for (let row = piece.start; row < piece.end; row++) {
-        rows.push(piece.rows[row]!);
-        this.#origins.push({ component: piece.component, row, height: piece.rows.length, index: piece.index });
+        rows.push(piece.rows[row - piece.offset]!);
+        this.#origins.push({ component: piece.component, row, height: piece.height, index: piece.index });
         placements.push(product ? { product, rowIndex: row - piece.start, colShift: 0 } : undefined);
+      }
+      if (piece.start !== 0 || piece.end !== piece.height) {
+        // Keep only this window's fragment. Release full native/mirror caches,
+        // but retain absolute geometry so append-only updates need no reflow.
+        const fragment = piece.rows.slice(from, to);
+        if (product) registerProduct(fragment, product);
+        this.#retainFragment(piece.component, fragment, piece.start, piece.height);
       }
     }
     if (this.#newer) notice("[Later history: scroll down to load | 5000-row window]");
-    const retained = new Set(pieces.filter((piece) => piece.start === 0 && piece.end === piece.rows.length).map((piece) => piece.component));
-    const visible = new Set(pieces.map((piece) => piece.component));
+    const retained = new Set(pieces.map((piece) => piece.component));
     for (const component of [...this.#blocks.keys()]) {
       if (!retained.has(component)) {
-        // Detach observers before leaf invalidation, then watch visible slices.
         this.#evict(component);
-        if (visible.has(component) || component === this.#pinned) this.#watch(component);
+        if (component === this.#pinned) this.#watch(component);
       }
     }
     this.#rows = rows; this.#dirty = false;
@@ -347,7 +362,8 @@ export class HistoryWindow {
     if (!this.#promptPreview || this.#promptPreview.width !== this.#width) {
       // Reuse the native visible rendering, including Markdown transformers.
       // An off-window prompt may render once; never retain its full row cache.
-      const cached = this.#blocks.get(target)?.rows;
+      const block = this.#blocks.get(target);
+      const cached = block?.offset === 0 ? block.rows : undefined;
       let summary = "";
       try {
         for (const row of cached ?? target.render(this.#width)) {
@@ -358,7 +374,8 @@ export class HistoryWindow {
       } catch { /* An optional preview must not break an otherwise usable transcript. */ }
       finally {
         if (!cached) {
-          if (this.#blocks.has(target)) this.#evict(target);
+          if (block?.rows) this.#retainFragment(target, block.rows, block.offset, block.height);
+          else if (this.#blocks.has(target)) this.#evict(target);
           else releaseBlock(target);
         }
       }
@@ -462,7 +479,7 @@ export class HistoryWindow {
   status() {
     return {
       rows: this.#rows.length,
-      cachedBlocks: [...this.#blocks.values()].filter((block) => block.rows).length,
+      cachedBlocks: [...this.#blocks.values()].filter((block) => block.rows?.length === block.height && block.offset === 0).length,
       renderedBlocks: this.#renderedBlocks,
       evictedBlocks: this.#evictedBlocks,
       older: this.#older,
