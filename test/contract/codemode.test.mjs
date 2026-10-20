@@ -90,7 +90,9 @@ test("codemode start and timing labels use dark orange with terminal color fallb
     assert.equal(expanded, `${colored("codemode")}\ntext(1)`, "script code keeps its own styling");
     assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)), colored("Elapsed 0.0s"), kind);
     assert.equal(render(codemode.renderResult(scriptOutput, {}, theme, context)),
-      `Script output\n${body}\n${colored("Took 0.1s")}`, "script output keeps ordinary shell styling");
+      colored("Took 0.1s"), "script output is hidden until explicitly expanded");
+    assert.equal(render(codemode.renderResult(scriptOutput, { expanded: true }, theme, context)),
+      `Script output\n${body}\n${colored("Took 0.1s")}`, "expanded script output keeps ordinary shell styling");
   }
 });
 
@@ -123,6 +125,7 @@ for (const [outcome, isPartial] of [["failed", true], ["cancelled", false]]) {
     row.updateResult({ content: [{ type: "text", text: `Script ${outcome}` }], details: { calls: [] }, isError: true }, isPartial);
     const ended = invalidations.mock.callCount();
     const frozen = plain(row);
+    assert.match(frozen, /\[error\]/, "hiding script output must not hide the failure status");
     t.mock.timers.tick(5_000);
     assert.equal(invalidations.mock.callCount(), ended);
     assert.equal(plain(row), frozen, "an error cannot re-arm the interval or keep elapsed time advancing");
@@ -196,12 +199,13 @@ test("native codemode folding hides every script line and uses ordinary read/she
   assert.match(folded, /Ran printf hello/);
   assert.match(folded, /output-0/);
   assert.doesNotMatch(folded, /output-8\n/);
-  assert.match(folded, /DERIVED SUMMARY KEEP/);
+  assert.doesNotMatch(folded, /Script output|DERIVED SUMMARY KEEP/);
   row.setExpanded(true);
   const expanded = plain(row);
   assert.match(expanded, /JS_ONLY_MARKER/);
   assert.equal((expanded.match(/JS_ONLY_MARKER/g) ?? []).length, 14);
   assert.match(expanded, /FILE_BODY_ONLY/);
+  assert.match(expanded, /DERIVED SUMMARY KEEP/, "the global shortcut remains a keyboard path to script output");
   assert.match(expanded, /output-8\n/);
   clickRow(row, "output-17");
   assert.doesNotMatch(plain(row), /output-8\n/, "clicking shell output collapses its call");
@@ -221,7 +225,7 @@ function clickRow(row, target, occurrence = 0, width = 80) {
   assert.equal(row.handleMouse(event)?.handled, true, "click consumed by this block");
 }
 
-test("clicks independently expand duplicate nested calls, source and script output", (t) => {
+test("clicks independently expand duplicate nested calls, source and script output via Took", (t) => {
   const { row, capture } = setup(t);
   const args = { path: "same.md" };
   for (const [id, text] of [[1, "FIRST BODY"], [2, "SECOND BODY"]])
@@ -229,9 +233,10 @@ test("clicks independently expand duplicate nested calls, source and script outp
   const result = deepFreeze({ content: [{ type: "text", text: Array.from({ length: 18 }, (_, i) => `SCRIPT_OUTPUT_${i}`).join("\n") }],
     details: { calls: [call(1, "read", args), call(2, "read", args)] } });
   row.updateResult(result, false);
+  assert.doesNotMatch(plain(row), /Script output|SCRIPT_OUTPUT_/);
   clickRow(row, "Read same.md");
   assert.match(plain(row), /FIRST BODY/);
-  assert.doesNotMatch(plain(row), /SECOND BODY|JS_ONLY_MARKER|SCRIPT_OUTPUT_8/);
+  assert.doesNotMatch(plain(row), /SECOND BODY|JS_ONLY_MARKER|SCRIPT_OUTPUT_/);
   clickRow(row, "Read same.md", 1);
   assert.match(plain(row), /FIRST BODY[\s\S]*SECOND BODY/);
   clickRow(row, "Read same.md");
@@ -239,8 +244,8 @@ test("clicks independently expand duplicate nested calls, source and script outp
   assert.match(plain(row), /SECOND BODY/);
   clickRow(row, "codemode");
   assert.match(plain(row), /JS_ONLY_MARKER/);
-  assert.doesNotMatch(plain(row), /FIRST BODY|SCRIPT_OUTPUT_8/);
-  clickRow(row, "Script output");
+  assert.doesNotMatch(plain(row), /FIRST BODY|SCRIPT_OUTPUT_/);
+  clickRow(row, "Took");
   assert.match(plain(row), /SCRIPT_OUTPUT_8/);
   clickRow(row, "SECOND BODY");
   assert.doesNotMatch(plain(row), /FIRST BODY|SECOND BODY/, "a body click closes only its own child call");
@@ -249,8 +254,9 @@ test("clicks independently expand duplicate nested calls, source and script outp
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER/);
   assert.match(plain(row), /SCRIPT_OUTPUT_8/);
   clickRow(row, "SCRIPT_OUTPUT_17");
-  assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FIRST BODY|SECOND BODY|SCRIPT_OUTPUT_8/);
-  assert.match(plain(row), /SCRIPT_OUTPUT_0/, "folding keeps the ordinary output preview");
+  assert.match(plain(row), /SCRIPT_OUTPUT_8/, "script output body clicks do not collapse it");
+  clickRow(row, "Took");
+  assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FIRST BODY|SECOND BODY|Script output|SCRIPT_OUTPUT_/);
 });
 
 test("streaming updates retain per-ID choices and earlier-call visibility remains independent", (t) => {
@@ -303,7 +309,8 @@ test("fullscreen clicks and copied text follow child geometry across wrapping an
   const first = { path: "long/漢字-" + "wide-".repeat(12) + "first.md" }, second = { path: "second.md" };
   capture(1, "read", first, { content: [{ type: "text", text: "FIRST WRAPPED BODY" }], details: {} });
   capture(2, "read", second, { content: [{ type: "text", text: "SECOND CLICK BODY" }], details: {} });
-  row.updateResult({ content: [], details: { calls: [call(1, "read", first), call(2, "read", second)] } }, false);
+  row.updateResult({ content: [{ type: "text", text: "SCRIPT_COPY_START\nSCRIPT_COPY_END" }],
+    details: { calls: [call(1, "read", first), call(2, "read", second)] } }, false);
   tui.setLayoutRoot(container(row));
   const click = target => {
     tui.doRender();
@@ -334,6 +341,14 @@ test("fullscreen clicks and copied text follow child geometry across wrapping an
   const foldedCopy = select(copyFrame(row, 36)).text;
   assert.doesNotMatch(foldedCopy, /SECOND CLICK BODY|JS_ONLY_MARKER/, "copy uses the newly collapsed frame");
   assert.match(foldedCopy, /FIRST WRAPPED BODY/);
+  assert.doesNotMatch(foldedCopy, /SCRIPT_COPY_/);
+  click("Took");
+  assert.match(plain(row, 36), /SCRIPT_COPY_START[\s\S]*SCRIPT_COPY_END/);
+  assert.match(select(copyFrame(row, 36)).text, /SCRIPT_COPY_START[\s\S]*SCRIPT_COPY_END/);
+  click("Took");
+  assert.doesNotMatch(plain(row, 36), /Script output|SCRIPT_COPY_/);
+  assert.doesNotMatch(select(copyFrame(row, 36)).text, /SCRIPT_COPY_/);
+  assert.match(plain(row, 36), /FIRST WRAPPED BODY/, "the footer does not change nested expansion");
 });
 
 test("nested bat calls use Read exploration while mixed execution retains Ran", (t) => {
@@ -462,6 +477,8 @@ test("uncached history keeps summaries, errors, model cost, computed output and 
     ],
   } }, false);
   assert.match(plain(row), /read/);
+  assert.doesNotMatch(plain(row), /Script output|computed independent output|full-script/);
+  clickRow(row, "Took");
   assert.match(plain(row), /computed independent output/);
   assert.match(plain(row), /full-script/);
   assert.match(plain(row), /Nested results unavailable/);

@@ -11,6 +11,7 @@ import {
 import { MouseRegion } from "@earendil-works/pi-tui";
 import { shellTitle } from "./renderers.ts";
 import { stackComponents } from "./copy-stack.ts";
+import { productFor, registerProduct } from "./selection-copy/model.ts";
 import { detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "./palette.ts";
 
 interface CodemodeTimerState {
@@ -208,6 +209,7 @@ interface NestedSlot {
 }
 interface ExpansionState {
   expanded: boolean;
+  receiving?: boolean;
   script?: boolean;
   output?: boolean;
   allCalls?: boolean;
@@ -228,7 +230,27 @@ function clickRegion(component: Component, context: ViewContext, toggle?: () => 
   });
 }
 
-/** Folded code has no preview; nested rows share direct-call renderers and budgets. */
+const SCRIPT_PREVIEW_ROWS = 12;
+
+/** Keep the newest physical rows and their copy boundaries, not a second source buffer. */
+function scriptPreview(component: Component): Component {
+  return {
+    render(width) {
+      const all = component.render(width);
+      if (all.length <= SCRIPT_PREVIEW_ROWS) return all;
+      const rows = all.slice(-SCRIPT_PREVIEW_ROWS), product = productFor(all);
+      if (product && !product.children) {
+        const copy = product.rows.slice(-SCRIPT_PREVIEW_ROWS);
+        copy[0] = { ...copy[0]!, breakBefore: "gap" };
+        registerProduct(rows, { width, rows: copy });
+      }
+      return rows;
+    },
+    invalidate() { component.invalidate(); },
+  };
+}
+
+/** Stream a bounded source preview; completed source folds independently of results. */
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
   highlight?: Highlight;
@@ -259,12 +281,20 @@ export function makeCodemodeRenderers(input: {
     renderCall(args, theme, context) {
       const timer = timerState(context);
       if (timer && context.executionStarted && timer.startedAt === undefined) timer.startedAt = Date.now();
-      const title = label(theme.bold("codemode"));
+      const title = label(theme.bold("codemode")), view = expansion(context);
+      const receiving = context.argsComplete === false && !context.executionStarted
+        && context.isPartial !== false && !context.hasResult && !context.isError;
+      // Fold once when generation ends; later execution updates must preserve clicks.
+      if (view.receiving && !receiving) view.script = false;
+      view.receiving = receiving;
       const code = asRecord(args).code;
-      if (typeof code !== "string") return clickRegion(input.makeText(`${title} ${theme.fg("error", "[invalid arg]")}`), context);
-      const view = expansion(context), expanded = view.script ?? view.expanded;
-      const script = expanded && code ? safeText(code) : "";
-      const component = input.makeText(script ? `${title}\n${input.highlight?.(script, "javascript") ?? script}` : title);
+      if (typeof code !== "string")
+        return clickRegion(input.makeText(receiving ? title : `${title} ${theme.fg("error", "[invalid arg]")}`), context);
+      const expanded = view.script ?? view.expanded;
+      const script = (receiving || expanded) && code ? safeText(code) : "";
+      const component = receiving && !expanded && script
+        ? stackComponents([input.makeText(title), scriptPreview(input.makeText(script))], "child-placements")
+        : input.makeText(script ? `${title}\n${input.highlight?.(script, "javascript") ?? script}` : title);
       return clickRegion(component, context, () => { view.script = !expanded; });
     },
     renderResult(result, options, theme, context) {
@@ -401,33 +431,30 @@ export function makeCodemodeRenderers(input: {
       if (missingResults)
         parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
       // Script output may be a computed summary, not a duplicate of tool output.
-      // Keep it and its archive path; reuse the ordinary shell's physical-row budget.
+      // Retain it and its archive path, but build the full body only when opened.
+      let toggleOutput: (() => void) | undefined;
       if (!options.isPartial && Array.isArray(value.content)) {
-        const content = value.content.filter(
-          (block, index) =>
-            !(
-              index === 0 &&
-              asRecord(block).type === "text" &&
-              /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/.test(String(asRecord(block).text))
-            ),
-        );
-        if (content.some((block) => asRecord(block).type === "text" && asRecord(block).text)) {
-          const expanded = view.output ?? view.expanded;
-          const toggle = () => { view.output = !expanded; };
-          parts.push(
-            clickRegion(input.makeText(theme.fg("dim", "Script output")), context, toggle),
-            clickRegion(input.shell.renderResult({ ...value, content }, { ...options, expanded }, theme, {
-              ...context,
-              expanded,
-              args: {},
-              lastComponent: undefined,
-            }), context, toggle),
-          );
+        const content = value.content.filter((block, index) => index !== 0 || asRecord(block).type !== "text"
+          || !/^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/.test(String(asRecord(block).text)));
+        const hasText = content.some((block) => asRecord(block).type === "text" && asRecord(block).text);
+        const expanded = view.output ?? view.expanded;
+        if (hasText || typeof details.fullOutputPath === "string") toggleOutput = () => { view.output = !expanded; };
+        if (toggleOutput && expanded) {
+          parts.push(input.makeText(theme.fg("dim", "Script output")));
+          if (hasText) parts.push(input.shell.renderResult({ ...value, content }, { ...options, expanded: true }, theme, {
+            ...context,
+            expanded: true,
+            args: {},
+            lastComponent: undefined,
+          }));
+          if (typeof details.fullOutputPath === "string")
+            parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
         }
-        if (typeof details.fullOutputPath === "string")
-          parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
-      if (timerText) parts.push(input.makeText(label(timerText)));
+      if (timerText || toggleOutput) {
+        const footer = label(timerText ?? "Took —");
+        parts.push(clickRegion(input.makeText(context.isError ? `${footer} ${theme.fg("error", "[error]")}` : footer), context, toggleOutput));
+      }
       return clickRegion(stackComponents(parts, "child-placements"), context);
     },
   };
