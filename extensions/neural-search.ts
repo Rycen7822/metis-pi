@@ -17,7 +17,7 @@ export default function neuralSearch(pi: ExtensionAPI): void {
 
   const owned = () => pi.getAllTools().some(tool => tool.name === name && tool.sourceInfo.path === ownerPath);
   const nativeSearch = () => pi.getAllTools().some(tool =>
-    tool.name === "tool_search" && tool.sourceInfo.path === "builtin:tool_search");
+    tool.name === "tool_search" && tool.sourceInfo.path === "builtin:tool-search");
   let lastWarning: string | undefined;
   const diagnose = (ctx: ExtensionContext, warning?: string) => {
     if (warning && warning !== lastWarning) ctx.ui.notify(warning, "warning");

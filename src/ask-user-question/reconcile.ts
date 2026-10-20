@@ -47,8 +47,8 @@ export function registerAskUserQuestionReconciler(pi: ExtensionAPI): void {
 			return false;
 		}
 		const discovery = pi.getAllTools().filter(tool =>
-			(tool.name === "codemode" || tool.name === "tool_search") &&
-			tool.sourceInfo.path === `builtin:${tool.name}`);
+			(tool.name === "codemode" && tool.sourceInfo.path === "builtin:codemode") ||
+			(tool.name === "tool_search" && tool.sourceInfo.path === "builtin:tool-search"));
 		const active = pi.getActiveTools();
 		if (start && !discovery.some(tool => active.includes(tool.name))) {
 			const gateway = discovery.find(tool => tool.name === "codemode") ??

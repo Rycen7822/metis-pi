@@ -43,7 +43,7 @@ async function fixture(t: any, hasUI: boolean, gateways: boolean | "tool_search"
     additionalExtensionPaths: [join(root, "extensions/ask-user-question.ts")],
     extensionFactories: [
       ...(gateways ? [gateways === "tool_search"
-        ? { name: "tool_search", builtin: true, factory: createToolSearchExtension() }
+        ? { name: "tool-search", builtin: true, factory: createToolSearchExtension() }
         : { name: "codemode", builtin: true, factory: createCodemodeExtension({ models: false }) }] : []),
       { name: "capture-context", factory: (pi: any) => pi.registerTool({ name: "fixture_probe", label: "Probe", description: "Fixture",
         parameters: Type.Object({}), execute: async (_id: string, _args: unknown, _signal: unknown, _update: unknown, context: unknown) => {
