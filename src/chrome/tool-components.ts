@@ -27,6 +27,10 @@ export function createDiffPainter(highlight: Highlight) {
         return found.value;
       }
       const value = highlight(text, language);
+      // Pi's deferred-grammar fallback colors even empty input. A ready grammar
+      // does not, so genuine same-color syntax is still preserved and cached.
+      if (value !== text && value === theme.fg("mdCodeBlock", text)
+          && highlight("", language) === theme.fg("mdCodeBlock", "")) return text;
       // The host's safe painter returns the input on failure. Do not turn a
       // transient syntax fallback into a persistent cached decision.
       if (typeof value !== "string" || value === text || palette !== colors) return value;
