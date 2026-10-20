@@ -79,7 +79,14 @@ interface LogicalLine {
 interface MirrorContext {
   instance: MarkdownInstance | TextInstance;
   fns: AdapterHostFns;
+  codeRows?: WeakMap<object, readonly string[]>;
 }
+
+// Observe token output, not the live theme/highlighter. Neither tokens nor old
+// full render arrays gain a strong owner, including during reentrant renders.
+interface CodeCapture { rows?: WeakMap<object, readonly string[]> }
+const activeCodeRows = new WeakMap<object, CodeCapture>();
+const codeRowsFor = new WeakMap<object, WeakMap<object, readonly string[]>>();
 
 function painter(instance: MarkdownInstance, name: string): (text: string) => string {
   const theme = instance.theme as Record<string, (text: string) => string> | undefined;
@@ -178,9 +185,16 @@ function renderTokenMirror(
       const fence = painter(instance, "codeBlockBorder");
       const codeBlock = painter(instance, "codeBlock");
       const codeLines = (token.text ?? "").split("\n");
+      const captured = ctx.codeRows?.get(token);
+      const bodyRows = captured?.slice(1, codeLines.length + 1);
+      const spacingCount = nextTokenType && nextTokenType !== "space" ? 1 : 0;
+      if (captured && (captured.length !== codeLines.length + 2 + spacingCount
+          || bodyRows?.some(line => !line.startsWith(indent))))
+        return hostRenderedLines(ctx, token, width, nextTokenType, styleContext);
       const highlight = (instance.theme as { highlightCode?: (text: string, lang: string) => string[] } | undefined)?.highlightCode;
-      const highlighted = highlight ? highlight(token.text ?? "", token.lang ?? "") : undefined;
-      const lines: LogicalLine[] = [contentLine(fence("```" + (token.lang || "")), "semantic")];
+      const highlighted = bodyRows ? bodyRows.map(line => line.slice(indent.length))
+        : highlight ? highlight(token.text ?? "", token.lang ?? "") : undefined;
+      const lines: LogicalLine[] = [contentLine(captured?.[0] ?? fence("```" + (token.lang || "")), "semantic")];
       if (highlighted && highlighted.length !== codeLines.length) {
         // Highlighter changed the line count: exact rows, unknown spans.
         return hostRenderedLines(ctx, token, width, nextTokenType, styleContext);
@@ -193,7 +207,7 @@ function renderTokenMirror(
           ],
         });
       }
-      lines.push(contentLine(fence("```"), "semantic"));
+      lines.push(contentLine(captured?.[codeLines.length + 1] ?? fence("```"), "semantic"));
       lines.push(...spacing(nextTokenType, ["space"]));
       return lines;
     }
@@ -472,6 +486,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
     throttled: "markdownThrottled" | "textThrottled";
     fallback: string;
   },
+  captureCode = false,
 ): boolean {
   if (Object.prototype.hasOwnProperty.call(prototype, key) || !Object.isExtensible(prototype)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
@@ -486,7 +501,19 @@ function wrapRenderPrototype<INST extends { text: string }>(
   const seen = new WeakMap<object, { text: string; width: number; attemptAt: number }>();
   const now = deps.now ?? (() => Date.now());
   const wrapper = function (this: INST, width: number): string[] {
-    const rows = original.call(this, width);
+    const previousCapture = activeCodeRows.get(this);
+    const captured: CodeCapture | undefined = captureCode ? {} : undefined;
+    let rows: string[];
+    try {
+      if (captured) activeCodeRows.set(this, captured);
+      rows = original.call(this, width);
+    } finally {
+      if (captured) {
+        if (previousCapture) activeCodeRows.set(this, previousCapture);
+        else activeCodeRows.delete(this);
+      }
+    }
+    if (captured?.rows) codeRowsFor.set(rows, captured.rows);
     try {
       publishRows(this, rows);
       const cached = cache.get(this);
@@ -529,8 +556,24 @@ export const MARKDOWN_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-markdown"
 export const TEXT_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-text");
 
 export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolean {
-  return wrapRenderPrototype<MarkdownInstance>(prototype, MARKDOWN_COPY_OWNER, deps,
-    buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" });
+  const tokenDescriptor = Object.getOwnPropertyDescriptor(prototype, "renderToken");
+  const capture = tokenDescriptor && typeof tokenDescriptor.value === "function" && tokenDescriptor.configurable && tokenDescriptor.writable;
+  const wrapped = wrapRenderPrototype<MarkdownInstance>(prototype, MARKDOWN_COPY_OWNER, deps,
+    buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" }, !!capture);
+  if (wrapped && capture) {
+    const original = tokenDescriptor.value as NonNullable<MarkdownInstance["renderToken"]>;
+    Object.defineProperty(prototype, "renderToken", { ...tokenDescriptor,
+      value(this: MarkdownInstance, token: MarkdownToken, width: number, next?: string, style?: unknown) {
+        const rows = original.call(this, token, width, next, style);
+        const captured = activeCodeRows.get(this);
+        if (captured && token.type === "code" && Array.isArray(rows) && rows.every(row => typeof row === "string")) {
+          (captured.rows ??= new WeakMap()).set(token, rows.slice());
+        }
+        return rows;
+      },
+    });
+  }
+  return wrapped;
 }
 
 function buildMarkdownProduct(
@@ -553,8 +596,10 @@ function buildMarkdownProduct(
     return undefined;
   }
   const normalized = text.replace(/\t/g, "   ");
-  const ctx: MirrorContext = { instance, fns };
-  const tokens = deps.lexer.lexer(normalized);
+  const ctx: MirrorContext = { instance, fns, codeRows: codeRowsFor.get(hostRows) };
+  const native = instance.cachedTokens instanceof WeakRef
+    ? instance.cachedTokens.deref() as { source?: unknown; tokens?: MarkdownToken[] } | undefined : undefined;
+  const tokens = native?.source === normalized && Array.isArray(native.tokens) ? native.tokens : deps.lexer.lexer(normalized);
   const logicalLines: LogicalLine[] = [];
   const styleContext = defaultStyleContext(instance);
   for (let i = 0; i < tokens.length; i++) {

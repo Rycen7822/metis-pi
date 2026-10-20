@@ -248,9 +248,15 @@ export interface CopyControllerDeps {
 
 const OWNER = Symbol.for("Rycen7822.metis-pi.selection-serializer");
 
+interface SerializerContext {
+  deps: CopyControllerDeps;
+  serializer: SelectionSerializer;
+  clearScheduled?: boolean;
+  memo?: { key: unknown[]; result: ReturnType<SelectionSerializer["serialize"]> };
+}
 interface SerializerOwner {
   receiver: symbol;
-  contexts: Map<AltScreenLike, { deps: CopyControllerDeps; serializer: SelectionSerializer }>;
+  contexts: Map<AltScreenLike, SerializerContext>;
   method: (this: AltScreenLike) => string | undefined;
   restore(): void;
 }
@@ -283,24 +289,39 @@ function installSerializer(tui: AltScreenLike, deps: CopyControllerDeps): (() =>
       const { deps, serializer } = context;
       deps.telemetry.calls = (deps.telemetry.calls ?? 0) + 1;
       const started = Date.now();
-      const bounds = this.getSelectionBounds?.();
-      if (!bounds) return undefined;
-      const selection = bounds;
+      const selection = this.getSelectionBounds?.();
+      if (!selection) { context.memo = undefined; return undefined; }
       const sourceLines = selection.start.scrollView === undefined
         ? (this.previousScreen ?? [])
         : scrollContentLinesOf(this, selection.start.scrollView);
-      if (sourceLines === undefined) return undefined;
+      if (sourceLines === undefined) { context.memo = undefined; return undefined; }
       const layout = this.currentLayout;
       const columnsFor = (row: number): { start: number; end: number } =>
         this.getSelectionColumns!(sourceLines[row] ?? "", row, selection);
       try {
-        const result = serializer.serialize(layout as LayoutFrameLike, {
-          scrollView: selection.start.scrollView,
-          startRow: selection.start.row,
-          endRow: selection.end.row,
-          sourceLines,
-          columnsFor,
-        });
+        // Native hasActiveSelection() and copy() ask synchronously for the same
+        // snapshot. Share that work only within this job, not across input or
+        // queued clipboard requests; no old frame/text stays owned while idle.
+        const key = [layout, layout?.root, sourceLines, this.getSelectionColumns,
+          selection.start.row, selection.start.col, selection.start.scrollView, selection.start.boundary,
+          selection.end.row, selection.end.col, selection.end.scrollView, selection.end.boundary];
+        let memo = context.memo;
+        if (!memo || !key.every((value, i) => Object.is(value, memo!.key[i]))) {
+          const result = serializer.serialize(layout as LayoutFrameLike, {
+            scrollView: selection.start.scrollView,
+            startRow: selection.start.row,
+            endRow: selection.end.row,
+            sourceLines,
+            columnsFor,
+          });
+          memo = { key, result };
+          context.memo = memo;
+          if (!context.clearScheduled) {
+            context.clearScheduled = true;
+            queueMicrotask(() => { context.memo = undefined; context.clearScheduled = false; });
+          }
+        }
+        const result = memo.result;
         const telemetry = deps.telemetry;
         telemetry.lastCharCount = result.text.length;
         telemetry.lastDurationMs = Date.now() - started;
@@ -323,6 +344,7 @@ function installSerializer(tui: AltScreenLike, deps: CopyControllerDeps): (() =>
         }
         return result.text;
       } catch (error) {
+        context.memo = undefined;
         deps.telemetry.failed += 1;
         deps.telemetry.lastMode = "failed";
         deps.telemetry.lastReason = error instanceof Error ? error.message : "serialize failed";
@@ -357,9 +379,10 @@ function installSerializer(tui: AltScreenLike, deps: CopyControllerDeps): (() =>
   }
   if (prototype.getActiveSelectionText !== owner.method) return;
   const receiver = serializerReceiver(tui);
-  const context = { deps, serializer: new SelectionSerializer(deps.fns) };
+  const context: SerializerContext = { deps, serializer: new SelectionSerializer(deps.fns) };
   owner.contexts.set(receiver, context);
   return () => {
+    context.memo = undefined;
     if (owner.contexts.get(receiver) === context) owner.contexts.delete(receiver);
     if (!owner.contexts.size) owner.restore();
   };
