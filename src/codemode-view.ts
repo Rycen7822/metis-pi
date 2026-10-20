@@ -451,7 +451,7 @@ export function makeCodemodeRenderers(input: {
             parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
         }
       }
-      if (timerText || toggleOutput) {
+      if (timerText || toggleOutput || context.isError) {
         const footer = label(timerText ?? "Took —");
         parts.push(clickRegion(input.makeText(context.isError ? `${footer} ${theme.fg("error", "[error]")}` : footer), context, toggleOutput));
       }
