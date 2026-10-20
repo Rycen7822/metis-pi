@@ -12,7 +12,7 @@
       "src/neural-search/engine",
       "src/neural-search/native/binding"
     ],
-    "sha256": "4dd8f5ecfba14bff941b24bbbfe3a8d0e935306e06c09061f8b4e237cbb9143d",
+    "sha256": "9ade8c7a11a9d9bdec6c7ffc10cc427d92b99c34bde7f231be9c355733102f58",
     "inputs": [
       {
         "path": "src/neural-search/engine/Cargo.lock",
@@ -180,7 +180,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/scan.rs",
-        "sha256": "818705f8faff6880e7435118743c5934f48e4f6f88e1737ebcc7757052c72d90"
+        "sha256": "7a206b0f6ef16210c00bbb9d56cc8054277b42311843d4a285e41aaf4b59fd54"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/score.rs",
@@ -228,7 +228,7 @@
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/watcher/background_watcher.rs",
-        "sha256": "70b69a5d78e1083ac64a91430d4de2eeb7999b15b124ffe089ee0cb965bee0fe"
+        "sha256": "adc31a76c24c031d9ccc5d2e13e228f1d03cc18a530ad4d5e1b1381a4c5e5e9d"
       },
       {
         "path": "src/neural-search/engine/crates/fff-core/src/watcher/mod.rs",
@@ -367,8 +367,8 @@
   },
   "asset": {
     "path": "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
-    "sha256": "a0622181adda42b9cc7c5e9df2c0da38c25d51fbb530ec4ed3b7366854e65ca2",
-    "bytes": 10456240,
+    "sha256": "7cc2e39d6cdba6630a969966ca8a960c2f804dd8168d92533eebc9cbcf925083",
+    "bytes": 10455152,
     "abi": {
       "version": 7,
       "machine": "x86-64",

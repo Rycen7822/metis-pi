@@ -26,7 +26,6 @@ pub struct BackgroundWatcher {
     healthy: Arc<AtomicBool>,
     debouncer: Arc<Mutex<Option<Debouncer>>>,
     watch_tx: Option<mpsc::Sender<WatchTask>>,
-    owner_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 pub(crate) enum WatchTask {
@@ -120,7 +119,7 @@ impl BackgroundWatcher {
         let owner_debouncer = Arc::clone(&debouncer);
 
         let owner_span = trace_span.clone();
-        let owner_thread = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("fff-watcher-own".into())
             .spawn(move || {
                 let _g = owner_span.enter();
@@ -281,7 +280,6 @@ impl BackgroundWatcher {
             healthy,
             debouncer,
             watch_tx: Some(watch_tx),
-            owner_thread: Some(owner_thread),
         })
     }
 
@@ -423,8 +421,6 @@ impl BackgroundWatcher {
         if let Some(debouncer) = self.debouncer.lock().take() {
             debouncer.stop_nonblocking();
         }
-
-        self.owner_thread.take();
 
         info!("Background file watcher stop signaled");
     }

@@ -291,10 +291,6 @@ impl ScanJob {
                 // Release failed/partial subscriptions before a retry.
                 picker.background_watcher.take();
             }
-            let shared_picker: &SharedFilePicker = &shared_picker;
-            let shared_frecency: &SharedFrecency = &shared_frecency;
-            let base_path: &std::path::Path = &base_path;
-
             match BackgroundWatcher::new(
                 base_path.to_path_buf(),
                 shared_picker.clone(),
