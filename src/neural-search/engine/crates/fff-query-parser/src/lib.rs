@@ -1,9 +1,7 @@
 //! Fast query parser for file search
 //!
 //! This parser takes a search query and extracts structured constraints
-//! while preserving text for fuzzy matching. Designed for maximum performance:
-//! - Single-pass parsing with minimal branching
-//! - Stack-allocated string buffers
+//! while borrowing query text for fuzzy matching and filters.
 //!
 //! # Examples
 //!

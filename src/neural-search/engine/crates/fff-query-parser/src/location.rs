@@ -83,10 +83,6 @@ fn parse_position_range(start_part: &str, end_part: &str) -> Option<Location> {
 
 /// Try to parse range patterns (contains '-')
 fn try_parse_column_range(location: &str) -> Option<Location> {
-    if !location.contains('-') {
-        return None;
-    }
-
     let (start_part, end_part) = location.split_once('-')?;
 
     // Try position range (line:col-line:col)
@@ -105,10 +101,6 @@ fn try_parse_column_range(location: &str) -> Option<Location> {
 
 /// Try to parse position patterns (contains ':' but not '-')
 fn try_parse_column_position(location: &str) -> Option<Location> {
-    if !location.contains(':') {
-        return None;
-    }
-
     let (line_str, col_str) = location.split_once(':')?;
     let line = line_str.parse::<i32>().ok()?;
     let col = col_str.parse::<i32>().ok()?;

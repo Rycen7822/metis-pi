@@ -5,7 +5,6 @@ use crate::glob_detect::has_wildcards;
 use crate::location::{Location, parse_location};
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::large_enum_variant)]
 pub enum FuzzyQuery<'a> {
     Parts(TextPartsBuffer<'a>),
     Text(&'a str),
@@ -16,7 +15,7 @@ pub enum FuzzyQuery<'a> {
 pub struct FFFQuery<'a> {
     /// The original raw query string before parsing
     pub raw_query: &'a str,
-    /// Parsed constraints (stack-allocated for ≤8 constraints)
+    /// Parsed constraints borrowing their text from the query.
     pub constraints: ConstraintVec<'a>,
     pub fuzzy_query: FuzzyQuery<'a>,
     /// Parsed location (e.g., file:12:4 -> line 12, col 4)
@@ -32,9 +31,7 @@ impl<'a> FFFQuery<'a> {
     /// let query = FFFQuery::parse("file *.rs", FileSearchConfig);
     /// ```
     pub fn parse(query: &'a str, config: impl ParserConfig) -> Self {
-        let query_parser = QueryParser::new(config);
-
-        query_parser.parse(query.as_ref())
+        QueryParser::new(config).parse(query)
     }
 }
 
@@ -63,10 +60,8 @@ impl<C: ParserConfig> QueryParser<C> {
         let mut constraints = ConstraintVec::new();
         let query = query.trim();
 
-        let whitespace_count = query.chars().filter(|c| c.is_whitespace()).count();
-
         // Single token - check if it's a constraint or plain text
-        if whitespace_count == 0 {
+        if !query.chars().any(char::is_whitespace) {
             // Try to parse as constraint first
             if let Some(constraint) = parse_token(query, config) {
                 // Don't treat filename tokens (FilePath) as constraints in single-token
@@ -217,13 +212,6 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
     }
 }
 
-/// Scalar byte find. Queries are tiny (<100 bytes), so this stays dependency-free
-/// instead of pulling in the `memchr` crate; fff-core uses `memchr` for real haystacks.
-#[inline]
-fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
-    haystack.iter().position(|&b| b == needle)
-}
-
 /// Parse extension pattern: *.rs -> Extension("rs")
 #[inline]
 fn parse_extension(token: &str) -> Option<Constraint<'_>> {
@@ -297,10 +285,8 @@ fn parse_constraint_token<'a, C: ParserConfig>(
             }
             None
         }
-        b'/' if config.enable_path_segments() => parse_path_segment(token),
-        _ if config.enable_path_segments() && token.ends_with('/') => {
-            // Handle trailing slash syntax: www/ -> PathSegment("www")
-            parse_path_segment_trailing(token)
+        _ if config.enable_path_segments() && (token.starts_with('/') || token.ends_with('/')) => {
+            parse_path_segment(token)
         }
         _ if matches!(context, TokenContext::Positive)
             && config.enable_filename_constraint()
@@ -316,10 +302,7 @@ fn parse_constraint_token<'a, C: ParserConfig>(
             }
 
             // Check for key:value patterns
-            if let Some(colon_idx) = memchr(b':', token.as_bytes()) {
-                let (key, value_with_colon) = token.split_at(colon_idx);
-                let value = &value_with_colon[1..]; // Skip the colon
-
+            if let Some((key, value)) = token.split_once(':') {
                 match key {
                     "type" if config.enable_type_filter() => {
                         return Some(Constraint::FileType(value));
@@ -346,24 +329,8 @@ fn parse_constraint_token<'a, C: ParserConfig>(
 /// Parse path segment: /src/ -> PathSegment("src")
 #[inline]
 fn parse_path_segment(token: &str) -> Option<Constraint<'_>> {
-    if token.len() > 1 && token.starts_with('/') {
-        let segment = token.trim_start_matches('/').trim_end_matches('/');
-        if !segment.is_empty() {
-            Some(Constraint::PathSegment(segment))
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-/// Parse path segment with trailing slash: www/ -> PathSegment("www")
-/// Also supports multi-segment paths: libswscale/aarch64/ -> PathSegment("libswscale/aarch64")
-#[inline]
-fn parse_path_segment_trailing(token: &str) -> Option<Constraint<'_>> {
-    if token.len() > 1 && token.ends_with('/') {
-        let segment = token.trim_end_matches('/');
+    if token.len() > 1 && (token.starts_with('/') || token.ends_with('/')) {
+        let segment = token.trim_matches('/');
         if !segment.is_empty() {
             Some(Constraint::PathSegment(segment))
         } else {
@@ -449,24 +416,24 @@ mod tests {
     #[test]
     fn test_parse_path_segment_trailing() {
         assert_eq!(
-            parse_path_segment_trailing("www/"),
+            parse_path_segment("www/"),
             Some(Constraint::PathSegment("www"))
         );
         assert_eq!(
-            parse_path_segment_trailing("src/"),
+            parse_path_segment("src/"),
             Some(Constraint::PathSegment("src"))
         );
         // Multi-segment paths should work
         assert_eq!(
-            parse_path_segment_trailing("src/lib/"),
+            parse_path_segment("src/lib/"),
             Some(Constraint::PathSegment("src/lib"))
         );
         assert_eq!(
-            parse_path_segment_trailing("libswscale/aarch64/"),
+            parse_path_segment("libswscale/aarch64/"),
             Some(Constraint::PathSegment("libswscale/aarch64"))
         );
         // Should not match without trailing slash
-        assert_eq!(parse_path_segment_trailing("www"), None);
+        assert_eq!(parse_path_segment("www"), None);
     }
 
     #[test]
@@ -496,13 +463,6 @@ mod tests {
             Some(Constraint::GitStatus(GitStatusFilter::Untracked))
         );
         assert_eq!(parse_git_status("invalid"), None);
-    }
-
-    #[test]
-    fn test_memchr() {
-        assert_eq!(memchr(b':', b"type:rust"), Some(4));
-        assert_eq!(memchr(b':', b"nocolon"), None);
-        assert_eq!(memchr(b':', b":start"), Some(0));
     }
 
     #[test]

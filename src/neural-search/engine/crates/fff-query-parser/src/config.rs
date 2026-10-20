@@ -68,10 +68,6 @@ impl ParserConfig for FileSearchConfig {}
 pub struct GrepConfig;
 
 impl ParserConfig for GrepConfig {
-    fn enable_path_segments(&self) -> bool {
-        true
-    }
-
     fn enable_git_status(&self) -> bool {
         false
     }
@@ -133,10 +129,6 @@ impl ParserConfig for GrepConfig {
 pub struct AiGrepConfig;
 
 impl ParserConfig for AiGrepConfig {
-    fn enable_path_segments(&self) -> bool {
-        true
-    }
-
     fn enable_git_status(&self) -> bool {
         false
     }
