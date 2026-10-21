@@ -138,6 +138,7 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | 显示层 | `-extensions/appearance.ts` |
 | goal / condense | `-extensions/goal.ts` / `-extensions/condense.ts` |
 | 动态指令 | `-extensions/dynamic-agents.ts`；卸载前先恢复原生策略。 |
+| Pi 文档提示 | `-extensions/system-prompt.ts`；仅覆盖 `docs`，不改其他提示分段或自定义完整提示。 |
 | skill 输入与显示 | 同时排除 `-extensions/skill-mux.ts`、`-extensions/skill-entry.ts`。 |
 | 全部 Action Fusion | `-extensions/action-fusion.ts` |
 | MCP | `-extensions/mcp.ts`；也可保持全局 `mcp.enabled=false`。 |
@@ -145,3 +146,5 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | PTY 进程工具 | `-extensions/execution.ts` |
 
 删除排除项可恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示；`/pruner off` 只停自动精简，历史回读仍可用。
+
+Pi 文档完整指引保存在 `<agent-dir>/PI_Documentation_Guide.md`（默认 `~/.pi/agent/`）。带 Metis 生成标记的文件在扩展加载时按当前 Pi 路径更新；移除首行标记可保留手动内容，已有非托管文件不会覆盖。新会话使用缩短后的提示，旧会话已有的历史提示不会追溯删除。
