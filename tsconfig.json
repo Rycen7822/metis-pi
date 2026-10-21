@@ -1,5 +1,5 @@
 {
-  "extends": "./tsconfig.core.json",
+  "extends": "./config/typescript/core.json",
   "compilerOptions": {
     "tsBuildInfoFile": ".work/tsc/entries.tsbuildinfo",
     "allowJs": true,

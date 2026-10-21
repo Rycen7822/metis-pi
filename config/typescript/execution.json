@@ -1,7 +1,7 @@
 {
-  "extends": "./tsconfig.base.json",
+  "extends": "./base.json",
   "compilerOptions": {
-    "tsBuildInfoFile": ".work/tsc/execution.tsbuildinfo",
+    "tsBuildInfoFile": "../../.work/tsc/execution.tsbuildinfo",
     "target": "ESNext",
     "lib": [
       "ESNext"
@@ -29,7 +29,7 @@
     "libReplacement": false
   },
   "include": [
-    "src/execution/**/*.ts",
-    "extensions/execution.ts"
+    "../../src/execution/**/*.ts",
+    "../../extensions/execution.ts"
   ]
 }

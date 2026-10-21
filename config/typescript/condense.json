@@ -1,7 +1,7 @@
 {
-  "extends": "./tsconfig.base.json",
+  "extends": "./base.json",
   "compilerOptions": {
-    "tsBuildInfoFile": ".work/tsc/condense.tsbuildinfo",
+    "tsBuildInfoFile": "../../.work/tsc/condense.tsbuildinfo",
     "strict": true,
     "noEmitOnError": true,
     "types": [
@@ -10,7 +10,7 @@
     "erasableSyntaxOnly": true
   },
   "include": [
-    "src/condense/**/*.ts",
-    "extensions/condense.ts"
+    "../../src/condense/**/*.ts",
+    "../../extensions/condense.ts"
   ]
 }

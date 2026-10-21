@@ -1,0 +1,28 @@
+{
+  "extends": "./base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.work/tsc/core.tsbuildinfo",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "lib": [
+      "ES2024"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "../../src/**/*.ts",
+    "../../extensions/mcp.ts",
+    "../../extensions/subagents.ts"
+  ],
+  "exclude": [
+    "../../src/execution/**",
+    "../../src/condense/**",
+    "../../src/pi-web-access/**",
+    "../../src/pi-session-recall/**",
+    "../../src/ask-user-question/**/*.test.ts",
+    "../../src/ask-user-question/test-fixtures.ts"
+  ]
+}

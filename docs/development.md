@@ -10,6 +10,8 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm run prepare:subagents
 ```
 
+根目录 `tsconfig.json` 保留为编辑器和扩展入口检查的默认配置；共享规则与 core、execution、condense、test 检查配置集中在 `config/typescript/`。Web/Recall 的配置仍在各自模块目录，继承同一份基础规则。
+
 | 命令 | 范围 |
 | --- | --- |
 | `npm run check` | core、execution、condense、Web/Recall 及全部扩展入口类型检查，不生成 JS；各配置的增量缓存位于 `.work/tsc/`。 |
