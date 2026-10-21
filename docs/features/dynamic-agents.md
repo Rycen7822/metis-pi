@@ -4,7 +4,7 @@
 
 ## 配置与匹配
 
-使用全局 `<agentDir>/metis-pi.toml` 的 `[dynamicAgents]`，目录跟随 `PI_CODING_AGENT_DIR`。默认 `enabled=false`、`notify=true`、`version=1`、`groups=[]`。`/metis-config init` 保留旧全局策略的原有效开关并导入 TOML，不删除原文件。
+使用全局 `<agentDir>/metis-pi.toml` 的 `[dynamicAgents]`，目录跟随 `PI_CODING_AGENT_DIR`。默认 `enabled=false`、`notify=true`、`version=1`、`groups=[]`。`/metis-config init` 只按默认值创建缺失的 TOML，不导入旧策略文件；需要保留的旧值须手工写入。
 
 添加 array-of-tables 时移除默认的 `groups=[]`：
 

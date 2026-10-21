@@ -8,6 +8,10 @@
 | --- | --- |
 | `/codex-ui` | 查看显示组件、有效配置、统计与复制状态；见 [诊断](diagnostics.md)。 |
 | `/execution` | 修改全局执行设置。 |
+| `/metis-config` / `/metis-config init` | 显示配置与说明路径 / 按默认值创建缺失的 TOML 和说明。 |
+| `/metis-subagents` | 子代理状态与 `stop` / `continue` / `answer` 操作。 |
+| `/neural-search health` / `rescan` | 查看本地搜索索引状态 / 请求重扫。 |
+| `/websearch` / `/curator` / `/search` | 打开网页检索面板 / 切换策展流程 / 浏览已存结果。 |
 | `/goal [objective]` | 查看或创建目标；`pause`、`resume`、`edit`、`clear` 管理目标。 |
 | `/pruner` | 历史精简与恢复；常用 `status`、`settings`、`on`、`off`、`now`、`compact`。 |
 | `/dynamic-agents [reload]` | 查看指令状态，或标记下一次 run 刷新。 |
@@ -19,6 +23,7 @@
 | 模型侧工具 | 契约 |
 | --- | --- |
 | `goal`（`action`: `get` / `create` / `update`） | [目标授权、预算和完成规则](features/goal.md)。 |
+| `subagents_*`（deferred） | [子代理工具、交付与清理](subagents/native.md)。 |
 | `context_tree_query` | [历史证据、参数及原文分页回读](features/condense.md)。 |
 | `exec_command` / `write_stdin` | [deferred PTY 进程工具](execution.md)。 |
 | `lsp`（`action`: `diagnostics` / `fix`） | [direct LSP 工具](features/lsp.md)，扁平参数；fix 默认预览，`write: true` 才写入。 |

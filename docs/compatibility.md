@@ -41,4 +41,4 @@ Pi 1.3.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in t
 
 扩展不自动改写个人设置或旧会话。旧 V8 脚本应改用 Pi codemode 和当前工具；旧 conversion 配置不读取。特殊窗口或 opaque checkpoint 不再解释，需用升级前版本导出可读历史再创建普通 Pi 会话。普通归档与 condense 原文仍可读取，复制会话时保留 blobs。
 
-当前核对来源为 Pi v1.3.0（`71023aec1`）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。
+当前核对来源为 Pi **v1.3.0**（开发依赖、锁文件与 CI 基线版本一致）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。

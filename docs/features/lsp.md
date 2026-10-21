@@ -13,7 +13,7 @@ Metis 内置维护 `@narumitw/pi-lsp` **0.49.9** 的源码，入口为
 
 | 操作 | 参数与默认行为 |
 | --- | --- |
-| `action: "diagnostics"` | `paths?` 为文件/目录数组，默认工作区根；`root?` 默认 cwd；`limit?` 默认每个服务器最多打开 50 个文件；`server?` 可为一个配置名或名字数组，省略时运行所有匹配扩展名的服务器。 |
+| `action: "diagnostics"` | `paths?` 为文件/目录数组，默认工作区根；`root?` 默认 cwd；`limit?` 默认每个服务器最多 50 个文件；`server?` 可为一个配置名或名字数组，省略时运行所有匹配扩展名的服务器。 |
 | `action: "fix"` | 必填单文件 `path`；`root?` 默认 cwd；`server?` 只能是一个配置名，多个服务器匹配时须明确选择；`kind?` 默认 `source.fixAll`；`write?` 默认 `false`，只预览，显式 `true` 才写入。 |
 
 定向诊断示例：

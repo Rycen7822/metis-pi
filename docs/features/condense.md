@@ -4,7 +4,7 @@ condense 先保存可查询原文，再精简请求历史；模型摘要与机�
 
 ## 设置与命令
 
-配置位于全局 `metis-pi.toml` 的 `[contextPrune]`，跟随宿主 agentDir；首次升级用 `/metis-config init` 导入旧全局配置并写同目录参数说明。新安装不自动开启，不覆盖已有值；`/pruner status` 查看，`settings` 修改，`on/off` 启停，`now` 手动处理待摘要批次，`compact` 压缩已摘要调用链。
+配置位于全局 `metis-pi.toml` 的 `[contextPrune]`，跟随宿主 agentDir；首次使用时可用 `/metis-config init` 按默认值创建 TOML 和同目录参数说明（不导入旧配置、不覆盖已有文件）。新安装不自动开启，不覆盖已有值；`/pruner status` 查看，`settings` 修改，`on/off` 启停，`now` 手动处理待摘要批次，`compact` 压缩已摘要调用链。
 
 TUI 下方 prune 状态行保留开关、上下文变化和额外模型用量；点击 `▶`／`▼` 展开／收起最新排队、摘要进度及延期详情。完成后的延期原因合并展示，小批次跳过只显示批次数、总保留字符数和单批阈值，不逐批堆叠长通知。默认展开状态由全局 TOML 的 `appearance.footer.pruneExpanded` 控制，默认 `false`；修改后 `/reload` 或重启生效。普通排队和未执行 prune 的提示不再追加到工具输出后；自动完成的结果/参数精简、去重、恢复占位替换及调用链压缩按实际提交报告，失败和警告仍可见。显式 `/pruner` 命令回复、非 TUI 通知和模型上下文不受折叠影响。
 

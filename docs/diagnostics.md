@@ -17,12 +17,12 @@
 | --- | --- |
 | 首行 | metis/Pi 版本、模式和宿主快照 revision。 |
 | `composer` / `working` / `chrome` | editor、metadata、Working、header/footer 的实际安装状态。 |
-| `footer` / `model` / `context` / `session` / `cache` / `speed` | 模型与统计来源、实时/确认值及 scope。 |
+| `footer` / `model` / `context` / `session Σ` / `cache(last)` / `output speed` | 来源说明、模型与统计的实时/确认值及 scope。 |
 | `interaction` / `outcome` | 时钟与终止证据。 |
 | `transcript` / `decorations` / `thinking` | 接管、退避、装饰失败及思考策略。 |
-| `fullscreen-margin` / `history-window` | 留白、窗口、页边界和预算。 |
+| `fullscreen-margin` / `history-window` | 留白、窗口安装与滚动条桥接、页边界和预算。 |
 | `glyphs` / `config` / `resources` | 字形计数、有效配置、timer/widget。 |
 | `git-changes` | HEAD/空树计数和采样参数。 |
 | `selection-copy` / `copy-stats` | 镜像降级、`other-wrapper`、复制模式/字数/耗时和失败。 |
 
-无活动会话时返回 `no active session`。此命令由 `src/diagnostics.ts` 装配，不验证所有外部服务或插件。
+无活动会话时返回 `metis-pi: no active session`。此命令由 `src/diagnostics.ts` 装配，不验证所有外部服务或插件。

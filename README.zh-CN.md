@@ -33,14 +33,14 @@ Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`�
 | [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
 | [Neural Search](docs/features/neural-search.md) | 一个 deferred `neural_search` 聚合本地路径/内容搜索；常驻简短目录，原生 `tool_search` 发现后直接调用，Rust 引擎与集成均由 Metis 维护，支持 Linux x64（glibc ≥2.31）。 |
 | [LSP](docs/features/lsp.md) | 一个 direct `lsp` 工具，以 `action: diagnostics/fix` 和扁平参数调用；修复默认预览，`/lsp` 查看命令可用性。只按名字的只读 allowlist 须另按参数限制写入。 |
-| [子代理](docs/subagents/cli.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
+| [子代理](docs/subagents/native.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
 | [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 工具；普通图片使用 Pi `read` + `image()`，provider 和登录由 Pi 提供。 |
-| [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
+| [Dynamic agents](docs/features/dynamic-agents.md) | 按 provider/模型从全局 TOML 选择全局指令策略，在下一次 agent run 生效；仅替换请求中的全局指令，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [Codex 远端压缩](docs/features/codex-compaction.md) | `openai` / `openai-codex` 的 `/compact` 与自动压缩支持远端加密 checkpoint，持久化回放；ChatGPT OAuth Responses 可经旧 Codex 路径压缩。 |
 | [condense](docs/features/condense.md) | 默认关闭，沿用 contextPrune；独立测量确定性替换，付费摘要须满足压力和完整消息 proxy 预算；不足时保留待处理证据，支持分页回读与 token 用量显示。 |
 
-metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不再使用项目 metis 覆盖。`/metis-config init` 导入旧全局设置并安装同目录[参数说明](metis-pi-config.md)，旧文件保留。LSP 只读 `[lsp]`，旧 LSP JSON 的配置值须手动复制，init 不导入。已有 TOML 直接编辑所需配置项并保留个性化值；子代理后端也使用 `[subagents]`，须先安全结束任务再重启 daemon 生效。[TOML 模板](metis-pi.toml)列出全部默认值。`[appearance] enabled = false` 只关闭显示层；Pi 自有模型/主题/packages/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
+metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不再使用项目 metis 覆盖。`/metis-config init` 在缺少 TOML 时按默认值创建配置并安装同目录[参数说明](metis-pi-config.md)，不导入、改写或备份其他配置文件。LSP 只读 `[lsp]`，旧 LSP JSON 的配置值须手动复制，init 不导入。已有 TOML 直接编辑所需配置项并保留个性化值；子代理后端也使用 `[subagents]`，须先安全结束任务再重启 daemon 生效。[TOML 模板](metis-pi.toml)列出全部默认值。`[appearance] enabled = false` 只关闭显示层；Pi 自有模型/主题/packages/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
 
 ## 兼容边界
 

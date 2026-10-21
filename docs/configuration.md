@@ -8,13 +8,15 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 
 | 内容 | TOML 表 / 归属 | 生效和写入 |
 | --- | --- | --- |
-| 显示配置 | `[appearance]` 及子表 | 启动读取，修改后重启；`enabled` 只控制显示层。 |
+| 显示配置 | `[appearance]` 及子表 | 扩展加载时读取；`/reload` 或重启生效；`enabled` 只控制显示层。 |
 | 执行配置 | `[execution.tools]` / `[execution.ui]` | `/execution` 写全局并保留其他字段；run 边界刷新，快捷键修改后重启；不支持 project 参数。 |
 | LSP | `[lsp]` / `[lsp.servers.<name>]` | 仅全局 TOML；每次工具或 `/lsp` 调用重读，默认 catalog 不下载服务器；见 [LSP](features/lsp.md)。 |
 | MCP 策略 | `[mcp]` | 默认关闭；`/mcp reload` 刷新。服务器和凭据仍由 Pi 管理。 |
 | condense / OCC | `[contextPrune]` 及子表 | `/pruner settings`、相关命令写全局；手动编辑后 `/reload`；见 [condense](features/condense.md)。 |
 | 动态全局指令 | `[dynamicAgents]` / `[[dynamicAgents.groups]]` | 策略 Markdown 相对全局配置目录；下一正式 run 读取，见 [动态指令](features/dynamic-agents.md)。 |
 | 子代理 | `[subagents]` / `profiles` | native 入口启用开关、childEnv、后端容量/超时/profile；后端启动读取，须安全 drain/stop 后重新连接。 |
+| 本地搜索 | `[neuralSearch]` | 只读全局 TOML，不读旧 `pi-fff.json`；`/reload` 或重启生效，见 [Neural Search](features/neural-search.md)。 |
+| 结构化提问 | `[askUserQuestion]` 及可选 `guidance` | 工具说明在注册时读取（`/reload`），折叠键在调用时读取；见 [结构化提问](features/ask-user-question.md)。 |
 | 会话回忆 | `[sessionRecall]` | `queryModel="default"` 跟随当前会话，或填已注册的 `provider/model-id`；每次 `session_recall` 的 `query` 操作重读。 |
 | 网页访问 | `[webAccess]` 及子表 | 搜索/抓取/摘要/工具普通选项；`/websearch`、`/curator` 写 TOML；凭据使用同目录 `web-search.json` 或环境变量。 |
 | goal / 结束摘要 | Pi session custom entries | 会话状态不是配置；摘要持久化由 `appearance.summary.persist` 控制。 |
@@ -143,6 +145,11 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | 全部 Action Fusion | `-extensions/action-fusion.ts` |
 | MCP | `-extensions/mcp.ts`；也可保持全局 `mcp.enabled=false`。 |
 | LSP 工具与 `/lsp` | `-extensions/lsp.ts` |
+| 本地搜索与 `@` 补全 | `-extensions/neural-search.ts` |
+| 结构化提问工具 | `-extensions/ask-user-question.ts` |
+| 子代理工具与委派 skill | `-extensions/subagents.ts` |
+| OpenAI / Codex 远端压缩 | `-extensions/codex-compaction.ts`；关闭后按 Pi 原生 compaction 处理，含已有 checkpoint 的会话应先按 [远端压缩](features/codex-compaction.md) 的说明写成普通摘要。 |
+| 网页访问 / 会话回忆 | `-extensions/web-access.ts` / `-extensions/session-recall.ts` |
 | PTY 进程工具 | `-extensions/execution.ts` |
 
 删除排除项可恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示；`/pruner off` 只停自动精简，历史回读仍可用。

@@ -12,7 +12,7 @@ composer 为 `￥` 和第二个及之后的 `/` 补发 skill 查询，见 [skill
 
 ## 探索工具显示
 
-`read` 与 npm `@ff-labs/pi-fff` 的 `ffgrep` / `fffind` 统一使用 `Exploring / Explored`：分别显示 `Read`、`Search`、`Find`，直接调用和 codemode 嵌套调用均支持。成功的 FFF 结果默认折叠，展开可查看全文，错误保持可见；直接连续调用可与 read 共用探索标题。仅接管这两个 FFF 名称，其他来源的同名工具、FFF 对原生 grep/find 的覆盖以及独立 renderer overlay 保留原样。
+`read`、本包的 `neural_search`（`find`/`grep`/`multi_grep`）以及独立 npm `@ff-labs/pi-fff` 的 `ffgrep` / `fffind` 统一使用 `Exploring / Explored`：分别显示 `Read`、`Search`、`Find`，直接调用和 codemode 嵌套调用均支持。成功结果默认折叠，展开可查看全文，错误保持可见；连续调用可与 read 共用探索标题。`neural_search` 仅在来源指向本包入口时接管，`ffgrep`/`fffind` 仅在来源为 `npm:@ff-labs/pi-fff` 时接管；其他来源的同名工具、覆盖原生 grep/find 的实现以及独立 renderer overlay 保留原样。
 
 原生 bash 和 Metis exec_command 中的只读 `ast-grep run/scan`、`rg` 内容检索显示 `Search`，`fd` 显示 `Find`，`bat` / `batcat` 及其他已识别的文件读取命令显示 `Read`（复用现有解析，不另建工具）。ast-grep 改写/交互更新、fd `--exec` / `--exec-batch`、输出重定向或混合执行仍显示 `Ran`；展开保留原命令。bash 输出沿用现有 shell 预览，不修改调用、参数或模型结果。
 

@@ -20,7 +20,7 @@ When the parent module is enabled and available, it also provides the `subagent-
 
 ## Workflow
 
-Use `subagents_spawn_agent` for a bounded independent task. Assign disjoint writes and explicit expected evidence. `subagents_wait_agent` waits for completion or questions; `subagents_agent_result` retrieves and pages results. Answer delivered questions with `subagents_answer_agent`. Reuse an operation ID only for an identical uncertain request; never automatically replay a mutation whose response was lost.
+Use `subagents_spawn_agent` for a bounded independent task. Assign disjoint writes and explicit expected evidence. `subagents_wait_agent` waits for completion or questions; `subagents_agent_result` retrieves and pages results; `subagents_list_agents` and `subagents_inspect_agent` read retained history and delivery details. Answer delivered questions with `subagents_answer_agent`, queue more work for a parked agent with `subagents_followup_task`, send a note with `subagents_send_message`, and stop current work with `subagents_interrupt_agent`. Reuse an operation ID only for an identical uncertain request; never automatically replay a mutation whose response was lost.
 
 Messages accepted by a worker are not necessarily consumed. Completed work means the model stopped normally; verify the requested artifacts before accepting it. Parent notifications count as delivered only after their receipt is saved to the active Pi session branch. Read all pages when a result has more content.
 
@@ -33,7 +33,7 @@ A follow-up resumes a cleanly parked worker from its saved session. Interruption
 State is private to Metis at **`<agentDir>/metis/subagent/`**, normally **`~/.pi/agent/metis/subagent/`**:
 
 - `registry.sqlite` and its SQLite sidecars: scopes, agents, runs, requests and delivery receipts.
-- `agents/`: sessions, generation-specific ownership records and diagnostic logs.
+- `agents/<agentId>/`: that agent's session, generation-specific ownership records and diagnostic logs.
 - `results/`: immutable paged results.
 
 The ledger requires the Metis native owner marker and current schema. An existing foreign or unsupported database is rejected before schema writes; it is not adopted or automatically upgraded. No other plugin's state directory is discovered or modified. The private `backend/main.py` launcher only serves the native host and its daemon. Source responsibilities are separated into [host, UI, backend and worker](../../src/subagents/README.md).

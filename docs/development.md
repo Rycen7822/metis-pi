@@ -17,11 +17,12 @@ npm run prepare:subagents
 | `npm test` / `npm run test:fast` | 全部 Node 测试 / core 规则与渲染原语。 |
 | `npm run test:host` / `test:protocol` | 真实宿主接线及包内容 / 请求、回放、压缩和历史编辑。 |
 | `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
+| `npm run test:lsp` / `test:ask-user-question` | LSP 会话与工具接线 / 结构化提问集成。 |
 | `npm run test:chrome` | 跨层界面、布局和复制测试。 |
 | `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为；4 个进程按文件分配测试。 |
 | `npm run verify` | 项目与测试类型 + 全部测试，包含实际 pack 文件清单校验。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
-| `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，均不进 Git。 |
+| `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`docs/transcript.ansi`、`docs/transcript.txt`，均不进 Git。 |
 | `node scripts/copy-perf.mjs` | 测量渲染/提取成本，不测系统剪贴板延迟。 |
 
 先运行改动附近的已有测试；跨模块变更运行 verify，终端显示/交互变更再运行严格 PTY。文档变更核对事实、链接和实际包内容；验证结果随当次任务或提交报告，并明确未覆盖边界。
@@ -36,7 +37,7 @@ core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接
 
 严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
 
-CI 在 Pi 1.3.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿主包及运行时 `pi-mcp` 的版本一致。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
+CI 在 Pi 1.3.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿主包及运行时 `pi-mcp` 的版本一致；另一个 job 从自有源码重建 Rust 搜索引擎、校验提交的二进制一致并运行继承的单元检查。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
 
 PR、main/tag push 和手动运行保留完整验证；功能分支只有在查到同仓库、同分支、同 SHA 的开放且可合并 PR 时才省去重复 push 全测，状态未知或查询失败仍全跑。同一 PR 的新提交取消旧运行，主干、tag 和手动运行使用独立并发组。
 

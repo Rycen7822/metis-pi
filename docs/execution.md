@@ -12,7 +12,7 @@ Pi 负责 JavaScript 编排、工具发现与权限、模型目录、认证、pr
 | --- | --- |
 | 普通命令 / 修改 | Pi `bash` / `edit`、`write`。 |
 | 长期进程 | `exec_command` 返回 `session_id`，后续用 `write_stdin` 读取；交互输入需初始调用指定 `tty: true`。 |
-| 返回普通图片 | Pi 1.2 原生 `image(await tools.read({path:'image.png'}))`；脚本中的 `read` 返回图片块，须用 `image()` 转发到外层。 |
+| 返回普通图片 | Pi 原生 `image(await tools.read({path:'image.png'}))`；脚本中的 `read` 返回图片块，须用 `image()` 转发到外层。 |
 | 修改后运行 | Pi edit/write 的 `then_run`，见 [Action Fusion](features/action-fusion.md)。 |
 
 原生脚本示例：

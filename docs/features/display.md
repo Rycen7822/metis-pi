@@ -18,7 +18,7 @@ appearance 提供紧凑显示，保留工具参数、执行结果、模型正文
 | bash 命令 | `Running` → `Ran`；换行前高亮，词法状态跨行保持，续行用 `│`，折叠预算 2 个屏幕行。 |
 | 普通输出 | 首行 `└`，其余缩进；折叠预算 5 个屏幕行，长输出保留首尾与展开提示，展开后保留完整可用正文。 |
 | 错误 | 前景标红，保留错误证据。 |
-| read / grep / find / ls | `Exploring` / `Explored`，成功结果默认折叠，各结果仍独立。 |
+| read / grep / find / ls / neural_search | `Exploring` / `Explored`，成功结果默认折叠，各结果仍独立。 |
 | 本包 exec_command | 命令 call 共用 bash 换行、高亮和复制信息；结果布局和后台会话由执行模块负责。 |
 
 展开提示跟随宿主键位。预算按终端列宽和物理行处理，不直接按 UTF-16 长度裁列；控制序列仅在显示副本中清理。第三方 Web、MCP、LSP、subagent 或同名工具保留 renderer。图片使用宿主协议并服从 `terminal.showImages`，关闭预览只报数量，不输出 Base64。

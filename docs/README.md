@@ -12,6 +12,7 @@
 | 输入区、Working、Footer、全屏历史与字形 | [界面](features/interface.md) |
 | 精确复制与剪贴板 | [选区复制](features/selection-copy.md) |
 | 多 skill 输入与折叠 | [skills](features/skills.md) |
+| 持久 Pi 子代理、委派与运行时状态 | [原生子代理](subagents/native.md) · [生命周期](subagents/lifecycle.md) |
 | 持久目标与自动续跑 | [goal](features/goal.md) |
 | OpenAI / Codex `/compact` 与自动远端压缩 | [OpenAI / Codex 远端压缩](features/codex-compaction.md) |
 | 历史精简、原文回读与 OCC | [condense](features/condense.md) |
@@ -26,6 +27,6 @@
 
 ## 维护
 
-[架构](architecture.md)说明模块所有权，[开发说明](development.md)说明验证和发布流程，[执行模块来源](provenance/execution/README.md)保留来源与许可。condense 的来源说明随其源码存放。
+[架构](architecture.md)说明模块所有权，[开发说明](development.md)说明验证和发布流程，[执行模块来源](provenance/execution/README.md)和[子代理来源](provenance/subagents/README.md)保留来源与许可。condense、LSP、网页访问、会话回忆与本地搜索的来源说明随各自源码目录存放。
 
 默认值统一维护在配置页；功能页维护用法和行为边界；历史过程留在 Git。渲染预览由 `npm run preview` 按需生成，不纳入 Git。
