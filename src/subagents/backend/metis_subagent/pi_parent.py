@@ -195,7 +195,7 @@ class PiNotifications:
                                 active_tools=list(w.run.active_tools.values()),
                                 tool_uses=w.run.tool_uses,
                                 total_tokens=w.run.usage.get("totalTokens", 0),
-                                response_preview=w.run.last_text[:200],
+                                thinking=w.run.thinking,
                             )
                     cursor = hashlib.sha256(dumps([notifications, states]).encode()).hexdigest()
                     remaining = until - asyncio.get_running_loop().time()

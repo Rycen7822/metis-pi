@@ -4,7 +4,7 @@ import { MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface WidgetAgent {
   id: string; name: string; state: string; started?: number;
-  active_tools?: string[]; tool_uses?: number; total_tokens?: number; response_preview?: string;
+  active_tools?: string[]; tool_uses?: number; total_tokens?: number; thinking?: boolean;
 }
 
 export const cleanLabel = (text: string) => stripVTControlCharacters(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
@@ -55,7 +55,7 @@ export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: 
         }
         const tools = [...new Set((agent.active_tools ?? []).filter(tool => typeof tool === "string"))];
         const activity = waiting ? "waiting for input" : tools.length ? tools.map(tool => ACTIONS[tool] ?? cleanLabel(tool)).join(", ") + "…"
-          : agent.state === "running" ? cleanLabel(agent.response_preview ?? "") || "thinking…" : state;
+          : agent.state === "running" ? agent.thinking === true ? "thinking…" : "working…" : state;
         let icon = waiting ? "?" : "◦";
         if (agent.state === "running") {
           const since = runningSince.get(agent.id) ?? animationNow;

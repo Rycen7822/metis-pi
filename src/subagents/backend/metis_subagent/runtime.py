@@ -359,12 +359,19 @@ class Runtime:
             return
         if kind == "message_update":
             update = e.get("assistantMessageEvent", {})
-            if (
-                isinstance(update, dict)
-                and update.get("type") in {"text_delta", "thinking_delta", "toolcall_delta"}
-                and update.get("delta")
-            ):
-                w.run.last_progress = time.monotonic()
+            if isinstance(update, dict):
+                phase = update.get("type")
+                progress = phase in {"text_delta", "thinking_delta", "toolcall_delta"} and update.get("delta")
+                if progress:
+                    w.run.last_progress = time.monotonic()
+                if progress or phase in {
+                    "start", "thinking_start", "thinking_end", "text_start", "text_end",
+                    "toolcall_start", "toolcall_end", "done", "error",
+                }:
+                    thinking = phase in {"thinking_start", "thinking_delta"}
+                    if w.run.thinking != thinking:
+                        w.run.thinking = thinking
+                        self.notify()
             return  # keep text deltas out of SQLite; message_end is canonical
         if kind in {"tool_execution_start", "tool_execution_update", "tool_execution_end"}:
             tool_id = e.get("toolCallId") or e.get("toolName")
@@ -375,6 +382,7 @@ class Runtime:
                 w.run.active_tools.pop(tool_id, None)
                 w.run.last_progress = time.monotonic()
             if kind != "tool_execution_update":
+                w.run.thinking = False
                 self.event(w, kind, e)
                 self.notify()
             return
@@ -385,6 +393,7 @@ class Runtime:
             role = m.get("role")
             mt = message_text(m)
             if role == "assistant":
+                w.run.thinking = False
                 w.run.last_progress = time.monotonic()
                 reason = m.get("stopReason")
                 # A final reply replaces tool-call preambles even when empty.

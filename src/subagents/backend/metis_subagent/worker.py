@@ -36,6 +36,7 @@ class RunProjection:
     """Task observations; Runtime decides when this projection starts and ends."""
     id: str | None = None
     last_text: str = ''
+    thinking: bool = False
     error: str | None = None
     usage: dict = field(default_factory=dict)
     ui: dict = field(default_factory=dict)
@@ -61,6 +62,7 @@ class RunProjection:
         self.id = None
         self.ui.clear()
         self.active_tools.clear()
+        self.thinking = False
         self.cancelled = False
 
 

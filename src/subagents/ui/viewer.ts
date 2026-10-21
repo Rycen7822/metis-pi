@@ -60,7 +60,7 @@ export class SubagentViewer implements Component {
   private readAbort = new AbortController();
   private disposed = false;
   private pageSize = 1;
-  private bodyTop = 5;
+  private bodyTop = 3;
   private bodyPadding = 2;
   private innerWidth = 1;
   private renderedHeight = 0;
@@ -369,10 +369,15 @@ export class SubagentViewer implements Component {
     this.targets = []; this.renderedHeight = 0; this.scrollbar = undefined;
     if (width <= 0 || !this.syncAgents()) { this.scrollbarGrab = undefined; return []; }
     const view = this.view;
+    const agent = view.snapshot?.agent, model = agent?.resolved_model;
+    const content = [this.theme.fg("muted", clean(`${model ? `${model.provider}/${model.id} · ` : ""}${agent?.cwd ?? ""}`))];
+    const notice = view.error || clean(view.snapshot?.run?.error ?? "") || (view.truncated ? "Some history omitted" : "");
+    if (notice) content.push(this.theme.fg(view.error || view.snapshot?.run?.error ? "error" : "dim", notice));
+    const bodyStart = content.length, frameRows = width < 5 ? 1 : 2;
     const inner = Math.max(1, width - 4);
-    this.innerWidth = inner; this.bodyTop = width < 5 ? 4 : 5; this.bodyPadding = width < 5 ? 0 : 2;
+    this.innerWidth = inner; this.bodyTop = frameRows + bodyStart; this.bodyPadding = width < 5 ? 0 : 2;
     const height = Math.max(1, Math.floor(this.tui.terminal.rows * 0.7));
-    this.pageSize = Math.max(1, height - 7);
+    this.pageSize = Math.max(1, height - this.bodyTop - frameRows);
     if (inner !== view.cachedWidth) {
       view.lines = []; view.layout = [];
       for (const entry of view.content.entries) {
@@ -390,28 +395,13 @@ export class SubagentViewer implements Component {
       const height = Math.max(Math.min(2, this.pageSize), Math.round(this.pageSize ** 2 / view.lines.length));
       this.scrollbar = { height, top: Math.round((this.pageSize - height) * offset / view.maxOffset) };
     } else this.scrollbarGrab = undefined;
-    const agent = view.snapshot?.agent;
-    const model = agent?.resolved_model;
     const toolsKey = this.keys.getKeys("app.tools.expand").join("/");
     const thoughtsKey = this.keys.getKeys("app.thinking.toggle").join("/");
     const body = view.lines.slice(offset, offset + this.pageSize);
     while (body.length < this.pageSize) body.push("");
-    const content = [
-      clean(
-        `${agent?.state ?? "loading"}` +
-          " · run " +
-          `${view.snapshot?.run?.state ?? "—"}` +
-          `${agent?.active_tools?.length ? ` · tools: ${agent.active_tools.join(", ")}` : ""}`,
-      ),
-      this.theme.fg("muted", clean(`${model ? `${model.provider}/${model.id} · ` : ""}${agent?.cwd ?? ""}`)),
-      this.theme.fg(
-        view.error || view.snapshot?.run?.error ? "error" : "dim",
-        view.error || clean(view.snapshot?.run?.error ?? "") ||
-          (view.truncated ? "Some history omitted" : "Click tools or thoughts to expand/collapse"),
-      ),
-      ...body,
+    content.push(...body,
       this.theme.fg("muted", `Click to fold · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`),
-    ];
+    );
     const header = this.renderHeader(width);
     const border = (text: string) => this.theme.fg("border", text);
     const rows = width < 5
@@ -420,7 +410,7 @@ export class SubagentViewer implements Component {
         border(`╭${"─".repeat(width - 2)}╮`), header,
         ...content.map((line, index) => {
           const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
-          const thumb = this.scrollbar, bodyY = index - 3;
+          const thumb = this.scrollbar, bodyY = index - bodyStart;
           const edge = thumb && bodyY >= thumb.top && bodyY < thumb.top + thumb.height
             ? this.theme.fg("accent", "┃") : border("│");
           return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${edge}`;
