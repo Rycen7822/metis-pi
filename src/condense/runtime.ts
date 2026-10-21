@@ -1564,7 +1564,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           await stopMaintenance();
           assertCurrent(version);
           if (!currentConfig.value.enabled) return;
-          const beforeRewrite = occ.measure(ctx);
+          let beforeRewrite = 0;
           const deferred = occ.deferLocal(ctx);
           if (occ.isCapacityWaiting()) {
             for (const call of capturedBatch.toolCalls) {
@@ -1586,6 +1586,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             sessionDir: ctx.sessionManager.getSessionDir(),
             sessionId: ctx.sessionManager.getSessionId(),
             appendEntry: appendArchive,
+            beforeIndex: () => {
+              assertCurrent(version);
+              beforeRewrite = occ.measure(ctx);
+            },
           });
           assertCurrent(version);
           if (handled.size) {

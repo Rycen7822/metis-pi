@@ -9,12 +9,15 @@ import { isCodeAction, type CodeActionResult } from "./code-actions.ts";
 import type { JsonRpcMessage, LspDiagnostic, LspServerAdapter, ServerCommand } from "./types.ts";
 
 const PROCESS_EXIT_GRACE_MS = 500;
+const FRAME_SEPARATOR = Buffer.from("\r\n\r\n", "latin1");
 
 export class LspClient {
   #child?: ChildProcessWithoutNullStreams;
   #process?: ChildProcessWithoutNullStreams;
   #processExit?: Promise<void>;
-  #buffer = Buffer.alloc(0);
+  #frameChunks: Buffer[] = [];
+  #headerMatch = 0;
+  #bodyRemaining: number | undefined;
   #nextId = 1;
   #pending = new Map<
     number,
@@ -253,6 +256,10 @@ export class LspClient {
   }
 
   #fail(message: string) {
+    // A failed server never delivers the rest of a frame; drop its partial bytes.
+    this.#frameChunks = [];
+    this.#headerMatch = 0;
+    this.#bodyRemaining = undefined;
     this.#rejectPending(message);
     if (this.#child && !this.#child.killed) this.#child.kill("SIGTERM");
     this.#child = undefined;
@@ -296,25 +303,47 @@ export class LspClient {
     }
   }
 
+  // Frames arrive as arbitrarily split byte chunks. One accumulator holds the current
+  // header or body as views, joining each only once; Content-Length is parsed once per frame.
   #onData(chunk: Buffer) {
-    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+    let offset = 0;
 
-    while (true) {
-      const separator = this.#buffer.indexOf("\r\n\r\n");
-      if (separator < 0) return;
+    // A zero-length body must complete even when its header ends at the chunk boundary.
+    while (offset < chunk.length || this.#bodyRemaining === 0) {
+      if (this.#bodyRemaining === undefined) {
+        const start = offset;
+        while (offset < chunk.length && this.#headerMatch < FRAME_SEPARATOR.length) {
+          const byte = chunk[offset++]!;
+          // On mismatch, a CR can still begin the next delimiter candidate.
+          if (byte === FRAME_SEPARATOR[this.#headerMatch]) this.#headerMatch++;
+          else this.#headerMatch = byte === FRAME_SEPARATOR[0] ? 1 : 0;
+        }
+        this.#frameChunks.push(chunk.subarray(start, offset));
+        if (this.#headerMatch < FRAME_SEPARATOR.length) return;
 
-      const header = this.#buffer.subarray(0, separator).toString("utf8");
-      const contentLength = /Content-Length:\s*(\d+)/i.exec(header)?.[1];
-      if (!contentLength) throw new Error(`Invalid LSP response header: ${header}`);
+        const header = this.#takeFrameBytes().subarray(0, -FRAME_SEPARATOR.length).toString("utf8");
+        this.#headerMatch = 0;
+        const contentLength = /Content-Length:\s*(\d+)/i.exec(header)?.[1];
+        if (!contentLength) throw new Error(`Invalid LSP response header: ${header}`);
+        this.#bodyRemaining = Number(contentLength);
+      } else {
+        const take = Math.min(this.#bodyRemaining, chunk.length - offset);
+        if (take > 0) this.#frameChunks.push(chunk.subarray(offset, offset + take));
+        offset += take;
+        this.#bodyRemaining -= take;
+        if (this.#bodyRemaining !== 0) return;
 
-      const bodyStart = separator + 4;
-      const bodyLength = Number(contentLength);
-      if (this.#buffer.length < bodyStart + bodyLength) return;
-
-      const rawBody = this.#buffer.subarray(bodyStart, bodyStart + bodyLength).toString("utf8");
-      this.#buffer = this.#buffer.subarray(bodyStart + bodyLength);
-      this.#handleMessage(JSON.parse(rawBody) as JsonRpcMessage);
+        const body = this.#takeFrameBytes();
+        this.#bodyRemaining = undefined;
+        this.#handleMessage(JSON.parse(body.toString("utf8")) as JsonRpcMessage);
+      }
     }
+  }
+
+  #takeFrameBytes() {
+    const bytes = this.#frameChunks.length === 1 ? this.#frameChunks[0]! : Buffer.concat(this.#frameChunks);
+    this.#frameChunks = [];
+    return bytes;
   }
 
   #handleMessage(message: JsonRpcMessage) {

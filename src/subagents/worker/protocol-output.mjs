@@ -1,6 +1,6 @@
-/** Managed progress reports liveness, not a reconstructable SDK transcript.
- * Keep cumulative snapshots in-process; message_end and tool start/end remain
- * canonical on the wire, including their usage, results and errors. */
+/** Managed events report liveness, not a reconstructable SDK transcript.
+ * Keep cumulative snapshots and unused complete/aggregate bodies in-process;
+ * message_end and tool start/end retain their full usage, results and errors. */
 export function projectSdkEvent(event, originRunId) {
   if (event.type === 'message_update') {
     return { type: event.type, originRunId, assistantMessageEvent: {
@@ -10,7 +10,14 @@ export function projectSdkEvent(event, originRunId) {
   if (event.type === 'tool_execution_update') {
     return { type: event.type, originRunId, toolCallId: event.toolCallId, toolName: event.toolName };
   }
-  return { ...event, originRunId };
+  const frame = { ...event, originRunId };
+  if (event.type === 'message_start' || event.type === 'turn_end') {
+    delete frame.message;
+    delete frame.toolResults;
+  } else if (event.type === 'agent_end') {
+    delete frame.messages; // Preserve willRetry, not the duplicate transcript.
+  }
+  return frame;
 }
 
 /** Bounded JSONL output for the plugin-owned SDK child. SDK event callbacks

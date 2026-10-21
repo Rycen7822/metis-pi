@@ -241,6 +241,9 @@ export class SubagentSession {
         if (data?.sessionId === this.sessionId && data.scope === this.client.scope && data.receipt) receipts.add(data.receipt);
       }
       if (entry.type === "custom_message" && entry.customType === ATTENTION) {
+        // Only known no-op receipts bypass validation; persisted bodies are mutable.
+        const receipt = (entry.details as { receipt?: string } | undefined)?.receipt;
+        if (receipt && this.observed.has(receipt)) continue;
         const proof = this.attentionProof(entry.content, entry.details);
         if (proof) receipts.add(proof.receipt);
       }
@@ -248,6 +251,7 @@ export class SubagentSession {
       const message = entry.message;
       const detail = message.details as { metisSubagentReceipt?: ReceiptProof } | undefined;
       const proof = detail?.metisSubagentReceipt;
+      if (proof && Array.isArray(proof.receipts) && proof.receipts.every(receipt => this.observed.has(receipt))) continue;
       if (
         proof?.sessionId === this.sessionId &&
         proof.scope === this.client.scope &&

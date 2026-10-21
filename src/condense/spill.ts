@@ -147,10 +147,17 @@ export async function spillOversizedBatch(args: {
   sessionDir: string;
   sessionId: string;
   appendEntry: (customType: string, data?: unknown) => void;
+  /** Capture capacity state only when a durable result is ready to change the projection. */
+  beforeIndex?: () => void;
 }): Promise<Set<string>> {
   const { batch, indexer, config, sessionDir, sessionId, appendEntry } = args;
   const handled = new Set<string>();
   const toIndex: CapturedToolCall[] = [];
+  let prepare = args.beforeIndex;
+  const beforeIndex = () => {
+    prepare?.call(args);
+    prepare = undefined;
+  };
 
   for (const tc of batch.toolCalls) {
     if (tc.outputArchive) {
@@ -172,6 +179,7 @@ export async function spillOversizedBatch(args: {
     if (config.dedupByContentHash) {
       const original = indexer.lookupByContent(tc.toolName, tc.resultText);
       if (original && original !== key) {
+        beforeIndex();
         indexer.registerDuplicate(key, original, appendEntry, { ...tc, turnIndex: batch.turnIndex, timestamp: batch.timestamp });
         handled.add(tc.toolCallId);
         continue;
@@ -193,6 +201,7 @@ export async function spillOversizedBatch(args: {
   }
 
   if (toIndex.length > 0) {
+    beforeIndex();
     indexer.addBatch(
       { turnIndex: batch.turnIndex, timestamp: batch.timestamp, assistantText: "", toolCalls: toIndex },
       appendEntry,

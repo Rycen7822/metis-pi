@@ -26,9 +26,20 @@ function exitAfterDelay() {
   }, 100);
 }
 
-function send(message) {
-  const body = JSON.stringify(message);
-  process.stdout.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+// All replies exercise split headers/bodies; multiple messages also share a write.
+function send(...messages) {
+  const all = Buffer.from(messages.map(message => {
+    const body = JSON.stringify(message);
+    return `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+  }).join(""));
+  const headerEnd = all.indexOf("\r\n\r\n");
+  const marker = all.indexOf(Buffer.from("🙂", "utf8"));
+  // Split at emoji+1 when present (mid 4-byte UTF-8 character); otherwise mid-body.
+  const bodySplit = marker >= 0 ? marker + 1 : headerEnd + 4 + Math.floor((all.length - headerEnd - 4) / 2);
+  process.stdout.write(all.subarray(0, 5));
+  process.stdout.write(all.subarray(5, headerEnd + 3));
+  process.stdout.write(all.subarray(headerEnd + 3, bodySplit));
+  process.stdout.write(all.subarray(bodySplit));
 }
 
 function diagnostic(message, line = 0) {
@@ -210,11 +221,10 @@ function handle(message) {
     } else if (scenario === "pull-empty-after-push") {
       publish(uri, [diagnostic("already published diagnostic")]);
     } else if (scenario === "batch-push" && openedUris.length === expectedFiles) {
-      setTimeout(() => {
-        for (const openedUri of openedUris) {
-          publish(openedUri, [diagnostic(`ready:${openedUri}`)]);
-        }
-      }, 5);
+      setTimeout(() => send(...openedUris.map(uri => ({
+        jsonrpc: "2.0", method: "textDocument/publishDiagnostics",
+        params: { uri, diagnostics: [diagnostic(`ready:${uri} 🙂 é ✓`)] },
+      }))), 5);
     }
     return;
   }

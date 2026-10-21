@@ -3,11 +3,11 @@
   "target": "x86_64-unknown-linux-musl",
   "source": {
     "root": "native/tools",
-    "baseRevision": "1187cf70e3b6de4b6e79ae996bc881d9105131f6",
-    "baseRef": "v0.20.0-46-g1187cf7",
+    "baseRevision": "87b13210fd1b90060f4e4a4812582a223e98a32b",
+    "baseRef": "v0.21.0-37-g87b1321",
     "modified": true,
     "verification": "Requires a Git checkout containing native/tools; installed packages contain helper bytes only.",
-    "sha256": "0d0356d533eebf596362357daa2d10cad5c6ac458d16df43f96e52d842a19a3c",
+    "sha256": "2becdac9e2d91ee9b5558e8361795955875d7081b9190e8ebaaad680e5e28a63",
     "inputs": [
       {
         "path": "native/tools/Cargo.lock",
@@ -99,7 +99,7 @@
       },
       {
         "path": "native/tools/exec/main.rs",
-        "sha256": "20866fe0c06cb56999293ccec7c791f20aa815f95e2721e802c6569960cb73b1"
+        "sha256": "65981cac5d7a67d46dd3c1bfe023ccdbf07964c47844257ec205d5aeb0546b3f"
       },
       {
         "path": "native/tools/exec/protocol.rs",
@@ -135,8 +135,8 @@
   "assets": [
     {
       "path": "assets/native-tools/exec/linux-x64/exec_bridge",
-      "sha256": "6b627ed18bc9d19573a95b3a05abbb503e1d19acc4e4862a7cbb2ab8a799a5ee",
-      "bytes": 1246032,
+      "sha256": "60f593999bb138f18c653e5f0d3672bbc99bd4f1a97b90481db62ae3367f73db",
+      "bytes": 1237840,
       "abi": {
         "machine": "x86-64",
         "interpreter": null,

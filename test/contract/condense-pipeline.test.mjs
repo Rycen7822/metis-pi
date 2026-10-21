@@ -16,6 +16,7 @@ import { loadConfig } from "../../src/condense/config.ts";
 import { encodePruneConfig, parseMetisConfig } from "../../src/metis-config.ts";
 import { stringify } from "smol-toml";
 import { disableNetwork } from "../helpers/native-provider.mjs";
+import { METIS_EVENTS } from "../../src/collaboration.ts";
 
 test.beforeEach(disableNetwork);
 
@@ -242,6 +243,20 @@ async function fixture(
     waitMaintenance, nextTimestamp: () => clock++,
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
+
+test("no-op completions skip history while real spills retain capacity accounting with OCC off", async t => {
+  const f = await fixture(t, { spillThreshold: 1000, spillPreviewBytes: 64, recoveryGraceTurns: 0, occ: false });
+  const sizes = [];
+  f.events.on(METIS_EVENTS.condenseProject, request => { sizes.push(JSON.stringify(request.messages).length); });
+  const small = f.add("small retained result", "unrecognized-command", "no-spill");
+  await f.emit("turn_end", { message: small.assistant, toolResults: [small.result], turnIndex: 0 });
+  assert.equal(sizes.length, 0, "no rewrite means no before/after capacity projection");
+  const large = f.add("ORIGINAL_" + "x".repeat(2000), "unrecognized-command", "real-spill");
+  await f.emit("turn_end", { message: large.assistant, toolResults: [large.result], turnIndex: 1 });
+  assert.ok(sizes.length >= 2, "native stale-capacity accounting still measures both sides of a rewrite");
+  assert.ok(sizes[0] > sizes.at(-1), "measurement observes the original result before its indexed stub");
+  assert.equal(f.calls.length, 0);
+});
 
 test("TUI context gives pending UI work a turn before reading its projection", async t => {
   const f = await fixture(t, { mode: "tui" });

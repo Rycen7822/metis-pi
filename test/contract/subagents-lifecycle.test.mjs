@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -286,16 +287,29 @@ test("attention receipts and question answers require the same saved body proof"
         if (saved.type === "custom") manager.appendCustomEntry(saved.customType, saved.data);
         else manager.appendCustomMessageEntry(saved.customType, saved.content, saved.display, saved.details);
       }
+      const serialize = t.mock.method(JSON, "stringify");
+      const reads = () => serialize.mock.calls.filter(({ arguments: [value] }) => value === draft.content).length;
       await owner.settled(ctx, true);
       const valid = variant === "unchanged" || variant === "boundary_edit";
       assert.deepEqual(calls.filter(call => call.op === "pi_observe").map(call => call.params.receipt), valid ? ["delivery_question"] : []);
       assert.deepEqual(calls.filter(call => call.op === "pi_uncertain").map(call => call.params.receipt), valid ? [] : ["delivery_question"], "an unconfirmed body retains recoverable attention");
       const answer = () => owner.execute("pi_answer_agent", { agent_id: "child", answer: "Use the current branch" }, "answer", ctx);
-      if (!valid) {
-        const rejected = await answer();
-        assert.equal(rejected.isError, true);
-        assert.equal(rejected.structuredContent.error.code, "input_not_delivered");
-        assert.equal(calls.filter(call => call.op === "pi_answer_agent").length, 0, "a rejected proof must not answer the question");
+      const saved = manager.getBranch().findLast(entry => entry.type === "custom_message" && entry.customType === original.customType);
+      const content = saved.content;
+      if (valid) {
+        assert.equal(reads(), 1, "first attention observation validates saved bytes");
+        serialize.mock.resetCalls();
+        await owner.settled(ctx);
+        assert.equal(reads(), 0, "observed attention is not serialized again");
+        saved.content += " Changed after observation.";
+        await owner.settled(ctx);
+      }
+      const rejected = await answer();
+      assert.equal(rejected.isError, true);
+      assert.equal(rejected.structuredContent.error.code, "input_not_delivered", "answering always requires the current saved body proof");
+      assert.equal(calls.filter(call => call.op === "pi_answer_agent").length, 0, "a rejected proof must not answer the question");
+      if (valid) saved.content = content;
+      else {
         // Recovery uses the original saved delivery, not a new notification or new run.
         manager.appendCustomMessageEntry(original.customType, original.content, original.display, original.details);
         await owner.settled(ctx);
@@ -310,17 +324,48 @@ test("attention receipts and question answers require the same saved body proof"
   }
 });
 
-test("a persisted receipt journal remains valid and is observed only once", async t => {
+test("reconciliation observes persisted journals once and validates new/mixed body proofs", async t => {
   const observed = [];
   const f = fixture(t, async (op, params, signal) => {
     if (op === "pi_watch") return heldWatch(signal);
     assert.equal(op, "pi_observe"); observed.push(params.receipt); return {};
   });
+  await until(() => f.operations.some(call => call.op === "pi_watch"));
+  const hash = content => createHash("sha256").update(JSON.stringify(content)).digest("hex");
+  const content = [{ type: "text", text: "saved é中👩🏽‍💻\n\u2028\u2029" }];
+  const proof = { id: "old-tool", events: [], receipts: ["old-tool"], sessionId: "lifecycle-test",
+    scope: "scope_test", digest: hash(content), isError: false };
+  const tool = { role: "toolResult", toolCallId: "tool", toolName: "fixture", timestamp: 1,
+    content, isError: false, details: { metisSubagentReceipt: proof } };
   f.branch.push({ type: "custom", customType: "metis-subagent-receipt", data: {
     sessionId: "lifecycle-test", scope: "scope_test", receipt: "delivery_saved",
-  } });
-  await f.owner.settled(f.ctx); await f.owner.settled(f.ctx, true);
-  assert.deepEqual(observed, ["delivery_saved"]);
+  } }, { type: "message", message: tool });
+  const serialize = t.mock.method(JSON, "stringify");
+  const reads = () => serialize.mock.calls.filter(({ arguments: [value] }) => value === content).length;
+  await f.owner.settled(f.ctx);
+  assert.deepEqual(observed, ["delivery_saved", "old-tool"]);
+  assert.equal(reads(), 1, "first observation validates saved bytes");
+  serialize.mock.resetCalls();
+  await f.owner.settled(f.ctx, true);
+  assert.equal(reads(), 0, "fully observed content is not serialized again");
+
+  // The same branch object must be revalidated when it gains an unobserved receipt.
+  proof.receipts.push("new-tool");
+  content[0].text += " changed";
+  await f.owner.settled(f.ctx);
+  assert.deepEqual(observed, ["delivery_saved", "old-tool"], "an observed identifier cannot bypass a mixed proof's digest");
+  proof.digest = hash(content);
+  for (const [target, key, value] of [
+    [tool, "isError", true], [proof, "scope", "foreign"], [proof, "sessionId", "foreign"],
+  ]) {
+    const saved = target[key];
+    target[key] = value;
+    await f.owner.settled(f.ctx);
+    assert.deepEqual(observed, ["delivery_saved", "old-tool"], `mixed proof requires matching ${key}`);
+    target[key] = saved;
+  }
+  await f.owner.settled(f.ctx);
+  assert.deepEqual(observed, ["delivery_saved", "old-tool", "new-tool"]);
   assert.deepEqual(f.warnings, []);
 });
 

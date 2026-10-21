@@ -27,7 +27,13 @@ export function isDaemonIdle(error: unknown): error is RuntimeError {
   return error instanceof RuntimeError && error.code === "daemon_idle";
 }
 interface Pending { resolve: (result: Record<string, unknown>) => void; reject: (error: Error) => void; cleanup: () => void }
-interface Bridge { child: ChildProcessWithoutNullStreams; ready?: Promise<void>; buffer: Buffer; stderr: string }
+interface Bridge {
+  child: ChildProcessWithoutNullStreams;
+  ready?: Promise<void>;
+  fragments: Buffer[];
+  frameBytes: number;
+  stderr: string;
+}
 
 export class SubagentClient {
   private bridge?: Bridge;
@@ -50,16 +56,26 @@ export class SubagentClient {
   private fail(bridge: Bridge | undefined, error: Error) {
     if (bridge !== this.bridge) return; // All transport failures, including late writes, have one owner.
     this.ended = true;
+    if (bridge) { bridge.fragments.length = 0; bridge.frameBytes = 0; }
     for (const call of this.pending.values()) { call.cleanup(); call.reject(error); }
     bridge?.child.stdin.destroy();
   }
   private receive(bridge: Bridge, chunk: Buffer) {
     if (bridge !== this.bridge) return;
-    bridge.buffer = Buffer.concat([bridge.buffer, chunk]);
-    let end: number;
-    while ((end = bridge.buffer.indexOf(10)) >= 0) {
-      if (end >= this.runtime.maxFrame) { this.fail(bridge, new Error("Subagent response exceeds frame limit")); return; }
-      const line = bridge.buffer.subarray(0, end); bridge.buffer = bridge.buffer.subarray(end + 1);
+    let start = 0;
+    while (start < chunk.length) {
+      // LF is ASCII even in UTF8: scan only new bytes, then join a completed
+      // frame once so fragmented responses never recopy or rescan the prefix.
+      const end = chunk.indexOf(10, start);
+      const part = chunk.subarray(start, end < 0 ? chunk.length : end);
+      bridge.frameBytes += part.length;
+      if (bridge.frameBytes >= this.runtime.maxFrame) { this.fail(bridge, new Error("Subagent response exceeds frame limit")); return; }
+      bridge.fragments.push(part);
+      if (end < 0) return;
+      const line = bridge.fragments.length === 1 ? part : Buffer.concat(bridge.fragments, bridge.frameBytes);
+      bridge.fragments.length = 0;
+      bridge.frameBytes = 0;
+      start = end + 1;
       try {
         const message = JSON.parse(line.toString("utf8"));
         const call = this.pending.get(message.id);
@@ -77,7 +93,6 @@ export class SubagentClient {
         else call.reject(new RuntimeError(message.error));
       } catch { this.fail(bridge, new Error("Invalid subagent protocol response")); return; }
     }
-    if (bridge.buffer.length >= this.runtime.maxFrame) this.fail(bridge, new Error("Subagent response exceeds frame limit"));
   }
   private send(frame: object) {
     const body = JSON.stringify(frame) + "\n", bridge = this.bridge;
@@ -118,7 +133,7 @@ export class SubagentClient {
         [join(this.runtime.root, "main.py"), "--home", join(this.agentDir, "metis", "subagent"), "pi-host"],
         { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
       );
-      const bridge = (this.bridge = { child, buffer: Buffer.alloc(0), stderr: "" });
+      const bridge = (this.bridge = { child, fragments: [], frameBytes: 0, stderr: "" });
       child.stdout.on("data", (chunk: Buffer) => this.receive(bridge, chunk));
       child.stderr.on("data", (chunk: Buffer) => {
         bridge.stderr = (bridge.stderr + chunk.toString("utf8")).slice(-2048);

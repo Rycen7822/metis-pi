@@ -6,9 +6,11 @@ import { createDiffComponent, createShellFactories } from "../../src/chrome/tool
 import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent, CodexWriteCallComponent } from "../../src/chrome/transcript-components.ts";
 import { createThinkingViewControl } from "../../src/thinking-view.ts";
 import { createWorkingComponent } from "../../src/chrome/working.ts";
+import { wrapPlainOutput } from "../../src/shell.ts";
 import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 
-const layout = { wrap: Tui.wrapTextWithAnsi, visibleWidth: Tui.visibleWidth };
+const layout = { visibleWidth: Tui.visibleWidth,
+  wrap: (text, width) => wrapPlainOutput(text, width, Tui.wrapTextWithAnsi) };
 const theme = { fg: (_tone, text) => text, bold: text => text };
 const shell = createShellFactories(layout);
 test.beforeEach(t => installCopyPrototypes(t, ["Text", "Markdown", "Container", "Box", "MouseRegion"]));
@@ -59,18 +61,22 @@ test("thinking rail recognizes an existing prefix through SGR and OSC8 while kee
 });
 
 test("real shell components copy consumed spaces, ANSI text and Unicode across physical wraps", () => {
-  for (const text of ["alpha   beta  gamma  ", "alpha \x1b[31mRED\x1b[0m  omega", "甲é 👩‍👩‍👦  fin", "RED", "first\nsecond"]) {
+  for (const text of ["alpha   beta  gamma  ", "alpha \x1b[31mRED\x1b[0m  omega", "甲é 👩‍👩‍👦  fin", "RED", "first\nsecond",
+    "ab CD  ".repeat(650), "\x1b[31m" + "A".repeat(4500) + "\x1b[0m end", "甲é 👩‍👩‍👦  ".repeat(100) + "fin"]) {
     const expected = Tui.stripTerminalSequences(text);
-    for (const width of [14, 80]) {
+    const commandFits = expected.length <= 1200;
+    for (const width of commandFits ? [14, 80] : [80]) {
       const output = shell.makeShellResult({ name: "bash", args: {}, result: { content: [{ type: "text", text }] },
         options: { expanded: true, isPartial: false }, theme, context: {}, expandHint: "expand", colorLevel: { kind: "truecolor" } });
       // Select the whole physical row, including its blank trailing cells.
       const copied = select(copyFrame(output, width), 0, undefined, () => ({ start: 0, end: width }));
       assert.equal(copied.text, expected);
       assert.equal(copied.nativeRows, 0);
-      const command = shell.makeShellCall({ name: "powershell", bullet: "•", title: "Ran", args: { command: text },
-        options: { expanded: true }, theme, context: {}, expandHint: "expand", colorLevel: { kind: "truecolor" } });
-      assert.equal(select(copyFrame(command, width), 0, undefined, () => ({ start: 0, end: width })).text, expected);
+      if (commandFits) {
+        const command = shell.makeShellCall({ name: "powershell", bullet: "•", title: "Ran", args: { command: text },
+          options: { expanded: true }, theme, context: {}, expandHint: "expand", colorLevel: { kind: "truecolor" } });
+        assert.equal(select(copyFrame(command, width), 0, undefined, () => ({ start: 0, end: width })).text, expected);
+      }
     }
   }
 });

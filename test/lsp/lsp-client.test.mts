@@ -87,7 +87,7 @@ test("pull diagnostics omit optional params when no values are available", async
   }
 });
 
-test("advertised pull diagnostic errors propagate", async () => {
+test("fragmented advertised pull diagnostic errors propagate", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-pull-error-"));
   const file = path.join(root, "main.go");
   writeFileSync(file, "package main\n");
@@ -313,7 +313,7 @@ test("code-action resolution follows the advertised server capability", async ()
   }
 });
 
-test("diagnostics open all files before awaiting push publications", async () => {
+test("diagnostics open all files before awaiting fragmented/coalesced UTF-8 publications", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-batch-push-"));
   mkdirSync(path.join(root, "pkg"));
   const files = ["a.go", "b.go", "c.go"].map((name) => path.join(root, "pkg", name));
@@ -329,6 +329,8 @@ test("diagnostics open all files before awaiting push publications", async () =>
       details.files.map(({ diagnostics }) => diagnostics.length),
       [1, 1, 1],
     );
+    assert.ok(details.files.every(({ diagnostics }) =>
+      diagnostics.every(({ message }) => message.endsWith("🙂 é ✓"))));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

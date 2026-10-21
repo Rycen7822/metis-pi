@@ -61,7 +61,9 @@ export function snapshotSession(session: ExecResultSessionState, maxOutputChars 
     exitCode: session.exitCode ?? undefined,
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
-    outputTail: session.buffer.slice(-maxOutputChars),
+    // slice(-0) would mean slice(0) and materialize all retained output; a zero
+    // character tail must not read the buffer (or its spool) at all.
+    outputTail: maxOutputChars === 0 ? "" : session.buffer.slice(-maxOutputChars),
     terminating: session.terminating,
   };
 }

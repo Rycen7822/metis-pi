@@ -25,11 +25,17 @@ test("spill paths preserve distinct occurrence bodies after reload and keep exis
     assistantText: "",
     toolCalls: originals.map(([id, text]) => record(id, text, 3)),
   };
-  await spillOversizedBatch({
-    batch, indexer, config: { ...DEFAULT_CONFIG, spillThreshold: 1, dedupByContentHash: false },
-    sessionDir: dir, sessionId: sm.getSessionId(),
-    appendEntry: (type, data) => sm.appendCustomEntry(type, data),
-  });
+  const spill = { indexer, sessionDir: dir, sessionId: sm.getSessionId(),
+    appendEntry: (type, data) => sm.appendCustomEntry(type, data) };
+  let baselines = 0;
+  const handled = await spillOversizedBatch({ ...spill, batch,
+    config: { ...DEFAULT_CONFIG, spillThreshold: 1, dedupByContentHash: false },
+    beforeIndex() {
+      baselines++;
+      for (const [id] of originals) assert.equal(indexer.getRecord(`${id}@3`), undefined);
+    } });
+  assert.equal(baselines, 1, "one pre-change baseline for the complete batch");
+  assert.equal(handled.size, originals.length, "every spilled occurrence contributes to the action count");
   indexer.reconstructFromSession(ctx);
   for (const [id, original] of originals) {
     const page = (await run({ toolCallIds: [`${id}@3`] })).details.results[0];
@@ -53,6 +59,17 @@ test("spill paths preserve distinct occurrence bodies after reload and keep exis
   });
   indexer.reconstructFromSession(ctx);
   assert.equal((await run({ toolCallIds: ["legacy:id@7"] })).details.results[0].text, "LEGACY_ORIGINAL");
+
+  const duplicate = await spillOversizedBatch({ ...spill,
+    batch: { ...batch, toolCalls: [record("duplicate", originals[0][1], 4)] },
+    config: { ...DEFAULT_CONFIG, spillThreshold: 1, dedupByContentHash: true },
+    beforeIndex() {
+      baselines++;
+      assert.equal(indexer.getRecord("duplicate@4"), undefined, "dedup measures before publishing its reference");
+    } });
+  assert.ok(duplicate.has("duplicate"));
+  assert.equal(baselines, 2);
+  assert.equal((await run({ toolCallIds: ["duplicate@4"] })).details.results[0].text, originals[0][1]);
 });
 
 test("spill recall reaches the tail; archive loss cannot masquerade as a complete preview", async (t) => {

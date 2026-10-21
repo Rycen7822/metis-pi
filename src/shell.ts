@@ -43,6 +43,35 @@ export interface VisualRow {
 }
 
 const MAX_LOGICAL_LINE_CHARS = 1200;
+const COPY_GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const detach = (text: string) => text ? Buffer.from(text, "utf16le").toString("utf16le") : "";
+
+/** The Pi layout binding can bulk-wrap long printable ASCII without the host's
+ * per-grapheme long-word allocations. Keep its word/space boundary rules; all
+ * styled, Unicode, multiline, short or unusual-width input stays with the host.
+ * Custom LayoutOps are untouched unless their owner opts into this binding. */
+export function wrapPlainOutput(text: string, width: number, host: LayoutOps["wrap"]): string[] {
+  if (text.length < 4096 || !Number.isInteger(width) || width < 1 || /[^\x20-\x7e]/.test(text)) return host(text, width);
+  if (text.length <= width) return [text];
+  const rows: string[] = [];
+  let line = "";
+  for (const match of text.matchAll(/ +|[^ ]+/g)) {
+    const token = match[0], whitespace = token[0] === " ";
+    if (token.length > width && !whitespace) {
+      if (line) rows.push(line.trimEnd());
+      let start = 0;
+      for (; start + width < token.length; start += width) rows.push(token.slice(start, start + width));
+      line = token.slice(start);
+    } else if (line.length + token.length > width && line.length > 0) {
+      rows.push(line.trimEnd());
+      line = whitespace ? "" : token;
+    } else {
+      line += token;
+    }
+  }
+  if (line) rows.push(line.trimEnd());
+  return rows;
+}
 
 /**
  * Length cap for oversized logical lines. ANSI-aware: escape sequences are
@@ -193,6 +222,36 @@ function wrapStyled(text: string, width: number, layout: LayoutOps, measured?: r
   }));
 }
 
+type OutputRow = VisualRow & { segmentIndex: number; sourceCopy?: CopyRow };
+
+/** Match native rows in source order, attaching detached copy data only to the
+ * kept rows. Drift uses wrapStyled; hidden continuations get no copy objects. */
+function attachOutputCopies(text: string, rows: readonly string[], layout: LayoutOps, selected: readonly OutputRow[]): boolean {
+  const source = stripAnsi(text);
+  const graphemes = /^[\x20-\x7e]*$/.test(source) ? undefined : COPY_GRAPHEMES.segment(source);
+  const boundary = (offset: number) => offset === source.length || !graphemes || graphemes.containing(offset)?.index === offset;
+  let offset = 0, next = 0;
+  for (let index = 0; index < rows.length; index++) {
+    const plain = stripAnsi(rows[index]!);
+    const start = source.indexOf(plain, offset);
+    // Native soft wraps can consume whitespace, but never other source text.
+    if (start < 0 || (index === 0 && start !== 0) || source.slice(offset, start).trim() !== "") return false;
+    const end = start + plain.length;
+    const visual = selected[next];
+    if (visual?.segmentIndex === index) {
+      if (!boundary(start) || !boundary(end)) return false;
+      visual.sourceCopy = {
+        spans: plain ? [{ colStart: 0, colEnd: layout.visibleWidth(rows[index]!), kind: "content", text: detach(plain) }] : [],
+        breakBefore: index === 0 ? "hard" : "soft",
+        bridge: selected[next - 1]?.segmentIndex === index - 1 ? detach(source.slice(offset, start)) : "",
+      };
+      next++;
+    }
+    offset = end;
+  }
+  return offset === source.length;
+}
+
 /** Keep display styling out of source coordinates; unknown host rows retain
  * native extraction over their content cells, excluding our gutter. */
 function gutterCopyRow(visual: Pick<VisualRow, "text" | "copy">, gutterWidth: number, input: ShellLayoutInput): CopyRow {
@@ -321,8 +380,8 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
  * Output block: "  └ " first row, "    " after, wrapped then middle-truncated
  * to OUTPUT_MAX_ROWS physical rows. Result region only — never a command head.
  * Streaming (isPartial) shows the bounded tail; done shows head+tail.
- * Prefixes are attached right after wrapping (Codex prefix_lines order), so
- * the "  └ " head survives truncation exactly like the upstream cell.
+ * Prefix choice follows the original wrapped position (Codex prefix_lines
+ * order); only retained rows materialize it, so a tail never becomes a head.
  */
 export function renderShellResult(input: ShellLayoutInput): string[] {
   const { row, width, layout } = input;
@@ -346,12 +405,11 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
     return [noOutput];
   }
 
-  // Wrap first (Codex), attach prefixes, then budget — a few very long lines
-  // cannot flood the viewport and "  └ " marks the block head. The whole body
+  // Wrap first (Codex), record prefix choice, then budget — long lines cannot
+  // flood the viewport and "  └ " still marks the original head. The whole body
   // (prefix + text) is dimmed through the SGR state machine: source colors
   // survive, internal resets re-acquire DIM, and our DIM never leaks out.
   const dimPolicy = { dim: true, colorLevel: input.colorLevel };
-  type OutputRow = VisualRow & { segmentIndex: number };
   const wrapped: OutputRow[] = [];
   // Native wrapping still decides the exact row count/hint. Defer styling and
   // provenance for hidden middle lines until after the physical-row budget.
@@ -361,16 +419,15 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
   });
   measured.forEach((segments, lineIndex) => {
     segments.forEach((text, segmentIndex) => {
-      const first = lineIndex === 0 && segmentIndex === 0;
-      wrapped.push({ text: `${first ? initialPrefix : subsequentPrefix}${text}`,
-        sourceLineIndex: lineIndex, segmentIndex, continuation: !first });
+      wrapped.push({ text, sourceLineIndex: lineIndex, segmentIndex,
+        continuation: lineIndex !== 0 || segmentIndex !== 0 });
     });
   });
 
   const kept = row.expanded ? wrapped : row.isPartial
     ? wrapped.slice(-OUTPUT_MAX_ROWS)
     : truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, subsequentPrefix, usable).rows;
-  let sourceLine = -1, segments: Pick<VisualRow, "text" | "copy">[] = [], afterGap = false;
+  let sourceLine = -1, afterGap = false;
   return kept.map((visual, index) => {
     if (visual.sourceLineIndex === -1) {
       copy?.push({ spans: [{ colStart: 0, colEnd: usable, kind: "semantic", text: stripAnsi(visual.text) }], breakBefore: "gap" });
@@ -380,17 +437,24 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
     if (copy) {
       if (sourceLine !== visual.sourceLineIndex) {
         sourceLine = visual.sourceLineIndex;
-        segments = wrapStyled(raw[sourceLine]!, outputWidth, layout, measured[sourceLine]);
+        const selected = (row.expanded ? kept.slice(index, index + measured[sourceLine]!.length)
+          : kept.filter(item => item.sourceLineIndex === sourceLine)) as OutputRow[];
+        if (!attachOutputCopies(raw[sourceLine]!, measured[sourceLine]!, layout, selected)) {
+          const segments = wrapStyled(raw[sourceLine]!, outputWidth, layout, measured[sourceLine]);
+          for (const item of selected) item.sourceCopy = segments[item.segmentIndex]!.copy;
+        }
       }
       // truncateMiddleRows only synthesizes sourceLineIndex=-1 notices; real
       // rows retain their original segment coordinate even across a gap.
-      const segmentIndex = (visual as OutputRow).segmentIndex;
+      const { segmentIndex, sourceCopy } = visual as OutputRow;
       const prefixWidth = sourceLine === 0 && segmentIndex === 0 ? initialPrefixWidth : subsequentPrefixWidth;
-      const original = gutterCopyRow(segments[segmentIndex]!, prefixWidth, input);
+      const original = gutterCopyRow({ text: visual.text, copy: sourceCopy }, prefixWidth, input);
       copy.push(afterGap ? { ...original, breakBefore: "gap" }
         : !row.expanded && row.isPartial && index === 0 ? { ...original, breakBefore: "hard" } : original);
     }
     afterGap = false;
-    return styleToolOutputLine(visual.text, dimPolicy);
+    // Bulk word wrapping uses slices. A committed visible row must not keep
+    // the entire hidden logical line alive after its component is released.
+    return styleToolOutputLine(detach(`${visual.continuation ? subsequentPrefix : initialPrefix}${visual.text}`), dimPolicy);
   });
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderShellCall, renderShellResult } from "../../src/shell.ts";
+import { renderShellCall, renderShellResult, wrapPlainOutput } from "../../src/shell.ts";
 import { renderWritePreview } from "../../src/write-preview.ts";
 import { sanitizeShellLine } from "../../src/palette.ts";
 import { layout } from "../helpers/layout.mjs";
@@ -67,6 +67,44 @@ test("final output keeps both ends, streaming keeps the tail, expansion exposes 
   const expanded = renderShellResult(renderOpts("echo", 40, output, { expanded: true }));
   assertRowsFit(expanded, 40);
   assert.deepEqual(expanded.map(plain), ["  └ first", "    second", "    third", "    fourth", "    fifth", "    last"]);
+});
+
+test("bulk ASCII wrapping preserves native long-word and whitespace boundaries", () => {
+  for (const width of [1, 2, 7, 76, 160]) {
+    for (const text of [
+      "x".repeat(5000), "prefix " + "x".repeat(5000) + " end  ",
+      "  prefix   " + "ab".repeat(2500) + "   end", "word  ".repeat(900),
+      " ".repeat(5000), "one " + " ".repeat(5000) + " two",
+    ]) {
+      assert.deepEqual(wrapPlainOutput(text, width, layout.wrap), layout.wrap(text, width));
+    }
+  }
+  for (const text of ["short", "a\tb", "x\ny", "\x1b[31m" + "x".repeat(5000), "甲".repeat(5000)]) {
+    let called = false;
+    const rows = wrapPlainOutput(text, 76, (source, width) => {
+      called = true; assert.equal(source, text); assert.equal(width, 76); return ["HOST"];
+    });
+    assert.equal(called, true, "unsupported input stays with the host");
+    assert.deepEqual(rows, ["HOST"]);
+  }
+});
+
+test("collapsed long output computes copy geometry only for its retained rows", () => {
+  const output = "0123456789".repeat(4000), width = 80;
+  const wrapped = layout.wrap(output, width - 4);
+  let characterWidths = 0;
+  const measuredLayout = { ...layout, visibleWidth(text) {
+    if (text.length === 1) characterWidths++;
+    return layout.visibleWidth(text);
+  } };
+  const copyOut = [];
+  const rows = renderShellResult({ ...renderOpts("", width, output), layout: measuredLayout, copyOut });
+  assertRowsFit(rows, width, OUTPUT_ROW_BUDGET);
+  assert.deepEqual([0, 1, 3, 4].map(index => content(copyOut[index])),
+    [wrapped[0], wrapped[1], wrapped.at(-2), wrapped.at(-1)]);
+  assert.deepEqual(copyOut.map(row => row.breakBefore), ["hard", "soft", "gap", "gap", "soft"]);
+  assert.ok(characterWidths <= width * OUTPUT_ROW_BUDGET,
+    `hidden continuations must not incur per-character copy geometry (${characterWidths} width calls)`);
 });
 
 test("empty/error output and safe styling survive the output pipeline", () => {

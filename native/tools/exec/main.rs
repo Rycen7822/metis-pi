@@ -43,19 +43,21 @@ enum Request {
 }
 
 #[derive(Debug, Serialize)]
-struct Response {
+struct Response<T> {
     request_id: u64,
     ok: bool,
-    result: Option<serde_json::Value>,
+    result: Option<T>,
     error: Option<String>,
 }
 
+// Serialize the typed result straight into the envelope. Going through
+// serde_json::Value would clone the base64 output chunks a second time.
 fn print_response<T: Serialize>(request_id: u64, result: Result<T, String>) {
     let response = match result {
         Ok(result) => Response {
             request_id,
             ok: true,
-            result: Some(serde_json::to_value(result).unwrap()),
+            result: Some(result),
             error: None,
         },
         Err(error) => Response {

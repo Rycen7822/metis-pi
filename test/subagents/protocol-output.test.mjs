@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PassThrough } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createProtocolOutput } from '../../src/subagents/worker/protocol-output.mjs';
+import { createProtocolOutput, projectSdkEvent } from '../../src/subagents/worker/protocol-output.mjs';
 
 function fixture(options = {}) {
   const stream = new PassThrough({ highWaterMark: 64 });
@@ -13,6 +13,44 @@ function fixture(options = {}) {
   return { stream, output, failures, collect, frames };
 }
 const progress = i => ({ type: 'tool_execution_update', toolCallId: 'tool', result: 'x'.repeat(1024), i });
+
+test('private projection retains canonical bytes and diagnostics without unused lifecycle bodies', t => {
+  const f = fixture(), originRunId = 'managed-origin';
+  t.after(() => f.stream.destroy());
+  f.collect();
+  const usage = { input: 17, output: 5, cacheRead: 3, cacheWrite: 1, totalTokens: 26,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const tool = { role: 'toolResult', toolCallId: 'tool', toolName: 'fixture', isError: true,
+    content: [{ type: 'text', text: 'é中👩🏽‍💻\n\u2028\u2029\u0000' },
+      { type: 'image', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV9sAAAAASUVORK5CYII=', mimeType: 'image/png' }],
+    details: { metisSubagentReceipt: { sessionId: 'session', scope: 'scope',
+      receipts: ['known', 'unknown'], digest: 'opaque-proof', isError: true }, opaque: [null, false, { signature: 'retained' }] },
+    usage, nestedCalls: { calls: [{ id: 'nested', name: 'inner', status: 'error', error: 'failure' }], complete: true }, timestamp: 1 };
+  const assistant = { role: 'assistant', api: 'openai-completions', provider: 'offline', model: 'fixture',
+    content: [{ type: 'thinking', thinking: '', thinkingSignature: 'opaque-signature' },
+    { type: 'text', text: 'partial error\n' }], usage, errorMessage: 'exact error', stopReason: 'error', timestamp: 2 };
+  const toolEnd = { type: 'tool_execution_end', toolCallId: 'tool', toolName: 'fixture', isError: true, durationMs: 12,
+    result: { content: tool.content, details: tool.details, structuredContent: { preview: 'diagnostic bytes' }, usage } };
+  const events = [{ type: 'message_start', message: tool }, { type: 'message_end', message: tool }, toolEnd,
+    { type: 'message_end', message: assistant }, { type: 'turn_end', message: assistant, toolResults: [tool] },
+    { type: 'agent_end', messages: [tool, assistant], willRetry: true },
+    { type: 'agent_end', messages: [assistant], willRetry: false },
+    { type: 'managed_task_end', runId: originRunId, cancelled: true, error: 'cancelled' }];
+  const before = JSON.stringify(events);
+  for (const event of events) f.output(projectSdkEvent(event, originRunId));
+  assert.equal(JSON.stringify(events), before, 'projection cannot mutate SDK/persistence inputs');
+  assert.deepEqual(f.failures, []);
+  assert.deepEqual(f.frames(), [
+    { type: 'message_start', originRunId },
+    { type: 'message_end', message: tool, originRunId },
+    { ...toolEnd, originRunId },
+    { type: 'message_end', message: assistant, originRunId },
+    { type: 'turn_end', originRunId },
+    { type: 'agent_end', willRetry: true, originRunId },
+    { type: 'agent_end', willRetry: false, originRunId },
+    { ...events.at(-1), originRunId },
+  ]);
+});
 
 test('backpressure coalesces progress and preserves critical order and final output', async () => {
   const f = fixture({ maxBytes: 8192 });

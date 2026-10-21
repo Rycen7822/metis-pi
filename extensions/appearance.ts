@@ -4,7 +4,7 @@ import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "../src/extension.ts";
 import { createDiffComponent, createDiffPainter, createShellFactories } from "../src/chrome/tool-components.ts";
 import { registerCompactionPresentation } from "../src/chrome/compaction-presentation.ts";
-import type { LayoutOps } from "../src/shell.ts";
+import { wrapPlainOutput, type LayoutOps } from "../src/shell.ts";
 import type { Palette } from "../src/tool-names.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
 import { makeSurfaceOps } from "../src/surface.ts";
@@ -17,7 +17,7 @@ import {
 
 function layoutOps(): LayoutOps {
   return {
-    wrap: (text: string, columns: number) => Tui.wrapTextWithAnsi(text, columns),
+    wrap: (text: string, columns: number) => wrapPlainOutput(text, columns, Tui.wrapTextWithAnsi),
     visibleWidth: (text: string) => Tui.visibleWidth(text),
   };
 }

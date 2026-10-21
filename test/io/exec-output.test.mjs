@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 import { ExecOutputBuffer } from "../../src/execution/exec/output-buffer.ts";
 import { consumeOutput, peekOutputSince, peekUnconsumedOutput } from "../../src/execution/exec/output.ts";
+import { snapshotSession } from "../../src/execution/exec/results.ts";
 import { trackExecSpools } from "../helpers/exec.mjs";
 
 const Mi = 1024 * 1024;
@@ -59,6 +60,21 @@ for (const scenario of [
 	buffer.append("later\n");
 	assert.deepEqual(peekOutputSince(state, baseline, 65), { output: "later\n", original_token_count: 2 });
 	assert.deepEqual(consumeOutput(state, 65), { output: "later\n", original_token_count: 2 });
+});
+
+test("snapshot tails skip the buffer at zero and keep positive/default limits", (t) => {
+	const text = "BEGIN|" + "x".repeat(9000) + "|END";
+	const slice = t.mock.fn(start => text.slice(start));
+	const session = { id: 1, command: "fixture", exitCode: undefined, startedAt: 1, updatedAt: 2,
+		terminating: false, buffer: { slice }, emittedOffset: 0 };
+	const { outputTail, running, command } = snapshotSession(session, 0);
+	assert.deepEqual({ outputTail, running, command }, { outputTail: "", running: true, command: "fixture" });
+	assert.equal(snapshotSession(session, -0).outputTail, "");
+	assert.equal(slice.mock.callCount(), 0, "zero cannot reach resident or spool reads through slice");
+	assert.equal(snapshotSession(session, 4).outputTail, "|END");
+	assert.equal(snapshotSession(session).outputTail, "x".repeat(7996) + "|END");
+	assert.equal(snapshotSession(session, 0).outputTail, "");
+	assert.equal(slice.mock.callCount(), 2, "zero remains read-free after positive reads");
 });
 
 test("partial spool writes fall back without losing retained output and release the file", (t) => {
