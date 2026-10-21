@@ -246,7 +246,9 @@ test("goal keeps unfinished targets, permits completed replacement and guides co
   assert.deepEqual((await h.tool("get")).details, first);
   assert.equal(h.entries.length, entries, "get is read-only");
   await assert.rejects(() => h.tool("create", { objective: "must not replace active" }), /unfinished goal/);
-  const prompt = (await h.fire("before_agent_start", { systemPrompt: "BASE" }, h.ctx)).systemPrompt;
+  const systemPromptOptions = { sections: {} as Record<string, string> };
+  await h.fire("before_agent_start", { systemPrompt: "BASE", systemPromptOptions }, h.ctx);
+  const prompt = systemPromptOptions.sections.metis_goal;
   assert.match(prompt, /call goal with action "update" and status "complete"/);
   assert.match(prompt, /at least three consecutive goal turns/);
   await h.fire("agent_start", {}, h.ctx);

@@ -503,8 +503,10 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     const snapshot = state.snapshot();
     if (!snapshot || snapshot.status !== "active") return;
+    const options = event.systemPromptOptions, prompt = activeGoalSystemPrompt(snapshot);
+    if (options.forceSystemPrompt !== undefined) options.forceSystemPrompt += `\n\n${prompt}`;
+    else options.sections.metis_goal = prompt;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${activeGoalSystemPrompt(snapshot)}`,
       message: {
         customType: "metis-goal-budget",
         content:
