@@ -2,9 +2,9 @@
 // never writes to disk, never executes, never parses unfinished JSON (the host
 // hands already-parsed args), never mutates the args.
 
-import type { Palette } from "./tool-names.ts";
+import type { Palette } from "./render-contract.ts";
 import type { ColorLevel } from "./palette.ts";
-import type { DiffLayoutOps } from "./tool-names.ts";
+import type { DiffLayoutOps } from "./render-contract.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
 
 /** Write call stage, resolved from host context fields (not just isPartial). */

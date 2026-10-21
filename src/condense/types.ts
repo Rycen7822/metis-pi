@@ -62,8 +62,6 @@ export interface DiagnosticEntryData {
  * grace checks in pruner.ts / chain-compressor.ts cannot drift from registration. */
 export const QUERY_TOOL_NAME = "context_tree_query";
 
-export const STATUS_WIDGET_ID = "context-prune";
-
 export const PROGRESS_WIDGET_ID = "context-prune-progress";
 
 /**

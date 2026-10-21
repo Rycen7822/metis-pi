@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync, readFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -16,7 +16,7 @@ import { isDaemonIdle, RuntimeError, SubagentClient } from "./client.ts";
 import type { RuntimePackage } from "./runtime-package.ts";
 import { SubagentViewer, type AgentInspection } from "../ui/viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
-import { loadConfig } from "../../config.ts";
+import type { AppearanceConfig } from "../../appearance-config.ts";
 import { installSamplingMailbox } from "./sampling.ts";
 
 const BINDING = "metis-subagent-scope",
@@ -71,6 +71,7 @@ export class SubagentSession {
   private readonly pi: ExtensionAPI;
   private readonly runtime: RuntimePackage;
   private readonly agentDir: string;
+  private readonly readAppearance: () => AppearanceConfig;
   private readonly client: SubagentClient;
   private readonly watchAbort = new AbortController();
   private watching?: Promise<void>;
@@ -92,10 +93,18 @@ export class SubagentSession {
   private releaseSampling?: () => void;
   private notifiedQuestions = new Set<string>();
 
-  constructor(pi: ExtensionAPI, runtime: RuntimePackage, ctx: ExtensionContext, agentDir: string) {
+  constructor(
+    pi: ExtensionAPI,
+    runtime: RuntimePackage,
+    ctx: ExtensionContext,
+    agentDir: string,
+    /** Re-reads appearance preferences on demand; the entry owns config IO. */
+    readAppearance: () => AppearanceConfig,
+  ) {
     this.pi = pi;
     this.runtime = runtime;
     this.agentDir = agentDir;
+    this.readAppearance = readAppearance;
     this.ctx = ctx;
     this.sessionId = ctx.sessionManager.getSessionId();
     const binding = ctx.sessionManager
@@ -158,9 +167,7 @@ export class SubagentSession {
       this.widgetRefresh?.();
       return;
     }
-    const animate = loadConfig(this.agentDir, path => {
-      try { return readFileSync(path, "utf8"); } catch { return undefined; }
-    }).config.working.animation && process.env.NO_COLOR === undefined;
+    const animate = this.readAppearance().working.animation && process.env.NO_COLOR === undefined;
     this.ctx.ui.setWidget(
       "metis-subagents",
       (tui, theme) => {
@@ -205,13 +212,7 @@ export class SubagentSession {
                 { agent_id: id, after },
                 signal,
               )) as unknown as AgentInspection,
-            loadConfig(this.agentDir, (path) => {
-              try {
-                return readFileSync(path, "utf8");
-              } catch {
-                return undefined;
-              }
-            }).config.thinking,
+            this.readAppearance().thinking,
             () => this.agents,
           )),
         { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } },

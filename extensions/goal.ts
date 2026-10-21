@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { METIS_EVENTS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
+import { METIS_EVENTS, METIS_STATUS_IDS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
 import { GoalState, validateObjective, formatElapsedSeconds, type Goal, type GoalStatus } from "../src/goal-state.ts";
 import type { GoalPopup } from "../src/goal-view.ts";
 
@@ -419,7 +419,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     popup?.update(goal);
     if (!goal || goal.status !== "active") syncStatusTimer(false);
     if (!goal) {
-      ctx.ui.setStatus("goal", undefined);
+      ctx.ui.setStatus(METIS_STATUS_IDS.goal, undefined);
       return;
     }
     const theme = ctx.ui.theme;
@@ -428,7 +428,7 @@ export default function goalExtension(pi: ExtensionAPI) {
         goal.tokenBudget === undefined
           ? ` (${formatElapsedSeconds(goal.timeUsedSeconds)})`
           : ` (${formatTokensCompact(goal.tokensUsed)} / ${formatTokensCompact(goal.tokenBudget)})`;
-      ctx.ui.setStatus("goal", theme.fg("accent", `Pursuing goal${usage}`));
+      ctx.ui.setStatus(METIS_STATUS_IDS.goal, theme.fg("accent", `Pursuing goal${usage}`));
       syncStatusTimer(true);
       return;
     }
@@ -439,7 +439,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       budgetLimited: "Goal budget reached",
       complete: "Goal complete",
     };
-    ctx.ui.setStatus("goal", theme.fg(goal.status === "complete" ? "success" : "warning", labels[goal.status]));
+    ctx.ui.setStatus(METIS_STATUS_IDS.goal, theme.fg(goal.status === "complete" ? "success" : "warning", labels[goal.status]));
   }
 
   function showGoalMessage(content: string): void {

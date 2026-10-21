@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { installAdapter, OWNED_EXECUTION_ENTRY } from "../../src/adapter.ts";
-import { makeRenderers, TOOL_NAMES } from "../../src/renderers.ts";
+import { makeRenderers } from "../../src/renderers.ts";
+import { TOOL_NAMES } from "../../src/tool-names.ts";
 import { initTheme, InteractiveMode, createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
 import { toolInfo, bindings, deepFreeze, theme, sessionStub } from "../helpers.mjs";

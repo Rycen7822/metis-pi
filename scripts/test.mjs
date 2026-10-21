@@ -5,7 +5,8 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = new URL("../test/", import.meta.url);
+const webRoot = new URL("../src/pi-web-access/", import.meta.url);
+const root = process.argv[2] === "plugins" ? new URL("test/", webRoot) : new URL("../test/", import.meta.url);
 const files = (dir = root, prefix = "") => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
   const name = `${prefix}${entry.name}`;
   if (entry.isDirectory()) return files(new URL(`${entry.name}/`, dir), `${name}/`);
@@ -14,6 +15,7 @@ const files = (dir = root, prefix = "") => readdirSync(dir, { withFileTypes: tru
 
 const suites = {
   all: () => true,
+  plugins: () => true,
   core: (file) => file.startsWith("core/"),
   host: (file) => file.startsWith("contract/") || file === "package.test.mjs",
   lsp: (file) => file.startsWith("lsp/"),
@@ -41,14 +43,16 @@ if (selected.length === 0) {
 }
 const child = spawnSync(
   process.execPath,
-  ["--experimental-strip-types", "--test", ...selected.map((file) => join(fileURLToPath(root), file))],
-  { stdio: "inherit" },
+  ["--experimental-strip-types",
+    ...(suite === "plugins" ? ["--import", new URL("test/isolate-env.mjs", webRoot).href] : []),
+    "--test", ...selected.map((file) => join(fileURLToPath(root), file))],
+  { stdio: "inherit", ...(suite === "plugins" ? { cwd: fileURLToPath(webRoot) } : {}) },
 );
 if (child.error) console.error(child.error);
 process.exitCode = child.status ?? 1;
 if (process.exitCode === 0 && (suite === "ask" || suite === "all")) {
   const ask = spawnSync(process.execPath,
-    ["node_modules/vitest/vitest.mjs", "run", "--config", "vitest.ask.config.ts"],
+    ["node_modules/vitest/vitest.mjs", "run", "--config", "config/vitest/ask.config.ts"],
     { cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "inherit" });
   if (ask.error) console.error(ask.error);
   process.exitCode = ask.status ?? 1;

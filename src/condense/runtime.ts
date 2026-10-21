@@ -1,3 +1,4 @@
+import { METIS_STATUS_IDS } from "../collaboration.ts";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
@@ -37,7 +38,6 @@ import {
   CUSTOM_TYPE_STATS,
   CUSTOM_TYPE_FRONTIER,
   CUSTOM_TYPE_FLUSH_METRICS,
-  STATUS_WIDGET_ID,
 } from "./types.ts";
 import { computeContextMetrics } from "./context-metrics.ts";
 import { StatsAccumulator } from "./stats.ts";
@@ -2277,7 +2277,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       unsubscribeProjection();
       unsubscribeMaintenance();
       unsubscribeRemoteCompaction();
-      try { ctx.ui.setStatus(STATUS_WIDGET_ID, undefined); } catch { /* UI may already be gone. */ }
+      try { ctx.ui.setStatus(METIS_STATUS_IDS.condense, undefined); } catch { /* UI may already be gone. */ }
     },
   };
 }

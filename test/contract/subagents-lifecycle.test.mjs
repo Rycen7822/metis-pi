@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { subagentTheme } from "../helpers/subagent-theme.mjs";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
+import { DEFAULT_CONFIG, loadConfig } from "../../src/appearance-config.ts";
 import { RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 import managedSurface from "../../src/subagents/worker/managed-surface.ts";
@@ -59,7 +60,10 @@ function fixture(t, call, agentDir = "/unused-test-agent-dir") {
     sessionManager: { getSessionId: () => "lifecycle-test", getBranch: () => branch },
     ui: { notify: (text, level) => warnings.push({ text, level }), setWidget() {}, setStatus() {} },
   };
-  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, runtime, ctx, agentDir);
+  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, runtime, ctx, agentDir,
+    () => loadConfig(agentDir, path => {
+      try { return readFileSync(path, "utf8"); } catch { return undefined; }
+    }).config);
   t.after(() => owner.close());
   const boundary = (type) => owner.boundary({ type, outcome: "completed", entries: [] }, ctx);
   return { owner, ctx, warnings, operations, boundary, branch };
@@ -295,7 +299,7 @@ test("attention receipts and question answers require the same saved body proof"
       const owner = new SubagentSession(
         { appendEntry: (type, data) => manager.appendCustomEntry(type, data), sendMessage() {} },
         { ...runtime, tools: runtimePackage().tools.filter(tool => tool.name === "subagents_answer_agent") },
-        ctx, "/unused-test-agent-dir",
+        ctx, "/unused-test-agent-dir", () => DEFAULT_CONFIG,
       );
       t.after(() => owner.close());
       const entries = variant === "boundary_edit" ? [{ type: "custom", customType: "another-boundary-entry", data: { note: "unrelated" } }] : [];

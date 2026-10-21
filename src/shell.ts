@@ -15,7 +15,7 @@ export const OUTPUT_SUBSEQUENT_PREFIX = "    ";
 export const COMMAND_CONTINUATION_MAX_ROWS = 2;
 export const OUTPUT_MAX_ROWS = 5;
 
-import type { DiffLayoutOps } from "./tool-names.ts";
+import type { DiffLayoutOps } from "./render-contract.ts";
 
 export type LayoutOps = DiffLayoutOps;
 

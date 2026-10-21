@@ -1,5 +1,5 @@
 import { Container, MouseRegion } from "@earendil-works/pi-tui";
-import type { Component } from "./tool-names.ts";
+import type { Component } from "./render-contract.ts";
 import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow, type ChildPlacement } from "./selection-copy/model.ts";
 
 /** Native stacking owns mouse geometry; copy provenance remains an explicit caller policy. */

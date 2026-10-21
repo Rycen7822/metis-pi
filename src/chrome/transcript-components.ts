@@ -16,7 +16,7 @@ import { CODEX_CYAN_RGB } from "../palette.ts";
 import type { ColorLevel } from "../palette.ts";
 import { renderWritePreview } from "../write-preview.ts";
 import type { WritePreviewInput } from "../renderers.ts";
-import type { Component, DiffLayoutOps } from "../tool-names.ts";
+import type { Component, DiffLayoutOps } from "../render-contract.ts";
 
 export interface TranscriptMouseEvent {
   type?: string;

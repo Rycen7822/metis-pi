@@ -5,7 +5,7 @@ import {
   type Component, type Focusable, type TUI, type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { formatElapsedSeconds, type Goal, type GoalStatus } from "./goal-state.ts";
-import { safeText } from "./tool-names.ts";
+import { safeText } from "./terminal-text.ts";
 
 // Native Editor wrapping needs room for a wide grapheme plus its two padding cells.
 const EDITOR_MIN_WIDTH = 4;

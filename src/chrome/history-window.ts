@@ -1,5 +1,5 @@
 import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyProduct, type ChildPlacement } from "../selection-copy/model.ts";
-import { safeText } from "../tool-names.ts";
+import { safeText } from "../terminal-text.ts";
 
 export const HISTORY_ROW_BUDGET = 5000;
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");

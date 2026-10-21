@@ -1,5 +1,6 @@
 import { fusionReceipt } from "./execution/action-fusion.ts";
-import { asRecord, type Renderers, type ViewContext } from "./tool-names.ts";
+import { asRecord } from "./tool-names.ts";
+import type { Renderers, ViewContext } from "./render-contract.ts";
 import { stackComponents } from "./copy-stack.ts";
 
 /** Use the mutation's immutable evidence, never the outer command's exit status. */

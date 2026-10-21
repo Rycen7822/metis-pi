@@ -1,6 +1,7 @@
 import { renderCodexDiffComponent, type DiffComponentInput } from "../diff-component.ts";
 import { renderShellCall, renderShellResult, type LayoutOps } from "../shell.ts";
-import { asRecord, type Component, type Highlight, type Palette } from "../tool-names.ts";
+import { asRecord } from "../tool-names.ts";
+import type { Component, Highlight, Palette } from "../render-contract.ts";
 import type { ShellFactories } from "../renderers.ts";
 import { registerProduct, publishRows, releaseCopyCache, type CopyRow } from "../selection-copy/model.ts";
 

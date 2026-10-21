@@ -5,7 +5,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";
-import { makeRenderers, languageForPath } from "../src/renderers.ts";
+import { makeRenderers } from "../src/renderers.ts";
+import { languageForPath } from "../src/tool-names.ts";
 import { renderDiffLines } from "../src/diff.ts";
 import { detectColorLevel } from "../src/palette.ts";
 import { TranscriptState } from "../src/transcript-state.ts";

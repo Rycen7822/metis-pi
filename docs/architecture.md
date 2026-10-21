@@ -29,7 +29,7 @@
 
 | 领域 | 主要模块和边界 |
 | --- | --- |
-| 适配 | `host-data.ts` 归一化公开数据；`adapter.ts` 校验工具来源和 renderer 所有权，每次行渲染共用一次工具查询；`config.ts` 校验显示设置。 |
+| 适配 | `host-data.ts` 归一化公开数据；`adapter.ts` 校验工具来源和 renderer 所有权，每次行渲染共用一次工具查询；`appearance-config.ts` 校验显示设置。 |
 | 工具输出与修改 | `renderers.ts` 装配，`shell.ts` / `diff.ts` / `write-preview.ts` 布局；`write-tracker.ts` 保存真实前后镜像，与 Fusion 共用路径规则。 |
 | 转录与思考 | `transcript-state.ts` 持有消息身份、语义 run 和计时；仅用已观察的响应身份恢复计时，内容相同不合并，身份冲突不推断时长；AssistantView 解析一次，`thinking-view.ts` 持有交互形态。原生 codemode 的 nested 工具事件不参与顶层探索分组。 |
 | chrome | `chrome/install.ts` 捕获宿主；editor/header/footer/working 各自持有组件；`fullscreen-layout.ts` 统一留白和 history-window，只安装一个布局根拦截器。 |
@@ -39,7 +39,7 @@
 chrome 通过结构类型和注入能力访问宿主。动画帧不扫描会话、读磁盘或查询额度。显示适配保留原执行、结果和模型正文。
 宿主事件类型及终端字符宽度、grapheme 截断复用 Pi 的公开接口。
 
-`src` 包含领域逻辑和宿主适配模块；纯领域模块保持宿主无关，适配模块可以导入 Pi 公共 API。扩展间的 Metis 事件名称和 payload 合同归 `collaboration.ts`；监听方先检查事实字段，压缩所有权查询和压缩前等待请求保留同步响应合同。
+`src` 包含领域逻辑和宿主适配模块；纯领域模块保持宿主无关，适配模块可以导入 Pi 公共 API。工具名与展示策略归 `tool-names.ts`，组件和渲染接口归 `render-contract.ts`，跨功能的终端文本净化归 `terminal-text.ts`；消费者直接引用所有者，不通过 renderer 装配模块转发。子代理入口注入按需重读的显示配置，host 不自带配置文件 IO。扩展间的 Metis 事件、共享状态身份和 payload 合同归 `collaboration.ts`；监听方先检查事实字段，压缩所有权查询和压缩前等待请求保留同步响应合同。
 
 ## 执行与上下文
 

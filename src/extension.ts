@@ -4,7 +4,8 @@ import { CodemodeViewStore, makeCodemodeRenderers } from "./codemode-view.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
-import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
+import { makeRenderers, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
+import type { TextFactory, Highlight, DiffFactory, DiffLayoutOps, Component } from "./render-contract.ts";
 import { isExplorationTool } from "./tool-names.ts";
 import { WriteDiffTracker, type WriteDiff } from "./write-tracker.ts";
 import { resolveNativeMutationPath } from "./native-tool-path.ts";
@@ -13,7 +14,7 @@ import { UiMetrics, formatDuration } from "./ui-metrics.ts";
 import { OutputSpeedTracker, observeOutputTiming, type OutputTimingObserver } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { formatBeijingTime, installUserTimestamps } from "./message-timestamp.ts";
-import { loadConfig, type AppearanceConfig } from "./config.ts";
+import { loadConfig, type AppearanceConfig } from "./appearance-config.ts";
 import { HostData, type HostContextLike, type UiSurface } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
@@ -42,12 +43,12 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   /** Pipeline color capability resolved from the live terminal (host-provided). */
   colorLevel?: ColorLevel;
   /** Real terminal layout ops (wrap/width) for fallback text paths. */
-  layoutOps?: import("./tool-names.ts").DiffLayoutOps;
+  layoutOps?: DiffLayoutOps;
   /** Pi AssistantMessageComponent prototype (separator decoration target). */
   assistantPrototype?: object;
   /** Pi InteractiveMode prototype (user message creation retains timestamps). */
   interactivePrototype?: object;
-  makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
+  makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => Component | undefined;
 
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
   editorHost?: { CustomEditor: unknown };

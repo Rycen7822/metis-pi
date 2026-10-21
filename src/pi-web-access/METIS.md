@@ -38,6 +38,10 @@ Local compatibility changes:
 bundle and the standalone MCP entry from the maintained source with
 `npm run build:plugins` at the Metis root. Dependencies and the lockfile are owned
 by the Metis root; do not install or update this directory as a separate package.
+The root `scripts/build-web-access.mjs` derives externals from that dependency owner;
+`npm run test:plugins` preserves this module's test cwd and isolation preload.
+The private local manifest records only the MCP identity/version and ESM mode.
+Tests and evidence stay colocated for development but are excluded from the npm payload.
 The standalone MCP bundle includes `typebox` 1.3.27; its license is retained in
 `licenses/typebox.LICENSE`. Keep that notice in sync when changing this bundled dependency.
 

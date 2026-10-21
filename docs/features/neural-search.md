@@ -72,9 +72,9 @@ neural_search({ action: "multi_grep", params: { patterns: ["ProfileStore", "prof
 - 入口：`extensions/neural-search.ts`。
 - 自有实现、MIT 许可与来源记录：`src/neural-search/`。
 - 本地参考检出：`references/pi-fff/`（未纳入 Git，也不随 npm 包发布，不被运行时代码导入）。
-- Rust 引擎源码和构建：`src/neural-search/engine/`，只纳入必要的搜索核心、查询解析、grep 与 C 接口，不包含上游其他应用入口。
+- Rust 引擎源码和构建：仓库的 `src/neural-search/engine/`，只纳入必要的搜索核心、查询解析、grep 与 C 接口，不包含上游其他应用入口，也不随 npm 包发布。
 - 随包原生库、来源校验和完整依赖许可：`src/neural-search/assets/`，与 TS 适配一起收在同一个模块目录中。
   `npm run build:neural-engine` 从自有源码编译，`npm run verify:neural-engine` 校验源代码、二进制、ABI 和许可；`prepack` 自动校验，CI 从源码重建。
 - 唯一外部运行时桥接依赖是可选的 `ffi-rs`，需要本地搜索时不要省略可选依赖。
   缺少绑定/原生库或运行在未支持的平台，首次实际搜索明确报错，不为发现工具启动索引。
-  开发验收须使用真实引擎；构建说明与继承的 Rust 单元检查见 [引擎维护指南](../../src/neural-search/engine/README.md)。
+  开发验收须使用真实引擎；构建说明与继承的 Rust 单元检查见 [仓库中的引擎维护指南](https://github.com/Rycen7822/metis-pi/blob/main/src/neural-search/engine/README.md)。

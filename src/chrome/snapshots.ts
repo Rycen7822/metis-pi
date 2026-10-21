@@ -5,7 +5,7 @@
 // is a pure read of the deps below (config via getConfig: it is reassigned on
 // config reload).
 
-import type { AppearanceConfig } from "../config.ts";
+import type { AppearanceConfig } from "../appearance-config.ts";
 import type { GitChangesTracker } from "../git-changes.ts";
 import type { HostData } from "../host-data.ts";
 import type { OutputSpeedTracker } from "../output-speed.ts";

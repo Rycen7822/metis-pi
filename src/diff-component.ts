@@ -2,7 +2,8 @@
 
 import { renderDiffLines, type DiffRow } from "./diff.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
-import { languageForPath, type DiffLayoutOps } from "./tool-names.ts";
+import { languageForPath } from "./tool-names.ts";
+import type { DiffLayoutOps } from "./render-contract.ts";
 import type { ColorLevel } from "./palette.ts";
 
 export interface DiffComponentInput {

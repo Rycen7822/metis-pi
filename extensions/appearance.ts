@@ -5,10 +5,10 @@ import { activate, type AppearanceAPI } from "../src/extension.ts";
 import { createDiffComponent, createDiffPainter, createShellFactories } from "../src/chrome/tool-components.ts";
 import { registerCompactionPresentation } from "../src/chrome/compaction-presentation.ts";
 import { wrapPlainOutput, type LayoutOps } from "../src/shell.ts";
-import type { Palette } from "../src/tool-names.ts";
+import type { Palette } from "../src/render-contract.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
 import { makeSurfaceOps } from "../src/surface.ts";
-import { loadConfig } from "../src/config.ts";
+import { loadConfig } from "../src/appearance-config.ts";
 import { thoughtSummaryText } from "../src/thinking-summary.ts";
 import {
   CodexSeparatorComponent, CodexWriteCallComponent, ThinkingRailComponent,

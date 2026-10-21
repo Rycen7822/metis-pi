@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
+import { loadConfig, DEFAULT_CONFIG } from "../../src/appearance-config.ts";
 import {
   readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig,
   initializeMetisConfig, isMetisConfigTable,

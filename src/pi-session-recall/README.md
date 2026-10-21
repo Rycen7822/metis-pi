@@ -1,89 +1,21 @@
-# pi-session-recall
+# Metis Session Recall
 
-Give [pi](https://github.com/earendil-works/pi) access to past conversations. Ask a normal question about previous work, and the agent can find the relevant sessions and inspect them for an answer.
+This module is maintained and shipped by **metis-pi**, not installed as a separate
+Pi package. Install Metis using the [root README](../../README.md); disable the
+standalone `@ogulcancelik/pi-session-recall` entry to avoid duplicate tools.
+Upstream version, commit and license attribution are retained in [METIS.md](METIS.md)
+and [LICENSE](LICENSE).
 
-## Install
+Metis exposes one deferred `session_recall` tool with `search`, `query` and
+`describe` actions. Search finds literal text in saved session JSONL files;
+query reads a selected session branch using the current Pi model runtime.
+There is no background indexing or vector database. Ripgrep is recommended;
+search can fall back to grep or Node's streaming scan.
 
-```bash
-pi install npm:@ogulcancelik/pi-session-recall
-```
+The optional query model is selected by `[sessionRecall].queryModel` in the global
+`metis-pi.toml`; `"default"` follows the current session. Pi owns model definitions
+and authentication. See the [tool and configuration guide](../../docs/features/managed-plugins.md)
+for the current interface and examples.
 
-Or add manually to `~/.pi/agent/settings.json`:
-
-```json
-{
-  "packages": ["npm:@ogulcancelik/pi-session-recall"]
-}
-```
-
-## How it works
-
-The extension adds two tools to pi: `session_search` and `session_query`. You do not need to call them yourself. Ask the agent a natural-language question such as:
-
-> What did we decide about authentication and security?
-
-The agent can then:
-
-1. Search for a few distinctive terms or exact phrases across your saved session files.
-2. Review the matching snippets and select the most relevant sessions.
-3. Ask `session_query` a focused question about each selected session.
-4. Combine the answers and respond with the relevant decisions, changes, or context.
-
-For example, the tool flow may look like this:
-
-```text
-You: What did we decide about authentication and security?
-Agent: session_search("authentication")
-Agent: session_search("security")
-Agent: session_query(<matching-session>, "What decisions did we make about authentication and security?")
-Agent: <answers your question>
-```
-
-Other useful prompts include:
-
-- `How did we fix the Cannot find module '@sinclair/typebox' error?`
-- `Which files did we change when we added passkey authentication?`
-- `Find the session where we discussed Blender VAT baking.`
-- `What approach did we reject for token refresh, and why?`
-
-There is no background indexing or vector database. Recall happens on demand: the main agent searches session JSONL files, then an LLM reads the relevant conversation and answers a focused question.
-
-### `session_search`
-
-Searches all past sessions using case-insensitive, literal fixed-string matching—essentially `rg -i -F`. It is not regex or semantic search. One call should contain one distinctive token or exact phrase, such as a filename, package name, error string, function name, issue ID, or remembered wording.
-
-Spaces are treated as part of the exact phrase. To search for separate concepts such as authentication and security, the agent makes separate calls rather than searching for `authentication security` as one phrase.
-
-### `session_query`
-
-Loads one selected session and sends its conversation to an LLM with a focused question. It includes user and assistant messages plus tool calls, while omitting assistant thinking and tool results to reduce cost.
-
-For a session larger than the model's context window, it keeps the beginning, end, and sections relevant to the question. Omitted sections are marked with `[... N messages omitted ...]`.
-
-## Configuration
-
-The Metis-maintained version reads `~/.pi/agent/metis-pi.toml` (following
-`PI_CODING_AGENT_DIR`). To use a dedicated model for `session_query`:
-
-```toml
-[sessionRecall]
-queryModel = "openai/gpt-6.1-sol"
-```
-
-`queryModel = "default"` follows the current session model. Missing, invalid, or
-unregistered model selections also fall back to that model. The setting is read
-at each query; `session_search` does not call a model. Model definitions and
-authentication remain managed by Pi.
-
-`/metis-config init` creates package defaults when no TOML exists. Edit
-`[sessionRecall].queryModel` directly to select a dedicated model. Missing
-TOML uses defaults; malformed TOML is reported as a configuration error.
-
-## Requirements
-
-- [pi](https://github.com/earendil-works/pi) v0.40+
-- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) — recommended for fast search, falls back to `grep` or Node-native scan
-
-## License
-
-MIT
+Development dependencies and checks are owned by the root project. This module
+loads TypeScript directly and does not need an independent manifest or build.

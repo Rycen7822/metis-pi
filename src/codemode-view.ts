@@ -1,13 +1,6 @@
-import {
-  asRecord,
-  safeText,
-  type Component,
-  type Highlight,
-  type Palette,
-  type Renderers,
-  type TextFactory,
-  type ViewContext,
-} from "./tool-names.ts";
+import { asRecord } from "./tool-names.ts";
+import { safeText } from "./terminal-text.ts";
+import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext } from "./render-contract.ts";
 import { MouseRegion } from "@earendil-works/pi-tui";
 import { shellTitle } from "./renderers.ts";
 import { stackComponents } from "./copy-stack.ts";

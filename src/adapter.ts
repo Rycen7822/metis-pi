@@ -1,4 +1,5 @@
-import { asRecord, TOOL_NAMES, isExplorationTool, type Component, type Palette, type Renderers, type ToolName, type ViewContext, type ViewOptions } from "./tool-names.ts";
+import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
+import type { Component, Palette, Renderers, ViewContext, ViewOptions } from "./render-contract.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";

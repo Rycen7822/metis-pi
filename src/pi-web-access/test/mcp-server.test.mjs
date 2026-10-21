@@ -187,7 +187,7 @@ globalThis.fetch = async (input, init) => {
 let binDir;
 async function builtBinDir() {
 	if (binDir) return binDir;
-	const build = spawnSync("npm", ["run", "build"], { cwd: repoRoot, encoding: "utf8", shell: process.platform === "win32" });
+	const build = spawnSync("npm", ["run", "build:plugins"], { cwd: join(repoRoot, "..", ".."), encoding: "utf8", shell: process.platform === "win32" });
 	assert.equal(build.status, 0, `${build.stdout}${build.stderr}`);
 	const dir = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-bin-"));
 	await writeFile(join(dir, "package.json"), JSON.stringify({ type: "module" }));

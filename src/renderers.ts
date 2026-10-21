@@ -14,35 +14,15 @@ import {
 } from "./explore.ts";
 import type { ExplorationPlan, TranscriptState } from "./transcript-state.ts";
 import { summarizeShellCommand } from "./execution/shell/summary.ts";
-import {
-  asRecord,
-  safeText,
-  languageForPath,
-  TOOL_NAMES,
-  isExplorationTool,
-  type ToolName,
-  type Palette,
-  type ViewContext,
-  type ViewOptions,
-  type TextFactory,
-  type Highlight,
-  type Renderers,
-  type DiffFactory,
-  type Component,
-  type TextComponent,
-  type DiffLayoutOps,
-} from "./tool-names.ts";
+import { asRecord, languageForPath, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
+import { safeText } from "./terminal-text.ts";
+import type {
+  Palette, ViewContext, ViewOptions, TextFactory, Highlight, Renderers,
+  DiffFactory, Component, TextComponent, DiffLayoutOps,
+} from "./render-contract.ts";
 import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffStats } from "./diff.ts";
 import type { WriteDiff } from "./write-tracker.ts";
 import { resolveWriteStage, type WriteStage } from "./write-preview.ts";
-
-export { asRecord, safeText, languageForPath, TOOL_NAMES } from "./tool-names.ts";
-export type {
-  ToolName, RecordValue, Palette, ViewContext, ViewOptions, Component, TextComponent,
-  TextFactory, Highlight, Renderers, DiffComponentInput, DiffFactory, DiffLayoutOps,
-} from "./tool-names.ts";
-export { parseDisplayDiff, renderDiffLines } from "./diff.ts";
-export type { DiffRow, DiffRowKind, DiffStats } from "./diff.ts";
 
 const PREVIEW_LINES = 5;
 const COMMAND_LINES = 2;

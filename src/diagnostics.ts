@@ -10,7 +10,7 @@
 // line-by-line by the pty harness, so builders must stay byte-stable.
 
 import type { AdapterHandle } from "./adapter.ts";
-import type { AppearanceConfig } from "./config.ts";
+import type { AppearanceConfig } from "./appearance-config.ts";
 import type { FullscreenLayoutSystem } from "./chrome/fullscreen-layout.ts";
 import type { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import type { GitChangesTracker } from "./git-changes.ts";

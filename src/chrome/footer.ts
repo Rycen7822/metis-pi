@@ -10,8 +10,8 @@ import type { UsageRecord } from "../usage-ledger.ts";
 import type { GitChangeStat } from "../git-changes.ts";
 import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
 import { formatSpeedLabel, formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
-import { STATUS_WIDGET_ID } from "../condense/types.ts";
-import { safeText } from "../tool-names.ts";
+import { METIS_STATUS_IDS } from "../collaboration.ts";
+import { safeText } from "../terminal-text.ts";
 import {
   cellWidth, formatCount, formatExactCount, formatPct, rowWidth, SEG_SEP,
   truncateSegments, type Segment,
@@ -166,11 +166,11 @@ export function createFooterComponent(
         if (expanded.location) lines.push(...detailLines(location, width));
       }
       for (const [key, text] of footerData?.getExtensionStatuses?.() ?? []) {
-        const [summary = "", ...details] = key === STATUS_WIDGET_ID ? (text || key).split("\n") : [text || key];
+        const [summary = "", ...details] = key === METIS_STATUS_IDS.condense ? (text || key).split("\n") : [text || key];
         const detail = details.join("\n");
-        const foldable = key === STATUS_WIDGET_ID && detail.length > 0;
+        const foldable = key === METIS_STATUS_IDS.condense && detail.length > 0;
         lines.push(paintRow(truncateSegments([{ text: summary, tone: "dim" }], width - (foldable ? 2 : 0))));
-        if (key === "goal" && deps.openGoal) {
+        if (key === METIS_STATUS_IDS.goal && deps.openGoal) {
           targets.push({ section: "goal", x: 0, y: lines.length - 1, width: cellWidth(lines.at(-1)!) });
         }
         if (foldable) {

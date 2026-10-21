@@ -6,7 +6,7 @@
 import { diffSignFg } from "../diff.ts";
 import type { SegmentTone } from "../segments.ts";
 import type { ColorLevel } from "../palette.ts";
-import type { AppearanceConfig } from "../config.ts";
+import type { AppearanceConfig } from "../appearance-config.ts";
 import type { HostData, UiAvailable } from "../host-data.ts";
 import type { CodexSurfaceOps } from "./editor.ts";
 import { createHardwareCursor } from "./hardware-cursor.ts";

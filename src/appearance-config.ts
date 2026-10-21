@@ -1,4 +1,6 @@
-// Appearance validation; global configuration IO is owned by metis-config.ts.
+// Single owner of appearance preferences: validation and defaults for the
+// `[appearance]` table. Global configuration IO and merge policy belong to
+// metis-config.ts; UI features consume this module instead of reading TOML.
 import { defaultMetisConfig, readMetisConfig } from "./metis-config.ts";
 
 export interface AppearanceConfig {

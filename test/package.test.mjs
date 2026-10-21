@@ -37,9 +37,17 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/ask-user-question/index.ts", "src/ask-user-question/ask-user-question.ts", "src/ask-user-question/LICENSE", "src/ask-user-question/METIS.md",
     "src/ask-user-question/locales/en.json", "docs/features/ask-user-question.md",
     "src/pi-web-access/licenses/typebox.LICENSE",
+    "src/neural-search/native/binding/ffi.ts", "src/neural-search/LICENSE",
+    "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
+    "src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
-  assert.ok([...files].every((path) => !path.startsWith("src/ask-user-question/") || (!path.endsWith(".test.ts") && !path.endsWith("test-fixtures.ts"))));
+  for (const path of files) {
+    if (!path.startsWith("src/")) continue;
+    assert.ok(!path.startsWith("src/neural-search/engine/"), path);
+    assert.ok(!path.split("/").some(part => ["test", "scripts", "evidence"].includes(part)), path);
+    assert.doesNotMatch(path, /(?:^|\/)(?:AGENTS\.md|tsconfig[^/]*\.json|test-fixtures\.ts)$|\.test\.[^/]+$/, path);
+  }
   assert.ok(!Object.hasOwn(pkg.dependencies, "@juicesharp/rpiv-ask-user-question"));
   assert.ok(!Object.hasOwn(pkg.dependencies, "@juicesharp/rpiv-config"));
   assert.ok([...files].every((path) => !path.split("/").includes("node_modules")));

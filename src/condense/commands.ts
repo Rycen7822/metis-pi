@@ -1,3 +1,4 @@
+import { METIS_STATUS_IDS } from "../collaboration.ts";
 import {
   type ContextPruneConfig,
   type SummarizerStats,
@@ -10,7 +11,6 @@ import {
   type ContextMetricsSnapshot,
   type DeferredReason,
   DEFERRED_REASON_LABELS,
-  STATUS_WIDGET_ID,
   PROGRESS_WIDGET_ID,
 } from "./types.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -55,7 +55,7 @@ export function setPruneStatusWidget(
   detail?: string,
 ): void {
   if (!config.showPruneStatusLine) {
-    ctx.ui.setStatus(STATUS_WIDGET_ID, undefined);
+    ctx.ui.setStatus(METIS_STATUS_IDS.condense, undefined);
     return;
   }
   const text = typeof value === "string" ? value : pruneStatusText(config, value, diagnostics);
@@ -65,7 +65,7 @@ export function setPruneStatusWidget(
   // sections, load-order independent.
   // The first line is the compact metric; the custom footer may disclose the
   // remaining lines. Native footers can still sanitize the whole value inline.
-  ctx.ui.setStatus(STATUS_WIDGET_ID, `\u2502 ${text} \u00b7 usage: ${usageTokens} tokens${detail ? `\n${detail}` : ""}`);
+  ctx.ui.setStatus(METIS_STATUS_IDS.condense, `\u2502 ${text} \u00b7 usage: ${usageTokens} tokens${detail ? `\n${detail}` : ""}`);
 }
 
 const SUBCOMMANDS = [

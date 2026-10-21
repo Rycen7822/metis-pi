@@ -8,6 +8,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isDaemonIdle, RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
+import { DEFAULT_CONFIG } from "../../src/appearance-config.ts";
 import { subagentAdmin } from "../helpers/subagent-admin.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -242,7 +243,8 @@ test("native session parks its helper silently and automatic boundaries do not r
   const f = await fixture(t), warnings = [];
   const ctx = { ...f.ctx, mode: "rpc", isIdle: () => false, hasPendingMessages: () => false,
     ui: { notify: text => warnings.push(text), setStatus() {}, setWidget() {} } };
-  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, f.runtime, ctx, f.dir);
+  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, f.runtime, ctx, f.dir,
+    () => DEFAULT_CONFIG);
   try {
     assert.equal((await owner.execute("subagents_list_agents", {}, "list-before-idle", ctx)).isError, false);
     const deadline = Date.now() + 45000;
