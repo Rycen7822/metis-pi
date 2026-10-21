@@ -154,6 +154,42 @@ test("conversation popup keeps native click folds through refresh and scrolling"
   for (const width of [1, 4, 40]) assert.ok(viewer.render(width).every(row => visibleWidth(row) <= width));
 });
 
+test("conversation scrollbar tracks keys, wheel, pointer capture and resize without taking body columns", async t => {
+  const tui = { terminal: { rows: 80 }, requestRender() {} };
+  const { viewer, rows, mouse, clickText } = popup(t, { tui, messages: {
+    reader: [textMessage(Array.from({ length: 100 }, (_, i) => `ROW_${i}`).join("\n\n"))],
+  } });
+  await nextTurn();
+  const thumb = () => rows().flatMap((row, index) => row.endsWith("┃") ? [index] : []);
+  const initial = thumb();
+  assert.ok(initial.length > 0, "overflow has a visible right-edge scrollbar");
+  assert.equal(initial.at(-1), rows().length - 3, "the initial follow-tail thumb reaches the body bottom");
+  viewer.handleInput("\u001b[H");
+  const top = thumb()[0];
+  assert.equal(top, rows().findIndex(row => row.includes("assistant:")), "Home puts the thumb at the first body row");
+  mouse(90, 3, top, { type: "wheel", button: "none", wheelDelta: 40 });
+  assert.ok(thumb()[0] > top && thumb().at(-1) < initial.at(-1), "wheel updates the reading position");
+  mouse(90, 89, rows().length - 3);
+  assert.equal(thumb().at(-1), rows().length - 3, "clicking the lower track reaches the tail");
+  assert.equal(mouse(90, 89, top, { type: "press" }).capture, true);
+  assert.equal(thumb()[0], top, "pressing the upper track scrolls to the start");
+  const below = rows().length + 20;
+  assert.equal(mouse(90, -5, below, { type: "drag" }).handled, true);
+  assert.equal(thumb().at(-1), rows().length - 3, "captured drag clamps outside the popup");
+  assert.equal(mouse(90, -5, below, { type: "release" }).handled, true);
+  assert.equal(mouse(90, -5, -1, { type: "drag" }), undefined, "release ends capture ownership");
+  tui.terminal.rows = 40;
+  assert.ok(thumb().length < initial.length, "resizing updates the thumb without changing the follow-tail anchor");
+  assert.equal(thumb().at(-1), rows().length - 3);
+  assert.equal(mouse(90, 89, thumb()[0], { type: "press" }).capture, true);
+  assert.deepEqual(viewer.render(0), []);
+  assert.equal(mouse(90, -5, -1, { type: "drag" }), undefined, "a hidden scrollbar cannot retain a drag");
+  clickText("writer", 90, { header: true });
+  await nextTurn();
+  assert.deepEqual(thumb(), [], "a short tab has no scrollbar");
+  for (const width of [1, 4, 5, 90]) assert.ok(viewer.render(width).every(row => visibleWidth(row) <= width));
+});
+
 test("one-row tabs keep close at the right border and only a left click closes", async t => {
   const { rows, mouse, closes } = popup(t);
   await nextTurn();
@@ -504,7 +540,9 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
   const { tui, terminal } = altScreen(100, 60);
   terminal.hideCursor = () => terminal.write("\u001b[?25l");
   terminal.showCursor = () => terminal.write("\u001b[?25h");
-  const { viewer, calls, closes } = popup(t, { tui });
+  const { viewer, calls, closes } = popup(t, { tui, messages: {
+    reader: [textMessage(Array.from({ length: 80 }, (_, i) => `SCROLL_${i}`).join("\n\n"))],
+  } });
   tui.setLayoutRoot(container());
   const overlay = tui.showOverlay(viewer, { anchor: "center", width: "90%", maxHeight: "70%" });
   t.after(() => overlay.hide());
@@ -517,6 +555,17 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
     assert.ok(row >= 0, `overlay header contains ${label}`);
     return { x: visibleWidth(lines[row].slice(0, lines[row].indexOf(label))) + 1, y: row + 1 };
   };
+  const lines = screenLines(tui), thumbRow = lines.findIndex(line => line.includes("┃"));
+  assert.ok(thumbRow >= 0, "the actual overlay paints its scrollbar");
+  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].indexOf("┃"))) + 1;
+  const bodyY = headerTarget("[reader]").y + 4;
+  tui.handleTerminalInput(sgr(0, barX, bodyY));
+  tui.doRender();
+  assert.ok(screenLines(tui).some(line => line.includes("SCROLL_0")), "native track press reaches the start");
+  tui.handleTerminalInput(sgr(32, 1, 60));
+  tui.handleTerminalInput(sgr(0, 1, 60, true));
+  tui.doRender();
+  assert.ok(screenLines(tui).some(line => line.includes("SCROLL_79")), "native captured drag works beyond the overlay bounds");
   const writer = headerTarget("writer");
   tui.handleTerminalInput(sgr(0, writer.x, writer.y));
   assert.deepEqual(calls.map(call => call.agentId), ["reader"], "press alone does not activate the tab");

@@ -64,6 +64,8 @@ export class SubagentViewer implements Component {
   private bodyPadding = 2;
   private innerWidth = 1;
   private renderedHeight = 0;
+  private scrollbar?: { top: number; height: number };
+  private scrollbarGrab?: number;
   private targets: HeaderTarget[] = [];
   private tabStart = 0;
   private tabWidth = -1;
@@ -151,6 +153,7 @@ export class SubagentViewer implements Component {
     this.cacheView(id);
     this.revealSelected = true;
     this.targets = []; this.renderedHeight = 0;
+    this.scrollbar = undefined; this.scrollbarGrab = undefined;
     this.tui.requestRender();
     void this.refresh(this.view, this.readAbort);
   }
@@ -204,6 +207,14 @@ export class SubagentViewer implements Component {
     this.tui.requestRender();
   }
 
+  private scrollScrollbarTo(y: number, grab: number) {
+    if (!this.scrollbar || this.pageSize <= this.scrollbar.height) return;
+    const view = this.view;
+    const target = Math.round((y - this.bodyTop - grab) * view.maxOffset / (this.pageSize - this.scrollbar.height));
+    const current = Number.isFinite(view.offset) ? view.offset : view.maxOffset;
+    this.scroll(target - current);
+  }
+
   handleInput(data: string) {
     if (!this.syncAgents()) return;
     if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q") this.close();
@@ -233,7 +244,16 @@ export class SubagentViewer implements Component {
   }
 
   handleMouse(event: TuiMouseEvent) {
-    if (!this.syncAgents() || event.y < 0 || event.y >= this.renderedHeight) return;
+    if (!this.syncAgents()) return;
+    if (event.type === "press") this.scrollbarGrab = undefined;
+    if (this.scrollbarGrab !== undefined) {
+      if (event.type === "release") { this.scrollbarGrab = undefined; return { handled: true }; }
+      if (event.type === "drag") {
+        this.scrollScrollbarTo(event.y, this.scrollbarGrab);
+        return { handled: true, render: true };
+      }
+    }
+    if (event.y < 0 || event.y >= this.renderedHeight) return;
     const target = this.targets.find(target => event.y === target.y && event.x >= target.x && event.x < target.x + target.width);
     if (target && event.button === "left") {
       if (event.type === "click") {
@@ -244,6 +264,15 @@ export class SubagentViewer implements Component {
     }
     const view = this.view;
     const bodyY = event.y - this.bodyTop;
+    const thumb = this.scrollbar;
+    if (thumb && event.x === this.innerWidth + 3 && bodyY >= 0 && bodyY < this.pageSize &&
+        event.button === "left" && (event.type === "press" || event.type === "click")) {
+      const onThumb = bodyY >= thumb.top && bodyY < thumb.top + thumb.height;
+      const grab = onThumb ? bodyY - thumb.top : Math.floor(thumb.height / 2);
+      if (event.type === "press") this.scrollbarGrab = grab;
+      if (!onThumb) this.scrollScrollbarTo(event.y, grab);
+      return { handled: true, capture: event.type === "press" };
+    }
     if (bodyY >= 0 && bodyY < this.pageSize && event.x >= this.bodyPadding && event.x < this.bodyPadding + this.innerWidth) {
       const y = bodyY + view.renderedOffset;
       const item = view.layout.find(item => y >= item.y && y < item.y + item.height);
@@ -337,8 +366,8 @@ export class SubagentViewer implements Component {
   }
 
   render(width: number): string[] {
-    this.targets = []; this.renderedHeight = 0;
-    if (width <= 0 || !this.syncAgents()) return [];
+    this.targets = []; this.renderedHeight = 0; this.scrollbar = undefined;
+    if (width <= 0 || !this.syncAgents()) { this.scrollbarGrab = undefined; return []; }
     const view = this.view;
     const inner = Math.max(1, width - 4);
     this.innerWidth = inner; this.bodyTop = width < 5 ? 4 : 5; this.bodyPadding = width < 5 ? 0 : 2;
@@ -357,6 +386,10 @@ export class SubagentViewer implements Component {
     view.maxOffset = Math.max(0, view.lines.length - this.pageSize);
     const offset = Math.min(view.offset, view.maxOffset);
     view.renderedOffset = offset;
+    if (width >= 5 && view.maxOffset > 0) {
+      const height = Math.max(Math.min(2, this.pageSize), Math.round(this.pageSize ** 2 / view.lines.length));
+      this.scrollbar = { height, top: Math.round((this.pageSize - height) * offset / view.maxOffset) };
+    } else this.scrollbarGrab = undefined;
     const agent = view.snapshot?.agent;
     const model = agent?.resolved_model;
     const toolsKey = this.keys.getKeys("app.tools.expand").join("/");
@@ -385,9 +418,12 @@ export class SubagentViewer implements Component {
       ? [header, ...content.map(line => truncateToWidth(line.replace(/\n/g, " "), width, "…"))].slice(0, height)
       : [
         border(`╭${"─".repeat(width - 2)}╮`), header,
-        ...content.map(line => {
+        ...content.map((line, index) => {
           const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
-          return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${border("│")}`;
+          const thumb = this.scrollbar, bodyY = index - 3;
+          const edge = thumb && bodyY >= thumb.top && bodyY < thumb.top + thumb.height
+            ? this.theme.fg("accent", "┃") : border("│");
+          return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${edge}`;
         }),
         border(`╰${"─".repeat(width - 2)}╯`),
       ].slice(0, height);
@@ -406,6 +442,7 @@ export class SubagentViewer implements Component {
     this.readAbort.abort();
     for (const view of this.views.values()) disposeView(view);
     this.views.clear(); this.agents.clear(); this.targets = []; this.renderedHeight = 0;
+    this.scrollbar = undefined; this.scrollbarGrab = undefined;
     this.abort.signal.removeEventListener("abort", this.onAbort);
     this.abort.abort();
   }

@@ -18,6 +18,8 @@ Use `pi_spawn_agent` for a bounded independent task. Assign disjoint writes and 
 
 Messages accepted by a worker are not necessarily consumed. Completed work means the model stopped normally; verify the requested artifacts before accepting it. Parent notifications count as delivered only after their receipt is saved to the active Pi session branch. Read all pages when a result has more content.
 
+Click an active agent in the fullscreen widget to open its read-only conversation popup. A right-edge scrollbar appears when the transcript overflows: click its track or drag the thumb, or use the wheel and navigation keys. Each tab retains its own scroll position; viewing and scrolling never acknowledge a result.
+
 A follow-up resumes a cleanly parked worker from its saved session. Interruptions preserve history and can leave partial filesystem changes. Managed children cannot reload, fork, navigate or replace their own sessions. Declared workspace admission coordinates writers but does not confine OS write access.
 
 ## State and ownership
