@@ -14,7 +14,8 @@
 
 import { randomUUID } from "node:crypto";
 import { METIS_EVENTS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
-import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
+import { GoalState, validateObjective, formatElapsedSeconds, type Goal, type GoalStatus } from "../src/goal-state.ts";
+import type { GoalPopup } from "../src/goal-view.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -57,18 +58,6 @@ function formatTokensCompact(value: number): string {
     return `${Number.isInteger(scaled) ? scaled.toFixed(0) : scaled.toFixed(1)}K`;
   }
   return String(value);
-}
-
-function formatElapsedSeconds(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
-  const days = Math.floor(seconds / 86_400);
-  const hours = Math.floor((seconds % 86_400) / 3_600);
-  const minutes = Math.floor((seconds % 3_600) / 60);
-  const remainingSeconds = seconds % 60;
-  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
-  return `${remainingSeconds}s`;
 }
 
 function isUnfinishedGoal(goal: Goal): boolean {
@@ -347,28 +336,64 @@ export default function goalExtension(pi: ExtensionAPI) {
   // Local patch (not upstream): keep the footer status fresh once a second so the
   // elapsed time ticks during a long single agent run, where no goal event fires.
   let statusTimer: ReturnType<typeof setInterval> | undefined;
-  let statusCtx: ExtensionContext | null = null;
+  let goalCtx: ExtensionContext | undefined;
+  let viewAbort: AbortController | undefined;
+  let popup: GoalPopup | undefined;
+  const stopGoalOpen = pi.events.on(METIS_EVENTS.goalOpen, () => { void openGoalPopup(); });
+
+  async function openGoalPopup(ctx = goalCtx): Promise<void> {
+    if (ctx?.mode !== "tui" || !ctx.hasUI || !state.current || viewAbort) return;
+    const controller = new AbortController();
+    viewAbort = controller;
+    const goalId = state.current.id;
+    try {
+      const { GoalPopup } = await import("../src/goal-view.ts");
+      if (controller.signal.aborted || state.current?.id !== goalId) return;
+      await ctx.ui.custom<void>((tui, theme, _keys, done) => {
+        popup = new GoalPopup(tui, theme, state.snapshot()!, {
+          done: () => done(undefined), signal: controller.signal,
+          save: (objective, original) => {
+            if (controller.signal.aborted || state.current?.id !== goalId || state.current.objective !== original) {
+              throw new Error("The goal changed while editing. Cancel and reopen Edit to load the current goal.");
+            }
+            editGoal(objective, ctx);
+          },
+        });
+        return popup;
+      }, { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } });
+    } catch (error) {
+      if (!controller.signal.aborted) ctx.ui.notify(`Failed to open goal: ${error instanceof Error ? error.message : String(error)}`, "error");
+    } finally {
+      if (viewAbort === controller) { popup = undefined; viewAbort = undefined; }
+    }
+  }
+
+  function editGoal(objective: string, ctx: ExtensionContext): void {
+    state.edit(objective);
+    persist("edit");
+    showGoalMessage(`Goal ${statusLabel(state.current!.status)}\n\n${goalSummary(state.snapshot()!)}`);
+    updateStatus(ctx);
+    if (state.current?.status === "active") queueContinuation(ctx);
+  }
 
   function stopStatusTimer(): void {
-    statusCtx = null;
     if (statusTimer === undefined) return;
     clearInterval(statusTimer);
     statusTimer = undefined;
   }
 
-  function syncStatusTimer(ctx: ExtensionContext, active: boolean): void {
-    statusCtx = ctx;
+  function syncStatusTimer(active: boolean): void {
     if (!active) {
       stopStatusTimer();
       return;
     }
     if (statusTimer !== undefined) return;
     statusTimer = setInterval(() => {
-      if (!statusCtx || state.current?.status !== "active") {
+      if (!goalCtx || state.current?.status !== "active") {
         stopStatusTimer();
         return;
       }
-      updateStatus(statusCtx);
+      updateStatus(goalCtx);
     }, 1000);
     (statusTimer as unknown as { unref?: () => void }).unref?.();
   }
@@ -388,9 +413,11 @@ export default function goalExtension(pi: ExtensionAPI) {
   }
 
   function updateStatus(ctx: ExtensionContext): void {
+    goalCtx = ctx.hasUI ? ctx : undefined;
     if (!ctx.hasUI) return;
     const goal = state.snapshot();
-    if (!goal || goal.status !== "active") syncStatusTimer(ctx, false);
+    popup?.update(goal);
+    if (!goal || goal.status !== "active") syncStatusTimer(false);
     if (!goal) {
       ctx.ui.setStatus("goal", undefined);
       return;
@@ -402,7 +429,7 @@ export default function goalExtension(pi: ExtensionAPI) {
           ? ` (${formatElapsedSeconds(goal.timeUsedSeconds)})`
           : ` (${formatTokensCompact(goal.tokensUsed)} / ${formatTokensCompact(goal.tokenBudget)})`;
       ctx.ui.setStatus("goal", theme.fg("accent", `Pursuing goal${usage}`));
-      syncStatusTimer(ctx, true);
+      syncStatusTimer(true);
       return;
     }
     const labels = {
@@ -447,6 +474,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   }
 
   function reconstructState(ctx: ExtensionContext): void {
+    viewAbort?.abort();
     stopStatusTimer();
     clearOwed();
     pendingError = undefined;
@@ -460,6 +488,9 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
   pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
   pi.on("session_shutdown", async () => {
+    viewAbort?.abort();
+    goalCtx = undefined;
+    stopGoalOpen();
     stopStatusTimer();
     clearOwed();
     pendingError = undefined;
@@ -629,6 +660,7 @@ export default function goalExtension(pi: ExtensionAPI) {
         return;
       }
       if (!trimmed) {
+        if (ctx.mode === "tui" && ctx.hasUI && state.current) { await openGoalPopup(ctx); return; }
         const snapshot = state.snapshot();
         showGoalMessage(snapshot ? goalSummary(snapshot) : "Usage: /goal <objective>\n\nNo goal is currently set.");
         updateStatus(ctx);
@@ -672,11 +704,7 @@ export default function goalExtension(pi: ExtensionAPI) {
             return;
           }
           try {
-            state.edit(edited);
-            persist("edit");
-            showGoalMessage(`Goal ${statusLabel(state.current!.status)}\n\n${goalSummary(state.snapshot()!)}`);
-            updateStatus(ctx);
-            if (state.current?.status === "active") queueContinuation(ctx);
+            editGoal(edited, ctx);
           } catch (err) {
             showGoalMessage(`Failed to edit thread goal: ${err instanceof Error ? err.message : String(err)}`);
           }

@@ -81,15 +81,15 @@ test("footer disclosures are independent native mouse targets and preserve focus
   };
   const summary = "│ prune: ON · 743.1k->292.7k (-61%) · usage: 0 tokens";
   const queued = "7 turns queued — will evaluate packing and summary budget on agent's next final text response";
-  const statuses = new Map([["vendor", "Other status stays"]]);
+  const statuses = new Map([["vendor", "Other status stays"], ["goal", "Pursuing goal (1s)"]]);
   setPruneStatusWidget({ ui: { setStatus: (key, text) => statuses.set(key, text) } },
     { ...DEFAULT_CONFIG, enabled: true, showPruneStatusLine: true },
     { beforeChars: 743_100 * 4, afterChars: 292_700 * 4 }, undefined, 0, queued);
   const callbacks = new Set();
-  let branch = "fix/output-speed-accounting", renders = 0;
+  let branch = "fix/output-speed-accounting", renders = 0, goalOpens = 0;
   const data = { getGitBranch: () => branch, getExtensionStatuses: () => statuses,
     onBranchChange(cb) { callbacks.add(cb); return () => callbacks.delete(cb); } };
-  const deps = { getSnapshot: () => snapshot, requestRender() { renders++; },
+  const deps = { getSnapshot: () => snapshot, requestRender() { renders++; }, openGoal() { goalOpens++; },
     show: { metadata: true, details: true, showCache: true, showChanges: true, showSpeed: true } };
   const footer = createFooterComponent(deps, data, text => text);
   t.after(() => footer.dispose());
@@ -148,6 +148,19 @@ test("footer disclosures are independent native mouse targets and preserve focus
   assert.equal(tui.getPrimaryScrollView(), scroll);
   assert.equal(tui.hasOverlay(), false);
   assert.match(expanded, /Other status stays/);
+  const goalPoint = () => ({ x: 2, y: screenLines(tui).findIndex(line => line.includes("goal") || line.includes("Goal complete")) + 1 });
+  click(goalPoint());
+  assert.equal(goalOpens, 1, "native footer clicks open the goal without changing composer focus");
+  assert.equal(editor.focused, true);
+  statuses.set("goal", "Goal complete");
+  frame();
+  const oldGoal = goalPoint();
+  click(oldGoal);
+  assert.equal(goalOpens, 2, "inactive goal statuses remain clickable");
+  statuses.delete("goal");
+  frame();
+  click(oldGoal);
+  assert.equal(goalOpens, 2, "removed status geometry cannot open a stale goal");
   const bodyRow = screenLines(tui).findIndex(line => line.includes("turns queued")) + 1;
   assert.match(click({ x: 3, y: bodyRow }), /turns queued/, "detail content is not a disclosure target");
 

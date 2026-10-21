@@ -291,10 +291,11 @@ test("nested tool activity does not leak image notices into top-level exploratio
 });
 
 test("one footer keeps ordered host metadata fresh across frames, events and session replacement", async (t) => {
+  const goalOpens = [];
   let reads = 0;
   let leaf = "first";
   let usage = { tokens: 172_000, contextWindow: 1_000_000, percent: 17.2 };
-  const { handlers, slots, footer: makeFooter, ctx } = await session(t, {}, {
+  const { handlers, slots, footer: makeFooter, ctx } = await session(t, { api: { events: { emit: name => goalOpens.push(name) } } }, {
     model: { id: "test-model", provider: "openai-codex", contextWindow: 1_000_000 }, thinkingLevel: "high",
     sessionManager: { getEntries: historyEntries, getSessionId: () => "footer-session", getLeafId: () => leaf },
     getContextUsage() { reads += 1; return usage; },
@@ -302,13 +303,17 @@ test("one footer keeps ordered host metadata fresh across frames, events and ses
   assert.equal(widgetByKey(slots, "metis-pi:composer-meta"), undefined, "metadata belongs below the editor");
   const footer = makeFooter({ getGitBranch: () => "main",
     getExtensionStatuses: () => new Map([["codex-adapter", "Codex adapter V: low · weekly: 20% left"],
-      ["context-prune", "│ prune: ON · usage: 0 tokens\n7 turns queued"]]) });
+      ["context-prune", "│ prune: ON · usage: 0 tokens\n7 turns queued"], ["goal", "Pursuing goal (1s)"]]) });
   const frame = () => plain(footer.render(140).join("\n"));
   const initial = frame();
   const fields = ["test-model", "high", "openai-codex", "ctx 172k/1.0M · 17.2%", "↑4.0k ↓200", "cache 20%"];
   for (const field of fields) assert.ok(initial.includes(field), `${field} reaches the installed footer`);
   assert.doesNotMatch(initial, /\/tmp\/workspace|turns queued/, "secondary details start folded");
   assert.match(frame(), /Codex adapter V: low · weekly: 20% left/, "vendor status remains");
+  const y = frame().split("\n").findIndex(line => line.includes("Pursuing goal"));
+  const event = { button: "left", x: 0, y, screenX: 0, screenY: y };
+  for (const type of ["press", "release", "click"]) footer.handleMouse({ ...event, type });
+  assert.deepEqual(goalOpens, ["metis:goal-open"], "the installed footer reaches the goal extension event");
   for (let i = 0; i < 64; i += 1) frame();
   assert.equal(reads, 1, "animation frames share one context projection");
 

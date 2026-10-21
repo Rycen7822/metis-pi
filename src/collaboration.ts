@@ -3,6 +3,7 @@ import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-
 export const METIS_EVENTS = {
   executionStatus: "metis:execution-status",
   goalSnapshot: "metis:goal-snapshot",
+  goalOpen: "metis:goal-open",
   goalProject: "metis:goal-project",
   occStatus: "metis:occ-status",
   occFinished: "metis:occ-finished",

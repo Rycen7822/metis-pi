@@ -1,5 +1,9 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { createEventBus, initTheme, InteractiveMode } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, Input, KeybindingsManager, TUI_KEYBINDINGS, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
+import { sgr } from "../helpers.mjs";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import goalExtension from "../../extensions/goal.ts";
@@ -15,6 +19,7 @@ function makeHost(t: TestContext) {
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
   const sent: unknown[] = [];
+  const notifications: string[] = [];
 
   const pi = {
     events: createEventBus(),
@@ -26,6 +31,7 @@ function makeHost(t: TestContext) {
   };
 
   const ctx = {
+    mode: "rpc" as "rpc" | "tui",
     hasUI: true,
     sessionManager: { getBranch: (): Array<{ type: string; customType?: string; data?: unknown }> => [], getSessionId: () => "goal-test-session" },
     hasPendingMessages: () => false,
@@ -33,9 +39,10 @@ function makeHost(t: TestContext) {
     ui: {
       theme: { fg: (_key: string, text: string) => text },
       setStatus: (key: string, text: string | undefined) => statusCalls.push({ key, text }),
-      notify: () => {},
+      notify: (message: string) => { notifications.push(message); },
       confirm: async () => false,
       editor: async (): Promise<string | undefined> => undefined,
+      custom: async (..._args: any[]): Promise<any> => undefined,
     },
   };
 
@@ -48,6 +55,7 @@ function makeHost(t: TestContext) {
     statusCalls,
     entries,
     sent,
+    notifications,
     command: async (args: string) => await commands.get("goal")!.handler(args, ctx),
     tools,
     tool: async (action: string, params: Record<string, unknown> = {}) =>
@@ -57,10 +65,154 @@ function makeHost(t: TestContext) {
   };
 }
 
+function popupHost(h: ReturnType<typeof makeHost>) {
+  initTheme("dark", false);
+  const { tui: native, terminal } = altScreen(100, 40);
+  const tui = native as any; // Same native input/render driver used by the JS UI contract tests.
+  Object.assign(terminal, {
+    hideCursor: () => terminal.write("\u001b[?25l"), showCursor: () => terminal.write("\u001b[?25h"),
+  });
+  const composer = new Input();
+  composer.setValue("keep the main input");
+  tui.setLayoutRoot(container(composer));
+  tui.setFocus(composer);
+  h.ctx.mode = "tui";
+  const host = { ui: tui, editor: { getText: () => composer.getValue() }, keybindings: new KeybindingsManager(TUI_KEYBINDINGS) };
+  // Use the SDK's real overlay completion/disposal path, not a second UI lifecycle.
+  const show = (InteractiveMode.prototype as any).showExtensionCustom.bind(host);
+  let popup: Component | undefined;
+  h.ctx.ui.custom = (factory, options) => show((...args: any[]) => popup = factory(...args), options);
+  const frame = () => { tui.doRender(); return screenLines(tui); };
+  const key = (data: string) => { tui.handleTerminalInput(data); return frame().join("\n"); };
+  const click = (label: string, before?: () => void) => {
+    const lines = frame(), y = lines.findIndex((line: string) => line.includes(label));
+    assert.ok(y >= 0, `popup contains ${label}`);
+    const x = visibleWidth(lines[y].slice(0, lines[y].indexOf(label))) + 1;
+    before?.();
+    tui.handleTerminalInput(sgr(0, x, y + 1));
+    tui.handleTerminalInput(sgr(0, x, y + 1, true));
+    return frame().join("\n");
+  };
+  const ready = async () => {
+    const deadline = performance.now() + 2000;
+    while (!tui.hasOverlay() && performance.now() < deadline) await nextTurn();
+    assert.ok(tui.hasOverlay(), `goal opens a real native overlay; ${h.notifications.join("; ")}`);
+    return frame().join("\n");
+  };
+  return { tui, terminal, composer, frame, key, click, ready, get popup() { assert.ok(popup); return popup; } };
+}
+
 /** Mock timers tick in whole steps, so each second is one scheduler advance. */
 function tick(t: TestContext, seconds: number): void {
   for (let i = 0; i < seconds; i += 1) t.mock.timers.tick(1000);
 }
+
+test("goal popup keeps live usage, edits through native input and leaves Cancel and close read-only", async t => {
+  const h = makeHost(t), ui = popupHost(h);
+  await h.tool("create", { objective: "\u001b]52;c;Y2xpcGJvYXJk\u0007original objective", token_budget: 100 });
+  tick(t, 3);
+  const original = (await h.tool("get")).details.goal;
+  const entries = h.entries.length, sent = h.sent.length;
+  const custom = t.mock.method(h.ctx.ui, "custom");
+  h.events.emit("metis:goal-open", {});
+  h.events.emit("metis:goal-open", {});
+  assert.match(await ui.ready(), /Pursuing · Elapsed: 3s/);
+  assert.equal(custom.mock.calls.length, 1, "repeated clicks keep one popup");
+  ui.key("readonly text must not edit");
+  ui.click("[Edit]");
+  assert.match(ui.click("[Editing]"), /\[Cancel\].*\[Save\]/);
+  assert.doesNotMatch(ui.popup.render(90).join("\n"), /\u001b\]52;/, "goal data cannot inject terminal controls through Editor prefill");
+  ui.key("draft to discard");
+  assert.match(ui.click("[Save]", () => ui.tui.handleTerminalInput("\u001b")), /original objective/);
+  ui.click("[Edit]");
+  ui.key("another cancelled draft");
+  ui.click("[Cancel]");
+  assert.equal(h.entries.length, entries);
+  assert.equal(h.sent.length, sent, "viewing and cancelling never queue a model turn");
+  ui.click("[Edit]");
+  assert.ok(ui.popup.render(90).some(line => line.includes(CURSOR_MARKER)), "editing forwards focus for the IME cursor");
+  ui.click("original objective");
+  assert.ok(ui.tui.isOverlayFocused(), "clicking Editor does not steal the popup's Escape/Save keys");
+  ui.key("\u001b[F");
+  ui.key("\u0015");
+  ui.key("新的目标👩‍🔬");
+  ui.key("\r");
+  const pasted = Array.from({ length: 12 }, (_, i) => `step ${i}`).join("\n");
+  ui.key(`\u001b[200~${pasted}\u001b[201~`);
+  ui.click("[Save]");
+  const saved = (await h.tool("get")).details.goal;
+  assert.equal(saved.objective, `新的目标👩‍🔬\n${pasted}`, "Save expands native paste markers and preserves newlines");
+  for (const field of ["threadId", "createdAt", "tokensUsed", "tokenBudget", "status"]) assert.equal(saved[field], original[field], field);
+  assert.equal(saved.timeUsedSeconds, 3, "editing accounts elapsed time without resetting it");
+  assert.equal(h.entries.at(-1)?.data.action, "edit");
+  ui.terminal.rows = 12;
+  assert.match(ui.click("[Edit]"), /\[Editing\].*\[Cancel\].*\[Save\]/);
+  assert.ok(ui.popup.render(90).some(line => line.includes(CURSOR_MARKER)), "resize keeps the editor cursor, not just the toolbar");
+  for (const width of [1, 4, 12, 90]) {
+    const rows = ui.popup.render(width);
+    assert.ok(rows.length <= 8 && rows.every(row => visibleWidth(row) <= width), "narrow overlays stay inside their viewport");
+  }
+  ui.click("step 10");
+  ui.key("X");
+  ui.click("[Save]");
+  assert.equal((await h.tool("get")).details.goal.objective, `新的目标👩‍🔬\n${pasted.replace("step 10", "Xstep 10")}`,
+    "clicking cropped editor content edits the displayed logical line");
+  assert.match(ui.key("\u001b[F"), /step 11/, "readonly End scrolls to the last goal line");
+  assert.doesNotMatch(ui.key("\u001b[H"), /step 11/, "readonly Home returns to the start");
+  ui.terminal.rows = 40;
+  tick(t, 2);
+  assert.match(ui.frame().join("\n"), /Elapsed: 5s/);
+  await h.tool("update", { status: "blocked" });
+  assert.match(ui.frame().join("\n"), /Blocked/);
+  tick(t, 2);
+  assert.match(ui.frame().join("\n"), /Elapsed: 5s/, "blocked time is not counted");
+  await h.tool("update", { status: "complete" });
+  assert.match(ui.frame().join("\n"), /Completed/);
+  ui.click("[X]");
+  assert.equal(ui.tui.hasOverlay(), false);
+  await nextTurn();
+  h.events.emit("metis:goal-open", {});
+  assert.match(await ui.ready(), /Completed · Elapsed: 5s/, "stopping the clock must retain the goal UI context");
+  ui.click("[X]");
+  assert.equal(ui.composer.focused, true);
+  assert.equal(ui.composer.getValue(), "keep the main input");
+});
+
+test("goal popup retains invalid and conflicting drafts and closes across branch changes and shutdown", async t => {
+  const h = makeHost(t), ui = popupHost(h);
+  await h.command("original");
+  const opened = h.command("");
+  await ui.ready();
+  ui.click("[Edit]");
+  ui.key("\u0015");
+  assert.match(ui.click("[Save]"), /must not be empty/);
+  assert.equal((await h.tool("get")).details.goal.objective, "original");
+  ui.key("x".repeat(4001));
+  assert.match(ui.click("[Save]"), /too long/);
+  assert.equal((await h.tool("get")).details.goal.objective, "original");
+  ui.key("\u0015");
+  ui.key("local draft");
+  h.ctx.ui.editor = async () => "external edit";
+  await h.command("edit");
+  assert.match(ui.click("[Save]"), /changed while editing/);
+  assert.equal((await h.tool("get")).details.goal.objective, "external edit");
+  ui.click("[Cancel]");
+  ui.click("[Edit]");
+  ui.key("will not save on navigation");
+  const branch = structuredClone(h.entries.at(-1)!.data);
+  h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: branch }];
+  await h.fire("session_tree", {}, h.ctx);
+  await opened;
+  assert.equal(ui.tui.hasOverlay(), false);
+  assert.equal((await h.tool("get")).details.goal.objective, "external edit");
+  h.events.emit("metis:goal-open", {});
+  await ui.ready();
+  ui.click("[Edit]");
+  ui.key("another unsaved draft");
+  await h.fire("session_shutdown", {}, h.ctx);
+  assert.equal(ui.tui.hasOverlay(), false);
+  assert.deepEqual(ui.popup.render(90), [], "disposed views cannot retain input targets");
+});
 
 test("goal validates action-specific fields without mutating state on invalid requests", async (t) => {
   const h = makeHost(t);

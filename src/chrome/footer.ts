@@ -46,6 +46,7 @@ export interface FooterShow {
 export interface FooterDeps {
   getSnapshot: () => FooterSnapshot;
   requestRender: () => void;
+  openGoal?: () => void;
   /** Default disclosure state; clicks only change this component's copy. */
   initiallyExpanded?: Record<FooterDisclosure, boolean>;
   /** Config-derived display flags, bound once per install. */
@@ -59,6 +60,7 @@ export interface FooterDataView {
 }
 
 type FooterDisclosure = "location" | "prune";
+type FooterTarget = FooterDisclosure | "goal";
 interface FooterField { segments: Segment[]; separator: Segment }
 const SPACE: Segment = { text: " ", tone: "dim" };
 
@@ -129,8 +131,8 @@ export function createFooterComponent(
 ) {
   let branch = footerData?.getGitBranch?.();
   const expanded = { location: false, prune: false, ...deps.initiallyExpanded };
-  let targets: Array<{ section: FooterDisclosure; x: number; y: number; width: number }> = [];
-  let pressed: { section: FooterDisclosure; x: number; y: number } | undefined;
+  let targets: Array<{ section: FooterTarget; x: number; y: number; width: number }> = [];
+  let pressed: { section: FooterTarget; x: number; y: number } | undefined;
   const unsubscribe = footerData?.onBranchChange?.(() => {
     branch = footerData?.getGitBranch?.();
     deps.requestRender();
@@ -168,6 +170,9 @@ export function createFooterComponent(
         const detail = details.join("\n");
         const foldable = key === STATUS_WIDGET_ID && detail.length > 0;
         lines.push(paintRow(truncateSegments([{ text: summary, tone: "dim" }], width - (foldable ? 2 : 0))));
+        if (key === "goal" && deps.openGoal) {
+          targets.push({ section: "goal", x: 0, y: lines.length - 1, width: cellWidth(lines.at(-1)!) });
+        }
         if (foldable) {
           disclosure("prune");
           if (expanded.prune) lines.push(...detailLines(detail, width));
@@ -196,7 +201,8 @@ export function createFooterComponent(
         const section = pressed.section;
         pressed = undefined;
         if (sameCell && hit?.section === section) {
-          expanded[section] = !expanded[section];
+          if (section === "goal") deps.openGoal?.();
+          else expanded[section] = !expanded[section];
           deps.requestRender();
           return { handled: true, render: true };
         }

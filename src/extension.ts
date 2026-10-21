@@ -25,6 +25,7 @@ import { registerDiagnosticsCommand } from "./diagnostics.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
 import { createFullscreenLayout, type FullscreenLayoutHost } from "./chrome/fullscreen-layout.ts";
+import { METIS_EVENTS } from "./collaboration.ts";
 
 export type AppearanceAPI = Pick<ExtensionAPI, "on" | "getAllTools">;
 // Decoration factories have one contract, owned by the adapter that consumes them.
@@ -131,6 +132,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // snapshots is built after metrics (which needs chrome.state), so the
     // lifecycle reads it lazily — it only installs after session_start.
     getSnapshots: () => snapshots,
+    openGoal: () => (bindings.api as Partial<Pick<ExtensionAPI, "events">> | undefined)?.events?.emit(METIS_EVENTS.goalOpen, {}),
     requestRender,
     captureTui,
     selectionCopyHook: () => (config.selectionCopy.ctrlC ? selectionCopy?.editorHook() : undefined),

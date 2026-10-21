@@ -51,6 +51,7 @@ export interface ChromeDeps {
   getSnapshots(): SnapshotSource;
   /** Repaint request (the captured renderer, when there is one). */
   requestRender(): void;
+  openGoal?: () => void;
   /** Adopt the renderer every chrome factory receives. */
   captureTui(tui: unknown): void;
   /** Selection-copy Ctrl+C hook for the editor (undefined when disabled). */
@@ -191,7 +192,7 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
           deps.captureTui(tui);
           return mods.createFooterComponent(
-            { getSnapshot: snapshots.getFooterSnapshot, requestRender: deps.requestRender, show: snapshots.footerShow(),
+            { getSnapshot: snapshots.getFooterSnapshot, requestRender: deps.requestRender, show: snapshots.footerShow(), openGoal: deps.openGoal,
               initiallyExpanded: { location: config.footer.locationExpanded, prune: config.footer.pruneExpanded } },
             footerData as never,
             makeTonePainter(theme, deps.colorLevel),
