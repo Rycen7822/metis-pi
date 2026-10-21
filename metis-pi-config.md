@@ -226,7 +226,7 @@ exclude = []
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `enabled` | `true` | 是否注册 native Pi 子代理入口；关闭不终止已运行任务。 |
+| `enabled` | `true` | 启用 native Pi 子代理工具、调用说明及专属 `subagent-delegation` skill；修改后 reload/restart，关闭不终止已运行任务。 |
 | `maxResidentAgents` | `4` | 每个 daemon 同时驻留的 worker 上限，含前/后台任务。 |
 | `maxAgentsPerScope` | `16` | 每个父会话 scope 的活跃/清理未验证 worker 上限；历史不占容量。 |
 | `rpcTimeoutSeconds` | `20` | worker RPC 请求秒数。 |

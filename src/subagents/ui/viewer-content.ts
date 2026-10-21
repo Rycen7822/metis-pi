@@ -86,7 +86,7 @@ export class ViewerContent {
   private add(entry: Entry) { this.entries.push(entry); }
   private tool(id: string, name: string, args: Record<string, unknown>, cwd: string) {
     // Serialized child messages carry no trusted registration provenance.
-    const renderer = name === "neural_search" ? undefined : name.startsWith("pi_") ? subagentToolRenderers(name)
+    const renderer = name === "neural_search" ? undefined : name.startsWith("subagents_") || name.startsWith("pi_") ? subagentToolRenderers(name)
       : this.renderers[(name === "exec_command" ? "bash" : name) as ToolName];
     const tool = new ToolExecutionComponent(name, `subagent-view:${id}:${this.entries.length}`,
       name === "exec_command" ? { ...args, command: args.cmd ?? args.command } : args, { showImages: false },

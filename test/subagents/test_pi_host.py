@@ -62,14 +62,14 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_revision_is_checked_again_before_each_explicit_operation(self):
         self.revision='controlled-old-source'
-        result=await self.call('pi_spawn_agent',{'task':'must not dispatch','access':'read','request_id':'version-guard'})
+        result=await self.call('subagents_spawn_agent',{'task':'must not dispatch','access':'read','request_id':'version-guard'})
         self.assertFalse(result['ok']); self.assertEqual(result['error']['code'],'version_mismatch')
         self.assertEqual([op for op,_ in self.calls].count('spawn'),0)
         self.assertIn('Background work has not been interrupted',result['error']['message'])
 
     async def test_unknown_mutation_reply_is_not_retried(self):
         self.spawn_mode='lost'
-        result=await self.call('pi_spawn_agent',{'task':'uncertain','access':'read','request_id':'unknown-mutation'})
+        result=await self.call('subagents_spawn_agent',{'task':'uncertain','access':'read','request_id':'unknown-mutation'})
         self.assertFalse(result['ok']); self.assertEqual(result['error']['code'],'connection_lost')
         self.assertEqual([op for op,_ in self.calls].count('spawn'),1)
         watched=await self.call('pi_watch',{},passive=True)
@@ -77,7 +77,7 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
 
     async def test_known_pre_admission_idle_rejection_reuses_the_original_operation(self):
         self.spawn_mode='idle'
-        result=await self.call('pi_spawn_agent',{'task':'safe retry','access':'read','request_id':'same-operation'})
+        result=await self.call('subagents_spawn_agent',{'task':'safe retry','access':'read','request_id':'same-operation'})
         self.assertTrue(result['ok'],result)
         attempts=[p for op,p in self.calls if op=='spawn']
         self.assertEqual(len(attempts),2); self.assertEqual(attempts[0],attempts[1])

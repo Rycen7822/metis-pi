@@ -267,7 +267,7 @@ ERROR_OUTPUT = obj({"isError": {"const": True, "type": "boolean"}, "error": obj(
 
 TOOLS = [
     tool(
-        "pi_spawn_agent",
+        "subagents_spawn_agent",
         "spawn",
         (
             "Start a Pi task with its own session. Parent conversation and sandbox are not "
@@ -311,7 +311,7 @@ TOOLS = [
         ["request_id", "task"],
     ),
     tool(
-        "pi_wait_agent",
+        "subagents_wait_agent",
         "wait",
         (
             "Wait for selected runs. Default any returns on the first completion, failure, "
@@ -352,7 +352,7 @@ TOOLS = [
         True,
     ),
     tool(
-        "pi_list_agents",
+        "subagents_list_agents",
         "list",
         (
             "Search this session's retained agent history by name/ID. Defaults to newest "
@@ -360,8 +360,8 @@ TOOLS = [
             "ISO 8601. total counts all history, matched counts query matches; continue with "
             "next_offset while has_more, keeping query/sort unchanged. Outstanding runs "
             "remain scope-wide; listing status does not consume result attention. Read "
-            "results with wait or pi_agent_result. For notification details, call "
-            "pi_inspect_agent with agent_id and detail=full."
+            "results with wait or subagents_agent_result. For notification details, call "
+            "subagents_inspect_agent with agent_id and detail=full."
         ),
         {
             **SCOPE,
@@ -378,7 +378,7 @@ TOOLS = [
         True,
     ),
     tool(
-        "pi_inspect_agent",
+        "subagents_inspect_agent",
         "inspect",
         (
             "Read bounded events and input receipts; pass next_cursor as after. full adds "
@@ -398,7 +398,7 @@ TOOLS = [
         True,
     ),
     tool(
-        "pi_agent_result",
+        "subagents_agent_result",
         "result",
         (
             "Read a terminal result by agent name/ID or explicit run ID; choose exactly one. "
@@ -417,7 +417,7 @@ TOOLS = [
         True,
     ),
     tool(
-        "pi_answer_agent",
+        "subagents_answer_agent",
         "answer",
         "Answer a pending Pi extension input request explicitly. Confirmations require a boolean; select/input/editor use text.",
         {
@@ -429,7 +429,7 @@ TOOLS = [
         ["agent_id", "request_id", "ui_request_id", "answer"],
     ),
     tool(
-        "pi_send_message",
+        "subagents_send_message",
         "message",
         (
             "Message by agent ID or name. Active tasks receive steering before a later model "
@@ -440,7 +440,7 @@ TOOLS = [
         ["agent_id", "request_id", "message"],
     ),
     tool(
-        "pi_followup_task",
+        "subagents_followup_task",
         "followup",
         (
             "Assign work by agent ID or name. Active tasks receive input in the same run; "
@@ -451,7 +451,7 @@ TOOLS = [
         ["agent_id", "request_id", "message"],
     ),
     tool(
-        "pi_interrupt_agent",
+        "subagents_interrupt_agent",
         "soft_interrupt",
         (
             "Interrupt the task and preserve its session. Normally retains the runtime; "
@@ -510,7 +510,7 @@ MANAGEMENT = [
         "scope_open",
         (
             "Open a Pi delegation scope in an explicit workspace, or resume a known scope. "
-            "Reuse it for subsequent calls. Optional: pi_spawn_agent with a cwd opens this "
+            "Reuse it for subsequent calls. Optional: subagents_spawn_agent with a cwd opens this "
             "scope implicitly."
         ),
         {
@@ -670,7 +670,7 @@ def validate_op(op, p):
         if op != "scope_open" and not p.get("scope"):
             raise AgentError(
                 "invalid_argument",
-                "scope is required; call pi_context first, or pass scope explicitly, or pass cwd to pi_spawn_agent",
+                "scope is required; call pi_context first, or pass scope explicitly, or pass cwd to subagents_spawn_agent",
             )
     elif op in {"pi_watch","pi_view","pi_claim","pi_observe","pi_release","pi_uncertain","pi_detach"}:
         fields = {"scope":ID}

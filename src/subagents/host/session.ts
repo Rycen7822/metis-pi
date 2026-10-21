@@ -509,7 +509,7 @@ export class SubagentSession {
     }
     throw new RuntimeError({
       code: "input_not_delivered",
-      message: "Read the pending question with pi_wait_agent before answering, or supply ui_request_id explicitly",
+      message: "Read the pending question with subagents_wait_agent before answering, or supply ui_request_id explicitly",
     });
   }
   async execute(name: string, args: Record<string, unknown>, id: string, ctx: ExtensionContext, signal?: AbortSignal) {
@@ -526,11 +526,11 @@ export class SubagentSession {
     const params = mutation ? { ...args, request_id: args.request_id ?? `pi_${digest([this.sessionId, id])}` } : args;
     try {
       let extra: object | undefined;
-      if (name === "pi_spawn_agent")
+      if (name === "subagents_spawn_agent")
         extra = { project_trust: await this.trust((args.cwd as string | undefined) ?? ctx.cwd) };
-      if (name === "pi_send_message" || name === "pi_followup_task") {
+      if (name === "subagents_send_message" || name === "subagents_followup_task") {
         const snapshot = await this.client.call(
-          "pi_inspect_agent",
+          "subagents_inspect_agent",
           { agent_id: args.agent_id, limit: 1, max_bytes: 16384 },
           signal,
           { consume: false },
@@ -571,7 +571,7 @@ export class SubagentSession {
           Object.assign(params, operation.params);
           question = operation.question;
         } else {
-          if (name === "pi_answer_agent" && !params.ui_request_id) {
+          if (name === "subagents_answer_agent" && !params.ui_request_id) {
             question = this.deliveredQuestion(params.agent_id);
             params.ui_request_id = question.id;
           }
@@ -626,7 +626,7 @@ export class SubagentSession {
         // Reuse wait's reservation; observation still requires the saved Pi result.
         try {
           const failed = await this.client.call(
-            "pi_wait_agent",
+            "subagents_wait_agent",
             { run_ids: [failure.run_id], timeout_seconds: 0 },
             signal,
           );
@@ -674,7 +674,7 @@ export class SubagentSession {
     const [operation, target, ...message] = args.trim().split(/\s+/);
     if (target && (operation === "stop" || (operation === "continue" && message.length))) {
       const result = await this.execute(
-        operation === "stop" ? "pi_interrupt_agent" : "pi_followup_task",
+        operation === "stop" ? "subagents_interrupt_agent" : "subagents_followup_task",
         {
           agent_id: target,
           request_id: randomUUID(),
@@ -699,7 +699,7 @@ export class SubagentSession {
       return result;
     }
     if (operation === "answer" && target) {
-      const snapshot = await this.client.call("pi_inspect_agent", { agent_id: target, detail: "full" }, undefined, {
+      const snapshot = await this.client.call("subagents_inspect_agent", { agent_id: target, detail: "full" }, undefined, {
         consume: false,
       });
       const run = snapshot.run as { id: string } | undefined;
@@ -711,7 +711,7 @@ export class SubagentSession {
         ctx.ui.notify("Answering a subagent question requires an interactive Pi session", "warning");
         return;
       }
-      const result = await this.client.call("pi_wait_agent", { run_ids: [run.id], timeout_seconds: 0 });
+      const result = await this.client.call("subagents_wait_agent", { run_ids: [run.id], timeout_seconds: 0 });
       const ticket = result._pi_delivery as Ticket | undefined;
       try {
         const question = (
@@ -740,9 +740,9 @@ export class SubagentSession {
         } else if (question.method === "select") answer = await ctx.ui.select(title, question.options ?? []);
         else if (question.method === "editor") answer = await ctx.ui.editor(title, question.prefill);
         else if (question.method === "input") answer = await ctx.ui.input(title, question.placeholder);
-        else throw new Error("Unsupported question type; use pi_answer_agent with an explicit answer");
+        else throw new Error("Unsupported question type; use subagents_answer_agent with an explicit answer");
         if (answer !== undefined && this.valid()) {
-          await this.client.call("pi_answer_agent", {
+          await this.client.call("subagents_answer_agent", {
             agent_id: target,
             ui_request_id: question.id,
             answer,
@@ -756,7 +756,7 @@ export class SubagentSession {
       }
       return;
     }
-    const snapshot = await this.client.call("pi_list_agents", {}, undefined, { consume: false });
+    const snapshot = await this.client.call("subagents_list_agents", {}, undefined, { consume: false });
     this.resume(true);
     if (!this.valid()) return;
     const agents = snapshot.agents as typeof this.agents;

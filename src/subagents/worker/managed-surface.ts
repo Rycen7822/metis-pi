@@ -60,9 +60,8 @@ export default async function (pi: ExtensionAPI) {
     const tool = pi.getAllTools().find(tool => tool.name === event.toolName);
     const path = tool && sourcePath(tool);
     const recursive =
-      ["pi_spawn_agent", "pi_followup_task", "pi_send_message"].some(
-        (name) => event.toolName === name || event.toolName.endsWith(`__${name}`),
-      ) ||
+      // Also reject legacy names and namespaced wrappers from ambient extensions.
+      /(?:^|__)(?:subagents|pi)_(?:spawn_agent|followup_task|send_message)$/.test(event.toolName) ||
       ["Agent", "SubagentWorkflow", "subagent", "spawn_agent", "followup_task"].includes(event.toolName) ||
       Boolean(path?.split(/[\\/]/).includes("pi-subagents"));
     if (recursive) return { block: true, reason: "Managed children cannot create or control subagents" };

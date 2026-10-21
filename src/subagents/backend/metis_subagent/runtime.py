@@ -398,7 +398,7 @@ class Runtime:
                     w.run.error = (
                         "Model output limit reached (stopReason=length); the task did not complete. "
                         "Increase maxTokens in the Pi model configuration or continue this agent with "
-                        "pi_followup_task."
+                        "subagents_followup_task."
                     )
                 elif reason in {"error", "aborted"}:
                     w.run.error = crop(str(m.get("errorMessage") or reason), 2000)
@@ -557,21 +557,21 @@ class Runtime:
         if not w or w.closed or w.tainted:
             if a["state"] == "orphaned" or a["cleanup"] == "unknown" or (w and w.tainted):
                 message = (
-                    "Pi worker cleanup is unverified; use pi_inspect_agent to check its state, then "
+                    "Pi worker cleanup is unverified; use subagents_inspect_agent to check its state, then "
                     "close/reap it with the CLI close command using the parent session state "
                     "directory (--home)"
                 )
             elif a["state"] == "crashed":
                 message = (
-                    "Pi worker failed; use pi_inspect_agent to review the failure, then "
-                    "pi_spawn_agent to create a new agent with valid settings"
+                    "Pi worker failed; use subagents_inspect_agent to review the failure, then "
+                    "subagents_spawn_agent to create a new agent with valid settings"
                 )
             elif a["state"] in {"dormant", "closed"}:
-                message = "Pi worker is parked or closed; use pi_followup_task to resume its saved session"
+                message = "Pi worker is parked or closed; use subagents_followup_task to resume its saved session"
             else:
                 message = (
-                    "No connected Pi worker; use pi_inspect_agent to check its state before resuming "
-                    "with pi_followup_task or creating a new agent with pi_spawn_agent"
+                    "No connected Pi worker; use subagents_inspect_agent to check its state before resuming "
+                    "with subagents_followup_task or creating a new agent with subagents_spawn_agent"
                 )
             raise AgentError("worker_unavailable", message)
         return w

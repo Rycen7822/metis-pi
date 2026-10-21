@@ -159,7 +159,7 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 class V2TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
     async def test_identifier_and_text_guards_match_tool_contract(self):
         await self.initialize()
-        schema=BY_NAME['pi_spawn_agent']['inputSchema']
+        schema=BY_NAME['subagents_spawn_agent']['inputSchema']
         for key in ['检查-1','trailing\n']:
             args={'cwd':str(self.workspace),'task':'first','access':'read','request_id':key}
             with self.assertRaises(ValidationError):
@@ -181,46 +181,46 @@ class V2TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
             validate_contract(value,definition['outputSchema'])
             return value
         args={'cwd':str(self.workspace),'task':'BIG','name':'results','access':'read','request_id':'big'}
-        a=await checked('pi_spawn_agent',args)
-        retried=await checked('pi_spawn_agent',args)
+        a=await checked('subagents_spawn_agent',args)
+        retried=await checked('subagents_spawn_agent',args)
         self.assertEqual(retried['run_id'],a['run_id']); self.assertTrue(retried['replayed'])
-        done=await checked('pi_wait_agent',{'run_ids':[a['run_id']],'timeout_seconds':8})
+        done=await checked('subagents_wait_agent',{'run_ids':[a['run_id']],'timeout_seconds':8})
         summary=done['runs'][0]
         self.assertEqual(summary['state'],'completed')
         self.assertNotIn('result_sha',summary); self.assertNotIn('error',summary)
         preview=summary['result']; self.assertTrue(preview['has_more'])
-        page=await checked('pi_agent_result',{'run_id':a['run_id'],'offset':preview['next_offset'],'max_bytes':16384})
+        page=await checked('subagents_agent_result',{'run_id':a['run_id'],'offset':preview['next_offset'],'max_bytes':16384})
         self.assertNotIn('offset',page)
         self.assertNotIn('usage',page); self.assertNotIn('artifact_path',page)
         self.assertNotIn('created',page['run'])
         contents=preview['text']+page['text']
         while page['has_more']:
-            page=await checked('pi_agent_result',{'run_id':a['run_id'],'offset':page['next_offset'],'max_bytes':16384})
+            page=await checked('subagents_agent_result',{'run_id':a['run_id'],'offset':page['next_offset'],'max_bytes':16384})
             contents+=page['text']
         self.assertEqual(hashlib.sha256(contents.encode()).hexdigest(),page['result_sha256'])
         self.assertEqual(preview['result_sha256'],page['result_sha256'])
-        listing=await checked('pi_list_agents',{})
+        listing=await checked('subagents_list_agents',{})
         self.assertEqual(listing['parent_notifications'],{'enabled':True,'transport':'pi_native'})
         self.assertNotIn('resolved_model',listing['agents'][0]); self.assertNotIn('thinking',listing['agents'][0])
         self.assertEqual(listing['outstanding']['total'],0)
-        found=await checked('pi_list_agents',{'query':'RESULT','sort':'created','limit':1,'offset':0})
+        found=await checked('subagents_list_agents',{'query':'RESULT','sort':'created','limit':1,'offset':0})
         self.assertEqual(found['agents'][0]['id'],a['agent_id'])
         self.assertEqual((found['total'],found['matched'],found['next_offset'],found['has_more']),(1,1,1,False))
-        normal=await checked('pi_inspect_agent',{'agent_id':'results','max_bytes':16384})
+        normal=await checked('subagents_inspect_agent',{'agent_id':'results','max_bytes':16384})
         self.assertNotIn('parent_notifications',normal)
         self.assertEqual(normal['agent']['resolved_model'],a['resolved_model'])
         self.assertEqual(normal['agent'].get('thinking'),a.get('thinking'))
-        full=await checked('pi_inspect_agent',{'agent_id':'results','detail':'full','max_bytes':16384})
+        full=await checked('subagents_inspect_agent',{'agent_id':'results','detail':'full','max_bytes':16384})
         self.assertEqual(full['run']['id'],a['run_id']); self.assertEqual(full['run']['state'],'completed')
         self.assertIsNotNone(full['run']['ended'])
         self.assertTrue(full['run']['usage'])
         self.assertEqual(Path(full['run']['artifact_path']).read_text(),contents)
         self.assertIn('parent_notifications',full)
-        self.assertEqual((await checked('pi_agent_result',{'run_id':a['run_id']}))['result_sha256'],page['result_sha256'])
-        self.assertEqual((await checked('pi_list_agents',{}))['outstanding']['total'],0)
-        await checked('pi_send_message',{'agent_id':'results','message':'idle history','request_id':'idle-msg'})
-        asking=await checked('pi_followup_task',{'agent_id':'results','message':'UI_CONFIRM','request_id':'ask'})
-        question=(await checked('pi_wait_agent',{'run_ids':[asking['run_id']],'timeout_seconds':8}))['questions'][0]
-        await checked('pi_answer_agent',{'agent_id':'results','ui_request_id':question['id'],'answer':True,'request_id':'answer'})
-        await checked('pi_wait_agent',{'run_ids':[asking['run_id']],'timeout_seconds':8})
-        await checked('pi_interrupt_agent',{'agent_id':'results','request_id':'idle-stop'})
+        self.assertEqual((await checked('subagents_agent_result',{'run_id':a['run_id']}))['result_sha256'],page['result_sha256'])
+        self.assertEqual((await checked('subagents_list_agents',{}))['outstanding']['total'],0)
+        await checked('subagents_send_message',{'agent_id':'results','message':'idle history','request_id':'idle-msg'})
+        asking=await checked('subagents_followup_task',{'agent_id':'results','message':'UI_CONFIRM','request_id':'ask'})
+        question=(await checked('subagents_wait_agent',{'run_ids':[asking['run_id']],'timeout_seconds':8}))['questions'][0]
+        await checked('subagents_answer_agent',{'agent_id':'results','ui_request_id':question['id'],'answer':True,'request_id':'answer'})
+        await checked('subagents_wait_agent',{'run_ids':[asking['run_id']],'timeout_seconds':8})
+        await checked('subagents_interrupt_agent',{'agent_id':'results','request_id':'idle-stop'})

@@ -3,15 +3,15 @@ import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-wo
 import { auxiliaryToolRenderers, displayRecord, inlineToolText } from "../../execution/ui/auxiliary-tool.ts";
 
 const titles: Record<string, [string, string]> = {
-  pi_spawn_agent: ["Starting subagent", "Started subagent"],
-  pi_wait_agent: ["Waiting for subagents", "Waited for subagents"],
-  pi_list_agents: ["Listing subagents", "Listed subagents"],
-  pi_inspect_agent: ["Inspecting subagent", "Inspected subagent"],
-  pi_agent_result: ["Reading subagent result", "Read subagent result"],
-  pi_answer_agent: ["Answering subagent", "Answered subagent"],
-  pi_send_message: ["Messaging subagent", "Messaged subagent"],
-  pi_followup_task: ["Assigning subagent task", "Assigned subagent task"],
-  pi_interrupt_agent: ["Interrupting subagent", "Interrupted subagent"],
+  subagents_spawn_agent: ["Starting subagent", "Started subagent"],
+  subagents_wait_agent: ["Waiting for subagents", "Waited for subagents"],
+  subagents_list_agents: ["Listing subagents", "Listed subagents"],
+  subagents_inspect_agent: ["Inspecting subagent", "Inspected subagent"],
+  subagents_agent_result: ["Reading subagent result", "Read subagent result"],
+  subagents_answer_agent: ["Answering subagent", "Answered subagent"],
+  subagents_send_message: ["Messaging subagent", "Messaged subagent"],
+  subagents_followup_task: ["Assigning subagent task", "Assigned subagent task"],
+  subagents_interrupt_agent: ["Interrupting subagent", "Interrupted subagent"],
 };
 
 function payload(result?: AgentToolResult<unknown>): Record<string, unknown> {
@@ -23,7 +23,7 @@ function payload(result?: AgentToolResult<unknown>): Record<string, unknown> {
 }
 
 function summary(name: string, data: Record<string, unknown>): string {
-  if (name === "pi_list_agents") {
+  if (name === "subagents_list_agents") {
     const returned = Array.isArray(data.agents) ? data.agents.length : 0;
     const total = data.total ?? returned;
     return (
@@ -35,18 +35,18 @@ function summary(name: string, data: Record<string, unknown>): string {
       " total subagents"
     );
   }
-  if (name === "pi_wait_agent") {
+  if (name === "subagents_wait_agent") {
     const runs = Array.isArray(data.runs) ? data.runs.map(displayRecord) : [];
     const states = runs.map((run) => `${run.name ?? run.id ?? "run"}: ${run.state ?? "returned"}`);
     return states.join("; ") || String(data.reason ?? "No runs returned");
   }
-  if (name === "pi_inspect_agent" || name === "pi_agent_result") {
+  if (name === "subagents_inspect_agent" || name === "subagents_agent_result") {
     const agent = displayRecord(data.agent),
       run = displayRecord(data.run);
     return `${agent.name ?? run.name ?? agent.id ?? run.id ?? "Subagent"} · ${agent.state ?? run.state ?? "result available"}`;
   }
-  if (name === "pi_answer_agent") return data.sent ? "Answer sent" : "Answer not sent";
-  if (name === "pi_interrupt_agent")
+  if (name === "subagents_answer_agent") return data.sent ? "Answer sent" : "Answer not sent";
+  if (name === "subagents_interrupt_agent")
     return `Previous state: ${data.previous_status ?? "unknown"}${data.forced ? " · forced" : ""}`;
   return [data.name ?? data.agent_id, data.state ?? data.delivery ?? "Accepted"].filter(Boolean).join(" · ");
 }
@@ -54,14 +54,16 @@ function summary(name: string, data: Record<string, unknown>): string {
 export function subagentToolRenderers(
   name: string,
 ): Pick<ToolDefinition, "renderCall" | "renderResult" | "renderShell"> {
-  const [active, complete] = titles[name] ?? [name, name];
+  // Read pre-rename transcripts without registering callable aliases.
+  const canonical = name.replace(/^pi_/, "subagents_");
+  const [active, complete] = titles[canonical] ?? [name, name];
   const base = auxiliaryToolRenderers(`${active} failed`, (args, result) => {
     const data = payload(result);
     const target =
       args.name ??
       args.agent_id ??
       args.run_id ??
-      (name === "pi_list_agents" ? args.query : undefined) ??
+      (canonical === "subagents_list_agents" ? args.query : undefined) ??
       (Array.isArray(args.agent_ids)
         ? args.agent_ids.join(", ")
         : Array.isArray(args.run_ids)
@@ -77,7 +79,7 @@ export function subagentToolRenderers(
       target: typeof target === "string" ? target : undefined,
       ...(result
         ? {
-            summary: inlineToolText(summary(name, data)),
+            summary: inlineToolText(summary(canonical, data)),
             warning:
               [
                 data.timed_out ? "Wait timed out" : "",
@@ -107,7 +109,7 @@ export function subagentToolRenderers(
 export const subagentAttentionRenderer: Parameters<ExtensionAPI["registerMessageRenderer"]>[1] = (message, { expanded }, theme) => {
   const text = typeof message.content === "string" ? message.content : "";
   let status: string;
-  try { status = summary("pi_wait_agent", JSON.parse(text.slice(text.indexOf("\n") + 1))); }
+  try { status = summary("subagents_wait_agent", JSON.parse(text.slice(text.indexOf("\n") + 1))); }
   catch { status = text.split("\n").slice(1, 5).join("; ") || "Attention"; }
   const header = theme.fg("accent", "Subagents") + " · " + inlineToolText(status);
   return new Text(header + (expanded ? "\n" + text : "\n" + theme.fg("dim", "ctrl+o to expand")), 0, 0);

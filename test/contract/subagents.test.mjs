@@ -181,6 +181,7 @@ test(
       maxTokens: 1000,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     };
+    let competingProvider = false;
     let turn = 0,
       backgroundBeforeReply = false;
     modelRuntime.registerProvider(model.provider, {
@@ -201,30 +202,30 @@ test(
             name: "codemode",
             arguments: {
               code:
-                'const ns=await describeNamespace("subagents"); if(!ns || !ns.tools.includes("pi_spawn_agent")) throw new Error("namespace missing"); ' +
-                'const found=await searchTools("spawn task",{namespace:"subagents",limit:1}); if(found[0]?.name!=="pi_spawn_agent") throw new Error("spawn discovery failed"); ' +
+                'const ns=await describeNamespace("subagents"); if(!ns || !ns.tools.includes("subagents_spawn_agent")) throw new Error("namespace missing"); ' +
+                'const found=await searchTools("spawn task",{namespace:"subagents",limit:1}); if(found[0]?.name!=="subagents_spawn_agent") throw new Error("spawn discovery failed"); ' +
                 'const a=await tools[found[0].name]({name:"nested-proof",task:"nested ' +
                 'proof",access:"read",profile:"viewer",model:"pi-mock-offline/mock"}); if(!a.request_id) throw ' +
                 'new Error("missing operation identity"); text(await ' +
-                'tools.pi_wait_agent({agent_ids:["nested-proof"],timeout_seconds:15}));',
+                'tools.subagents_wait_agent({agent_ids:["nested-proof"],timeout_seconds:15}));',
             },
           };
         }
         if (turn === 3)
           call = {
-            name: "pi_spawn_agent",
+            name: "subagents_spawn_agent",
             arguments: { name: "direct-proof", task: "direct proof", access: "read", model: "pi-mock-offline/mock" },
           };
         if (turn === 4) {
           const spawn = context.messages.findLast(
-            (message) => message.role === "toolResult" && message.toolName === "pi_spawn_agent",
+            (message) => message.role === "toolResult" && message.toolName === "subagents_spawn_agent",
           );
           assert.ok(JSON.parse(spawn.content[0].text).request_id);
-          call = { name: "pi_wait_agent", arguments: { agent_ids: ["direct-proof"], timeout_seconds: 15 } };
+          call = { name: "subagents_wait_agent", arguments: { agent_ids: ["direct-proof"], timeout_seconds: 15 } };
         }
         if (turn === 6)
           call = {
-            name: "pi_spawn_agent",
+            name: "subagents_spawn_agent",
             arguments: {
               task: "background proof",
               access: "read",
@@ -234,7 +235,7 @@ test(
           };
         if (turn === 7) {
           const spawn = context.messages.findLast(
-            (message) => message.role === "toolResult" && message.toolName === "pi_spawn_agent",
+            (message) => message.role === "toolResult" && message.toolName === "subagents_spawn_agent",
           );
           const path = join(state, "results", `${JSON.parse(spawn.content[0].text).run_id}.txt`);
           call = {
@@ -256,7 +257,7 @@ test(
           );
         if (turn === 9)
           call = {
-            name: "pi_spawn_agent",
+            name: "subagents_spawn_agent",
             arguments: {
               task: "ask before proceeding",
               access: "read",
@@ -267,21 +268,21 @@ test(
           };
         if (turn === 10 || turn === 12) {
           const spawn = context.messages.findLast(
-            (message) => message.role === "toolResult" && message.toolName === "pi_spawn_agent",
+            (message) => message.role === "toolResult" && message.toolName === "subagents_spawn_agent",
           );
           call = {
-            name: "pi_wait_agent",
+            name: "subagents_wait_agent",
             arguments: { run_ids: [JSON.parse(spawn.content[0].text).run_id], timeout_seconds: 15 },
           };
         }
         if (turn === 11) {
           const wait = context.messages.findLast(
-            (message) => message.role === "toolResult" && message.toolName === "pi_wait_agent",
+            (message) => message.role === "toolResult" && message.toolName === "subagents_wait_agent",
           );
           const question = JSON.parse(wait.content[0].text).questions[0];
           assert.ok(question, "a read-only child can ask its parent without bypassing policy");
           call = {
-            name: "pi_answer_agent",
+            name: "subagents_answer_agent",
             arguments: { agent_id: question.name, answer: "Use the current isolated branch" },
           };
         }
@@ -290,15 +291,15 @@ test(
             name: "codemode",
             arguments: {
               code:
-                'const a=await tools.pi_spawn_agent({task:"overlap ' +
+                'const a=await tools.subagents_spawn_agent({task:"overlap ' +
                 'proof",access:"read",model:"pi-mock-offline/mock",request_id:"overlap-spawn"}); ' +
-                "text(await Promise.all([tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:" +
-                "15}),tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15})]));",
+                "text(await Promise.all([tools.subagents_wait_agent({run_ids:[a.run_id],timeout_seconds:" +
+                "15}),tools.subagents_wait_agent({run_ids:[a.run_id],timeout_seconds:15})]));",
             },
           };
         if (turn === 16)
           call = {
-            name: "pi_spawn_agent",
+            name: "subagents_spawn_agent",
             arguments: {
               task: "must not start",
               access: "read",
@@ -311,7 +312,7 @@ test(
             name: "codemode",
             arguments: {
               code:
-                'text(await tools.pi_spawn_agent({task:"must not ' +
+                'text(await tools.subagents_spawn_agent({task:"must not ' +
                 'start",access:"read",model:"no-such-model-xyz",request_id:"failed-nested-' +
                 `${turn}` +
                 '"}));' +
@@ -320,7 +321,7 @@ test(
           };
         if (turn === 22)
           call = {
-            name: "pi_spawn_agent",
+            name: "subagents_spawn_agent",
             arguments: {
               task: "asynchronous failure proof",
               access: "read",
@@ -331,7 +332,7 @@ test(
           };
         if (turn === 25)
           call = {
-            name: "pi_spawn_agent",
+            name: "subagents_spawn_agent",
             arguments: { cwd: join(dir, "missing"), task: "must not start", request_id: "missing-cwd-direct" },
           };
         if (turn === 27)
@@ -339,7 +340,7 @@ test(
             name: "codemode",
             arguments: {
               code:
-                "const r=await tools.pi_spawn_agent({cwd:" +
+                "const r=await tools.subagents_spawn_agent({cwd:" +
                 `${JSON.stringify(join(dir, "missing"))}` +
                 ',task:"must not start",request_id:"missing-cwd-nested"}); ' +
                 'if(r.isError!==true||r.error?.code!=="invalid_cwd") throw new Error("missing ' +
@@ -348,7 +349,7 @@ test(
           };
         if (turn === 29)
           call = {
-            name: "pi_followup_task",
+            name: "subagents_followup_task",
             arguments: {
               agent_id: "pi_missing_preflight",
               message: "must not start",
@@ -357,10 +358,10 @@ test(
           };
         if (turn === 31) {
           const previous = context.messages.find(
-            (message) => message.role === "toolResult" && message.toolName === "pi_spawn_agent",
+            (message) => message.role === "toolResult" && message.toolName === "subagents_spawn_agent",
           );
           call = {
-            name: "pi_followup_task",
+            name: "subagents_followup_task",
             arguments: {
               agent_id: JSON.parse(previous.content[0].text).agent_id,
               message: "shutdown viewer proof",
@@ -395,7 +396,13 @@ test(
       agentDir: dir,
       settingsManager,
       additionalExtensionPaths: [join(root, "extensions/subagents.ts")],
-      extensionFactories: [{ builtin: true, name: "codemode", factory: createCodemodeExtension({ models: false }) }],
+      extensionFactories: [
+        { builtin: true, name: "codemode", factory: createCodemodeExtension({ models: false }) },
+        { factory: api => {
+          if (competingProvider) api.registerTool({ name: "pi_spawn_agent", description: "Controlled competing provider",
+            parameters: runtimePackage().tools[0].inputSchema, execute: async () => ({ content: [], details: undefined }) });
+        } },
+      ],
       noSkills: true,
       noThemes: true,
       noPromptTemplates: true,
@@ -489,11 +496,17 @@ test(
       if (event.type === "tool_execution_end" && event.parentToolCallId) nested.push(event);
     });
     await loaded.session.bindExtensions({ onError: (error) => errors.push(error), uiContext, mode: "tui" });
+    const delegation = loader.getSkills().skills.find(skill => skill.name === "subagent-delegation");
+    assert.equal(delegation?.filePath, join(root, "src/subagents/skills/subagent-delegation/SKILL.md"));
+    assert.deepEqual(loader.getSkills().diagnostics, []);
+    assert.match(loaded.session.systemPrompt, /subagent-delegation/);
+    assert.ok(!loaded.session.getAllTools().some(tool => /^pi_(?:spawn_agent|wait_agent|list_agents|inspect_agent|agent_result|answer_agent|send_message|followup_task|interrupt_agent)$/.test(tool.name)), "old public tool aliases are not registered");
     const initialTools = loaded.session.getActiveToolNames();
     assert.ok(initialTools.includes("codemode"), "native codemode dependency activates without changing caller settings");
     for (const tool of runtimePackage().tools) {
       assert.equal(initialTools.includes(tool.name), false, "native tools are not initially declared directly");
       const registered = loaded.session.getAllTools().find(item => item.name === tool.name);
+      assert.ok(tool.name.startsWith("subagents_"));
       assert.equal(registered.exposure, "deferred");
       assert.equal(registered.namespace.name, "subagents");
     }
@@ -503,7 +516,7 @@ test(
     await loaded.session.waitForIdle();
     assert.equal(turn, 2, JSON.stringify({ errors, assistantErrors: loaded.session.state.messages.filter(message => message.role === "assistant").map(message => message.errorMessage?.slice(0, 1200)) }));
     assert.equal(
-      nested.filter((event) => event.toolName === "pi_wait_agent" && !event.isError).length,
+      nested.filter((event) => event.toolName === "subagents_wait_agent" && !event.isError).length,
       1,
       JSON.stringify(loaded.session.state.messages.filter((message) => message.role === "toolResult")),
     );
@@ -535,7 +548,7 @@ test(
     assert.deepEqual(widgets.at(-1), [], "settled children do not remain in the running list");
     const direct = branch.find(
       (entry) =>
-        entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "pi_wait_agent",
+        entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "subagents_wait_agent",
     );
     assert.equal(direct.message.isError, false, JSON.stringify(direct));
     assert.equal(JSON.parse(direct.message.content[0].text).runs[0].state, "completed");
@@ -663,6 +676,22 @@ test(
     const header = popup.render(60)[1];
     assert.match(header, /\[direct-proof\]/);
     assert.doesNotMatch(header, /\[<\]|\[>\]|nested-proof/, "reopening shows the active child, not earlier completed agents or their extra pages");
+    writeFileSync(join(dir, "metis-pi.toml"), "[subagents]\nenabled=false\n");
+    await loaded.session.reload();
+    assert.ok(!loader.getSkills().skills.some(skill => skill.name === "subagent-delegation"), "reload withdraws the module skill");
+    assert.ok(!loaded.session.getAllTools().some(tool => tool.namespace?.name === "subagents"), "reload withdraws the module tools");
+    assert.doesNotMatch(loaded.session.systemPrompt, /subagent-delegation|<metis_subagents>/);
+    writeFileSync(join(dir, "metis-pi.toml"), "[subagents]\nenabled=true\n");
+    await loaded.session.reload();
+    assert.ok(loader.getSkills().skills.some(skill => skill.name === "subagent-delegation"), "reenabling restores the module skill");
+    assert.equal(loaded.session.getAllTools().filter(tool => tool.namespace?.name === "subagents").length, 9);
+    loaded.session.setActiveToolsByName([...loaded.session.getActiveToolNames().filter(name => name !== "codemode"), ...runtimePackage().tools.map(tool => tool.name)]);
+    const resources = await loaded.session.extensionRunner.emitResourcesDiscover(dir, "reload");
+    assert.equal(resources.skillPaths.length, 1, "direct tool activation does not require codemode to expose the skill");
+    competingProvider = true;
+    await loaded.session.reload();
+    assert.ok(!loader.getSkills().skills.some(skill => skill.name === "subagent-delegation"), "a competing legacy provider also withdraws the module skill");
+    assert.ok(!loaded.session.getAllTools().some(tool => tool.namespace?.name === "subagents"));
   },
 );
 
@@ -701,7 +730,7 @@ test(
       ]) {
         let failure;
         await assert.rejects(
-          client.call("pi_spawn_agent", {
+          client.call("subagents_spawn_agent", {
             name: "configuration-probe",
             access: "read",
             task: "must not start",
@@ -717,14 +746,14 @@ test(
             return true;
           },
         );
-        const inspected = await client.call("pi_inspect_agent", { agent_id: failure.agent_id, detail: "full" });
+        const inspected = await client.call("subagents_inspect_agent", { agent_id: failure.agent_id, detail: "full" });
         assert.equal(inspected.agent.cleanup, "verified");
         assert.equal(inspected.run.id, failure.run_id);
         assert.equal(inspected.run.state, "failed");
         assert.match(inspected.agent.name, /startup failed/);
         for (const receipt of inspected._pi_delivery.receipts) await client.call("pi_observe", { receipt });
         await assert.rejects(
-          client.call("pi_followup_task", {
+          client.call("subagents_followup_task", {
             agent_id: failure.agent_id,
             message: "retry",
             request_id: `${request_id}-retry`,
@@ -732,22 +761,22 @@ test(
           (error) =>
             error instanceof RuntimeError &&
             error.code === "worker_unavailable" &&
-            /pi_spawn_agent/.test(error.message),
+            /subagents_spawn_agent/.test(error.message),
         );
       }
-      const started = await client.call("pi_spawn_agent", {
+      const started = await client.call("subagents_spawn_agent", {
         name: "configuration-probe",
         access: "read",
         task: "recovered",
         request_id: "fixed-model",
       });
       assert.equal(started.name, "configuration-probe");
-      const waited = await client.call("pi_wait_agent", { run_ids: [started.run_id], timeout_seconds: 15 });
+      const waited = await client.call("subagents_wait_agent", { run_ids: [started.run_id], timeout_seconds: 15 });
       assert.equal(waited.runs[0].state, "completed");
       for (const receipt of waited._pi_delivery.receipts) await client.call("pi_release", { receipt });
       for (const [operation, args] of [
-        ["pi_agent_result", { run_id: started.run_id }],
-        ["pi_inspect_agent", { agent_id: started.agent_id }],
+        ["subagents_agent_result", { run_id: started.run_id }],
+        ["subagents_inspect_agent", { agent_id: started.agent_id }],
       ]) {
         const ui = await client.call(operation, args, undefined, { consume: false });
         assert.equal(ui._pi_delivery, undefined, "internal UI reads preserve unseen attention");
@@ -759,29 +788,29 @@ test(
           "unpersisted delivery remains eligible for wakeup",
         );
       }
-      const listed = await client.call("pi_list_agents", {});
+      const listed = await client.call("subagents_list_agents", {});
       assert.equal(listed.outstanding.total, 1);
       assert.equal(listed._pi_delivery, undefined, "listing completion status does not deliver the result");
       assert.ok(
         (await client.call("pi_watch", {})).notifications.some((event) => event.run_id === started.run_id),
         "listing preserves automatic result attention",
       );
-      const delivered = await client.call("pi_agent_result", { run_id: started.run_id });
+      const delivered = await client.call("subagents_agent_result", { run_id: started.run_id });
       for (const receipt of delivered._pi_delivery.receipts) await client.call("pi_observe", { receipt });
-      assert.equal((await client.call("pi_wait_agent", { timeout_seconds: 0 })).runs.length, 0);
-      assert.equal((await client.call("pi_list_agents", {})).outstanding.total, 0);
+      assert.equal((await client.call("subagents_wait_agent", { timeout_seconds: 0 })).runs.length, 0);
+      assert.equal((await client.call("subagents_list_agents", {})).outstanding.total, 0);
       assert.equal(
-        (await client.call("pi_agent_result", { run_id: started.run_id })).result_sha256,
+        (await client.call("subagents_agent_result", { run_id: started.run_id })).result_sha256,
         delivered.result_sha256,
       );
       assert.equal((await client.call("pi_watch", {})).notifications.length, 0);
-      const interruptible = await client.call("pi_spawn_agent", {
+      const interruptible = await client.call("subagents_spawn_agent", {
         task: "interrupt before completion",
         profile: "slow",
         access: "read",
         request_id: "interruptible",
       });
-      const stopped = await client.call("pi_interrupt_agent", { agent_id: interruptible.agent_id, request_id: "stop" });
+      const stopped = await client.call("subagents_interrupt_agent", { agent_id: interruptible.agent_id, request_id: "stop" });
       assert.equal(stopped.run_id, interruptible.run_id);
       for (const receipt of stopped._pi_delivery.receipts) await client.call("pi_observe", { receipt });
       assert.equal(
@@ -789,7 +818,7 @@ test(
         0,
         "the parent's own interruption does not become a late notification",
       );
-      assert.equal((await client.call("pi_agent_result", { run_id: stopped.run_id })).run.state, "interrupted");
+      assert.equal((await client.call("subagents_agent_result", { run_id: stopped.run_id })).run.state, "interrupted");
     } finally {
       await client.close();
       try {

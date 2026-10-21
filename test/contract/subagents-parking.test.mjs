@@ -72,15 +72,15 @@ test(
   async (t) => {
     const f = await fixture(t),
       { client } = f;
-    const first = await client.call("pi_spawn_agent", {
+    const first = await client.call("subagents_spawn_agent", {
       task: "parking-original-sentinel",
       access: "read",
       request_id: "parking-original",
     });
-    const waited = await client.call("pi_wait_agent", { run_ids: [first.run_id], timeout_seconds: 15 });
+    const waited = await client.call("subagents_wait_agent", { run_ids: [first.run_id], timeout_seconds: 15 });
     assert.equal(waited.runs[0].state, "completed");
     for (const receipt of waited._pi_delivery.receipts) await client.call("pi_release", { receipt });
-    const original = await client.call("pi_agent_result", { run_id: first.run_id }, undefined, { consume: false });
+    const original = await client.call("subagents_agent_result", { run_id: first.run_id }, undefined, { consume: false });
     const view = await client.call("pi_view", { agent_id: first.agent_id });
     const before = status(f.runtime, f.state),
       bridge = client.bridge.child.pid;
@@ -106,7 +106,7 @@ test(
       bridge,
       "test keeps the old helper to exercise authenticated per-operation rebind",
     );
-    const follow = await client.call("pi_followup_task", {
+    const follow = await client.call("subagents_followup_task", {
       agent_id: first.agent_id,
       message: "parking-followup-sentinel",
       request_id: "parking-followup",
@@ -114,7 +114,7 @@ test(
     assert.equal(follow.agent_id, first.agent_id);
     assert.notEqual(follow.run_id, first.run_id);
     assert.notEqual(status(f.runtime, f.state).pid, before.pid);
-    const done = await client.call("pi_wait_agent", { run_ids: [follow.run_id], timeout_seconds: 15 });
+    const done = await client.call("subagents_wait_agent", { run_ids: [follow.run_id], timeout_seconds: 15 });
     assert.equal(done.runs[0].state, "completed");
     const restored = await client.call("pi_view", { agent_id: first.agent_id });
     assert.equal(restored.session_file, view.session_file);
@@ -129,7 +129,7 @@ test(
     );
     assert.equal(users.filter((text) => text.includes("parking-followup-sentinel")).length, 1);
     assert.equal(
-      (await client.call("pi_agent_result", { run_id: first.run_id }, undefined, { consume: false })).result_sha256,
+      (await client.call("subagents_agent_result", { run_id: first.run_id }, undefined, { consume: false })).result_sha256,
       original.result_sha256,
     );
     assert.ok(
@@ -145,10 +145,10 @@ test(
   async (t) => {
     const f = await fixture(t),
       { client } = f;
-    await assert.rejects(client.call("pi_list_agents", {}, undefined, { passive: true }), isDaemonIdle);
+    await assert.rejects(client.call("subagents_list_agents", {}, undefined, { passive: true }), isDaemonIdle);
     assert.equal(status(f.runtime, f.state), undefined);
     const child = client.bridge.child;
-    assert.equal((await client.call("pi_list_agents", {})).agents.length, 0);
+    assert.equal((await client.call("subagents_list_agents", {})).agents.length, 0);
     assert.equal(client.bridge.child, child, "rejected passive initialization can be retried in the same helper");
     const source = status(f.runtime, f.state);
     assert.ok(source.pid);
@@ -164,10 +164,10 @@ test(
     await client.park();
     assert.notEqual(child.exitCode, null);
     assert.equal(client.bridge, undefined);
-    assert.equal((await client.call("pi_list_agents", {})).agents.length, 0);
+    assert.equal((await client.call("subagents_list_agents", {})).agents.length, 0);
     lateWrite(new Error("controlled old-helper EPIPE"));
     assert.equal(
-      (await client.call("pi_list_agents", {})).agents.length,
+      (await client.call("subagents_list_agents", {})).agents.length,
       0,
       "late write failure cannot close the replacement",
     );
@@ -181,17 +181,17 @@ test(
 
 test("a parked helper cannot replace a later frontend's lease when reconnecting", { timeout: 30000 }, async (t) => {
   const f = await fixture(t);
-  await f.client.call("pi_list_agents", {});
+  await f.client.call("subagents_list_agents", {});
   await f.client.park();
   const later = new SubagentClient(f.runtime, f.ctx, f.dir, f.client.scope, () => {});
   f.clients.push(later);
-  await later.call("pi_list_agents", {});
+  await later.call("subagents_list_agents", {});
   await assert.rejects(
-    f.client.call("pi_list_agents", {}),
+    f.client.call("subagents_list_agents", {}),
     (error) => error instanceof RuntimeError && error.code === "parent_stale",
   );
   assert.equal(
-    (await later.call("pi_list_agents", {})).agents.length,
+    (await later.call("subagents_list_agents", {})).agents.length,
     0,
     "old reconnect did not take the live owner back",
   );
@@ -201,7 +201,7 @@ for (const failureAt of ["journal", "reply"])
   test(`a failed binding ${failureAt} cannot turn reconnect into ownership takeover`, { timeout: 30000 }, async (t) => {
     const f = await fixture(t),
       failure = new Error(`controlled ${failureAt} failure`);
-    if (failureAt === "reply") await f.client.call("pi_list_agents", {});
+    if (failureAt === "reply") await f.client.call("subagents_list_agents", {});
     const original = new SubagentClient(f.runtime, f.ctx, f.dir, f.client.scope, () => {
       if (failureAt === "journal") throw failure;
     });
@@ -214,26 +214,26 @@ for (const failureAt of ["journal", "reply"])
         return result;
       };
     }
-    await assert.rejects(original.call("pi_list_agents", {}), (error) => error === failure);
+    await assert.rejects(original.call("subagents_list_agents", {}), (error) => error === failure);
     assert.ok(original.scope);
     await original.park();
     const later = new SubagentClient(f.runtime, f.ctx, f.dir, original.scope, () => {});
     f.clients.push(later);
-    await later.call("pi_list_agents", {});
+    await later.call("subagents_list_agents", {});
     await assert.rejects(
-      original.call("pi_list_agents", {}),
+      original.call("subagents_list_agents", {}),
       (error) => error instanceof RuntimeError && error.code === "parent_stale",
     );
-    assert.equal((await later.call("pi_list_agents", {})).agents.length, 0);
+    assert.equal((await later.call("subagents_list_agents", {})).agents.length, 0);
   });
 
 test("closing during parking cannot restart a helper for waiting foreground work", { timeout: 30000 }, async t => {
   const f = await fixture(t), { client } = f;
-  await client.call("pi_list_agents", {});
+  await client.call("subagents_list_agents", {});
   let release; const stopped = new Promise(resolve => { release = resolve; }), stop = client.stopChild.bind(client);
   client.stopChild = async child => { await stopped; await stop(child); };
   const parking = client.park(), closed = client.close();
-  const waiting = assert.rejects(client.call("pi_list_agents", {}), /frontend closed/);
+  const waiting = assert.rejects(client.call("subagents_list_agents", {}), /frontend closed/);
   release(); await Promise.all([parking, closed, waiting]);
   assert.equal(client.bridge, undefined, "a logical close cannot create a replacement");
 });
@@ -244,7 +244,7 @@ test("native session parks its helper silently and automatic boundaries do not r
     ui: { notify: text => warnings.push(text), setStatus() {}, setWidget() {} } };
   const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, f.runtime, ctx, f.dir);
   try {
-    assert.equal((await owner.execute("pi_list_agents", {}, "list-before-idle", ctx)).isError, false);
+    assert.equal((await owner.execute("subagents_list_agents", {}, "list-before-idle", ctx)).isError, false);
     const deadline = Date.now() + 45000;
     while ((owner.syncState !== "parked" || owner.watching || status(f.runtime, f.state)) && Date.now() < deadline) {
       await owner.boundary({ type: "turn_end", outcome: "completed", entries: [] }, ctx);
@@ -257,7 +257,7 @@ test("native session parks its helper silently and automatic boundaries do not r
     for (const type of ["turn_end", "agent_before_settle"]) await owner.boundary({ type, outcome: "completed", entries: [] }, ctx);
     await owner.settled(ctx, true);
     assert.equal(status(f.runtime, f.state), undefined, "automatic parent events did not create a restart loop");
-    assert.equal((await owner.execute("pi_list_agents", {}, "list-after-idle", ctx)).isError, false);
+    assert.equal((await owner.execute("subagents_list_agents", {}, "list-after-idle", ctx)).isError, false);
     assert.ok(status(f.runtime, f.state).pid, "an explicit request wakes and reauthenticates the daemon");
     assert.deepEqual(warnings, []);
   } finally { await owner.close(); }

@@ -259,7 +259,7 @@ def session_argv(home, a, spec):
     session=Path(a['session_file'])
     if session.is_symlink(): raise AgentError('unsafe_session','Managed session path must not be a symlink')
     if a['generation'] and (not session.exists() or session.stat().st_size==0):
-        raise AgentError('session_unavailable','Previous Pi session is missing or empty; use pi_spawn_agent to create a new agent explicitly')
+        raise AgentError('session_unavailable','Previous Pi session is missing or empty; use subagents_spawn_agent to create a new agent explicitly')
     argv=list(spec['argv'])
     if spec.get('surface'):
         # launch_spec owns the first extension slot. Rebind only that asset when

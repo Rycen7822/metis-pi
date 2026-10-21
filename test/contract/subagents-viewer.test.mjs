@@ -154,6 +154,23 @@ test("conversation popup keeps native click folds through refresh and scrolling"
   for (const width of [1, 4, 40]) assert.ok(viewer.render(width).every(row => visibleWidth(row) <= width));
 });
 
+test("conversation tools retain subagent summaries for current and pre-rename transcripts", async t => {
+  const messages = ["subagents_wait_agent", "pi_wait_agent", "pi_custom_tool"].flatMap((name, i) => [
+    { role: "assistant", content: [{ type: "toolCall", id: `wait-${i}`, name, arguments: { run_ids: [`run-${i}`] } }] },
+    { role: "toolResult", toolCallId: `wait-${i}`, toolName: name, content: [{ type: "text", text: JSON.stringify({
+      runs: [{ id: `run-${i}`, name: i ? "saved-child" : "current-child", state: "completed" }],
+    }) }] },
+  ]);
+  const { rows } = popup(t, { messages: { reader: messages } });
+  await nextTurn();
+  const rendered = rows();
+  assert.equal(rendered.filter(row => /Wait(?:ing|ed) for subagents/.test(row)).length, 2);
+  assert.match(rendered.join("\n"), /current-child: completed/);
+  assert.match(rendered.join("\n"), /saved-child: completed/);
+  assert.match(rendered.join("\n"), /pi_custom_tool/);
+  assert.doesNotMatch(rendered.join("\n"), /subagents_custom_tool/, "unknown tools retain their original display name");
+});
+
 test("conversation scrollbar tracks keys, wheel, pointer capture and resize without taking body columns", async t => {
   const tui = { terminal: { rows: 80 }, requestRender() {} };
   const { viewer, rows, mouse, clickText } = popup(t, { tui, messages: {

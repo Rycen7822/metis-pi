@@ -9,6 +9,30 @@ import { subagentTheme } from "../helpers/subagent-theme.mjs";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
 import { RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
+import managedSurface from "../../src/subagents/worker/managed-surface.ts";
+
+test("managed children reject current and legacy recursive tool calls, including namespace wrappers", async t => {
+  const names = ["PI_AGENTS_HOST", "PI_AGENTS_CHILD_ACCESS", "PI_AGENTS_CHILD_BUILTINS"];
+  const previous = names.map(name => process.env[name]);
+  t.after(() => names.forEach((name, i) => {
+    if (previous[i] === undefined) delete process.env[name]; else process.env[name] = previous[i];
+  }));
+  process.env.PI_AGENTS_HOST = "pi";
+  process.env.PI_AGENTS_CHILD_ACCESS = "write";
+  process.env.PI_AGENTS_CHILD_BUILTINS = "";
+  t.mock.method(process.stderr, "write", () => true);
+  const handlers = new Map();
+  await managedSurface({
+    on: (event, handler) => handlers.set(event, handler),
+    getAllTools: () => [], getActiveTools: () => [], setActiveTools() {},
+  });
+  const check = toolName => handlers.get("tool_call")({ toolName, input: {} });
+  for (const name of ["subagents_spawn_agent", "subagents_followup_task", "subagents_send_message",
+    "pi_spawn_agent", "mcp__pi_spawn_agent", "mcp__subagents_send_message"]) {
+    assert.equal(check(name)?.block, true, `${name} cannot delegate from a managed child`);
+  }
+  assert.equal(check("subagents_spawn_agent_notes"), undefined, "unrelated ambient tools are not blocked by a partial name");
+});
 
 const runtime = { root: "/unused-test-runtime", tools: [], baseEnvKeys: [], scopeEnvKeys: [], maxFrame: 8 * 1024 * 1024 };
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -149,11 +173,11 @@ for (const error of [
         ["pi_watch"],
       );
       if (error instanceof RuntimeError) {
-        const result = await f.owner.execute("pi_list_agents", {}, "test-call", f.ctx);
+        const result = await f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx);
         assert.equal(result.isError, true);
         assert.equal(JSON.parse(result.content[0].text).error.code, "version_mismatch");
       } else
-        await assert.rejects(f.owner.execute("pi_list_agents", {}, "test-call", f.ctx), (value) => value === error);
+        await assert.rejects(f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx), (value) => value === error);
       assert.equal(f.warnings.length, 1);
     },
   );
@@ -270,7 +294,7 @@ test("attention receipts and question answers require the same saved body proof"
       };
       const owner = new SubagentSession(
         { appendEntry: (type, data) => manager.appendCustomEntry(type, data), sendMessage() {} },
-        { ...runtime, tools: runtimePackage().tools.filter(tool => tool.name === "pi_answer_agent") },
+        { ...runtime, tools: runtimePackage().tools.filter(tool => tool.name === "subagents_answer_agent") },
         ctx, "/unused-test-agent-dir",
       );
       t.after(() => owner.close());
@@ -293,7 +317,7 @@ test("attention receipts and question answers require the same saved body proof"
       const valid = variant === "unchanged" || variant === "boundary_edit";
       assert.deepEqual(calls.filter(call => call.op === "pi_observe").map(call => call.params.receipt), valid ? ["delivery_question"] : []);
       assert.deepEqual(calls.filter(call => call.op === "pi_uncertain").map(call => call.params.receipt), valid ? [] : ["delivery_question"], "an unconfirmed body retains recoverable attention");
-      const answer = () => owner.execute("pi_answer_agent", { agent_id: "child", answer: "Use the current branch" }, "answer", ctx);
+      const answer = () => owner.execute("subagents_answer_agent", { agent_id: "child", answer: "Use the current branch" }, "answer", ctx);
       const saved = manager.getBranch().findLast(entry => entry.type === "custom_message" && entry.customType === original.customType);
       const content = saved.content;
       if (valid) {
@@ -307,7 +331,7 @@ test("attention receipts and question answers require the same saved body proof"
       const rejected = await answer();
       assert.equal(rejected.isError, true);
       assert.equal(rejected.structuredContent.error.code, "input_not_delivered", "answering always requires the current saved body proof");
-      assert.equal(calls.filter(call => call.op === "pi_answer_agent").length, 0, "a rejected proof must not answer the question");
+      assert.equal(calls.filter(call => call.op === "subagents_answer_agent").length, 0, "a rejected proof must not answer the question");
       if (valid) saved.content = content;
       else {
         // Recovery uses the original saved delivery, not a new notification or new run.
@@ -317,7 +341,7 @@ test("attention receipts and question answers require the same saved body proof"
       }
       const answered = await answer();
       assert.equal(answered.isError, false);
-      const dispatched = calls.find(call => call.op === "pi_answer_agent");
+      const dispatched = calls.find(call => call.op === "subagents_answer_agent");
       assert.equal(dispatched.params.ui_request_id, question.id);
       assert.deepEqual(dispatched.extra.question, { id: question.id, agent_id: question.agent_id, run_id: question.run_id, generation: question.generation });
     });
@@ -390,7 +414,7 @@ test("a stale boundary idle reply cannot park newer explicit work", async t => {
   });
   await until(() => f.operations.length);
   const boundary = f.boundary("turn_end"); await until(() => rejectClaim);
-  await f.owner.execute("pi_list_agents", {}, "new-foreground", f.ctx);
+  await f.owner.execute("subagents_list_agents", {}, "new-foreground", f.ctx);
   rejectClaim(new RuntimeError({ code: "daemon_idle", message: "old boundary" })); await boundary;
   assert.equal(f.owner.syncState, "active"); assert.deepEqual(f.warnings, []);
 });
@@ -398,8 +422,8 @@ test("a stale boundary idle reply cannot park newer explicit work", async t => {
 test("a successful explicit answer resumes the same synchronization policy as other tools", async t => {
   const f = fixture(t, async (op, _params, signal) => {
     if (op === "pi_watch") return heldWatch(signal);
-    if (op === "pi_inspect_agent") return { run: { id: "run" } };
-    if (op === "pi_wait_agent") return { questions: [{ id: "question", method: "select", title: "Choose", options: ["yes"] }] };
+    if (op === "subagents_inspect_agent") return { run: { id: "run" } };
+    if (op === "subagents_wait_agent") return { questions: [{ id: "question", method: "select", title: "Choose", options: ["yes"] }] };
     return {};
   });
   f.ctx.hasUI = true; f.ctx.ui.select = async () => "yes";
@@ -407,7 +431,7 @@ test("a successful explicit answer resumes the same synchronization policy as ot
   f.owner.synchronizationFailed(new Error("previous synchronization failure"));
   await f.owner.command("answer agent", f.ctx);
   assert.equal(f.owner.syncState, "active"); assert.equal(f.warnings.length, 1);
-  assert.ok(f.operations.some(row => row.op === "pi_answer_agent"));
+  assert.ok(f.operations.some(row => row.op === "subagents_answer_agent"));
 });
 
 test("watch delivery queued behind a failing boundary cannot bypass the automatic gate", async t => {
@@ -444,12 +468,12 @@ test("normal parking is silent and only foreground activity resumes a passive wa
       if (++watches === 1) throw new RuntimeError({ code: "daemon_idle", message: "parked" });
       return heldWatch(signal);
     }
-    assert.equal(op, "pi_list_agents"); return { agents: [] };
+    assert.equal(op, "subagents_list_agents"); return { agents: [] };
   });
   await until(() => f.owner.syncState === "parked" && !f.owner.watching);
   await f.boundary("turn_end"); await f.owner.settled(f.ctx, true);
   assert.equal(f.operations.length, 1); assert.deepEqual(f.warnings, []);
-  const result = await f.owner.execute("pi_list_agents", {}, "test-call", f.ctx);
+  const result = await f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx);
   assert.equal(result.isError, false);
   await until(() => watches === 2);
   assert.deepEqual(f.warnings, []);
@@ -463,7 +487,7 @@ test("an old idle-watch response cannot park newer foreground work", async t => 
     return heldWatch(signal);
   });
   await until(() => rejectOld);
-  await f.owner.execute("pi_list_agents", {}, "test-call", f.ctx);
+  await f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx);
   rejectOld(new RuntimeError({ code: "daemon_idle", message: "stale idle response" }));
   await until(() => watches === 2);
   assert.equal(f.owner.syncState, "active"); assert.deepEqual(f.warnings, []);
@@ -480,7 +504,7 @@ test("foreground work arriving during helper parking restarts the watch after de
     return heldWatch(signal);
   });
   await until(() => parking);
-  await f.owner.execute("pi_list_agents", {}, "test-call", f.ctx);
+  await f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx);
   releasePark(); await until(() => watches === 2);
   assert.equal(f.owner.syncState, "active"); assert.deepEqual(f.warnings, []);
 });

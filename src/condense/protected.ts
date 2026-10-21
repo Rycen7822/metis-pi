@@ -65,9 +65,10 @@ export function normalizePath(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-// Large agent results and inspection histories keep the normal archive path.
-const subagentControls = new Set(["pi_spawn_agent", "pi_wait_agent", "pi_list_agents",
-  "pi_answer_agent", "pi_send_message", "pi_followup_task", "pi_interrupt_agent"]);
+// Preserve control receipts in both current and pre-rename histories; large results/inspections remain archiveable.
+const subagentControls = new Set(["spawn_agent", "wait_agent", "list_agents",
+  "answer_agent", "send_message", "followup_task", "interrupt_agent"]
+  .flatMap(operation => [`subagents_${operation}`, `pi_${operation}`]));
 export const isSubagentControl = (toolName: string): boolean => subagentControls.has(toolName);
 
 export function isProtected(toolName: string, args: unknown, config: ProtectionConfig): boolean {

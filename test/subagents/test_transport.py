@@ -221,7 +221,7 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
         output=self.host.stdout._transport
         output.pause_reading()
         try:
-            for _ in range(40): await self.send('pi_list_agents')
+            for _ in range(40): await self.send('subagents_list_agents')
             # A separate file marker is unnecessary: the parent keeps the output
             # paused through EOF. The child must exit even when no bytes drain.
             self.host.stdin.close()
@@ -239,7 +239,7 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
         fd=output.get_extra_info('pipe').fileno()
         capacity=fcntl.fcntl(fd,fcntl.F_SETPIPE_SZ,4096)
         output.pause_reading()
-        rid=await self.send('pi_list_agents')
+        rid=await self.send('subagents_list_agents')
         size=array.array('i',[0]); end=asyncio.get_running_loop().time()+3
         while asyncio.get_running_loop().time()<end:
             fcntl.ioctl(fd,termios.FIONREAD,size,True)
@@ -253,7 +253,7 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
         output,rid=await self.fill_stdout_pipe()
         try:
             self.host.stdin.write((dumps({'cancel':rid})+'\n').encode()); await self.host.stdin.drain()
-            await self.send('pi_inspect_agent', {'agent_id':'a'},rid='must-not-append')
+            await self.send('subagents_inspect_agent', {'agent_id':'a'},rid='must-not-append')
             end=asyncio.get_running_loop().time()+3
             while self.host.returncode is None and asyncio.get_running_loop().time()<end:
                 await asyncio.sleep(.01)
@@ -269,13 +269,13 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_waiting_output_leaves_current_frame_and_connection_intact(self):
         output,rid=await self.fill_stdout_pipe()
         try:
-            pending=await self.send('pi_inspect_agent', {'agent_id':'a'})
+            pending=await self.send('subagents_inspect_agent', {'agent_id':'a'})
             self.host.stdin.write((dumps({'cancel':pending})+'\n').encode()); await self.host.stdin.drain()
-            last=await self.send('pi_inspect_agent', {'agent_id':'a'})
+            last=await self.send('subagents_inspect_agent', {'agent_id':'a'})
         finally: output.resume_reading()
         self.assertEqual((await self.receive())['id'],rid)
         self.assertEqual((await self.receive())['id'],last)
-        self.assertEqual((await self.rpc('pi_inspect_agent', {'agent_id':'a'}))['result'],{})
+        self.assertEqual((await self.rpc('subagents_inspect_agent', {'agent_id':'a'}))['result'],{})
 
 
 
@@ -621,7 +621,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
             return value['result']
         try:
             opened = await host_call('init','initialize', {'cwd':str(self.workspace)}, source=self.source)
-            a = await host_call('spawn','pi_spawn_agent', {'task':'delay=0.4|survive-helper',
+            a = await host_call('spawn','subagents_spawn_agent', {'task':'delay=0.4|survive-helper',
                 'access':'read', 'request_id':'survive'})
             host.stdin.close()
             await asyncio.wait_for(host.wait(), 5)

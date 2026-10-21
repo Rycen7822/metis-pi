@@ -12,9 +12,15 @@ Metis provides durable subagents through the `subagents` namespace in Pi. Tools 
 
 See the [parameter guide](../../metis-pi-config.md) and [lifecycle contracts](lifecycle.md).
 
+## Delegation skill
+
+When the parent module is enabled and available, it also provides the `subagent-delegation` skill through Pi resource discovery. The model sees its short description and reads its instructions before assigning work; the full skill is not embedded in the system prompt. It defaults to detailed guidance for fast/lightweight (Flash-class) models and outcome-led guidance for models with strong reasoning, planning and reliable autonomous execution. Guidance is adjusted to the task, user instructions and observed capability, rather than a fixed provider/model list or a model label alone. Neither style changes permissions or selects a different model.
+
+`[subagents].enabled` controls the tools, module guidance and this skill together after reload/restart. Disabled modules and managed children do not advertise the skill. Disabling does not erase instructions already read into conversation history or terminate background tasks. Public tools use `subagents_*`; old `pi_*` tool aliases are not registered. Private host RPC names and persisted IDs are unchanged.
+
 ## Workflow
 
-Use `pi_spawn_agent` for a bounded independent task. Assign disjoint writes and explicit expected evidence. `pi_wait_agent` waits for completion or questions; `pi_agent_result` retrieves and pages results. Answer delivered questions with `pi_answer_agent`. Reuse an operation ID only for an identical uncertain request; never automatically replay a mutation whose response was lost.
+Use `subagents_spawn_agent` for a bounded independent task. Assign disjoint writes and explicit expected evidence. `subagents_wait_agent` waits for completion or questions; `subagents_agent_result` retrieves and pages results. Answer delivered questions with `subagents_answer_agent`. Reuse an operation ID only for an identical uncertain request; never automatically replay a mutation whose response was lost.
 
 Messages accepted by a worker are not necessarily consumed. Completed work means the model stopped normally; verify the requested artifacts before accepting it. Parent notifications count as delivered only after their receipt is saved to the active Pi session branch. Read all pages when a result has more content.
 

@@ -50,7 +50,7 @@ class ClientTimeoutBudget(unittest.TestCase):
     def test_wait_schema_exposes_seconds_only(self):
         from metis_subagent.schema import NATIVE_BY_NAME, validate_op
         from metis_subagent.common import AgentError
-        props=NATIVE_BY_NAME['pi_wait_agent']['inputSchema']['properties']
+        props=NATIVE_BY_NAME['subagents_wait_agent']['inputSchema']['properties']
         self.assertNotIn('timeout_ms',props)
         self.assertEqual(props['mode'],{'type':'string','enum':['any','all'],'default':'any'})
         self.assertEqual((props['timeout_seconds']['default'],props['timeout_seconds']['maximum']),(600,3600))

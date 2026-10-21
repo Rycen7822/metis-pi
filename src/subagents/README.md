@@ -9,6 +9,7 @@ subagents/
 │   ├── client.ts                 Python host 连接、JSONL 请求与取消
 │   ├── session.ts                父会话租约、操作身份、通知与交付证明
 │   └── sampling.ts               原生采样边界的通知让行
+├── skills/subagent-delegation/    随父模块启用的委派指导，不由公共 skills 扫描
 ├── ui/                           渲染、状态组件与会话查看器
 ├── backend/                      Python 服务
 │   ├── main.py                   私有进程入口：pi-host 或 daemon

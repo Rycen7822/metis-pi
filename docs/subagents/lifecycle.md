@@ -43,9 +43,9 @@ Settled idle workers are parked automatically; retained history does not consume
 capacity. Model and thinking configuration failures keep diagnostic identities
 and results, and release their original name after verified cleanup.
 
-A failed worker can be inspected with `pi_inspect_agent`; create a new agent with
-`pi_spawn_agent` when its launch settings or saved session are unusable. A verified
-parked/closed agent resumes via `pi_followup_task`. Unverified cleanup requires
+A failed worker can be inspected with `subagents_inspect_agent`; create a new agent with
+`subagents_spawn_agent` when its launch settings or saved session are unusable. A verified
+parked/closed agent resumes via `subagents_followup_task`. Unverified cleanup requires
 inspection before reuse. When a killed guard cannot provide its descendant receipt, inspect and remove remaining descendants before explicit operator reconciliation. Unknown ownership is never cleared automatically.
 
 On Linux/WSL each worker guard adopts orphaned descendants, including detached

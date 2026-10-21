@@ -1368,7 +1368,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError) as cm:
             await self.mutation("send", s["agent_id"], mode="steer", message="too late")
         self.assertEqual(cm.exception.code, "worker_unavailable")
-        self.assertIn("pi_followup_task", cm.exception.message)
+        self.assertIn("subagents_followup_task", cm.exception.message)
 
     async def test_prompt_handled_without_a_run_is_reported_as_a_failed_run(self):
         # A handled input still gets a failed managed completion; the next task

@@ -9,7 +9,7 @@ const namespace = {
   name: "subagents",
   description: "Create, observe, message, answer and interrupt persistent Pi subagents in this parent session.",
 };
-const guidance = "Subagent tools are deferred in the subagents namespace. Use codemode: discover with describeNamespace('subagents') or searchTools(query, {namespace:'subagents', limit:1}), then call tools.<name>(args). Check result.isError and preserve IDs, request_id, errors, questions and not_consumed inputs in output. Partial script success is not rolled back; do not blindly rerun mutations.";
+const guidance = "Subagent tools are deferred in the subagents namespace. Use codemode: discover with describeNamespace('subagents') or searchTools(query, {namespace:'subagents', limit:1}), then call tools.subagents_<operation>(args). Use the subagent-delegation skill before spawning or assigning work. Check result.isError and preserve IDs, request_id, errors, questions and not_consumed inputs in output. Partial script success is not rolled back; do not blindly rerun mutations.";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
@@ -48,7 +48,7 @@ export default function subagents(pi: ExtensionAPI) {
         (tool) =>
           /(?:^|\/)pi-subagents(?:\/|$)/.test(tool.sourceInfo.path) ||
           ["Agent", "SubagentWorkflow", "subagent"].includes(tool.name) ||
-          (ownNames.has(tool.name) && tool.sourceInfo.path !== ownPath),
+          (ownNames.has(tool.name.replace(/^pi_/, "subagents_")) && tool.sourceInfo.path !== ownPath),
       );
   const definitions: ToolDefinition[] = runtime.tools.map((tool) => ({
     name: tool.name,
@@ -86,6 +86,11 @@ export default function subagents(pi: ExtensionAPI) {
     for (const definition of definitions) pi.registerTool(definition);
     owner = new SubagentSession(pi, runtime, ctx, agentDir);
     if (hasTools()) codemodeReady(ctx, true);
+  });
+  pi.on("resources_discover", () => {
+    if (owner && !conflict() && hasTools()) {
+      return { skillPaths: [fileURLToPath(new URL("../src/subagents/skills/subagent-delegation/SKILL.md", import.meta.url))] };
+    }
   });
   pi.on("session_shutdown", async () => {
     await owner?.close();

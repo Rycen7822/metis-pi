@@ -42,9 +42,14 @@ test("legitimate failed arguments retain cooldown and protected-output exclusion
     const protectedMessages = [call("nested", 1, "evidence"), result("nested", 2, true, details), final(3)];
     assert.equal(purgeErroredArgs(protectedMessages, purge), protectedMessages);
   }
-  const control = [call("child", 1, "agent-instructions", "pi_send_message"),
-    { ...result("child", 2, true), toolName: "pi_send_message" }, final(3)];
-  assert.equal(purgeErroredArgs(control, purge), control);
+  for (const operation of ["spawn_agent", "wait_agent", "list_agents", "answer_agent", "send_message", "followup_task", "interrupt_agent"]) {
+    for (const prefix of ["subagents", "pi"]) {
+      const name = `${prefix}_${operation}`;
+      const control = [call("child", 1, "agent-instructions", name),
+        { ...result("child", 2, true), toolName: name }, final(3)];
+      assert.equal(purgeErroredArgs(control, purge), control, `${name} receipts remain protected across reloads and upgrades`);
+    }
+  }
 });
 
 const chain = { blockId: "b1", startUserTimestamp: 1, finalAssistantTimestamp: 4, compressedAt: 100,

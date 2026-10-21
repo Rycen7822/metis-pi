@@ -480,14 +480,14 @@ test("automatic chain compression follows its switch and retains three recent ta
             timestamp: f.nextTimestamp(),
             stopReason: "toolUse",
             content: [
-              { type: "toolCall", id: "protected-receipt", name: "pi_spawn_agent", arguments: { task: "Inspect" } },
+              { type: "toolCall", id: "protected-receipt", name: "subagents_spawn_agent", arguments: { task: "Inspect" } },
             ],
           });
           f.sm.appendMessage({
             role: "toolResult",
             timestamp: f.nextTimestamp(),
             toolCallId: "protected-receipt",
-            toolName: "pi_spawn_agent",
+            toolName: "subagents_spawn_agent",
             content: [{ type: "text", text: "PROTECTED_RECEIPT_VERBATIM" }],
             isError: false,
           });
@@ -1105,9 +1105,9 @@ test("deterministic packing retains the test tail; semantic serialization preser
 
 test("subagent control receipts remain verbatim while ordinary results are summarized", async t => {
   const f = await fixture(t);
-  const control = { role: "toolResult", toolCallId: "control", toolName: "pi_wait_agent", timestamp: 3,
+  const control = { role: "toolResult", toolCallId: "control", toolName: "subagents_wait_agent", timestamp: 3,
     content: [{ type: "text", text: '{"state":"completed","exact":"' + "x".repeat(6000) + '"}' }], isError: false };
-  f.sm.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "control", name: "pi_wait_agent",
+  f.sm.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "control", name: "subagents_wait_agent",
     arguments: { run_ids: ["completed-run"] } }], timestamp: 2, stopReason: "toolUse" });
   f.sm.appendMessage(control);
   f.add("ordinary output\n".repeat(1800), "cat ordinary.txt", "ordinary");
