@@ -145,7 +145,7 @@ for (const coderActive of [false, true]) {
 
 for (const [label, selection] of [
   ["allowlist", { tools: ["read", "bash", "codemode"] }],
-  ["exclusion", { excludeTools: ["pi_*"] }],
+  ["exclusion", { excludeTools: ["subagents_*"] }],
 ]) {
   test(`real SDK ${label} removes native tools and their namespace hint`, async t => {
     mkdirSync(join(root, ".work"), { recursive: true });

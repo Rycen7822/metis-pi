@@ -797,14 +797,17 @@ test("goal continuation counters change only the appended message, preserving sy
   await tools
     .get("goal")
     .execute("c", { action: "create", objective: "Finish local work", token_budget: 10000 }, undefined, undefined, ctx);
-  const before = await hooks.get("before_agent_start")({ systemPrompt: "FIXED" }, ctx);
+  const beforeEvent = { systemPromptOptions: { sections: { docs: "FIXED" } } };
+  const before = await hooks.get("before_agent_start")(beforeEvent, ctx);
   await hooks.get("agent_start")({}, ctx);
   await hooks.get("agent_end")(
     { messages: [{ role: "assistant", stopReason: "stop", usage, content: [{ type: "text", text: "Continue" }] }] },
     ctx,
   );
-  const after = await hooks.get("before_agent_start")({ systemPrompt: "FIXED" }, ctx);
-  assert.equal(before.systemPrompt, after.systemPrompt);
+  const afterEvent = { systemPromptOptions: { sections: { docs: "FIXED" } } };
+  const after = await hooks.get("before_agent_start")(afterEvent, ctx);
+  assert.deepEqual(beforeEvent.systemPromptOptions, afterEvent.systemPromptOptions);
+  assert.match(afterEvent.systemPromptOptions.sections.metis_goal, /Finish local work/);
   assert.notEqual(before.message.content, after.message.content);
   assert.match(after.message.content, /Tokens used: 20/);
 });

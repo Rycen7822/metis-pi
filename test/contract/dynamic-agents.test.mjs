@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentSystemMessage, getSystemMessageText } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   createEventBus,
@@ -178,8 +178,7 @@ const goalSnapshot = h => {
   h.bus.emit(METIS_EVENTS.goalSnapshot, request);
   return request.snapshot;
 };
-const systemText = call => call.context.messages.filter(message => message.role === "system")
-  .map(message => message.content).join("\n");
+const systemText = call => getSystemMessageText(getCurrentSystemMessage(call.context.messages));
 
 for (const reverse of [false, true])
 test(`custom Goal creation and resume preserve goal and policy through tool steps, reverse=${reverse}`, { timeout: 15_000 }, async t => {
