@@ -11,6 +11,7 @@
 | `goal.ts` | 入口负责宿主 I/O、提示和工具；`src/goal-state.ts` 负责状态、计时、分支恢复和用量。 |
 | `dynamic-agents.ts` | 每个 run 的全局指令快照、来源恢复与 Pi 原生请求投影。 |
 | `system-prompt.ts` | 把 Pi 的 `docs` 分段替换为指向 `PI_Documentation_Guide.md` 的简短指引（自定义完整提示或强制系统提示时不替换）；该文件由包内模板生成到 agent 目录。 |
+| `retry-policy.ts` | 仅为启用入口的会话补充 `workspace_billing_scope_unavailable` 瞬时错误分类；分类副本绕过 `billing` 关键词误判，真实错误保持原样。配额/溢出判定、预算、退避与取消仍由 Pi 管理，关闭或重载时释放会话租约。 |
 | `condense.ts` | 重复安装检测和摘要用量显示；`src/condense` 负责原文、精简、摘要、恢复和 OCC。 |
 | `action-fusion.ts` | Pi edit/write 的 then_run 增强；`src/execution/action-fusion.ts` 负责路径排队、快照、取消和回执。 |
 | `execution.ts` | deferred PTY 进程工具、执行设置、后台 shell 和资源清理。 |

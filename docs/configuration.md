@@ -141,6 +141,7 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | goal / condense | `-extensions/goal.ts` / `-extensions/condense.ts` |
 | 动态指令 | `-extensions/dynamic-agents.ts`；卸载前先恢复原生策略。 |
 | Pi 文档提示 | `-extensions/system-prompt.ts`；仅覆盖 `docs`，不改其他提示分段或自定义完整提示。 |
+| 网关错误重试 | `-extensions/retry-policy.ts`；`/reload` 后移除此会话的额外错误分类，沿用 Pi 原生判定。 |
 | skill 输入与显示 | 同时排除 `-extensions/skill-mux.ts`、`-extensions/skill-entry.ts`。 |
 | 全部 Action Fusion | `-extensions/action-fusion.ts` |
 | MCP | `-extensions/mcp.ts`；也可保持全局 `mcp.enabled=false`。 |
@@ -153,5 +154,7 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | PTY 进程工具 | `-extensions/execution.ts` |
 
 删除排除项可恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示；`/pruner off` 只停自动精简，历史回读仍可用。
+
+网关重试仅将 `workspace_billing_scope_unavailable` 视为瞬时计费查询故障，沿用 Pi `settings.json` 的 `retry.enabled`、`retry.maxRetries` 和退避参数，不增加独立重试循环。它不改变同进程未启用入口的会话，也不改写已保存的错误；宿主重试方法无法适配时提示警告并保留原生行为。
 
 Pi 文档完整指引保存在 `<agent-dir>/PI_Documentation_Guide.md`（默认 `~/.pi/agent/`）。带 Metis 生成标记的文件在扩展加载时按当前 Pi 路径更新；移除首行标记可保留手动内容，已有非托管文件不会覆盖。新会话使用缩短后的提示，旧会话已有的历史提示不会追溯删除。
