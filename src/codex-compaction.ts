@@ -37,8 +37,14 @@ interface Checkpoint {
 interface GrantIdentity { identity: string; legacy: LegacyBinding[] }
 type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const sourceHash = (branch: SessionEntry[]) => hash(branch.filter(entry =>
-  entry.type === "message" || entry.type === "context_edit" || entry.type === "compaction" || entry.type === "branch_summary"));
+// Native entries are append-only: the last source entry identifies its ancestry, excluding extension journals.
+const sourceVersion = ({ sessionManager }: ExtensionContext) => {
+  let entry = sessionManager.getLeafEntry();
+  while (entry && entry.type !== "message" && entry.type !== "context_edit"
+    && entry.type !== "compaction" && entry.type !== "branch_summary")
+    entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
+  return entry?.id;
+};
 const record = (value: unknown): Item => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const digest = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const legacyBinding = (value: unknown): value is LegacyBinding => {
@@ -66,6 +72,9 @@ const tokenAccount = (key: string): unknown => {
 const accountHeader = (model: Model<Api>, auth: { headers?: Record<string, string | null> }) =>
   Object.entries({ ...model.headers, ...auth.headers }).findLast(([name]) => name.toLowerCase() === "chatgpt-account-id")?.[1] ?? undefined;
 const route = (model: Model<Api>, baseUrl = model.baseUrl) => [model.provider, model.api, model.id, baseUrl];
+// Pi emits model_select for model identity, not same-ID endpoint/API changes.
+const sameRoute = (before: Model<Api>, after: Model<Api> | undefined) => after !== undefined
+  && before.provider === after.provider && before.api === after.api && before.id === after.id && before.baseUrl === after.baseUrl;
 const boundIdentity = (model: Model<Api>, url: string, identity: unknown, header?: string) =>
   hash([...route(model, url), identity, header]);
 const bindingScope = (model: Model<Api>, url: string, account: unknown, header?: string): BindingScope => ({
@@ -154,7 +163,8 @@ async function requestBinding(ctx: ExtensionContext, model: Model<Api>, accounts
 const sameProvider = (before: Awaited<ReturnType<typeof requestBinding>>, after: Awaited<ReturnType<typeof requestBinding>>) =>
   before.registration === after.registration && before.nativeOwner === after.nativeOwner
   && before.scope.credential === after.scope.credential
-  && hash([before.auth.headers, before.auth.env, before.model.baseUrl]) === hash([after.auth.headers, after.auth.env, after.model.baseUrl]);
+  && JSON.stringify([before.auth.headers, before.auth.env, before.model.baseUrl])
+    === JSON.stringify([after.auth.headers, after.auth.env, after.model.baseUrl]);
 const matchesBinding = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>) =>
   data.binding === request.identity || data.binding === request.legacyIdentity || request.legacyBindings.includes(data.binding);
 const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>,
@@ -462,9 +472,9 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     if (!data) throw new Error("Remote checkpoint was edited or its metadata is invalid. Use /compact to rebuild it");
     let summary = savedPortable(current, ctx);
     if (!summary) {
-      const version = generation, session = ctx.sessionManager.getSessionId(), source = sourceHash(ctx.sessionManager.getBranch());
+      const version = generation, session = ctx.sessionManager.getSessionId(), source = sourceVersion(ctx);
       const sourceUnchanged = () => version === generation && session === ctx.sessionManager.getSessionId()
-        && source === sourceHash(ctx.sessionManager.getBranch());
+        && source === sourceVersion(ctx);
       const origin = data.model ?? current.origin;
       const model = origin && ctx.modelRegistry.find(origin.provider, origin.modelId);
       if (!model || !isRemoteModel(model)) throw new Error("Original checkpoint model is unavailable; restore its provider before retrying");
@@ -525,7 +535,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     // Only owned checkpoints need raw-source verification. Native history,
     // boundaries and edits determine recovery; extension journals and summary
     // messages may legitimately be published by this request's context hooks.
-    preparedSource = sourceHash(ctx.sessionManager.getBranch());
+    preparedSource = sourceVersion(ctx);
     if (current.data && isRemoteModel(ctx.model)) {
       try {
         const state = bindingState(current.data, await requestBinding(ctx, ctx.model, accounts), current.origin);
@@ -581,7 +591,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     if (preparedPortable) {
       const current = active(ctx);
       if (preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation
-        || hash(preparedModel) !== hash(ctx.model) || preparedSource !== sourceHash(ctx.sessionManager.getBranch())
+        || preparedSource !== sourceVersion(ctx)
         || !current || savedPortable(current, ctx) !== preparedPortable) {
         cancelRequest(ctx); return emptyPayload(event.payload);
       }
@@ -592,10 +602,10 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     if (!preparedMarker) return;
     const requestModel = preparedModel ?? ctx.model;
     const session = preparedSession, version = preparedGeneration;
-    const source = sourceHash(ctx.sessionManager.getBranch());
+    const source = sourceVersion(ctx);
     if (!isRemoteModel(requestModel)
       || session !== ctx.sessionManager.getSessionId() || version !== generation
-      || hash(requestModel) !== hash(ctx.model) || preparedSource !== source) {
+      || !sameRoute(requestModel, ctx.model) || preparedSource !== source) {
       cancelRequest(ctx); return emptyPayload(event.payload);
     }
     const expected = summaryText(preparedMarker);
@@ -609,11 +619,11 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     try {
       const request = await requestBinding(ctx, requestModel, accounts);
       // Authentication may yield to history edits, appends or session/model
-      // switches. Revalidate with a fresh source hash and use the same ordinary
+      // switches. Revalidate the native source version and use the same ordinary
       // cancellation path as before await, rather than an authentication error.
-      if (session !== ctx.sessionManager.getSessionId() || version !== generation || hash(requestModel) !== hash(ctx.model)
+      if (session !== ctx.sessionManager.getSessionId() || version !== generation || !sameRoute(requestModel, ctx.model)
         || bindingState(current.data, request, current.origin) !== "valid"
-        || source !== sourceHash(ctx.sessionManager.getBranch())) {
+        || source !== sourceVersion(ctx)) {
         cancelRequest(ctx); return emptyPayload(event.payload);
       }
       return replaceMarker(event.payload, current.data);
@@ -637,11 +647,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       pi.events.emit(METIS_EVENTS.beforeRemoteCompact, { waits, signal: event.signal } satisfies BeforeRemoteCompactRequest);
       await Promise.all(waits);
       const version = generation, model = ctx.model;
-      const modelHash = hash(model);
-      const authority = () => hash([ctx.getSystemPrompt(), pi.getActiveTools(), pi.getAllTools()]);
-      const authorized = authority();
       const branch = ctx.sessionManager.getBranch();
-      const session = ctx.sessionManager.getSessionId(), source = sourceHash(branch);
+      const session = ctx.sessionManager.getSessionId(), source = sourceVersion(ctx);
       const request = remote && model ? await requestBinding(ctx, model, accounts) : undefined;
       if (request?.auth.apiKey) secrets.push(request.auth.apiKey);
       const identity = request?.identity;
@@ -812,8 +819,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       if (JSON.stringify(history).length > MAX_BYTES) throw new Error("Codex checkpoint too large");
       const finalRequest = await requestBinding(ctx, model, accounts);
       const finalCompactor = hybrid ? await codexRequest(ctx, model, accounts) : compactor;
-      if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== sourceHash(ctx.sessionManager.getBranch())
-        || modelHash !== hash(ctx.model) || authorized !== authority() || identity !== finalRequest.identity
+      if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== sourceVersion(ctx)
+        || identity !== finalRequest.identity
         || !sameProvider(request, finalRequest)
         || compactor.identity !== finalCompactor.identity
         || !sameProvider(compactor, finalCompactor) || signal.aborted)
