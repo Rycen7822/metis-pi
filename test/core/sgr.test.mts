@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { styleToolOutputLine } from "../../src/output-style.ts";
-import { makeSurfaceOps } from "../../src/surface.ts";
+import { styleToolOutputLine } from "../../src/presentation/output-style.ts";
+import { makeSurfaceOps } from "../../src/appearance/chrome/surface.ts";
 
 const level = { kind: "truecolor" } as const;
 const bg = "\x1b[48;2;31;31;31m";

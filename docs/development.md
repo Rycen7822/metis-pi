@@ -10,7 +10,9 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm run prepare:subagents
 ```
 
-根目录 `tsconfig.json` 保留为编辑器和扩展入口检查的默认配置；共享规则与 core、execution、condense、test 检查配置集中在 `config/typescript/`。Web/Recall 的配置仍在各自模块目录，继承同一份基础规则。
+根目录 `tsconfig.json` 保留为编辑器和扩展入口检查的默认配置；共享规则与 core、execution、condense、test 检查配置集中在 `config/typescript/`，结构化提问的 Vitest 配置位于 `config/vitest/ask.config.ts`。Web/Recall 的类型配置仍在各自模块目录，继承同一份基础规则。
+
+依赖、工具链和锁文件只由根项目维护，不在 `src` 子目录安装依赖。`scripts/build-web-access.mjs` 从根 manifest 读取外部依赖并构建 Web 的两个 bundle；Web 内的私有 `package.json` 仅保留 MCP 身份、来源版本和 ESM 模式，不承载另一套开发依赖。
 
 | 命令 | 范围 |
 | --- | --- |
@@ -21,6 +23,7 @@ npm run prepare:subagents
 | `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
 | `npm run test:lsp` / `test:ask-user-question` | LSP 会话与工具接线 / 结构化提问集成。 |
 | `npm run test:chrome` | 跨层界面、布局和复制测试。 |
+| `npm run build:plugins` / `test:plugins` | 从根工具链构建 Web 扩展与 MCP CLI / 运行共置的 Web 测试，保留模块 cwd 和隔离预载。 |
 | `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为；4 个进程按文件分配测试。 |
 | `npm run verify` | 项目与测试类型 + 全部测试，包含实际 pack 文件清单校验。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
@@ -35,7 +38,7 @@ npm run prepare:subagents
 
 core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接线与恢复；protocol 核对最终请求和来源；IO 验证持久化与损坏恢复；resource 观察真实回调和释放；PTY 验证可见帧、输入、手势和复制。
 
-复用现有测试，新增断言须对应具体失败。夹具只准备输入，不能复制业务算法或从结果反推 expected。使用者清理 timer、临时目录、进程和原型包装，网络钩子显式恢复。禁止在正式测试中扫描源码证明旧功能删除；一次性清理核查放 `.work/`。
+复用现有测试，新增断言须对应具体失败。夹具只准备输入，不能复制业务算法或从结果反推 expected。使用者清理 timer、临时目录、进程和原型包装，网络钩子显式恢复。禁止在正式测试中扫描源码证明旧功能删除；一次性清理核查放 `.work/`。并行重构按明确文件与职责分工，保留配置、协议、持久化及资源清理语义；单次委派说明和验收记录不常驻仓库根目录。
 
 严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
 
@@ -55,9 +58,11 @@ CI 的 verify 在单个 job 内使用 Node 编译缓存，测试的进程和配�
 
 ## 源码与发布
 
+`src/appearance/` 拥有主会话显示装配、状态和生命周期；`presentation/` 提供主转录与子代理共用的呈现能力，`file-changes/` 提供执行与显示共用的文件证据。Skills、Goal、Dynamic Agents 和 Remote Compaction 各自形成完整功能模块；`src/skills/` 是实现，根目录 `skills/` 才是 Pi 公共技能交付。`configuration/store.ts` 只管全局存储，Web 与 Condense 保留各自字段政策。跨扩展协议与入口身份不承载功能权限策略。
+
 运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。condense 由根项目统一维护与检查；来源归属见 [NOTICE](../NOTICE)，许可见 [condense LICENSE](provenance/condense/LICENSE) 与 [执行来源](provenance/execution/README.md)。
 
-发布包携带 TS、condense 入口、子代理 Python/JS 核心、shell WASM、Linux x64 PTY helper、主题与许可/文档；Rust 来源和开发配置留在 Git。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。
+发布包携带运行时 TS、Web 预构建 bundle、子代理 Python/JS 核心、shell WASM、Linux x64 PTY helper 与 Neural Search 共享库、主题和许可/文档。共置测试、构建脚本、验收证据、代理开发指令、类型配置及 Rust 引擎源码只保留在 Git，不随 npm 包发布；发布排除规则和必要资源统一由 `test/package.test.mjs` 核对。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。
 
 原生 helper 测试与 Linux x64 发布构建使用：
 

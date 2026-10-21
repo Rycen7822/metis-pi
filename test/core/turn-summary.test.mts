@@ -1,7 +1,7 @@
 // Summary text, legacy rendering and append acknowledgements; display delivery is covered by contract/appearance.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatSummaryLine, SUMMARY_CUSTOM_TYPE, makeEntryRenderer, TurnSummary } from "../../src/turn-summary.ts";
+import { formatSummaryLine, SUMMARY_CUSTOM_TYPE, makeEntryRenderer, TurnSummary } from "../../src/appearance/activity/turn-summary.ts";
 
 test("summary append acknowledgement retains uncertain attempts without retry until a session reset", () => {
   let attempts = 0, fail = true;

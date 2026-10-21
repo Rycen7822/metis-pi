@@ -32,14 +32,27 @@ test("package exposes extensions, themes and portable skills with their referenc
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
     "src/pi-web-access/index.ts", "src/pi-web-access/dist/index.js", "src/pi-web-access/dist/mcp-cli.js",
+    "src/appearance/runtime.ts", "src/presentation/renderers.ts",
+    "src/presentation/components/tool-components.ts", "src/presentation/components/transcript-components.ts",
+    "src/configuration/store.ts", "src/configuration/web-access.ts",
+    "src/remote-compaction/runtime.ts", "src/remote-compaction/checkpoint.ts",
+    "src/skills/host-patch.ts", "src/extension-paths.ts",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
     "src/pi-lsp/config.ts", "src/pi-lsp/pi-lsp.ts", "src/pi-lsp/code-actions.ts", "src/pi-lsp/published-diagnostics.ts", "src/pi-lsp/LICENSE", "src/pi-lsp/METIS.md", "docs/features/lsp.md",
     "src/ask-user-question/index.ts", "src/ask-user-question/ask-user-question.ts", "src/ask-user-question/LICENSE", "src/ask-user-question/METIS.md",
     "src/ask-user-question/locales/en.json", "docs/features/ask-user-question.md",
     "src/pi-web-access/licenses/typebox.LICENSE",
+    "src/neural-search/native/binding/ffi.ts", "src/neural-search/LICENSE",
+    "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
+    "src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
-  assert.ok([...files].every((path) => !path.startsWith("src/ask-user-question/") || (!path.endsWith(".test.ts") && !path.endsWith("test-fixtures.ts"))));
+  for (const path of files) {
+    if (!path.startsWith("src/")) continue;
+    assert.ok(!path.startsWith("src/neural-search/engine/"), path);
+    assert.ok(!path.split("/").some(part => ["test", "scripts", "evidence"].includes(part)), path);
+    assert.doesNotMatch(path, /(?:^|\/)(?:AGENTS\.md|tsconfig[^/]*\.json|test-fixtures\.ts)$|\.test\.[^/]+$/, path);
+  }
   assert.ok(!Object.hasOwn(pkg.dependencies, "@juicesharp/rpiv-ask-user-question"));
   assert.ok(!Object.hasOwn(pkg.dependencies, "@juicesharp/rpiv-config"));
   assert.ok([...files].every((path) => !path.split("/").includes("node_modules")));

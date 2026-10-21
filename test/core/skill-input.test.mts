@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSkillInput, createSkillAutocompleteWrapper } from "../../src/skill-input.ts";
+import { createSkillInput, createSkillAutocompleteWrapper } from "../../src/skills/input.ts";
 
 const alpha = '<skill name="alpha" location="/skills/alpha/SKILL.md">\nAlpha body.\n</skill>';
 const beta = '<skill name="beta" location="/skills/beta/SKILL.md">\nBeta body.\n</skill>';

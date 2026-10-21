@@ -3,7 +3,7 @@
 // handlers receive; text semantics ("完成"/"Failed") are never evidence.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InteractionOutcomeTracker } from "../../src/interaction-outcome.ts";
+import { InteractionOutcomeTracker } from "../../src/appearance/activity/interaction-outcome.ts";
 
 for (const [stops, outcome, evidence, toolErrors] of [
   [["stop"], "completed", "assistant-stop", 1],

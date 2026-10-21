@@ -26,10 +26,9 @@
  */
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 
-import { fileURLToPath } from "node:url";
+import { OWNED_NEURAL_SEARCH_ENTRY } from "../../extension-paths.ts";
 
 const BUILTIN_SOURCE_PREFIX = "builtin:";
-const OWNED_NEURAL_SEARCH_ENTRY = fileURLToPath(new URL("../../../extensions/neural-search.ts", import.meta.url));
 
 function sourcePath(tool: ToolInfo): string | undefined {
   const path = (tool.sourceInfo as { path?: unknown } | undefined)?.path;

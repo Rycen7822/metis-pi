@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatResult, makeRenderers, parseDisplayDiff, renderDiffLines } from "../../src/renderers.ts";
+import { formatResult, makeRenderers } from "../../src/presentation/renderers.ts";
+import { parseDisplayDiff, renderDiffLines } from "../../src/presentation/diff.ts";
 import { stripVTControlCharacters } from "node:util";
 import { theme, FakeText, deepFreeze, sessionStub } from "../helpers.mjs";
 import { layout } from "../helpers/layout.mjs";
-import { fusionRenderers } from "../../src/fusion-view.ts";
+import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
 import { MouseRegion, Text } from "@earendil-works/pi-tui";
 import { publishedRowsOf } from "../../src/selection-copy/model.ts";
 

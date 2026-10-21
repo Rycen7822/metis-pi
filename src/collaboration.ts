@@ -14,6 +14,9 @@ export const METIS_EVENTS = {
   condenseMaintenance: "metis:condense-maintenance",
 } as const;
 
+// Shared status identities are consumed by both feature writers and chrome.
+export const METIS_STATUS_IDS = { goal: "goal", condense: "context-prune" } as const;
+
 // Queries are synchronous: listeners fill response fields on the original object
 // before emit returns. Inputs are readonly; response fields remain mutable.
 export interface ExecutionStatusRequest { busy: boolean }

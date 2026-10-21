@@ -1,6 +1,6 @@
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isMetisConfigTable, metisConfigPath, readMetisConfig } from "../metis-config.ts";
+import { isMetisConfigTable, metisConfigPath, readMetisConfig } from "../configuration/store.ts";
 import { HOME_DIR } from "./native/paths.ts";
 
 const BOOLEAN_KEYS = ["enabled", "mentions", "enableFsRootScanning", "enableHomeDirScanning", "warnOnHomeDirScan", "followSymlinks"] as const;

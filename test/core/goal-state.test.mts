@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/openai-codex-responses";
-import { GoalState } from "../../src/goal-state.ts";
+import { GoalState } from "../../src/goal/state.ts";
 import { FAKE_API_KEY, modelNamed } from "../helpers/native-provider.mjs";
 
 test("Goal accounts the native SDK's uncached input plus output exactly once", async () => {

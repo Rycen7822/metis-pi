@@ -3,8 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readWebAccessConfig } from "../metis-config.ts";
-import { webAccessAgentDir } from "../web-access-config.ts";
+import { readWebAccessConfig, webAccessAgentDir } from "../configuration/web-access.ts";
 import type { Dispatcher } from "undici";
 
 const proxyStorage = new AsyncLocalStorage<string | null>();

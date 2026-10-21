@@ -1,6 +1,8 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isMetisConfigTable, readMetisConfig } from "../src/metis-config.ts";
+import { isMetisConfigTable, readMetisConfig } from "../src/configuration/store.ts";
+import { loadConfig } from "../src/appearance/config.ts";
 import { runtimePackage } from "../src/subagents/host/runtime-package.ts";
 import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/ui/rendering.ts";
 import { SubagentSession } from "../src/subagents/host/session.ts";
@@ -26,6 +28,17 @@ export default function subagents(pi: ExtensionAPI) {
     pi.on("session_start", (_event, ctx) => { ctx.ui.notify(`Metis subagents unavailable: ${String(error)}`, "warning"); }); return;
   }
   let owner: SubagentSession | undefined, blocked = false;
+  // Appearance preferences are re-read per use, never cached at session start:
+  // the next widget render or viewer open sees a mid-session config edit. An
+  // absent or unreadable file still degrades to defaults inside loadConfig.
+  const readAppearance = () =>
+    loadConfig(agentDir, (path) => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return undefined;
+      }
+    }).config;
   let warnedCodemode = false;
   const codemodeReady = (ctx: ExtensionContext, activate = false) => {
     const active = pi.getActiveTools();
@@ -84,7 +97,7 @@ export default function subagents(pi: ExtensionAPI) {
       return;
     }
     for (const definition of definitions) pi.registerTool(definition);
-    owner = new SubagentSession(pi, runtime, ctx, agentDir);
+    owner = new SubagentSession(pi, runtime, ctx, agentDir, readAppearance);
     if (hasTools()) codemodeReady(ctx, true);
   });
   pi.on("resources_discover", () => {

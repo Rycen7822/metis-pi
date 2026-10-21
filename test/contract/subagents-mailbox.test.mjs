@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
+import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
 import { SubagentClient } from "../../src/subagents/host/client.ts";
 import { installSamplingMailbox } from "../../src/subagents/host/sampling.ts";
 
@@ -197,6 +198,7 @@ async function fixture(t, kind = "thinking", toolFirst = false) {
             { root: "/unused", tools: [], baseEnvKeys: [], scopeEnvKeys: [], maxFrame: 1000000 },
             ctx,
             dir,
+            () => DEFAULT_CONFIG,
           );
         });
         pi.on("before_agent_start", (_event, context) => owner.update(context));

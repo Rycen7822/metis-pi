@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { UiMetrics, type InteractionSnapshot } from "../../src/ui-metrics.ts";
+import { UiMetrics, type InteractionSnapshot } from "../../src/appearance/activity/ui-metrics.ts";
 
 test("writing and thinking share one retry clock; settlement resets the next interaction", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });

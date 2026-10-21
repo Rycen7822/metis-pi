@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, parse } from "node:path";
 import { temporaryDirectory as tempDir } from "../helpers/temp-dir.mjs";
 import { trackedRepo } from "../helpers/git.mts";
-import { GIT_CHANGES_DEBOUNCE_MS, readChangeSample, type GitExec } from "../../src/git-changes.ts";
+import { GIT_CHANGES_DEBOUNCE_MS, readChangeSample, type GitExec } from "../../src/appearance/git-changes.ts";
 
 /** Minimal repo marker so findGitDir() accepts the directory. */
 function fakeRepo(t: TestContext): string {

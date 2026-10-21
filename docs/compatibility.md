@@ -8,7 +8,7 @@
 
 ## 显示适配
 
-`src/adapter.ts` 装饰宿主工具组件的 renderer/shell selector 与 render，保留工具执行和存储结果。
+`src/appearance/tool-host-adapter.ts` 装饰宿主工具组件的 renderer/shell selector 与 render，保留工具执行和存储结果。
 
 | 条件 | 行为 |
 | --- | --- |

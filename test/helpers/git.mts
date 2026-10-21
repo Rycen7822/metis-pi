@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { temporaryDirectory } from "./temp-dir.mjs";
-import { createGitChangesTracker } from "../../src/git-changes.ts";
+import { createGitChangesTracker } from "../../src/appearance/git-changes.ts";
 
 export function git(cwd: string, ...args: string[]): void {
   execFileSync("git", args, {

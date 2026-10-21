@@ -7,7 +7,7 @@ import { buildQuery, hasGlobSyntax } from "../native/query.ts";
 import { contentPage, searchContent, multilineOrError, MATCHES_PER_FILE } from "../native/content.ts";
 import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
-import { safeText } from "../../tool-names.ts";
+import { safeText } from "../../presentation/terminal-text.ts";
 import type { SearchLease, SearchRuntime } from "../session.ts";
 
 const DEFAULT_GREP_LIMIT = 20;

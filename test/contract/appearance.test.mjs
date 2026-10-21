@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activate } from "../../src/extension.ts";
-import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
+import { activate } from "../../src/appearance/runtime.ts";
+import { GIT_CHANGES_INTERVAL_MS } from "../../src/appearance/git-changes.ts";
 import { theme, toolInfo } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import * as Tui from "@earendil-works/pi-tui";
 import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
-import { ThinkingRailComponent } from "../../src/chrome/transcript-components.ts";
+import { ThinkingRailComponent } from "../../src/presentation/components/transcript-components.ts";
 import { stringify } from "smol-toml";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai";

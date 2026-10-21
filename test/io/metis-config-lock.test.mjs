@@ -25,7 +25,7 @@ if (mode === 'writer') {
     return value;
   };
   syncBuiltinESMExports();
-  const { updateMetisConfig } = await import('../../src/metis-config.ts');
+  const { updateMetisConfig } = await import('../../src/configuration/store.ts');
   fs.writeFileSync(join(directory, `ready-${role}`), String(process.pid));
   updateMetisConfig(directory, role === 'first'
     ? { sessionRecall: { queryModel: 'openai/process-proof' } }
@@ -62,7 +62,7 @@ if (mode === 'writer') {
     assert.equal(fs.existsSync(join(dir, 'read-second')), false, 'second process waits before reading');
     fs.writeFileSync(join(dir, 'release'), 'go');
     await Promise.all([first, second]);
-    const { readMetisConfig } = await import('../../src/metis-config.ts');
+    const { readMetisConfig } = await import('../../src/configuration/store.ts');
     const saved = readMetisConfig(dir).config;
     assert.equal(saved.sessionRecall.queryModel, 'openai/process-proof');
     assert.equal(saved.appearance.enabled, false);

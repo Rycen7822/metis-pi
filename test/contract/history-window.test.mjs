@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
-import { createHistoryWindowSystem } from "../../src/chrome/history-window.ts";
+import { createHistoryWindowSystem } from "../../src/appearance/chrome/history-window.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { altScreen, container, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 

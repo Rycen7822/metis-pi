@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
-import { tokenizeBashLine, highlightBashScript } from "../../src/bash-lexer.ts";
-import { createDiffComponent, createShellFactories } from "../../src/chrome/tool-components.ts";
-import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent, CodexWriteCallComponent } from "../../src/chrome/transcript-components.ts";
-import { createThinkingViewControl } from "../../src/thinking-view.ts";
-import { createWorkingComponent } from "../../src/chrome/working.ts";
-import { wrapPlainOutput } from "../../src/shell.ts";
+import { tokenizeBashLine, highlightBashScript } from "../../src/presentation/bash-lexer.ts";
+import { createDiffComponent, createShellFactories } from "../../src/presentation/components/tool-components.ts";
+import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent, CodexWriteCallComponent } from "../../src/presentation/components/transcript-components.ts";
+import { createThinkingViewControl } from "../../src/presentation/thinking-view.ts";
+import { createWorkingComponent } from "../../src/appearance/chrome/working.ts";
+import { wrapPlainOutput } from "../../src/presentation/shell.ts";
 import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 
 const layout = { visibleWidth: Tui.visibleWidth,

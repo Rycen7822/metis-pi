@@ -112,8 +112,8 @@ test("resolveGeminiFetch keeps explicit web transport when undici is not resolva
 		for (const file of ["utils.ts", "proxy-transport.ts"]) {
 			const target = join(dir, file);
 			writeFileSync(target, readFileSync(target, "utf8").replace(
-				/from "\.\.\/(metis-config|web-access-config)\.ts"/g,
-				(_, name) => `from "${new URL(`../../${name}.ts`, import.meta.url).href}"`,
+				/from "\.\.\/configuration\/(store|web-access)\.ts"/g,
+				(_, name) => `from "${new URL(`../../configuration/${name}.ts`, import.meta.url).href}"`,
 			));
 		}
 		const script = [

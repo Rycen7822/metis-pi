@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TranscriptState, renderedThinkingRuns, assistantHasVisibleThinking } from "../../src/transcript-state.ts";
-import { makeRenderers } from "../../src/renderers.ts";
-import { createThinkingViewControl } from "../../src/thinking-view.ts";
+import { TranscriptState, renderedThinkingRuns, assistantHasVisibleThinking } from "../../src/appearance/transcript/state.ts";
+import { makeRenderers } from "../../src/presentation/renderers.ts";
+import { createThinkingViewControl } from "../../src/presentation/thinking-view.ts";
 import { theme, FakeText, sessionStub } from "../helpers.mjs";
 
 const IMAGE_NAMES = ["first.png", "second.png", "third.png"];

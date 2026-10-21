@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { initTheme, UserMessageComponent, SkillInvocationMessageComponent } from "@earendil-works/pi-coding-agent";
-import { createFullscreenLayout } from "../../src/chrome/fullscreen-layout.ts";
+import { createFullscreenLayout } from "../../src/appearance/chrome/fullscreen-layout.ts";
 import { altScreen, container, screenLines, installCopyPrototypes, select, drag } from "../helpers/ui-fixtures.mjs";
 import { sgr } from "../helpers.mjs";
 

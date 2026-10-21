@@ -3,7 +3,7 @@
 // asserts boundary validation: nothing invalid crosses as undefined/NaN.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HostData, toContextUsageSnapshot } from "../../src/host-data.ts";
+import { HostData, toContextUsageSnapshot } from "../../src/appearance/host-data.ts";
 
 test("invalid context counters cannot produce a display snapshot", () => {
   assert.equal(toContextUsageSnapshot({ tokens: Number.NaN, contextWindow: 0, percent: 200 }), undefined);

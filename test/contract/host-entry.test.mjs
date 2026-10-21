@@ -302,8 +302,8 @@ test("shipped entry owns grouped read rows and images without changing the nativ
 test("built exec_command delegates its real Pi row to the shell display", async (t) => {
   const h = entry(t);
   const { createExecCommandTool } = await import("../../src/execution/exec/command-tool.ts");
-  const { highlightBashScript } = await import("../../src/bash-lexer.ts");
-  const { detectColorLevel } = await import("../../src/palette.ts");
+  const { highlightBashScript } = await import("../../src/presentation/bash-lexer.ts");
+  const { detectColorLevel } = await import("../../src/presentation/palette.ts");
   const tool = createExecCommandTool({});
   h.definitions.push({ name: "exec_command", sourceInfo: {
     source: "local", path: resolve(import.meta.dirname, "../../extensions/execution.ts"),

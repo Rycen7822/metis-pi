@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { metisConfigPath } from "../../metis-config.ts";
+import { metisConfigPath } from "../../configuration/store.ts";
 import type { RuntimePackage } from "./runtime-package.ts";
 export class RuntimeError extends Error {
   readonly code: string;

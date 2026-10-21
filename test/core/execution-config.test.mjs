@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readExecutionConfig, writeExecutionConfig, executionConfigPath } from "../../src/execution/config.ts";
-import { parseMetisConfig } from "../../src/metis-config.ts";
+import { parseMetisConfig } from "../../src/configuration/store.ts";
 
 test("execution is global only and section writes preserve other values", t => {
   const dir = mkdtempSync(join(tmpdir(), "metis-execution-config-")), cwd = join(dir, "project");

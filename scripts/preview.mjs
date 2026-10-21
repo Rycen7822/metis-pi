@@ -5,12 +5,13 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";
-import { makeRenderers, languageForPath } from "../src/renderers.ts";
-import { renderDiffLines } from "../src/diff.ts";
-import { detectColorLevel } from "../src/palette.ts";
-import { TranscriptState } from "../src/transcript-state.ts";
-import { renderShellCall, renderShellResult } from "../src/shell.ts";
-import { renderWritePreview } from "../src/write-preview.ts";
+import { makeRenderers } from "../src/presentation/renderers.ts";
+import { languageForPath } from "../src/presentation/tool-names.ts";
+import { renderDiffLines } from "../src/presentation/diff.ts";
+import { detectColorLevel } from "../src/presentation/palette.ts";
+import { TranscriptState } from "../src/appearance/transcript/state.ts";
+import { renderShellCall, renderShellResult } from "../src/presentation/shell.ts";
+import { renderWritePreview } from "../src/presentation/write-preview.ts";
 const root = new URL("../", import.meta.url);
 const palette = JSON.parse(readFileSync(new URL("themes/metis-pi.json", root), "utf8"));
 function hexColor(key) {

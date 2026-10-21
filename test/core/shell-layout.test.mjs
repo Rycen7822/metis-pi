@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderShellCall, renderShellResult, wrapPlainOutput } from "../../src/shell.ts";
-import { renderWritePreview } from "../../src/write-preview.ts";
-import { sanitizeShellLine } from "../../src/palette.ts";
+import { renderShellCall, renderShellResult, wrapPlainOutput } from "../../src/presentation/shell.ts";
+import { renderWritePreview } from "../../src/presentation/write-preview.ts";
+import { sanitizeShellLine } from "../../src/presentation/palette.ts";
 import { layout } from "../helpers/layout.mjs";
 
 // Independent physical budgets, never read from the implementation.

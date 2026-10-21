@@ -81,4 +81,4 @@ WSL/Linux 的右键在按下时立即生效，不依赖终端上报松开事件�
 
 来源/形状守卫和恢复规则见 [兼容性](../compatibility.md)。警告、错误和 notify 保持原样显示。
 
-输出布局位于 `src/renderers.ts`、`shell.ts`、`diff.ts`、`write-preview.ts`，快照由 `write-tracker.ts` 持有；思考交互由 `thinking-view.ts` 与 `transcript-state.ts` 持有。
+输出布局位于 `src/presentation/renderers.ts`、`shell.ts`、`diff.ts`、`write-preview.ts`，快照由 `write-tracker.ts` 持有；思考交互由 `thinking-view.ts` 与 `transcript-state.ts` 持有。

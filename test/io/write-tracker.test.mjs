@@ -8,8 +8,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
-import { WriteDiffTracker } from "../../src/write-tracker.ts";
-import { resolveNativeMutationPath } from "../../src/native-tool-path.ts";
+import { WriteDiffTracker } from "../../src/appearance/transcript/write-tracker.ts";
+import { resolveNativeMutationPath } from "../../src/file-changes/path.ts";
 
 const BUILTIN = { source: "builtin", path: "builtin:write" };
 const FOREIGN = { source: "npm:compatibility-test", path: "/test/custom.ts" };

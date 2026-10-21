@@ -14,14 +14,13 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// proxy-transport.ts
+// src/pi-web-access/proxy-transport.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readWebAccessConfig } from "../../metis-config.ts";
-import { webAccessAgentDir } from "../../web-access-config.ts";
+import { readWebAccessConfig, webAccessAgentDir } from "../../configuration/web-access.ts";
 function normalizeProxyUrl(value, source) {
   if (value === void 0 || value === null) return null;
   if (typeof value !== "string") throw new Error(`${source} must be an http(s) or socks proxy URL string`);
@@ -350,18 +349,19 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
 }
 var proxyStorage, CurlTransportError;
 var init_proxy_transport = __esm({
-  "proxy-transport.ts"() {
+  "src/pi-web-access/proxy-transport.ts"() {
     proxyStorage = new AsyncLocalStorage();
     CurlTransportError = class extends Error {
     };
   }
 });
 
-// utils.ts
+// src/pi-web-access/utils.ts
 import { isIP } from "node:net";
 import { join as join2 } from "node:path";
-import { metisConfigPath, readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../metis-config.ts";
-import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../web-access-config.ts";
+import { metisConfigPath } from "../../configuration/store.ts";
+import { readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../configuration/web-access.ts";
+import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../configuration/web-access.ts";
 function getWebSearchConfigDir() {
   return webAccessAgentDir2();
 }
@@ -475,7 +475,7 @@ async function fetchWithCredentialRedirects(url, init, credentialHeaders, creden
 }
 var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, GOOGLE_RECENCY_TBS;
 var init_utils = __esm({
-  "utils.ts"() {
+  "src/pi-web-access/utils.ts"() {
     init_proxy_transport();
     API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
@@ -489,7 +489,7 @@ var init_utils = __esm({
   }
 });
 
-// search-answer-formatting.ts
+// src/pi-web-access/search-answer-formatting.ts
 function extractSnippetAround(text4, start, end) {
   if (typeof start !== "number" || typeof end !== "number" || !text4) return "";
   const before = Math.max(0, start - 100);
@@ -516,14 +516,14 @@ function formatSearchResultsAsAnswer(results) {
 Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.url})`).join("\n\n");
 }
 var init_search_answer_formatting = __esm({
-  "search-answer-formatting.ts"() {
+  "src/pi-web-access/search-answer-formatting.ts"() {
   }
 });
 
-// activity.ts
+// src/pi-web-access/activity.ts
 var ActivityMonitor, activityMonitor;
 var init_activity = __esm({
-  "activity.ts"() {
+  "src/pi-web-access/activity.ts"() {
     ActivityMonitor = class {
       entries = [];
       maxEntries = 10;
@@ -593,7 +593,7 @@ var init_activity = __esm({
   }
 });
 
-// domain-filter-normalization.ts
+// src/pi-web-access/domain-filter-normalization.ts
 function normalizeDomain(value) {
   let input = value.trim().toLowerCase();
   if (!input) return null;
@@ -638,14 +638,14 @@ function matchesDomainFilter(url, filters) {
   return filters.include.length === 0 || filters.include.some(matches);
 }
 var init_domain_filter_normalization = __esm({
-  "domain-filter-normalization.ts"() {
+  "src/pi-web-access/domain-filter-normalization.ts"() {
   }
 });
 
-// search-types.ts
+// src/pi-web-access/search-types.ts
 var SearchUnsupportedFilterError, SearchHttpError;
 var init_search_types = __esm({
-  "search-types.ts"() {
+  "src/pi-web-access/search-types.ts"() {
     SearchUnsupportedFilterError = class extends Error {
       constructor(message) {
         super(message);
@@ -663,7 +663,7 @@ var init_search_types = __esm({
   }
 });
 
-// credential-source.ts
+// src/pi-web-access/credential-source.ts
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 function redactCredential(text4, credential) {
@@ -768,7 +768,7 @@ async function resolveCredential(options) {
 }
 var execAsync, COMMAND_TIMEOUT_MS, MAX_CREDENTIAL_BYTES, ENV_SOURCE, OP_SESSION_NAME, COMMAND_ENVIRONMENT_NAMES, CredentialResolutionError;
 var init_credential_source = __esm({
-  "credential-source.ts"() {
+  "src/pi-web-access/credential-source.ts"() {
     execAsync = promisify(exec);
     COMMAND_TIMEOUT_MS = 5e3;
     MAX_CREDENTIAL_BYTES = 16384;
@@ -806,7 +806,7 @@ var init_credential_source = __esm({
   }
 });
 
-// auth-fetch.ts
+// src/pi-web-access/auth-fetch.ts
 function resolveAuthFetchProfile(request) {
   const profiles = loadAuthFetchProfiles();
   if (profiles.length === 0) {
@@ -917,14 +917,14 @@ function hostMatches(hostname, allowedHost) {
 }
 var WEB_SEARCH_CONFIG_PATH, AUTH_PROFILE_NAME_PATTERN;
 var init_auth_fetch = __esm({
-  "auth-fetch.ts"() {
+  "src/pi-web-access/auth-fetch.ts"() {
     init_utils();
     WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
     AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
   }
 });
 
-// gemini-adc.ts
+// src/pi-web-access/gemini-adc.ts
 import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { createSign } from "node:crypto";
 import { homedir } from "node:os";
@@ -1122,7 +1122,7 @@ function hasExplicitApiBase() {
 }
 var DEFAULT_ADC_PATH, TOKEN_ENDPOINT, VERTEX_HOST, VERTEX_API_VERSION, REFRESH_SKEW_MS, cachedConfig2, cachedToken, OAUTH_CREDENTIAL_REJECTION_STATUSES;
 var init_gemini_adc = __esm({
-  "gemini-adc.ts"() {
+  "src/pi-web-access/gemini-adc.ts"() {
     init_utils();
     init_proxy_transport();
     init_credential_source();
@@ -1137,7 +1137,7 @@ var init_gemini_adc = __esm({
   }
 });
 
-// gemini-api.ts
+// src/pi-web-access/gemini-api.ts
 function loadConfig3() {
   return cachedConfig3 ??= loadWebAccessConfig();
 }
@@ -1358,7 +1358,7 @@ async function queryGeminiApiWithVideo(prompt, videoUri, options = {}) {
 }
 var DEFAULT_API_HOST, API_VERSION, API_BASE, CONFIG_PATH2, DEFAULT_MODEL, cachedConfig3, responseCredentials;
 var init_gemini_api = __esm({
-  "gemini-api.ts"() {
+  "src/pi-web-access/gemini-api.ts"() {
     init_utils();
     init_credential_source();
     init_gemini_adc();
@@ -1372,7 +1372,7 @@ var init_gemini_api = __esm({
   }
 });
 
-// gemini-web-config.ts
+// src/pi-web-access/gemini-web-config.ts
 function normalizeChromeProfile(value) {
   if (typeof value !== "string") return void 0;
   const normalized = value.trim();
@@ -1427,14 +1427,14 @@ function isBrowserCookieAccessAllowed() {
 }
 var BROWSER_COOKIE_PRESETS, cachedConfig4;
 var init_gemini_web_config = __esm({
-  "gemini-web-config.ts"() {
+  "src/pi-web-access/gemini-web-config.ts"() {
     init_utils();
     BROWSER_COOKIE_PRESETS = ["helium", "chrome", "brave", "arc", "chromium", "edge"];
     cachedConfig4 = null;
   }
 });
 
-// chrome-cookies.ts
+// src/pi-web-access/chrome-cookies.ts
 import { execFile } from "node:child_process";
 import { pbkdf2Sync, createDecipheriv } from "node:crypto";
 import { copyFileSync, existsSync as existsSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync3, realpathSync, rmSync } from "node:fs";
@@ -1987,7 +1987,7 @@ function copySidecar(srcDb, targetDb, suffix) {
 }
 var GOOGLE_ORIGINS, ALL_COOKIE_NAMES, MACOS_BROWSER_CONFIGS, LINUX_BROWSER_CONFIGS, WINDOWS_BROWSER_CONFIGS, browserPasswordCache, sqliteModule, sqliteImportAttempted;
 var init_chrome_cookies = __esm({
-  "chrome-cookies.ts"() {
+  "src/pi-web-access/chrome-cookies.ts"() {
     init_gemini_web_config();
     GOOGLE_ORIGINS = [
       "https://gemini.google.com",
@@ -2034,7 +2034,7 @@ var init_chrome_cookies = __esm({
   }
 });
 
-// gemini-web.ts
+// src/pi-web-access/gemini-web.ts
 import { readFileSync as readFileSync4 } from "node:fs";
 import { basename } from "node:path";
 function createGeminiFetch(undiciImpl) {
@@ -2260,7 +2260,7 @@ function parseStreamGenerateResponse(rawText) {
 }
 var GEMINI_APP_URL, GEMINI_STREAM_GENERATE_URL, GEMINI_UPLOAD_URL, GEMINI_UPLOAD_PUSH_ID, USER_AGENT, MODEL_HEADER_NAME, DEFAULT_GEMINI_WEB_MODEL, MODEL_HEADERS, REQUIRED_COOKIES, geminiFetchImpl, geminiFetchOverride, GEMINI_MAX_HEADER_SIZE;
 var init_gemini_web = __esm({
-  "gemini-web.ts"() {
+  "src/pi-web-access/gemini-web.ts"() {
     init_chrome_cookies();
     init_gemini_web_config();
     init_proxy_transport();
@@ -2283,17 +2283,17 @@ var init_gemini_web = __esm({
   }
 });
 
-// search-result-count-normalization.ts
+// src/pi-web-access/search-result-count-normalization.ts
 function normalizeSearchResultCount(value, options = {}) {
   const count = typeof value === "number" && Number.isFinite(value) ? value : 5;
   return Math.max(1, Math.min(Math.floor(count), options.max ?? 20));
 }
 var init_search_result_count_normalization = __esm({
-  "search-result-count-normalization.ts"() {
+  "src/pi-web-access/search-result-count-normalization.ts"() {
   }
 });
 
-// perplexity.ts
+// src/pi-web-access/perplexity.ts
 function loadConfig5() {
   return cachedConfig5 ??= loadWebAccessConfig();
 }
@@ -2426,7 +2426,7 @@ async function askPerplexity(prompt, options = {}) {
 }
 var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH3, REQUEST_TIMEOUT_MS, RATE_LIMIT, requestTimestamps, cachedConfig5;
 var init_perplexity = __esm({
-  "perplexity.ts"() {
+  "src/pi-web-access/perplexity.ts"() {
     init_utils();
     init_activity();
     init_search_types();
@@ -2447,7 +2447,7 @@ var init_perplexity = __esm({
   }
 });
 
-// search-error-redaction.ts
+// src/pi-web-access/search-error-redaction.ts
 function redactSearchFailure(error, credential) {
   const message = error instanceof Error ? error.message : String(error);
   const redacted = redactCredential(message, credential);
@@ -2457,13 +2457,13 @@ function redactSearchFailure(error, credential) {
   return { message: redacted, error: safeError };
 }
 var init_search_error_redaction = __esm({
-  "search-error-redaction.ts"() {
+  "src/pi-web-access/search-error-redaction.ts"() {
     init_credential_source();
     init_search_types();
   }
 });
 
-// parallel.ts
+// src/pi-web-access/parallel.ts
 function loadConfig8() {
   return cachedConfig8 ??= loadWebAccessConfig();
 }
@@ -2695,7 +2695,7 @@ async function parallelFetch(url, body, signal) {
 }
 var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH6, MIN_PARALLEL_API_KEY_LENGTH, MIN_USEFUL_CONTENT, SEARCH_TIMEOUT_MS3, PLACEHOLDER_API_KEY_DENYLIST, cachedConfig8;
 var init_parallel = __esm({
-  "parallel.ts"() {
+  "src/pi-web-access/parallel.ts"() {
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -2725,7 +2725,7 @@ var init_parallel = __esm({
   }
 });
 
-// parallel-mcp.ts
+// src/pi-web-access/parallel-mcp.ts
 function requestSignal3(signal) {
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS2);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -2901,7 +2901,7 @@ async function extractWithParallelMcp(url, signal, options = {}) {
 }
 var PARALLEL_MCP_URL, CONFIG_PATH7, REQUEST_TIMEOUT_MS2;
 var init_parallel_mcp = __esm({
-  "parallel-mcp.ts"() {
+  "src/pi-web-access/parallel-mcp.ts"() {
     init_activity();
     init_proxy_transport();
     init_credential_source();
@@ -2915,7 +2915,7 @@ var init_parallel_mcp = __esm({
   }
 });
 
-// tinyfish.ts
+// src/pi-web-access/tinyfish.ts
 function loadConfig9() {
   return cachedConfig9 ??= loadWebAccessConfig();
 }
@@ -3156,7 +3156,7 @@ async function extractWithTinyFish(url, signal, options = {}) {
 }
 var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH8, SEARCH_TIMEOUT_MS4, FETCH_TIMEOUT_MS, MAX_FETCH_URLS, MAX_FETCH_PER_URL_TIMEOUT_MS, cachedConfig9;
 var init_tinyfish = __esm({
-  "tinyfish.ts"() {
+  "src/pi-web-access/tinyfish.ts"() {
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -3175,7 +3175,7 @@ var init_tinyfish = __esm({
   }
 });
 
-// search1api.ts
+// src/pi-web-access/search1api.ts
 function loadConfig10() {
   return cachedConfig10 ??= loadWebAccessConfig();
 }
@@ -3335,7 +3335,7 @@ async function extractWithSearch1API(url, signal, options = {}) {
 }
 var SEARCH1API_SEARCH_URL, SEARCH1API_CRAWL_URL, CONFIG_PATH9, SEARCH_TIMEOUT_MS5, CRAWL_TIMEOUT_MS, cachedConfig10;
 var init_search1api = __esm({
-  "search1api.ts"() {
+  "src/pi-web-access/search1api.ts"() {
     init_search_error_redaction();
     init_search_types();
     init_proxy_transport();
@@ -3354,7 +3354,7 @@ var init_search1api = __esm({
   }
 });
 
-// querit.ts
+// src/pi-web-access/querit.ts
 function loadConfig12() {
   return cachedConfig12 ??= loadWebAccessConfig();
 }
@@ -3600,7 +3600,7 @@ async function extractWithQuerit(url, signal, options = {}) {
 }
 var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH11, SEARCH_TIMEOUT_MS7, CONTENTS_TIMEOUT_MS, MAX_CONTENT_URLS, cachedConfig12;
 var init_querit = __esm({
-  "querit.ts"() {
+  "src/pi-web-access/querit.ts"() {
     init_utils();
     init_proxy_transport();
     init_activity();
@@ -3619,7 +3619,7 @@ var init_querit = __esm({
   }
 });
 
-// ssrf-protection.ts
+// src/pi-web-access/ssrf-protection.ts
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
@@ -3952,7 +3952,7 @@ function bytesMatchPrefix(addr, network, prefix) {
 }
 var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, WEB_SEARCH_CONFIG_PATH2, DEFAULT_DOMAIN_POLICY;
 var init_ssrf_protection = __esm({
-  "ssrf-protection.ts"() {
+  "src/pi-web-access/ssrf-protection.ts"() {
     init_utils();
     init_proxy_transport();
     DEFAULT_MAX_REDIRECTS = 5;
@@ -3963,7 +3963,7 @@ var init_ssrf_protection = __esm({
   }
 });
 
-// firecrawl.ts
+// src/pi-web-access/firecrawl.ts
 function loadConfig15() {
   return cachedConfig15 ??= loadWebAccessConfig();
 }
@@ -4254,7 +4254,7 @@ async function extractWithFirecrawl(url, signal, options) {
 }
 var CONFIG_PATH14, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, SUPPORTED_API_VERSIONS, cachedConfig15;
 var init_firecrawl = __esm({
-  "firecrawl.ts"() {
+  "src/pi-web-access/firecrawl.ts"() {
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -4272,7 +4272,7 @@ var init_firecrawl = __esm({
   }
 });
 
-// kagi.ts
+// src/pi-web-access/kagi.ts
 function loadConfig18() {
   return cachedConfig18 ??= loadWebAccessConfig();
 }
@@ -4487,7 +4487,7 @@ async function extractWithKagi(url, signal, options = {}) {
 }
 var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH17, SEARCH_TIMEOUT_MS13, cachedConfig18;
 var init_kagi = __esm({
-  "kagi.ts"() {
+  "src/pi-web-access/kagi.ts"() {
     init_search_types();
     init_proxy_transport();
     init_utils();
@@ -4505,7 +4505,7 @@ var init_kagi = __esm({
   }
 });
 
-// ollama.ts
+// src/pi-web-access/ollama.ts
 function loadConfig20() {
   return cachedConfig20 ??= loadWebAccessConfig();
 }
@@ -4678,7 +4678,7 @@ async function extractWithOllama(url, signal, options = {}) {
 }
 var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH19, SEARCH_TIMEOUT_MS15, cachedConfig20;
 var init_ollama = __esm({
-  "ollama.ts"() {
+  "src/pi-web-access/ollama.ts"() {
     init_utils();
     init_proxy_transport();
     init_activity();
@@ -4696,7 +4696,7 @@ var init_ollama = __esm({
   }
 });
 
-// content.ts
+// src/pi-web-access/content.ts
 function extractHeadingTitle(text4) {
   const match = text4.match(/^#{1,2}\s+(.+)/m);
   if (!match) return null;
@@ -4704,11 +4704,11 @@ function extractHeadingTitle(text4) {
   return cleaned || null;
 }
 var init_content = __esm({
-  "content.ts"() {
+  "src/pi-web-access/content.ts"() {
   }
 });
 
-// media-errors.ts
+// src/pi-web-access/media-errors.ts
 function formatSeconds(s) {
   const h = Math.floor(s / 3600);
   const m = Math.floor(s % 3600 / 60);
@@ -4746,11 +4746,11 @@ function mapFfmpegError(err) {
   return snippet ? `ffmpeg failed: ${snippet}` : "ffmpeg failed";
 }
 var init_media_errors = __esm({
-  "media-errors.ts"() {
+  "src/pi-web-access/media-errors.ts"() {
   }
 });
 
-// feature-config.ts
+// src/pi-web-access/feature-config.ts
 function loadFeatureConfig() {
   return loadWebAccessConfig();
 }
@@ -4765,12 +4765,12 @@ function canAttachImages() {
   }
 }
 var init_feature_config = __esm({
-  "feature-config.ts"() {
+  "src/pi-web-access/feature-config.ts"() {
     init_utils();
   }
 });
 
-// video-extract.ts
+// src/pi-web-access/video-extract.ts
 import { execFile as execFile2 } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
 import { existsSync as existsSync3, readdirSync as readdirSync3, statSync } from "node:fs";
@@ -5043,7 +5043,7 @@ function extractVideoTitle(text4, filePath) {
 }
 var execFileAsync, DEFAULT_VIDEO_PROMPT, VIDEO_EXTENSIONS, VIDEO_CONFIG_DEFAULTS, cachedVideoConfig;
 var init_video_extract = __esm({
-  "video-extract.ts"() {
+  "src/pi-web-access/video-extract.ts"() {
     init_utils();
     init_media_errors();
     init_activity();
@@ -5080,7 +5080,7 @@ Format as markdown.`;
   }
 });
 
-// youtube-extract.ts
+// src/pi-web-access/youtube-extract.ts
 import { execFile as execFile3 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
 function errorMessage22(err) {
@@ -5304,7 +5304,7 @@ ${answer}
 }
 var execFileAsync2, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig35;
 var init_youtube_extract = __esm({
-  "youtube-extract.ts"() {
+  "src/pi-web-access/youtube-extract.ts"() {
     init_utils();
     init_proxy_transport();
     init_media_errors();
@@ -5328,7 +5328,7 @@ Format as markdown.`;
   }
 });
 
-// media-frames.ts
+// src/pi-web-access/media-frames.ts
 function parseTimestamp(ts) {
   const num = Number(ts);
   if (Number.isFinite(num) && num >= 0) return Math.floor(num);
@@ -5445,7 +5445,7 @@ async function extractMediaFrames(url, options, signal) {
 }
 var DEFAULT_RANGE_FRAMES, MIN_FRAME_INTERVAL;
 var init_media_frames = __esm({
-  "media-frames.ts"() {
+  "src/pi-web-access/media-frames.ts"() {
     init_media_errors();
     init_video_extract();
     init_youtube_extract();
@@ -5454,7 +5454,7 @@ var init_media_frames = __esm({
   }
 });
 
-// rsc-extract.ts
+// src/pi-web-access/rsc-extract.ts
 function extractRSCContent(html) {
   if (!html.includes("self.__next_f.push")) {
     return null;
@@ -5760,11 +5760,11 @@ function extractRSCContent(html) {
   return content.length > 100 ? { title, content } : null;
 }
 var init_rsc_extract = __esm({
-  "rsc-extract.ts"() {
+  "src/pi-web-access/rsc-extract.ts"() {
   }
 });
 
-// datalab-pdf-extract.ts
+// src/pi-web-access/datalab-pdf-extract.ts
 function loadConfig36() {
   return cachedConfig36 ??= loadWebAccessConfig();
 }
@@ -6114,7 +6114,7 @@ function datalabFilename(title) {
 }
 var DEFAULT_API_HOST2, API_PREFIX, DEFAULT_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, MAX_RESPONSE_BYTES, MAX_ERROR_BODY_BYTES, CLEANUP_TIMEOUT_MS, DATALAB_MODE_VALUES, DATALAB_LOCATION_VALUES, DEFAULT_DATALAB_MODE, DEFAULT_PROCESSING_LOCATION, DEFAULT_DATALAB_TIMEOUT_MS, cachedConfig36;
 var init_datalab_pdf_extract = __esm({
-  "datalab-pdf-extract.ts"() {
+  "src/pi-web-access/datalab-pdf-extract.ts"() {
     init_utils();
     init_proxy_transport();
     init_credential_source();
@@ -6141,7 +6141,7 @@ var init_datalab_pdf_extract = __esm({
   }
 });
 
-// gemini-pdf-extract.ts
+// src/pi-web-access/gemini-pdf-extract.ts
 import { Buffer as Buffer2 } from "node:buffer";
 async function extractPDFViaGemini(buffer, options) {
   const pagesToExtract = options.pages === void 0 ? options.maxPages : Math.min(options.pages, options.maxPages);
@@ -6218,7 +6218,7 @@ function normalizeTitle(value) {
 }
 var PDF_MIME_TYPE, DEFAULT_TIMEOUT_MS2, PAGE_MARKER_PATTERN;
 var init_gemini_pdf_extract = __esm({
-  "gemini-pdf-extract.ts"() {
+  "src/pi-web-access/gemini-pdf-extract.ts"() {
     init_gemini_api();
     PDF_MIME_TYPE = "application/pdf";
     DEFAULT_TIMEOUT_MS2 = 12e4;
@@ -6226,7 +6226,7 @@ var init_gemini_pdf_extract = __esm({
   }
 });
 
-// pdf-extract.ts
+// src/pi-web-access/pdf-extract.ts
 import { writeFile as writeFile2, mkdir } from "node:fs/promises";
 import { createHash as createHash2 } from "node:crypto";
 import { join as join7, basename as basename3 } from "node:path";
@@ -6441,7 +6441,7 @@ function isPDF(url, contentType) {
 }
 var PDF_PROVIDER_VALUES, DEFAULT_PDF_MAX_SIZE_MB, MAX_PDF_MAX_SIZE_MB, MAX_DATALAB_TIMEOUT_MS, DEFAULT_MAX_PAGES, DEFAULT_OUTPUT_DIR, PAGE_MARKER_PATTERN2;
 var init_pdf_extract = __esm({
-  "pdf-extract.ts"() {
+  "src/pi-web-access/pdf-extract.ts"() {
     init_utils();
     init_credential_source();
     init_datalab_pdf_extract();
@@ -6462,7 +6462,7 @@ var init_pdf_extract = __esm({
   }
 });
 
-// github-api.ts
+// src/pi-web-access/github-api.ts
 import { execFile as execFile4 } from "node:child_process";
 async function checkGhAvailable(signal) {
   if (ghAvailable !== null) return ghAvailable;
@@ -6626,7 +6626,7 @@ async function fetchViaApi(url, owner, repo, info, sizeNote) {
 }
 var MAX_TREE_ENTRIES, MAX_INLINE_FILE_CHARS, ghAvailable, ghHintShown;
 var init_github_api = __esm({
-  "github-api.ts"() {
+  "src/pi-web-access/github-api.ts"() {
     MAX_TREE_ENTRIES = 200;
     MAX_INLINE_FILE_CHARS = 1e5;
     ghAvailable = null;
@@ -6634,7 +6634,7 @@ var init_github_api = __esm({
   }
 });
 
-// github-extract.ts
+// src/pi-web-access/github-extract.ts
 import {
   chmodSync,
   closeSync as closeSync2,
@@ -7413,7 +7413,7 @@ async function extractGitHub(url, signal, forceClone) {
 }
 var BINARY_EXTENSIONS, NOISE_DIRS, MAX_INLINE_FILE_CHARS2, MAX_TREE_ENTRIES2, CLONE_RUNTIME_OWNER_FILENAME, CLONE_RUNTIME_OWNER_VERSION, MAX_CLONE_RUNTIME_OWNER_BYTES, cloneCache, startedCloneRuntimeCleanups, cachedConfig37, cloneRuntime, PROCESS_KILL_GRACE_MS;
 var init_github_extract = __esm({
-  "github-extract.ts"() {
+  "src/pi-web-access/github-extract.ts"() {
     init_utils();
     init_activity();
     init_github_api();
@@ -7510,7 +7510,7 @@ var init_github_extract = __esm({
   }
 });
 
-// github-issue-pr.ts
+// src/pi-web-access/github-issue-pr.ts
 import { execFile as execFile6 } from "node:child_process";
 function loadConfig37() {
   if (cachedConfig38) return cachedConfig38;
@@ -8087,7 +8087,7 @@ async function extractGitHubIssuePr(url, signal, options) {
 }
 var GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMENT_INLINE_CHARS, MAX_INLINE_COMMENTS, MAX_INLINE_REVIEWS, MAX_INLINE_CHECKS, MAX_INLINE_FILES, MAX_INLINE_COMMITS, MAX_INLINE_REVIEW_THREADS, REST_HEADERS, PR_SUBPATHS, PR_FIELDS, PR_CORE_FIELDS, ISSUE_FIELDS, ISSUE_CORE_FIELDS, cachedConfig38;
 var init_github_issue_pr = __esm({
-  "github-issue-pr.ts"() {
+  "src/pi-web-access/github-issue-pr.ts"() {
     init_utils();
     init_github_api();
     init_ssrf_protection();
@@ -8175,7 +8175,7 @@ var init_github_issue_pr = __esm({
   }
 });
 
-// gemini-url-context.ts
+// src/pi-web-access/gemini-url-context.ts
 function shouldRethrow3(err) {
   const message = err instanceof Error ? err.message : String(err);
   return err instanceof CredentialResolutionError || message.startsWith("Failed to parse ");
@@ -8257,7 +8257,7 @@ function extractTitleFromContent(text4, url) {
 }
 var EXTRACTION_PROMPT;
 var init_gemini_url_context = __esm({
-  "gemini-url-context.ts"() {
+  "src/pi-web-access/gemini-url-context.ts"() {
     init_activity();
     init_credential_source();
     init_gemini_api();
@@ -8272,7 +8272,7 @@ URL: `;
   }
 });
 
-// crawl4ai.ts
+// src/pi-web-access/crawl4ai.ts
 function loadConfig38() {
   return cachedConfig39 ??= loadWebAccessConfig();
 }
@@ -8407,7 +8407,7 @@ async function extractWithCrawl4ai(url, signal, options) {
 }
 var CONFIG_PATH33, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
-  "crawl4ai.ts"() {
+  "src/pi-web-access/crawl4ai.ts"() {
     init_utils();
     init_activity();
     init_credential_source();
@@ -8419,7 +8419,7 @@ var init_crawl4ai = __esm({
   }
 });
 
-// brightdata-unlocker.ts
+// src/pi-web-access/brightdata-unlocker.ts
 function loadConfig39() {
   return cachedConfig40 ??= loadWebAccessConfig();
 }
@@ -8568,7 +8568,7 @@ async function extractWithBrightDataUnlocker(url, signal, options) {
 }
 var CONFIG_PATH34, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, ZONE_PATTERN2, cachedConfig40;
 var init_brightdata_unlocker = __esm({
-  "brightdata-unlocker.ts"() {
+  "src/pi-web-access/brightdata-unlocker.ts"() {
     init_utils();
     init_activity();
     init_credential_source();
@@ -8581,7 +8581,7 @@ var init_brightdata_unlocker = __esm({
   }
 });
 
-// declared-web-links.ts
+// src/pi-web-access/declared-web-links.ts
 function discoverDeclaredWebLinks(document, linkHeader, responseUrl) {
   const links = /* @__PURE__ */ new Map();
   for (const value of splitLinkHeader(linkHeader ?? "")) {
@@ -8713,7 +8713,7 @@ function inlineCode(value) {
 }
 var MAX_DECLARED_LINKS, MAX_DECLARED_URL_LENGTH, RELATION_LABELS, DECLARATION_RELATIONS;
 var init_declared_web_links = __esm({
-  "declared-web-links.ts"() {
+  "src/pi-web-access/declared-web-links.ts"() {
     MAX_DECLARED_LINKS = 20;
     MAX_DECLARED_URL_LENGTH = 4096;
     RELATION_LABELS = {
@@ -8727,7 +8727,7 @@ var init_declared_web_links = __esm({
   }
 });
 
-// data-uri-sanitize.ts
+// src/pi-web-access/data-uri-sanitize.ts
 import { Buffer as Buffer3 } from "node:buffer";
 import { createHash as createHash4 } from "node:crypto";
 function sha256Bytes(value) {
@@ -9009,14 +9009,14 @@ function sanitizeInlineDataUris(text4, sourcePath) {
 }
 var MAX_DATA_URI_HEADER_CHARS, MAX_MIME_CHARS, MAX_MARKER_SOURCE_CHARS;
 var init_data_uri_sanitize = __esm({
-  "data-uri-sanitize.ts"() {
+  "src/pi-web-access/data-uri-sanitize.ts"() {
     MAX_DATA_URI_HEADER_CHARS = 1024;
     MAX_MIME_CHARS = 127;
     MAX_MARKER_SOURCE_CHARS = 180;
   }
 });
 
-// extract.ts
+// src/pi-web-access/extract.ts
 var extract_exports = {};
 __export(extract_exports, {
   extractContent: () => extractContent,
@@ -9985,7 +9985,7 @@ async function fetchAllContent(urls, signal, options) {
 }
 var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_SEARCH_CONFIG_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, turndownInstance, fetchLimit, PDFSizeLimitError, JINA_READER_BASE, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
 var init_extract = __esm({
-  "extract.ts"() {
+  "src/pi-web-access/extract.ts"() {
     init_content();
     init_proxy_transport();
     init_media_frames();
@@ -10041,106 +10041,18 @@ var init_extract = __esm({
   }
 });
 
-// mcp-cli.ts
+// src/pi-web-access/mcp-cli.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-// package.json
+// src/pi-web-access/package.json
 var package_default = {
   name: "pi-web-access",
   version: "0.38.0",
-  description: "Web search, URL fetching, GitHub repo cloning, PDF extraction, YouTube video understanding, and local video analysis for Pi coding agent. Supports OpenAI, Brave, Parallel, TinyFish, Search1API, Searchinfinity, Querit, Tavily, Firecrawl, Crawl4AI, Jina, SERPdive, Kagi, Ollama, AnySearch, Bright Data SERP, SerpBase, SerpApi, Serply, You.com, SearXNG, degoog, Exa, Perplexity, Gemini, Kimi, and Mistral.",
-  type: "module",
-  bin: {
-    "pi-web-access-mcp": "dist/mcp-cli.js"
-  },
-  engines: {
-    node: ">=22.19.0"
-  },
-  scripts: {
-    test: "node --import ./test/isolate-env.mjs --test",
-    typecheck: "tsc",
-    "audit:runtime": "npm audit --omit=dev --omit=peer",
-    build: "node scripts/build.js"
-  },
-  keywords: [
-    "pi-package",
-    "pi",
-    "pi-coding-agent",
-    "extension",
-    "web-search",
-    "tinyfish",
-    "search1api",
-    "searchinfinity",
-    "querit",
-    "degoog",
-    "perplexity",
-    "fetch",
-    "scraping"
-  ],
-  author: "Nico Bailon",
-  license: "MIT",
-  repository: {
-    type: "git",
-    url: "git+https://github.com/nicobailon/pi-web-access.git"
-  },
-  bugs: {
-    url: "https://github.com/nicobailon/pi-web-access/issues"
-  },
-  homepage: "https://github.com/nicobailon/pi-web-access#readme",
-  files: [
-    "dist",
-    "*.ts",
-    "CHANGELOG.md",
-    "SECURITY.md",
-    "banner.png",
-    "pi-web-fetch-demo.mp4"
-  ],
-  devDependencies: {
-    "@earendil-works/pi-ai": "1.3.0",
-    "@earendil-works/pi-coding-agent": "1.3.0",
-    "@earendil-works/pi-tui": "1.3.0",
-    "@types/turndown": "^5.0.6",
-    esbuild: "^0.28.1",
-    typebox: "1.3.27",
-    typescript: "^7.0.2"
-  },
-  dependencies: {
-    "@modelcontextprotocol/sdk": "1.32.1",
-    "@mozilla/readability": "^0.6.0",
-    defuddle: "0.19.3",
-    linkedom: "^0.16.0",
-    "p-limit": "^6.1.0",
-    "promise.try": "^2.0.1",
-    turndown: "^7.2.0",
-    undici: "^8.11.2",
-    unpdf: "^1.6.2"
-  },
-  peerDependencies: {
-    "@earendil-works/pi-ai": ">=1.3.0",
-    "@earendil-works/pi-coding-agent": ">=1.3.0",
-    "@earendil-works/pi-tui": ">=1.3.0",
-    typebox: "*"
-  },
-  peerDependenciesMeta: {
-    "@earendil-works/pi-ai": {
-      optional: true
-    },
-    "@earendil-works/pi-coding-agent": {
-      optional: true
-    },
-    "@earendil-works/pi-tui": {
-      optional: true
-    }
-  },
-  pi: {
-    extensions: [
-      "./index.ts"
-    ],
-    video: "https://github.com/nicobailon/pi-web-access/raw/refs/heads/main/pi-web-fetch-demo.mp4"
-  }
+  private: true,
+  type: "module"
 };
 
-// mcp-server.ts
+// src/pi-web-access/mcp-server.ts
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   CallToolRequestSchema,
@@ -18614,7 +18526,7 @@ __export(value_exports, {
   Repair: () => Repair
 });
 
-// search-providers.ts
+// src/pi-web-access/search-providers.ts
 var RESOLVED_SEARCH_PROVIDERS = ["openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "you", "firecrawl", "jina", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "exa", "serpdive", "kagi", "ollama", "anysearch", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "bocha", "xcrawl", "baizhi", "zai", "keenable", "ceramic"];
 var SEARCH_PROVIDERS = ["auto", "all", ...RESOLVED_SEARCH_PROVIDERS];
 var ALL_SEARCH_PROVIDERS = ["searxng", "openai", "exa", "brave", "parallel", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "firecrawl", "jina", "serpdive", "kagi", "ollama", "perplexity", "gemini", "bocha"];
@@ -18663,7 +18575,7 @@ function providerLabel(provider) {
   return SEARCH_PROVIDER_LABELS[provider];
 }
 
-// mcp-tool-definitions.ts
+// src/pi-web-access/mcp-tool-definitions.ts
 function stringEnum(values, description) {
   return typebox_exports.Unsafe({ type: "string", enum: [...values], description });
 }
@@ -18753,7 +18665,7 @@ function validateMcpToolArguments(tool, args) {
   return problems.size > 0 ? [...problems] : ["arguments do not match the input schema"];
 }
 
-// mcp-server.ts
+// src/pi-web-access/mcp-server.ts
 var TOOL_RUNNERS = {
   web_search: (core2, args, signal) => core2.webSearch(args, signal),
   fetch_content: (core2, args, signal) => core2.fetchContent(args, signal),
@@ -18795,17 +18707,17 @@ function createMcpServer(core2, info, enabledTools) {
   return server2;
 }
 
-// standalone-web-tools.ts
+// src/pi-web-access/standalone-web-tools.ts
 init_utils();
 
-// openai-search.ts
+// src/pi-web-access/openai-search.ts
 init_search_answer_formatting();
 init_utils();
 init_activity();
 init_domain_filter_normalization();
 import { randomUUID } from "node:crypto";
 
-// search-response-policy.ts
+// src/pi-web-access/search-response-policy.ts
 init_domain_filter_normalization();
 init_search_answer_formatting();
 function filterSearchResponseByDomain(response, domainFilter) {
@@ -18821,7 +18733,7 @@ function filterSearchResponseByDomain(response, domainFilter) {
   };
 }
 
-// openai-search.ts
+// src/pi-web-access/openai-search.ts
 init_search_types();
 init_credential_source();
 var OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -19464,7 +19376,7 @@ async function searchWithCurrentModelOpenAI(query, options = {}, ctx) {
   return runOpenAISearch(query, options, auth, ctx);
 }
 
-// storage.ts
+// src/pi-web-access/storage.ts
 import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 init_utils();
 import { join as join3 } from "node:path";
@@ -19692,12 +19604,12 @@ function isValidStoredData(data) {
   return true;
 }
 
-// web-tool-core.ts
+// src/pi-web-access/web-tool-core.ts
 init_utils();
 init_proxy_transport();
 import pLimit2 from "p-limit";
 
-// fetch-params.ts
+// src/pi-web-access/fetch-params.ts
 init_proxy_transport();
 function normalizeFetchContentParams(params) {
   const normalizedUrls = uniqueUrls(normalizeUrlArray(params.urls));
@@ -19769,10 +19681,10 @@ function uniqueUrls(urls) {
   return [...new Set(urls)];
 }
 
-// web-tool-core.ts
+// src/pi-web-access/web-tool-core.ts
 init_auth_fetch();
 
-// content-find.ts
+// src/pi-web-access/content-find.ts
 var CONTEXT_CHARS = 400;
 var MAX_OUTPUT_CHARS = 2e4;
 function normalize2(value) {
@@ -19996,12 +19908,12 @@ Showing 0 of ${matches.length} matches.`;
   return formatRanges(ranges, true, omitted);
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_utils();
 init_credential_source();
 init_gemini_api();
 
-// gemini-search.ts
+// src/pi-web-access/gemini-search.ts
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -20195,11 +20107,11 @@ async function resolveRedirect(proxyUrl, signal) {
   }
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_perplexity();
 init_search_types();
 
-// exa.ts
+// src/pi-web-access/exa.ts
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -20566,7 +20478,7 @@ async function searchWithExa(query, options = {}) {
   }
 }
 
-// brave.ts
+// src/pi-web-access/brave.ts
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
@@ -20574,7 +20486,7 @@ init_search_answer_formatting();
 init_utils();
 init_activity();
 
-// brave-rate-limit.ts
+// src/pi-web-access/brave-rate-limit.ts
 var DEFAULT_SAFETY_MARGIN_MS = 100;
 var DEFAULT_MAX_WAIT_MS = 3e4;
 function parseNumberList(value) {
@@ -20710,7 +20622,7 @@ var BraveRateLimitCoordinator = class {
   }
 };
 
-// brave.ts
+// src/pi-web-access/brave.ts
 init_search_result_count_normalization();
 init_credential_source();
 var BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1";
@@ -20847,13 +20759,13 @@ Get a key at https://brave.com/search/api/`
   }
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_parallel();
 init_parallel_mcp();
 init_tinyfish();
 init_search1api();
 
-// searchinfinity.ts
+// src/pi-web-access/searchinfinity.ts
 init_search_error_redaction();
 init_search_types();
 init_proxy_transport();
@@ -20997,10 +20909,10 @@ async function searchWithSearchinfinity(query, options = {}) {
   }
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_querit();
 
-// tavily.ts
+// src/pi-web-access/tavily.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -21191,7 +21103,7 @@ async function tavilyRequest(apiUrl, apiKey, body, signal) {
   }
 }
 
-// you.ts
+// src/pi-web-access/you.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -21315,10 +21227,10 @@ async function searchWithYou(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_firecrawl();
 
-// jina-search.ts
+// src/pi-web-access/jina-search.ts
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -21489,7 +21401,7 @@ async function searchWithJina(query, options = {}) {
   return result;
 }
 
-// serpdive.ts
+// src/pi-web-access/serpdive.ts
 init_search_error_redaction();
 init_search_types();
 init_proxy_transport();
@@ -21646,10 +21558,10 @@ async function searchWithSerpdive(query, options = {}) {
   return result;
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_kagi();
 
-// bocha.ts
+// src/pi-web-access/bocha.ts
 init_search_error_redaction();
 init_search_types();
 init_proxy_transport();
@@ -21779,10 +21691,10 @@ async function searchWithBocha(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 init_ollama();
 
-// searxng.ts
+// src/pi-web-access/searxng.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -21896,7 +21808,7 @@ Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.ur
   }
 }
 
-// degoog.ts
+// src/pi-web-access/degoog.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -22072,7 +21984,7 @@ async function searchWithDegoog(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// duckduckgo.ts
+// src/pi-web-access/duckduckgo.ts
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
@@ -22145,7 +22057,7 @@ async function searchWithDuckDuckGo(query, options = {}) {
   }
 }
 
-// anysearch.ts
+// src/pi-web-access/anysearch.ts
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
@@ -22267,7 +22179,7 @@ async function searchWithAnySearch(query, options = {}) {
   return mapped;
 }
 
-// xcrawl.ts
+// src/pi-web-access/xcrawl.ts
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
@@ -22414,7 +22326,7 @@ async function searchWithXCrawl(query, options = {}) {
   };
 }
 
-// xai-search.ts
+// src/pi-web-access/xai-search.ts
 init_search_answer_formatting();
 init_utils();
 init_activity();
@@ -22680,7 +22592,7 @@ async function searchWithXai(query, options = {}, ctx) {
   }
 }
 
-// brightdata.ts
+// src/pi-web-access/brightdata.ts
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -22912,7 +22824,7 @@ async function searchWithBrightData(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// serpbase.ts
+// src/pi-web-access/serpbase.ts
 init_search_types();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
@@ -23023,7 +22935,7 @@ async function searchWithSerpBase(query, options = {}) {
   }
 }
 
-// serpapi.ts
+// src/pi-web-access/serpapi.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -23139,7 +23051,7 @@ async function searchWithSerpApi(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// serper.ts
+// src/pi-web-access/serper.ts
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
@@ -23247,7 +23159,7 @@ async function searchWithSerper(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// serply.ts
+// src/pi-web-access/serply.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -23368,7 +23280,7 @@ async function searchWithSerply(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// baizhi.ts
+// src/pi-web-access/baizhi.ts
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
@@ -23473,7 +23385,7 @@ async function searchWithBaizhi(query, options = {}) {
   }
 }
 
-// zai.ts
+// src/pi-web-access/zai.ts
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
@@ -23611,7 +23523,7 @@ async function searchWithZai(query, options = {}) {
   }
 }
 
-// valyu.ts
+// src/pi-web-access/valyu.ts
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
@@ -23734,7 +23646,7 @@ async function searchWithValyu(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results, ...inlineContent.length > 0 ? { inlineContent } : {} };
 }
 
-// keenable.ts
+// src/pi-web-access/keenable.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -23880,7 +23792,7 @@ async function searchWithKeenable(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// ceramic.ts
+// src/pi-web-access/ceramic.ts
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -24030,7 +23942,7 @@ async function searchWithCeramic(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
-// kimi-search.ts
+// src/pi-web-access/kimi-search.ts
 init_utils();
 init_activity();
 init_domain_filter_normalization();
@@ -24177,7 +24089,7 @@ async function searchWithKimi(query, options = {}, ctx) {
   }
 }
 
-// mistral-search.ts
+// src/pi-web-access/mistral-search.ts
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -24369,7 +24281,7 @@ async function searchWithMistral(query, options = {}) {
   }
 }
 
-// search-router.ts
+// src/pi-web-access/search-router.ts
 var SearchProviderError = class extends Error {
   provider;
   kind;
@@ -24938,7 +24850,7 @@ async function search(query, options = {}) {
   };
 }
 
-// source-check.ts
+// src/pi-web-access/source-check.ts
 import { createHash } from "node:crypto";
 var OFFICIAL_DOCS_HOSTS = /^(developers\.|docs\.|learn\.|reference\.)|\.github\.io$/i;
 var OFFICIAL_DOCS_PATHS = /\/(docs?|reference)(\/|\b)/i;
@@ -25090,7 +25002,7 @@ function getResearchArtifact(id) {
   return data.artifact;
 }
 
-// web-tool-core.ts
+// src/pi-web-access/web-tool-core.ts
 var WEB_SEARCH_CONFIG_PATH4 = getWebAccessConfigPath();
 function loadConfig40() {
   return loadWebAccessConfig();
@@ -26179,7 +26091,7 @@ function markToolError(result) {
   return error !== void 0 || nothingSucceeded ? { ...result, isError: true } : result;
 }
 
-// standalone-web-tools.ts
+// src/pi-web-access/standalone-web-tools.ts
 var MAX_STORED_RESULTS = 50;
 var STANDALONE_DIRECT_IMAGE_ERROR = "Direct image fetch is not supported over MCP; fetch_content returns text there. Fetch images from the Pi extension instead.";
 function standaloneError(error) {
@@ -26267,7 +26179,7 @@ function createStandaloneWebToolCore(fetch) {
   };
 }
 
-// mcp-cli.ts
+// src/pi-web-access/mcp-cli.ts
 console.log = console.info = console.debug = console.error;
 var core = createStandaloneWebToolCore();
 var server = createMcpServer(core, { name: "pi-web-access", version: package_default.version }, core.enabledToolNames);

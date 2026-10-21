@@ -1,5 +1,5 @@
 import type { ContextUsage } from "@earendil-works/pi-coding-agent";
-import { defaultMetisConfig, isMetisConfigTable } from "../metis-config.ts";
+import { defaultMetisConfig, isMetisConfigTable } from "../configuration/store.ts";
 import type { ContextMetricsSnapshot } from "./types.ts";
 
 // Ceiling on what the budget triggers treat as the context window. Advertised

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MetisConfigError } from "../metis-config.ts";
+import { MetisConfigError } from "../configuration/store.ts";
 import {
 	COLLAPSE_KEY_OFF,
 	DEFAULT_COLLAPSE_KEY,

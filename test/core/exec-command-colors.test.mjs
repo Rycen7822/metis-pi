@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { stripVTControlCharacters as plain } from "node:util";
-import { highlightBashScript } from "../../src/bash-lexer.ts";
+import { highlightBashScript } from "../../src/presentation/bash-lexer.ts";
 import { renderExecCommandCall } from "../../src/execution/ui/rendering.ts";
 
 const theme = { fg: (_role, text) => text, bold: text => text };

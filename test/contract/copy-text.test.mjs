@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { copyFrame as renderFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
-import { makeRenderers } from "../../src/renderers.ts";
-import { fusionRenderers } from "../../src/fusion-view.ts";
+import { makeRenderers } from "../../src/presentation/renderers.ts";
+import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
 import { theme as toolTheme } from "../helpers.mjs";
 
 test.beforeEach((t) => installCopyPrototypes(t, undefined, { renderLatex: () => null }));

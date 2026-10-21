@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";
 import { altScreen, container, screenLines, drag, installCopyPrototypes, copyFrame, select } from "../helpers/ui-fixtures.mjs";
-import { createFullscreenLayout } from "../../src/chrome/fullscreen-layout.ts";
+import { createFullscreenLayout } from "../../src/appearance/chrome/fullscreen-layout.ts";
 import {
   initTheme,
   InteractiveMode,
@@ -11,10 +11,10 @@ import {
   createReadToolDefinition,
   createBashToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { installAdapter } from "../../src/adapter.ts";
-import { activate } from "../../src/extension.ts";
-import { CodemodeViewStore, makeCodemodeRenderers } from "../../src/codemode-view.ts";
-import { makeRenderers } from "../../src/renderers.ts";
+import { installAdapter } from "../../src/appearance/tool-host-adapter.ts";
+import { activate } from "../../src/appearance/runtime.ts";
+import { CodemodeViewStore, makeCodemodeRenderers } from "../../src/appearance/transcript/codemode-view.ts";
+import { makeRenderers } from "../../src/presentation/renderers.ts";
 import { bindings, sessionStub, toolInfo, deepFreeze, theme, sgr } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 

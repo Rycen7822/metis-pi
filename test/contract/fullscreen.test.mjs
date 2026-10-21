@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import * as Tui from "@earendil-works/pi-tui";
-import { createFullscreenLayout, FULLSCREEN_MARGIN_OWNER } from "../../src/chrome/fullscreen-layout.ts";
+import { createFullscreenLayout, FULLSCREEN_MARGIN_OWNER } from "../../src/appearance/chrome/fullscreen-layout.ts";
 import { sgr } from "../helpers.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 

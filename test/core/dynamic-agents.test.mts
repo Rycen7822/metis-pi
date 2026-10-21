@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
-import { loadPolicy, matches, parseConfig, projectMessages, replaceGlobal } from "../../src/dynamic-agents.ts";
+import { loadPolicy, matches, parseConfig, projectMessages, replaceGlobal } from "../../src/dynamic-agents/policy.ts";
 
 test("provider globs, literal punctuation and cross-provider terminal IDs", () => {
   const flash = { provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" };
