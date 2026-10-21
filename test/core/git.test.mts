@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseNumstatZ, resolveHead, type GitExec } from "../../src/git-changes.ts";
+import { parseNumstatZ, resolveHead, type GitExec } from "../../src/appearance/git-changes.ts";
 
 test("numstat -z rows: binary counts as a file, renames key on the new path", () => {
   assert.equal(parseNumstatZ("").size, 0);

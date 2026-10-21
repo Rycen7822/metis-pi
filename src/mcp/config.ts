@@ -1,6 +1,6 @@
 // Configuration validation follows Pi 1.0.0 (MIT, Mario Zechner). See NOTICE.
 import { existsSync, readFileSync } from "node:fs";
-import { defaultMetisConfig, metisConfigPath, readMetisConfig } from "../metis-config.ts";
+import { defaultMetisConfig, metisConfigPath, readMetisConfig } from "../configuration/store.ts";
 import { execSync, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";

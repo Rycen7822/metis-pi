@@ -8,7 +8,7 @@ import {
   type TUI,
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
-import { DEFAULT_CONFIG, type AppearanceConfig } from "../../appearance-config.ts";
+import { DEFAULT_CONFIG, type AppearanceConfig } from "../../appearance/config.ts";
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
 import { activeAgents } from "./widget.ts";
 

@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stringify } from "smol-toml";
-import { encodePruneConfig } from "../../src/metis-config.ts";
+import { encodePruneConfig } from "../../src/condense/config.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   createAgentSession,

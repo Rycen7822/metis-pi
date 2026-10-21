@@ -58,6 +58,8 @@ CI 的 verify 在单个 job 内使用 Node 编译缓存，测试的进程和配�
 
 ## 源码与发布
 
+`src/appearance/` 拥有主会话显示装配、状态和生命周期；`presentation/` 提供主转录与子代理共用的呈现能力，`file-changes/` 提供执行与显示共用的文件证据。Skills、Goal、Dynamic Agents 和 Remote Compaction 各自形成完整功能模块；`src/skills/` 是实现，根目录 `skills/` 才是 Pi 公共技能交付。`configuration/store.ts` 只管全局存储，Web 与 Condense 保留各自字段政策。跨扩展协议与入口身份不承载功能权限策略。
+
 运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。condense 由根项目统一维护与检查；来源归属见 [NOTICE](../NOTICE)，许可见 [condense LICENSE](provenance/condense/LICENSE) 与 [执行来源](provenance/execution/README.md)。
 
 发布包携带运行时 TS、Web 预构建 bundle、子代理 Python/JS 核心、shell WASM、Linux x64 PTY helper 与 Neural Search 共享库、主题和许可/文档。共置测试、构建脚本、验收证据、代理开发指令、类型配置及 Rust 引擎源码只保留在 Git，不随 npm 包发布；发布排除规则和必要资源统一由 `test/package.test.mjs` 核对。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。

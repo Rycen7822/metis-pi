@@ -2,16 +2,26 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ContextPruneConfig, PruneOn } from "./types.ts";
 import { BATCHING_MODE_VALUES, PRUNE_ON_VALUES, SUMMARIZER_THINKING_VALUES } from "./types.ts";
 import {
-  decodePruneConfig,
   defaultMetisConfig,
-  encodePruneConfig,
+  type MetisConfig,
   isMetisConfigTable,
   MetisConfigError,
   metisConfigPath,
   readMetisConfig,
   updateMetisConfig,
-} from "../metis-config.ts";
+} from "../configuration/store.ts";
 
+const nullable = ["autoBudgetThreshold", "budgetTurnDelta", "frontierGapThresholdTokens", "maxImagesPerRequest"];
+export function encodePruneConfig(config: object): MetisConfig {
+  const copy: MetisConfig = { ...config };
+  for (const key of nullable) if (copy[key] === null) copy[key] = false;
+  return copy;
+}
+export function decodePruneConfig(config: MetisConfig): MetisConfig {
+  const copy = { ...config };
+  for (const key of nullable) if (copy[key] === false) copy[key] = null;
+  return copy;
+}
 const bundledDefaults = defaultMetisConfig().contextPrune;
 // The bundled table is the domain's defaults; user tables still go through normalize.
 export const DEFAULT_CONFIG = decodePruneConfig(isMetisConfigTable(bundledDefaults) ? bundledDefaults : {}) as unknown as ContextPruneConfig;

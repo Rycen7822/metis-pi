@@ -6,7 +6,7 @@ import { openPrunerSettings } from "../../src/condense/settings.ts";
 import { registerCommands, setPruneStatusWidget } from "../../src/condense/commands.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../../src/condense/config.ts";
 import { displayValue, parseScalar, scalarRow, writeScalar } from "../../src/condense/setting-fields.ts";
-import { parseMetisConfig } from "../../src/metis-config.ts";
+import { parseMetisConfig } from "../../src/configuration/store.ts";
 import { stringify } from "smol-toml";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";

@@ -1,7 +1,7 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { OutputSpeedTracker, observeOutputTiming, computeSpeed, formatSpeed, formatSpeedValue } from "../../src/output-speed.ts";
+import { OutputSpeedTracker, observeOutputTiming, computeSpeed, formatSpeed, formatSpeedValue } from "../../src/appearance/activity/output-speed.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 function fixture(t: TestContext) {

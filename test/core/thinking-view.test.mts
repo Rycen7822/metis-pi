@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createThinkingViewControl, PeekScroll } from "../../src/thinking-view.ts";
-import type { ThinkingView } from "../../src/thinking-view.ts";
-import { ThinkingClickableComponent } from "../../src/chrome/transcript-components.ts";
+import { createThinkingViewControl, PeekScroll } from "../../src/presentation/thinking-view.ts";
+import type { ThinkingView } from "../../src/presentation/thinking-view.ts";
+import { ThinkingClickableComponent } from "../../src/presentation/components/transcript-components.ts";
 
 function clicks() {
   const control = createThinkingViewControl();

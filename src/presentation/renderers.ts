@@ -1,0 +1,498 @@
+// Display-only renderer registration for Pi's native two slots:
+// call region = title/command; result region = output/diff body.
+// Never modifies tool data.
+
+import { formatReadLineRange } from "@earendil-works/pi-coding-agent";
+import { renderCodexDiffComponent } from "./diff-component.ts";
+import {
+  renderExplorationHeader,
+  renderExplorationMember,
+  renderExplorationImages,
+  renderExplorationLines,
+  explorationVerb,
+  type ExplorationRow,
+} from "./explore.ts";
+import { summarizeShellCommand } from "../execution/shell/summary.ts";
+import { asRecord, languageForPath, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
+import { safeText } from "./terminal-text.ts";
+import type {
+  Palette, ViewContext, ViewOptions, TextFactory, Highlight, Renderers,
+  DiffFactory, Component, TextComponent, DiffLayoutOps, ExplorationPlan, WritePreviewInput, ShellFactories,
+} from "./contracts.ts";
+import { parseDisplayDiff, diffStatsFromRows, renderDiffLines } from "./diff.ts";
+import type { WriteDiff, DiffStats } from "../file-changes/diff.ts";
+import { resolveWriteStage } from "./write-preview.ts";
+import { shellTitle } from "./shell.ts";
+
+const PREVIEW_LINES = 5;
+const COMMAND_LINES = 2;
+const MAX_PREVIEW_LINE_CHARS = 1200;
+const SHELL = new Set<ToolName>(["bash", "powershell"]);
+
+function string(value: unknown): string { return typeof value === "string" ? value : ""; }
+function path(args: Record<string, unknown>, ctx: ViewContext): string {
+  let value = string(args.path) || string(args.file_path);
+  if (ctx.cwd && value.startsWith(`${ctx.cwd}/`)) value = value.slice(ctx.cwd.length + 1);
+  return value;
+}
+function cleanLines(text: string): string[] {
+  const lines = safeText(text).split("\n");
+  while (lines.length && lines.at(-1) === "") lines.pop();
+  return lines;
+}
+function shortened(line: string): string {
+  return line.length > MAX_PREVIEW_LINE_CHARS
+    ? `${line.slice(0, MAX_PREVIEW_LINE_CHARS).replace(/[\ud800-\udbff]$/, "")} … [line shortened in preview]` : line;
+}
+/** Right-aligned four-cell line numbers, the one numbering used by every preview. */
+function numberedLines(lines: readonly string[]): string[] {
+  return lines.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
+}
+function preview(lines: string[], limit: number, expanded: boolean, hint: string, mode: "head" | "tail" | "both" = "head"): string[] {
+  if (expanded) return lines;
+  let selected = lines;
+  if (lines.length > limit) {
+    const notice = `… +${lines.length - limit} lines (${hint})`;
+    if (mode === "tail") selected = [notice, ...lines.slice(-limit)];
+    else if (mode === "both") {
+      const head = Math.floor(limit / 2);
+      selected = [...lines.slice(0, head), notice, ...lines.slice(-(limit - head))];
+    } else selected = [...lines.slice(0, limit), notice];
+  }
+  const shortenedLines = selected.map(shortened);
+  if (shortenedLines.some((line) => line.endsWith("[line shortened in preview]"))) shortenedLines.push(`(${hint} for the complete text)`);
+  return shortenedLines;
+}
+function gutter(lines: readonly string[], theme: Palette, color = "toolOutput"): string {
+  return lines.map((line, i) => `${theme.fg("dim", i === 0 ? "  └ " : "    ")}${theme.fg(color, line)}`).join("\n");
+}
+function highlight(text: string, language: string, theme: Palette, paint?: Highlight): string {
+  try {
+    if (paint) return paint(text, language);
+  } catch {
+    /* Syntax colouring is optional. */
+  }
+  return theme.fg("toolTitle", text);
+}
+
+/** Exploration title (call region): the FIRST grouped member owns the group header; later members render only their own row. */
+export function explorationTitle(
+  name: ToolName,
+  ctx: ViewContext,
+  theme: Palette,
+  colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" },
+): string {
+  const outer = asRecord(ctx.args);
+  const args = name === "neural_search" ? asRecord(outer.params) : outer;
+  const done = ctx.isPartial === false;
+  const verb = explorationVerb(name, outer);
+  const pattern = typeof args.pattern === "string" ? args.pattern :
+    name === "neural_search" && Array.isArray(args.patterns) && args.patterns.every(value => typeof value === "string")
+      ? args.patterns : undefined;
+  const target = safeText(pattern !== undefined ? JSON.stringify(pattern) : path(args, ctx));
+  const inPath = pattern !== undefined ? safeText([path(args, ctx), string(args.constraints)].filter(Boolean).join(" ")) : undefined;
+  const suffix = name === "read" ? formatReadLineRange(args.offset, args.limit) : "";
+  const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
+  const level = ctx.colorLevel ?? colorLevel;
+  const plan: ExplorationPlan | undefined = ctx.explorationPlan as ExplorationPlan | undefined;
+  if (!plan) {
+    return renderExplorationLines(
+      { running: !done, isError: ctx.isError === true, rows },
+      level,
+      theme,
+    ).join("\n");
+  }
+  const header = plan.isHeaderOwner
+    ? `${renderExplorationHeader({ running: plan.running, isError: ctx.isError === true }, theme)}\n`
+    : "";
+  const memberLine = renderExplorationMember(rows[0]!, { first: plan.isFirstMember }, level);
+  // Aggregated image notice lives on the LAST member (once per group).
+  const images = plan.isLastMember && !plan.running
+    ? renderExplorationImages(plan.groupImages, level, ctx.showImages)
+    : undefined;
+  return [header + memberLine, images].filter(Boolean).join("\n");
+}
+
+export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff | undefined): string {
+  const args = asRecord(ctx.args);
+  const done = ctx.isPartial === false;
+  // While args stream the path may not have arrived yet (content-first providers): show a dim placeholder until the path frame lands.
+  const rawPath = shortened(safeText(path(args, ctx)));
+  const target = rawPath
+    ? theme.fg("toolTitle", rawPath)
+    : theme.fg("dim", "(path pending…)");
+  if (!done) {
+    return `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold("Writing"))} ${target}`;
+  }
+  if (ctx.isError === true) {
+    return `${theme.fg("error", "•")} ${theme.fg("toolTitle", theme.bold("Failed"))} ${target}`;
+  }
+  const bullet = theme.fg("success", "•");
+  if (!change || change.kind === "unavailable") {
+    const reason = change?.reason ? ` ${theme.fg("muted", `(${change.reason}; diff unavailable)`)}` : "";
+    return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target}${reason}`;
+  }
+  if (change.kind === "add") {
+    return (
+      `${bullet}` +
+      " " +
+      `${theme.fg("toolTitle", theme.bold("Added"))}` +
+      " " +
+      `${target}` +
+      " " +
+      `${theme.fg("toolDiffAdded", `+${change.added}`)}` +
+      " " +
+      `${theme.fg("toolDiffRemoved", "-0")}`
+    );
+  }
+  if (change.kind === "update") {
+    return (
+      `${bullet}` +
+      " " +
+      `${theme.fg("toolTitle", theme.bold("Edited"))}` +
+      " " +
+      `${target}` +
+      " " +
+      `${theme.fg("toolDiffAdded", `+${change.added}`)}` +
+      " " +
+      `${theme.fg("toolDiffRemoved", `-${change.removed}`)}`
+    );
+  }
+  if (change.kind === "unchanged") {
+    return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target} ${theme.fg("muted", "(unchanged)")}`;
+  }
+  return `${bullet} ${theme.fg("toolTitle", theme.bold("Failed"))} ${target}`;
+}
+
+export function diffStats(value: unknown): DiffStats | undefined {
+  const diff = asRecord(asRecord(value).details).diff;
+  if (typeof diff !== "string") return undefined;
+  return diffStatsFromRows(parseDisplayDiff(diff));
+}
+
+/** Shell call text for non-component hosts (title + command, never output). */
+export function shellCallText(
+  bullet: string,
+  title: string,
+  args: Record<string, unknown>,
+  ctx: ViewContext,
+  theme: Palette,
+  paint?: Highlight,
+): string {
+  const value = string(args.command) || "…";
+  const all = cleanLines(value);
+  const expanded = ctx.expanded === true;
+  const visible = expanded ? all : all.slice(0, COMMAND_LINES).map(shortened);
+  if (!expanded && all.length > COMMAND_LINES) visible.push(`… +${all.length - COMMAND_LINES} command lines`);
+  const [head = "…", ...rest] = visible;
+  return (
+    `${bullet} ${theme.fg("toolTitle", theme.bold(title))} ${highlight(head, "bash", theme, paint)}` +
+    rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("")
+  );
+}
+
+export function formatResult(
+  name: ToolName,
+  value: unknown,
+  options: ViewOptions,
+  theme: Palette,
+  ctx: ViewContext,
+  hint = "expand tool output",
+): string {
+  const result = asRecord(value);
+  const blocks = Array.isArray(result.content) ? result.content.map(asRecord) : [];
+  const text = blocks
+    .filter((block) => block.type === "text")
+    .map((block) => string(block.text))
+    .join("\n");
+  const lines = cleanLines(text);
+  const expanded = options.expanded === true;
+  const error = ctx.isError === true || result.isError === true;
+  const sections: string[] = [];
+  const foldedExploration = isExplorationTool(name, ctx.args) && !expanded && !error && !options.isPartial;
+  if (lines.length && !foldedExploration) {
+    sections.push(
+      gutter(
+        preview(lines, PREVIEW_LINES, expanded, hint, SHELL.has(name) ? (options.isPartial ? "tail" : "both") : "head"),
+        theme,
+        error ? "error" : "toolOutput",
+      ),
+    );
+  }
+  if (!lines.length && error) sections.push(gutter(["Tool failed (no text output)"], theme, "error"));
+  if (!lines.length && !error && options.isPartial) sections.push(gutter(["Running…"], theme, "dim"));
+  if (SHELL.has(name) && !lines.length && !error && !options.isPartial)
+    sections.push(gutter(["(no output)"], theme, "dim"));
+  const images = blocks.filter((block) => block.type === "image").length;
+  // Grouped members don't repeat the image notice; the group aggregates it once (call region).
+  const groupedMember = isExplorationTool(name, ctx.args) && ctx.explorationPlan !== undefined;
+  if (images && !groupedMember)
+    sections.push(
+      gutter(
+        [
+          `${images}` +
+            " image" +
+            `${images === 1 ? "" : "s"}` +
+            `${ctx.showImages === false ? " (TUI preview disabled)" : ""}`,
+        ],
+        theme,
+        "dim",
+      ),
+    );
+  const other = blocks.filter((block) => block.type !== "text" && block.type !== "image");
+  if (other.length) sections.push(gutter([`${other.length} additional non-text content block(s)`], theme, "dim"));
+  return sections.filter(Boolean).join("\n");
+}
+
+function editCall(input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats): string {
+  const args = asRecord(input);
+  const done = ctx.isPartial === false;
+  const marker = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
+  const label = ctx.isError ? "Failed" : done ? "Edited" : "Editing";
+  let suffix = "";
+  if (stats && ctx.isError !== true)
+    suffix =
+      " (" +
+      `${theme.fg("toolDiffAdded", `+${stats.added}`)}` +
+      " " +
+      `${theme.fg("toolDiffRemoved", `-${stats.removed}`)}` +
+      ")";
+  return `${marker} ${theme.fg("toolTitle", theme.bold(label))} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
+}
+
+/** Only presentation data crosses into the tool renderers. */
+export interface RendererSession {
+  readonly colorLevel: import("./palette.ts").ColorLevel;
+  readonly writeChanges: ReadonlyMap<string, WriteDiff>;
+  readonly transcript?: { explorationPlan(toolCallId: string): ExplorationPlan | undefined };
+}
+
+export function makeRenderers(
+  makeText: TextFactory,
+  expandHint: () => string,
+  paint?: Highlight,
+  makeDiff?: DiffFactory,
+  makeShell?: ShellFactories,
+  makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => Component | undefined,
+  session?: RendererSession,
+  layoutOps?: DiffLayoutOps,
+): Record<ToolName, Renderers> {
+  const ownComponents = new WeakSet<object>();
+  const views = new WeakMap<object, { call?: TextComponent; stats?: DiffStats }>();
+  function view(ctx: ViewContext) {
+    if (!ctx.state || typeof ctx.state !== "object") return undefined;
+    let state = views.get(ctx.state);
+    if (!state) { state = {}; views.set(ctx.state, state); }
+    return state;
+  }
+  function component(text: string, ctx: ViewContext): TextComponent {
+    const previous = ctx.lastComponent;
+    // Reuse only OUR Text components that have setText; the write-call composite
+    // is ours but setText-less (calling it threw TypeError, host silently fell back).
+    const reusable = previous && typeof previous === "object" && ownComponents.has(previous)
+      && typeof (previous as { setText?: unknown }).setText === "function";
+    if (reusable) {
+      (previous as TextComponent).setText(text);
+      return previous as TextComponent;
+    }
+    const created = makeText(text);
+    if (created && typeof created === "object") ownComponents.add(created);
+    return created;
+  }
+  function writeChangeFor(ctx: ViewContext): WriteDiff | undefined {
+    // Injected change (tests/preview/host without tracker wiring) wins; then the tracker keyed by toolCallId.
+    if (ctx.writeChanges && typeof ctx.writeChanges === "object") return ctx.writeChanges as WriteDiff;
+    const toolCallId = typeof ctx.toolCallId === "string" ? ctx.toolCallId : undefined;
+    return toolCallId && session ? session.writeChanges.get(toolCallId) : undefined;
+  }
+  function colorFor(ctx: ViewContext): import("./palette.ts").ColorLevel {
+    return ctx.colorLevel ?? session?.colorLevel ?? { kind: "ansi16" };
+  }
+  const layout: DiffLayoutOps = layoutOps ?? { wrap: (text) => [text], visibleWidth: (text) => text.length };
+
+  function writeBody(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext): Component {
+    const args = asRecord(ctx.args);
+    const expanded = options.expanded === true;
+    const error = ctx.isError === true || asRecord(result).isError === true;
+    const hint = expandHint();
+    const contentArg = typeof args.content === "string" ? args.content : undefined;
+
+    if (error) {
+      const blocks = Array.isArray(asRecord(result).content) ? (asRecord(result).content as unknown[]).map(asRecord) : [];
+      const text = blocks.filter((block) => block.type === "text").map((block) => string(block.text)).join("\n");
+      const lines = cleanLines(text);
+      const head = gutter(["write failed"], theme, "error");
+      const body = lines.length ? gutter(preview(lines, PREVIEW_LINES, expanded, hint), theme, "error") : "";
+      const attempted = contentArg
+        ? gutter(expanded
+            ? ["attempted content (not written):", ...numberedLines(cleanLines(contentArg))]
+            : ["attempted content (not written) — expand to view"], theme, "muted")
+        : "";
+      return component([head, body, attempted].filter(Boolean).join("\n"), ctx);
+    }
+
+    const change = writeChangeFor(ctx);
+    if (change && (change.kind === "add" || change.kind === "update") && change.rows?.length) {
+      const filePath = path(args, ctx);
+      if (makeDiff) {
+        return makeDiff({ rows: change.rows, filePath, theme, context: ctx, options });
+      }
+      const rendered = renderDiffLines({
+        rows: change.rows, width: 100, layout, colorLevel: colorFor(ctx),
+        language: languageForPath(filePath), paint,
+      });
+      return component(rendered.join("\n"), ctx);
+    }
+
+    // unchanged/unavailable/no tracker: preview from the call's own args — never a fabricated +N/-0.
+    if (contentArg === undefined) return component("", ctx);
+    const lines = cleanLines(contentArg);
+    const numbered = numberedLines(lines);
+    const label = change?.kind === "unchanged"
+      ? "written content (unchanged)"
+      : `written content (${lines.length} lines)`;
+    const head = gutter([label], theme, "muted");
+    const body = gutter(preview(numbered, PREVIEW_LINES, expanded, hint), theme);
+    return component([head, body].filter(Boolean).join("\n"), ctx);
+  }
+
+  return Object.fromEntries<Renderers>(
+    TOOL_NAMES.map((name) => [
+      name,
+      {
+        renderCall(args: unknown, theme: Palette, ctx: ViewContext) {
+          // Pi passes the same args in both slots; merge so title builders can read args from either source.
+          const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
+          if (SHELL.has(name)) {
+            const command = string(asRecord(args).command);
+            const summary = name === "bash" ? summarizeShellCommand(command) : undefined;
+            if (summary && summary.actions.length && summary.actions.every(action => action.kind === "read" || action.kind === "search" || action.kind === "find")) {
+              const rows: ExplorationRow[] = summary.actions.map(action => action.kind === "read"
+                ? { verb: "Read", target: path({ path: action.path }, merged) }
+                : {
+                  verb: action.kind === "find" ? "Find" : "Search",
+                  target: action.query || action.command,
+                  inPath: action.query ? action.path : undefined,
+                });
+              const title = renderExplorationLines({ running: merged.isPartial !== false, isError: merged.isError === true, rows }, colorFor(merged), theme).join("\n");
+              return component(merged.expanded ? `${title}\n${highlight(safeText(command), "bash", theme, paint)}` : title, ctx);
+            }
+            const { bullet, title } = shellTitle(merged, theme);
+            if (makeShell?.makeShellCall) {
+              return makeShell.makeShellCall({
+                name,
+                bullet,
+                title,
+                args: asRecord(args),
+                options: { isPartial: merged.isPartial, expanded: merged.expanded },
+                theme,
+                context: merged,
+                expandHint: expandHint(),
+                colorLevel: colorFor(merged),
+              });
+            }
+            return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
+          }
+          if (name === "write") {
+            // Call slot ALWAYS owns a structured header: it stays visible through
+            // arg streaming and completion; the live preview is a body UNDER it,
+            // never a replacement.
+            const hasResult = merged.isPartial === false;
+            const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
+            const stage = resolveWriteStage({
+              argsComplete: merged.argsComplete === true,
+              executionStarted: merged.executionStarted === true,
+              isError: merged.isError === true,
+              hasResult: merged.isPartial === false,
+            });
+            if (makeWriteCall && !hasResult) {
+              const input: WritePreviewInput & { headerText: string } = {
+                name,
+                args: asRecord(args),
+                stage,
+                contentPrefix,
+                headerText: writeTitle(merged, theme, writeChangeFor(merged)),
+                expanded: merged.expanded === true,
+                theme,
+                context: merged,
+                expandHint: expandHint(),
+                colorLevel: colorFor(merged),
+              };
+              // Reuse our previous call component when the host hands it back
+              // (updateArgs → lastComponent). Update in place; never mutate a foreign instance.
+              const previous = ctx.lastComponent;
+              if (
+                previous &&
+                typeof previous === "object" &&
+                ownComponents.has(previous) &&
+                typeof (previous as { update?: unknown }).update === "function"
+              ) {
+                (previous as { update: (next: typeof input) => void }).update(input);
+                return previous as Component;
+              }
+              const callComponent = makeWriteCall(input);
+              if (callComponent && typeof callComponent === "object") {
+                ownComponents.add(callComponent);
+                return callComponent;
+              }
+            }
+            return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
+          }
+          if (isExplorationTool(name, merged.args)) {
+            const plan =
+              merged.explorationPlan ??
+              session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
+            return component(
+              explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)),
+              ctx,
+            );
+          }
+          if (name === "neural_search") {
+            const action = string(asRecord(merged.args).action) || "…";
+            return component(theme.fg("toolTitle", `neural_search ${safeText(action)}`), ctx);
+          }
+          const state = view(ctx);
+          const call = component(editCall(args, theme, merged, state?.stats), ctx);
+          if (state) state.call = call;
+          return call;
+        },
+        renderResult(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext) {
+          if (name === "edit") {
+            const state = view(ctx);
+            const diff = asRecord(asRecord(result).details).diff;
+            const rows = typeof diff === "string" && (state || ctx.isError !== true) ? parseDisplayDiff(diff) : undefined;
+            if (state) {
+              state.stats = rows ? diffStatsFromRows(rows) : undefined;
+              state.call?.setText(editCall(ctx.args, theme, ctx, state.stats));
+            }
+            if (rows && ctx.isError !== true) {
+              const filePath = path(asRecord(ctx.args), ctx);
+              if (makeDiff) return makeDiff({ rows, filePath, theme, context: ctx, options });
+              return component(
+                renderCodexDiffComponent({ rows, filePath, paint, colorLevel: colorFor(ctx) }, 100, layout).join("\n"),
+                ctx,
+              );
+            }
+          }
+          if (name === "write") {
+            if (options.isPartial) return component("", ctx);
+            return writeBody(result, options, theme, ctx);
+          }
+          if (SHELL.has(name) && makeShell?.makeShellResult) {
+            return makeShell.makeShellResult({
+              name,
+              args: asRecord(ctx.args),
+              result,
+              options,
+              theme,
+              context: ctx,
+              expandHint: expandHint(),
+              colorLevel: colorFor(ctx),
+            });
+          }
+          return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
+        },
+      },
+    ]),
+  ) as Record<ToolName, Renderers>;
+}

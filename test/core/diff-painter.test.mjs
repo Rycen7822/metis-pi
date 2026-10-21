@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createDiffPainter } from "../../src/chrome/tool-components.ts";
+import { createDiffPainter } from "../../src/presentation/components/tool-components.ts";
 
 function palette() {
   return {

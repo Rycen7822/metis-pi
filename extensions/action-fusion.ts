@@ -9,9 +9,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { executeFusion, fusionFailed, THEN_RUN_SCHEMA } from "../src/execution/action-fusion.ts";
 import { runNativeFusionCommand } from "../src/execution/action-fusion-command.ts";
-import { snapshotFile, computeWriteDiff } from "../src/write-tracker.ts";
-import { resolveNativeMutationPath } from "../src/native-tool-path.ts";
-export { resolveNativeMutationPath } from "../src/native-tool-path.ts";
+import { snapshotFile, computeWriteDiff } from "../src/file-changes/diff.ts";
+import { resolveNativeMutationPath } from "../src/file-changes/path.ts";
+export { resolveNativeMutationPath } from "../src/file-changes/path.ts";
 
 function wrapNative<P extends TProperties, D, S>(base: ToolDefinition<TObject<P>, D, S>) {
   const parameters = Type.Object({ ...base.parameters.properties, then_run: THEN_RUN_SCHEMA });

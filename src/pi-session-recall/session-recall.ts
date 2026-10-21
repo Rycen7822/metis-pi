@@ -37,7 +37,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { isMetisConfigTable, readMetisConfig } from "../metis-config.ts";
+import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
 import { createRecallRequest } from "./context.ts";
 import { searchFiles, searchLines } from "./search.ts";
 

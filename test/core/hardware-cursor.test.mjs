@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHardwareCursor } from "../../src/chrome/hardware-cursor.ts";
+import { createHardwareCursor } from "../../src/appearance/chrome/hardware-cursor.ts";
 
 function renderer(initial = false) {
   const writes = [];

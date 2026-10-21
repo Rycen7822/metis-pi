@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
-import { createSkillMux } from "../../src/skill-mux.ts";
+import { createSkillMux } from "../../src/skills/mux.ts";
 import { DefaultResourceLoader, SettingsManager, loadSkills, parseSkillBlock, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function writeSkill(root: string, dirName: string, name: string, body: string) {

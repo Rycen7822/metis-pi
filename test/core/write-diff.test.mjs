@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeWriteDiff, buildDiffRows } from "../../src/write-tracker.ts";
+import { computeWriteDiff, buildDiffRows } from "../../src/file-changes/diff.ts";
 
 test("oversize pre-image cannot fabricate a diff", () => {
   const oversize = computeWriteDiff(

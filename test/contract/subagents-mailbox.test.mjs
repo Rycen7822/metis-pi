@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
-import { DEFAULT_CONFIG } from "../../src/appearance-config.ts";
+import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
 import { SubagentClient } from "../../src/subagents/host/client.ts";
 import { installSamplingMailbox } from "../../src/subagents/host/sampling.ts";
 

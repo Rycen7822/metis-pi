@@ -1,5 +1,5 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isMetisConfigTable, readMetisConfig } from "../metis-config.ts";
+import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
 
 export interface GuidanceFields {
 	promptSnippet?: string;

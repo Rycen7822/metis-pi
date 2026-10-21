@@ -1,19 +1,19 @@
 import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
-import { activate, type AppearanceAPI } from "../src/extension.ts";
-import { createDiffComponent, createDiffPainter, createShellFactories } from "../src/chrome/tool-components.ts";
-import { registerCompactionPresentation } from "../src/chrome/compaction-presentation.ts";
-import { wrapPlainOutput, type LayoutOps } from "../src/shell.ts";
-import type { Palette } from "../src/render-contract.ts";
-import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
-import { makeSurfaceOps } from "../src/surface.ts";
-import { loadConfig } from "../src/appearance-config.ts";
-import { thoughtSummaryText } from "../src/thinking-summary.ts";
+import { activate, type AppearanceAPI } from "../src/appearance/runtime.ts";
+import { createDiffComponent, createDiffPainter, createShellFactories } from "../src/presentation/components/tool-components.ts";
+import { registerCompactionPresentation } from "../src/appearance/chrome/compaction-presentation.ts";
+import { wrapPlainOutput, type LayoutOps } from "../src/presentation/shell.ts";
+import type { Palette } from "../src/presentation/contracts.ts";
+import { CODEX_CYAN_RGB, resolveColorContext } from "../src/presentation/palette.ts";
+import { makeSurfaceOps } from "../src/appearance/chrome/surface.ts";
+import { loadConfig } from "../src/appearance/config.ts";
+import { thoughtSummaryText } from "../src/presentation/thinking-summary.ts";
 import {
   CodexSeparatorComponent, CodexWriteCallComponent, ThinkingRailComponent,
   ThinkingPeekComponent, ThinkingClickableComponent,
-} from "../src/chrome/transcript-components.ts";
+} from "../src/presentation/components/transcript-components.ts";
 
 function layoutOps(): LayoutOps {
   return {

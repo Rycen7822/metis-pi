@@ -1,5 +1,5 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { defaultMetisConfig, isMetisConfigTable, metisConfigPath, readMetisConfig, updateMetisConfig } from "../metis-config.ts";
+import { defaultMetisConfig, isMetisConfigTable, metisConfigPath, readMetisConfig, updateMetisConfig } from "../configuration/store.ts";
 
 export type ExecutionConfig = {
   tools: { autoReasoning: boolean; customRustBinariesDir: string };

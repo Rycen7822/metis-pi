@@ -1,6 +1,6 @@
 import type { Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { safeText } from "../../terminal-text.ts";
+import { safeText } from "../../presentation/terminal-text.ts";
 
 export class CollapsedText implements Component {
   constructor(private readonly preview: string, private readonly suffix = "", private readonly marker = "...") {}

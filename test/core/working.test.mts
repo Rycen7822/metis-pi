@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { workingFrame, createWorkingComponent, type WorkingSnapshotWithUsage } from "../../src/chrome/working.ts";
+import { workingFrame, createWorkingComponent, type WorkingSnapshotWithUsage } from "../../src/appearance/chrome/working.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 const SHOW = { elapsed: true, thought: true, tool: true, tokens: false };

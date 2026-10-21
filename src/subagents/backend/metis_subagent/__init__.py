@@ -8,7 +8,7 @@ PROTOCOL_VERSION = 4
 
 # Captured at import time: changing files on disk cannot update a resident daemon.
 _digest = sha256()
-for _file in [PACKAGE_DIR / 'metis-pi.toml', ENTRYPOINT, *sorted(MODULE_DIR.glob('*.py')),
+for _file in [PACKAGE_DIR / 'metis-pi.toml', PACKAGE_DIR / 'src' / 'extension-paths.ts', ENTRYPOINT, *sorted(MODULE_DIR.glob('*.py')),
               *sorted(WORKER_DIR.glob('*.ts')), *sorted(WORKER_DIR.glob('*.mjs'))]:
     _digest.update(str(_file.relative_to(PACKAGE_DIR)).encode() + b'\0' + _file.read_bytes())
 RUNTIME_REVISION = _digest.hexdigest()

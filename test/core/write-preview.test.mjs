@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CodexWriteCallComponent } from "../../src/chrome/transcript-components.ts";
+import { CodexWriteCallComponent } from "../../src/presentation/components/transcript-components.ts";
 import { layout } from "../helpers/layout.mjs";
 import { copyFrame, select } from "../helpers/ui-fixtures.mjs";
 

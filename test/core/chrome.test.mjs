@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFooterComponent, layoutFooter } from "../../src/chrome/footer.ts";
+import { createFooterComponent, layoutFooter } from "../../src/appearance/chrome/footer.ts";
 import * as Tui from "@earendil-works/pi-tui";
 import { sgr } from "../helpers.mjs";
 import { altScreen, screenLines } from "../helpers/ui-fixtures.mjs";
 import { setPruneStatusWidget } from "../../src/condense/commands.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
-import { cellWidth, clipLine, truncateSegments } from "../../src/segments.ts";
+import { cellWidth, clipLine, truncateSegments } from "../../src/presentation/segments.ts";
 
 test("chrome clipping keeps terminal graphemes and excludes ANSI from cell counts", () => {
   assert.equal(cellWidth("é👩‍🔬"), 3);
@@ -57,7 +57,7 @@ test("footer keeps unknown context distinct from zero usage", () => {
 });
 
 test("header component: real identity, never impersonates OpenAI", async () => {
-  const { createHeaderComponent } = await import("../../src/chrome/header.ts");
+  const { createHeaderComponent } = await import("../../src/appearance/chrome/header.ts");
   const deps = {
     appearanceVersion: "0.8.5",
     piVersion: "0.85.1",

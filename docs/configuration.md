@@ -114,7 +114,7 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 
 ## 颜色能力
 
-`src/palette.ts` 按顺序命中即停，实例缓存结果；改环境变量后重启。
+`src/presentation/palette.ts` 按顺序命中即停，实例缓存结果；改环境变量后重启。
 
 | 条件 | 结果 |
 | --- | --- |

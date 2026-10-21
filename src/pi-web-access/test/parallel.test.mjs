@@ -1,5 +1,5 @@
 import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../web-access-config.ts";
+import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";

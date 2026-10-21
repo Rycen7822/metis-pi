@@ -112,7 +112,7 @@ function readConfigSequence(configs) {
 	try {
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from ${JSON.stringify(new URL("../../web-access-config.ts", import.meta.url).href)};
+import { splitWebAccessConfig } from ${JSON.stringify(new URL("../../configuration/web-access.ts", import.meta.url).href)};
 
 				import { writeFileSync } from "node:fs";
 				import { join } from "node:path";

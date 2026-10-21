@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { subagentTheme } from "../helpers/subagent-theme.mjs";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
-import { DEFAULT_CONFIG, loadConfig } from "../../src/appearance-config.ts";
+import { DEFAULT_CONFIG, loadConfig } from "../../src/appearance/config.ts";
 import { RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 import managedSurface from "../../src/subagents/worker/managed-surface.ts";

@@ -3,10 +3,10 @@
 // triggers may mix) expands every skill (host-format blocks) plus the
 // trailing text. Single `/skill:` inputs, bare `￥`-less text, and everything
 // else pass through untouched for the host's native handling.
-// See src/skill-mux.ts for the mechanics and performance notes.
+// See src/skills/mux.ts for the mechanics and performance notes.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createSkillAutocompleteWrapper, createSkillMux } from "../src/skill-mux.ts";
+import { createSkillAutocompleteWrapper, createSkillMux } from "../src/skills/mux.ts";
 
 export default function skillMuxExtension(pi: ExtensionAPI): void {
   const mux = createSkillMux(pi);

@@ -1,5 +1,5 @@
 import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../web-access-config.ts";
+import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { appendFile, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -14,7 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createMcpServer } from "../mcp-server.ts";
-import { initializeMetisConfig } from "../../metis-config.ts";
+import { initializeMetisConfig } from "../../configuration/store.ts";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const TOOL_NAMES = ["fetch_content", "get_search_content", "source_check", "web_search"];
@@ -194,8 +194,9 @@ async function builtBinDir() {
 	const cliDir = join(dir, "src", "pi-web-access", "dist");
 	await mkdir(cliDir, { recursive: true });
 	await copyFile(join(repoRoot, "dist", "mcp-cli.js"), join(cliDir, "mcp-cli.js"));
-	for (const name of ["metis-config.ts", "web-access-config.ts"]) {
-		await copyFile(join(repoRoot, "..", name), join(dir, "src", name));
+	await mkdir(join(dir, "src", "configuration"), { recursive: true });
+	for (const name of ["store.ts", "web-access.ts"]) {
+		await copyFile(join(repoRoot, "..", "configuration", name), join(dir, "src", "configuration", name));
 	}
 	for (const name of ["metis-pi.toml", "metis-pi-config.md"]) {
 		await copyFile(join(repoRoot, "..", "..", name), join(dir, name));

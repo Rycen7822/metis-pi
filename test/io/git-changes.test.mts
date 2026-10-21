@@ -5,7 +5,7 @@ import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync 
 import { join } from "node:path";
 import { temporaryDirectory as tempDir } from "../helpers/temp-dir.mjs";
 import { git, committedRepository, trackedRepo, refreshAndExpectSample } from "../helpers/git.mts";
-import { createLineCountCache, MAX_UNTRACKED_BYTES, readLineCount, resolveHead } from "../../src/git-changes.ts";
+import { createLineCountCache, MAX_UNTRACKED_BYTES, readLineCount, resolveHead } from "../../src/appearance/git-changes.ts";
 
 test("readLineCount streams: text, no trailing newline, binary, oversized, missing", async (t) => {
   const dir = tempDir(t, "metis-pi-lines-");

@@ -107,4 +107,6 @@ fullscreen 留白、历史窗口与置顶输入条共用一个布局根安装生
 
 `glyphs.include` 可追加字符；终端和字体决定实际效果，绕过帧写入路径的组件不受处理。
 
-实现集中在 `src/chrome/`、`turn-summary.ts`、`git-changes.ts` 和 `glyph-presentation.ts`。
+主界面实现集中在 `src/appearance/chrome/`，交互摘要与用量 owner 位于 `src/appearance/activity/`；Git 统计和会话装配由 appearance 管理，共用呈现组件位于 `src/presentation/`。
+
+字形 writer 包装由当前激活持有并在会话关闭时释放，重新启用使用新的配置，不覆盖后来接管的 writer。若升级前的 Pi 进程已安装旧版不可释放包装，首次升级须重启 Pi；字形诊断会显示 `legacy writer requires Pi restart`。旧版 Skills 加载期补丁也需重启一次，之后的热重载由入口释放租约。

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { UsageLedger, cacheHitRate, sanitizeUsage } from "../../src/usage-ledger.ts";
-import { SUMMARY_CUSTOM_TYPE } from "../../src/turn-summary.ts";
+import { UsageLedger, cacheHitRate, sanitizeUsage } from "../../src/appearance/activity/usage-ledger.ts";
+import { SUMMARY_CUSTOM_TYPE } from "../../src/appearance/activity/turn-summary.ts";
 
 const U = (input: number, output: number, cacheRead = 0, cacheWrite = 0) => ({
   input, output, cacheRead, cacheWrite,

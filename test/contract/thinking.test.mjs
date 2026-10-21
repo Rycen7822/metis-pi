@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
-import { TranscriptState } from "../../src/transcript-state.ts";
-import { installTranscriptDecorations } from "../../src/transcript-adapter.ts";
-import { thoughtSummaryText } from "../../src/thinking-summary.ts";
-import { ThinkingRailComponent, ThinkingPeekComponent, ThinkingClickableComponent } from "../../src/chrome/transcript-components.ts";
+import { TranscriptState } from "../../src/appearance/transcript/state.ts";
+import { installTranscriptDecorations } from "../../src/appearance/transcript/adapter.ts";
+import { thoughtSummaryText } from "../../src/presentation/thinking-summary.ts";
+import { ThinkingRailComponent, ThinkingPeekComponent, ThinkingClickableComponent } from "../../src/presentation/components/transcript-components.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 

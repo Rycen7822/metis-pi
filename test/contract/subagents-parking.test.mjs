@@ -8,7 +8,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isDaemonIdle, RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
-import { DEFAULT_CONFIG } from "../../src/appearance-config.ts";
+import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
 import { subagentAdmin } from "../helpers/subagent-admin.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));

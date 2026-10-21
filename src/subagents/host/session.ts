@@ -16,7 +16,7 @@ import { isDaemonIdle, RuntimeError, SubagentClient } from "./client.ts";
 import type { RuntimePackage } from "./runtime-package.ts";
 import { SubagentViewer, type AgentInspection } from "../ui/viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
-import type { AppearanceConfig } from "../../appearance-config.ts";
+import type { AppearanceConfig } from "../../appearance/config.ts";
 import { installSamplingMailbox } from "./sampling.ts";
 
 const BINDING = "metis-subagent-scope",

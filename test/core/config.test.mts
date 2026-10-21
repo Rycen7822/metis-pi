@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, DEFAULT_CONFIG } from "../../src/appearance-config.ts";
+import { loadConfig, DEFAULT_CONFIG } from "../../src/appearance/config.ts";
 import {
   readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig,
   initializeMetisConfig, isMetisConfigTable,
-  readWebAccessConfig, updateWebAccessConfig,
-} from "../../src/metis-config.ts";
+} from "../../src/configuration/store.ts";
+import { readWebAccessConfig, updateWebAccessConfig } from "../../src/configuration/web-access.ts";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";

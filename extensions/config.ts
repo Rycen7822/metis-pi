@@ -1,6 +1,6 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { initializeMetisConfig, metisConfigPath, METIS_CONFIG_GUIDE } from "../src/metis-config.ts";
+import { initializeMetisConfig, metisConfigPath, METIS_CONFIG_GUIDE } from "../src/configuration/store.ts";
 
 export default function config(pi: ExtensionAPI): void {
   pi.registerCommand("metis-config", {

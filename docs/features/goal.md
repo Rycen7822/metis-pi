@@ -41,4 +41,4 @@ RPC/非交互模式保留原来的 `/goal` 文本查看方式，不创建终端�
 - 用量属于开始该回合的目标，新目标不继承旧回合用量；Pi 的 input 已排除 cacheRead，直接加 output，无测量字段时回退 totalTokens。完成工具回执显示当时用量，最终回复的用量在 agent_end 后结算。
 - 取分支最后一条 goal 记录；提示只保留当前目标最近续跑消息，移除 UI 消息。OCC 协调见 [condense](condense.md)。
 
-入口拥有宿主 I/O；`src/goal-state.ts` 拥有状态和计账。Apache-2.0 来源与修改归属见 [NOTICE](../../NOTICE)。
+入口拥有宿主 I/O；`src/goal/state.ts` 拥有状态和计账。Apache-2.0 来源与修改归属见 [NOTICE](../../NOTICE)。

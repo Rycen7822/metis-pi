@@ -24,7 +24,7 @@ const externals = [
 const configModules = {
   name: "metis-config-origin",
   setup(build) {
-    build.onResolve({ filter: /^\.\.\/(metis-config|web-access-config)\.ts$/ }, ({ path }) => ({
+    build.onResolve({ filter: /^\.\.\/configuration\/(store|web-access)\.ts$/ }, ({ path }) => ({
       path: `../../${path.slice(3)}`,
       external: true,
     }));

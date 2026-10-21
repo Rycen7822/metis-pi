@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { defaultMetisConfig, parseMetisConfig, metisConfigPath, isMetisConfigTable as isRecord } from "../metis-config.ts";
+import { defaultMetisConfig, parseMetisConfig, metisConfigPath, isMetisConfigTable as isRecord } from "../configuration/store.ts";
 import type { InternalLspServer, LspConfig } from "./types.ts";
 
 const BIOME_EXTENSIONS = [

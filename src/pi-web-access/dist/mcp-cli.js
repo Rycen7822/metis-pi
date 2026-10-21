@@ -20,8 +20,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readWebAccessConfig } from "../../metis-config.ts";
-import { webAccessAgentDir } from "../../web-access-config.ts";
+import { readWebAccessConfig, webAccessAgentDir } from "../../configuration/web-access.ts";
 function normalizeProxyUrl(value, source) {
   if (value === void 0 || value === null) return null;
   if (typeof value !== "string") throw new Error(`${source} must be an http(s) or socks proxy URL string`);
@@ -360,8 +359,9 @@ var init_proxy_transport = __esm({
 // src/pi-web-access/utils.ts
 import { isIP } from "node:net";
 import { join as join2 } from "node:path";
-import { metisConfigPath, readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../metis-config.ts";
-import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../web-access-config.ts";
+import { metisConfigPath } from "../../configuration/store.ts";
+import { readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../configuration/web-access.ts";
+import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../configuration/web-access.ts";
 function getWebSearchConfigDir() {
   return webAccessAgentDir2();
 }

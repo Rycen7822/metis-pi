@@ -1,8 +1,8 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isMetisConfigTable, readMetisConfig } from "../src/metis-config.ts";
-import { loadConfig } from "../src/appearance-config.ts";
+import { isMetisConfigTable, readMetisConfig } from "../src/configuration/store.ts";
+import { loadConfig } from "../src/appearance/config.ts";
 import { runtimePackage } from "../src/subagents/host/runtime-package.ts";
 import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/ui/rendering.ts";
 import { SubagentSession } from "../src/subagents/host/session.ts";

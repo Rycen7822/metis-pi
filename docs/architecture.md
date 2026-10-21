@@ -1,15 +1,15 @@
 # 架构与所有权
 
-根 `package.json` 统一依赖、版本、入口和发布载荷；加载 `extensions/*.ts` 与 `themes/metis-pi.json`。Pi 入口直接使用 TS；子代理核心使用 Python daemon 和 JS SDK runner。
+根 `package.json` 统一依赖、版本、入口和发布载荷；加载 `extensions/*.ts` 与 `themes/metis-pi.json`。对外入口身份不变，实现按状态和能力所有者组织；Pi 入口直接使用 TS，子代理核心使用 Python daemon 和 JS SDK runner。
 
 ## 入口和模块
 
 | 入口 | 所有者与职责 |
 | --- | --- |
-| `appearance.ts` | `src/extension.ts` 装配显示、宿主适配、转录、chrome、复制和诊断。 |
-| `skill-mux.ts` / `skill-entry.ts` | Pi 持有 skill 来源和优先级；metis 负责多输入展开、补全、标签和折叠。 |
-| `goal.ts` | 入口负责宿主 I/O、提示和工具；`src/goal-state.ts` 负责状态、计时、分支恢复和用量。 |
-| `dynamic-agents.ts` | 每个 run 的全局指令快照、来源恢复与 Pi 原生请求投影。 |
+| `appearance.ts` | `src/appearance/runtime.ts` 装配显示、宿主适配、转录、chrome、复制和诊断。 |
+| `skill-mux.ts` / `skill-entry.ts` | `src/skills/` 负责多输入展开、补全、标签和折叠；Pi 持有来源和优先级。显示补丁在 factory 同步安装、由会话租约释放，独立于 appearance 开关。 |
+| `goal.ts` | `src/goal/` 的 runtime 负责宿主 I/O、提示、工具与续跑，state 负责状态、计时、分支恢复和用量；view 按需加载。 |
+| `dynamic-agents.ts` | `src/dynamic-agents/` 的 policy 负责选择/读取指令，runtime 负责每个 run 的快照、来源恢复与 Pi 原生请求投影。 |
 | `system-prompt.ts` | 把 Pi 的 `docs` 分段替换为指向 `PI_Documentation_Guide.md` 的简短指引（自定义完整提示或强制系统提示时不替换）；该文件由包内模板生成到 agent 目录。 |
 | `retry-policy.ts` | 仅为启用入口的会话补充 `workspace_billing_scope_unavailable` 瞬时错误分类；分类副本绕过 `billing` 关键词误判，真实错误保持原样。配额/溢出判定、预算、退避与取消仍由 Pi 管理，关闭或重载时释放会话租约。 |
 | `condense.ts` | 重复安装检测和摘要用量显示；`src/condense` 负责原文、精简、摘要、恢复和 OCC。 |
@@ -21,7 +21,7 @@
 | `web-access.ts` | `src/pi-web-access` 管理搜索、提取、内容存储和 Curator；聚合工具沿 Pi deferred/codemode 发现与调用。 |
 | `session-recall.ts` | `src/pi-session-recall` 管理会话检索与回读；辅助模型请求使用当前 Pi ModelRuntime。 |
 
-全局 `metis-pi.toml` 的 `appearance.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。配置写入在跨进程锁内读取最新内容、合并并原子发布；参数说明文档不占用配置临界区。
+全局 `metis-pi.toml` 的 `appearance.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。`configuration/store.ts` 在跨进程锁内读取最新内容、合并并原子发布；参数说明文档不占用配置临界区。Web 凭据拼装归 `configuration/web-access.ts`，Condense 的 nullable 编解码归自身配置模块，store 不持有领域字段规则。
 
 ## 显示数据流
 
@@ -29,17 +29,17 @@
 
 | 领域 | 主要模块和边界 |
 | --- | --- |
-| 适配 | `host-data.ts` 归一化公开数据；`adapter.ts` 校验工具来源和 renderer 所有权，每次行渲染共用一次工具查询；`appearance-config.ts` 校验显示设置。 |
-| 工具输出与修改 | `renderers.ts` 装配，`shell.ts` / `diff.ts` / `write-preview.ts` 布局；`write-tracker.ts` 保存真实前后镜像，与 Fusion 共用路径规则。 |
-| 转录与思考 | `transcript-state.ts` 持有消息身份、语义 run 和计时；仅用已观察的响应身份恢复计时，内容相同不合并，身份冲突不推断时长；AssistantView 解析一次，`thinking-view.ts` 持有交互形态。原生 codemode 的 nested 工具事件不参与顶层探索分组。 |
-| chrome | `chrome/install.ts` 捕获宿主；editor/header/footer/working 各自持有组件；`fullscreen-layout.ts` 统一留白和 history-window，只安装一个布局根拦截器。 |
-| 度量与摘要 | metrics/outcome/usage/speed 模块分别采样与去重；`git-changes.ts` 只读 Git；`turn-summary.ts` 是显示层唯一追加会话记录的模块。 |
+| 适配 | `appearance/host-data.ts` 归一化公开数据；`tool-host-adapter.ts` 校验工具来源和 renderer 所有权，每次行渲染共用一次工具查询；`config.ts` 校验显示设置。`extension-paths.ts` 只提供物理身份，呈现与 worker profile 各自保留准入政策。 |
+| 工具输出与修改 | `presentation/` 装配并布局工具行、Shell、Diff 和 write 预览，主转录与子代理共用组件。`file-changes/` 提供共享路径、快照和 Diff 模型；`appearance/transcript/write-tracker.ts` 只持有主会话观察状态。 |
+| 转录与思考 | `appearance/transcript/state.ts` 持有消息身份、语义 run 和计时；只用已观察的响应身份恢复计时，内容相同不合并，身份冲突不推断时长。AssistantView 解析一次，`presentation/thinking-view.ts` 持有共享交互形态。nested 工具事件不参与顶层探索分组。 |
+| chrome | `appearance/chrome/install.ts` 捕获宿主；editor/header/footer/working 各自持有主界面组件；fullscreen-layout 统一留白和 history-window，只安装一个布局根拦截器。共享组件在 `presentation/components/`，不反向依赖主界面。 |
+| 度量与摘要 | `appearance/activity/` 中的交互时钟、attempt 终态、确认用量、producer 采样与持久化摘要各自拥有生命周期；不合成一个全局 MetricsService。`git-changes.ts` 独立管理 footer 激活和 Git 轮询，诊断只读聚合；turn-summary 是显示层唯一追加会话记录的模块。 |
 | 复制与呈现 | `selection-copy/` 读取当前已提交帧的来源映射，不额外渲染；缓存校验原生渲染行，未知区域原生回退。渲染映射和计数随进程保留，选区序列化按真实 TUI 租用并释放，支持宿主代理切换接收者。颜色/控制序列在显示层处理，glyph 转换在布局之后。 |
 
 chrome 通过结构类型和注入能力访问宿主。动画帧不扫描会话、读磁盘或查询额度。显示适配保留原执行、结果和模型正文。
 宿主事件类型及终端字符宽度、grapheme 截断复用 Pi 的公开接口。
 
-`src` 包含领域逻辑和宿主适配模块；纯领域模块保持宿主无关，适配模块可以导入 Pi 公共 API。工具名与展示策略归 `tool-names.ts`，组件和渲染接口归 `render-contract.ts`，跨功能的终端文本净化归 `terminal-text.ts`；消费者直接引用所有者，不通过 renderer 装配模块转发。子代理入口注入按需重读的显示配置，host 不自带配置文件 IO。扩展间的 Metis 事件、共享状态身份和 payload 合同归 `collaboration.ts`；监听方先检查事实字段，压缩所有权查询和压缩前等待请求保留同步响应合同。
+`src` 包含领域逻辑和宿主适配模块；纯领域模块保持宿主无关，适配模块可以导入 Pi 公共 API。工具名与展示策略归 `presentation/tool-names.ts`，组件、工厂输入和展示计划归 `presentation/contracts.ts`，跨功能终端文本净化归 `presentation/terminal-text.ts`；消费者直接引用所有者，不通过 renderer 装配模块转发。子代理入口注入按需重读的显示配置，host 不自带配置文件 IO。扩展间的 Metis 事件、共享状态身份和 payload 合同归 `collaboration.ts`；监听方先检查事实字段，压缩所有权查询和压缩前等待请求保留同步响应合同。
 
 ## 执行与上下文
 
@@ -57,7 +57,7 @@ Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 的�
 
 显式启用 MCP 后，每个服务器由一个 session owner 共享连接；每个工具独立注册，调用经过 Pi 原执行链。目录缓存不授权执行，实时 schema/身份变化会拒绝旧调用；空闲回收、取消和关闭属于该 owner。MCP 协议与 OAuth 复用 Pi 公共包；服务器配置、凭据及 CLI 保持原生格式。切换步骤见 [配置](configuration.md#mcp)。
 
-condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。错误清理按 occurrence 配对，程序派生身份不由用户正文推断。配置模块拥有默认值和领域合法值，设置预设拥有 UI 标签；保存负责持久化，运行时应用配置并按相关政策决定失效范围。显示设置不会取消领域工作。Pi 发起压缩并提供边界；普通模型由 condense 的 OCC 准备候选，Codex 远端检查点及其原文恢复由 `codex-compaction.ts` 发布，OCC 查询该所有权后让出同一次请求。执行模块只提供忙状态，goal 暂存续跑并在完成后复核。
+condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。错误清理按 occurrence 配对，程序派生身份不由用户正文推断。配置模块拥有默认值和领域合法值，设置预设拥有 UI 标签；保存负责持久化，运行时应用配置并按相关政策决定失效范围。显示设置不会取消领域工作。Pi 发起压缩并提供边界；普通模型由 condense 的 OCC 准备候选，远程检查点及其原文恢复由 `remote-compaction/runtime.ts` 统一推进和发布；`checkpoint.ts` 只持有无 IO 的校验、marker 与 carrier 编解码，OCC 查询该所有权后让出同一次请求。执行模块只提供忙状态，goal 暂存续跑并在完成后复核。
 
 执行 bridge 持有每个进程的字节解码、序号、退出和串行轮询；manager 组合 process handle，独立持有等待、交付、保留与展示状态。输出流尚未关闭或缓冲已淘汰未读数据时，归档记录不完整及其原因，并保留真实进程退出码。查询分页共享字节来源，不把历史条目或证据目录伪装成工具执行。
 

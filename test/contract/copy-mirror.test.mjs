@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem, detectExternalSerializerPatch } from "../../src/selection-copy/index.ts";
-import { stackComponents } from "../../src/copy-stack.ts";
+import { stackComponents } from "../../src/selection-copy/stack.ts";
 import { altScreen, copyFrame, installCopyPrototypes, markdownTheme, screenLines, select } from "../helpers/ui-fixtures.mjs";
 
 const theme = {

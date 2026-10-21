@@ -1,5 +1,5 @@
 import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../web-access-config.ts";
+import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import "./isolate-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

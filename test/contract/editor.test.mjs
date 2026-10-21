@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { CustomEditor, InteractiveMode, initTheme } from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
-import { makeCodexEditorFactory } from "../../src/chrome/editor.ts";
-import { createHardwareCursor } from "../../src/chrome/hardware-cursor.ts";
-import { CURSOR_MARKER, makeSurfaceOps } from "../../src/surface.ts";
+import { makeCodexEditorFactory } from "../../src/appearance/chrome/editor.ts";
+import { createHardwareCursor } from "../../src/appearance/chrome/hardware-cursor.ts";
+import { CURSOR_MARKER, makeSurfaceOps } from "../../src/appearance/chrome/surface.ts";
 import { theme } from "../helpers.mjs";
 import { altScreen, container } from "../helpers/ui-fixtures.mjs";
 
