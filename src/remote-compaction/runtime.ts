@@ -18,7 +18,7 @@ import {
 import {
   KEY, MARKER, MAX_BYTES, record, digest, ours, checkpoint, rawBranch,
   summaryText, matchesMarker, replaceMarker, responsesHistory,
-  type Item, type BindingScope, type Checkpoint,
+  type Item, type BindingScope, type CheckpointScope, type Checkpoint,
 } from "./checkpoint.ts";
 
 const TIMEOUT = 300_000;
@@ -57,7 +57,7 @@ const sameRoute = (before: Model<Api>, after: Model<Api> | undefined) => after !
   && before.provider === after.provider && before.api === after.api && before.id === after.id && before.baseUrl === after.baseUrl;
 const boundIdentity = (model: Model<Api>, url: string, identity: unknown, header?: string) =>
   hash([...route(model, url), identity, header]);
-const bindingScope = (model: Model<Api>, url: string, account: unknown, header?: string): BindingScope => ({
+const bindingScope = (model: Model<Api>, url: string, account: unknown, header?: string): Pick<BindingScope, "route" | "account"> => ({
   route: hash(route(model, url.replace(/\/+$/, ""))),
   ...(account !== undefined || header !== undefined ? { account: hash([account, header]) } : {}),
 });
@@ -90,9 +90,11 @@ async function resolveRequest(ctx: ExtensionContext, model: Model<Api>, resolved
   if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? "Codex authentication unavailable" : safeError(auth.error));
   if (!provider) throw new Error("Unsupported Codex API");
   const account = tokenAccount(auth.apiKey), header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
-  const scope: BindingScope = { ...bindingScope(model, url, account, header),
-    // The only explicit auth override is the read-only legacy Codex CLI login.
-    credential: resolvedAuth !== undefined || ctx.modelRegistry.isUsingOAuth(model) ? "oauth" : "api_key" };
+  const baseScope = bindingScope(model, url, account, header);
+  // The only explicit auth override is the read-only legacy Codex CLI login.
+  const scope: CheckpointScope = resolvedAuth !== undefined || ctx.modelRegistry.isUsingOAuth(model)
+    ? { ...baseScope, credential: "oauth" }
+    : { ...baseScope, credential: "api_key", apiKeyDigest: hash(auth.apiKey) };
   const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };
   return { scope,
     registration: ctx.modelRegistry.getRegisteredProviderConfig(model.provider),
@@ -102,12 +104,14 @@ async function resolveRequest(ctx: ExtensionContext, model: Model<Api>, resolved
 }
 const sameProvider = (before: Awaited<ReturnType<typeof resolveRequest>>, after: Awaited<ReturnType<typeof resolveRequest>>) =>
   before.registration === after.registration && before.nativeOwner === after.nativeOwner
-  && before.scope.route === after.scope.route && before.scope.account === after.scope.account
-  && before.scope.credential === after.scope.credential && before.auth.apiKey === after.auth.apiKey
+  && scopeState(before.scope, after.scope) === "valid"
+  // A stable known account can authorize an in-flight OAuth refresh. With an
+  // opaque account, a changed token cannot prove the result still belongs here.
+  && (before.auth.apiKey === after.auth.apiKey || before.scope.credential === "oauth" && before.scope.account !== undefined)
   && JSON.stringify([before.auth.headers, before.auth.env, before.model.baseUrl])
     === JSON.stringify([after.auth.headers, after.auth.env, after.model.baseUrl]);
-// Only unscoped v1 records need the old token/account digest. New checkpoints
-// never compute or persist a token identity, and Pi credentials are untouched.
+// V1 API keys and unscoped records need the old key/account binding. OAuth
+// checkpoints never pin access tokens, and Pi credentials are untouched.
 const matchesLegacyBinding = (binding: string | undefined, request: Awaited<ReturnType<typeof resolveRequest>>) => {
   if (!binding) return false;
   const account = tokenAccount(request.auth.apiKey!), header = accountHeader(request.model, request.auth);
@@ -116,15 +120,22 @@ const matchesLegacyBinding = (binding: string | undefined, request: Awaited<Retu
 };
 const scopeState = (previous: BindingScope, current: BindingScope) => {
   if (previous.route !== current.route || previous.credential && previous.credential !== current.credential
-    || previous.account && current.account && previous.account !== current.account) return "incompatible";
-  return previous.account && !current.account ? "unverified" : "valid";
+    || previous.account && current.account && previous.account !== current.account
+    || previous.apiKeyDigest && previous.apiKeyDigest !== current.apiKeyDigest) return "incompatible";
+  if (previous.account !== current.account || previous.credential === "api_key" && !previous.apiKeyDigest) return "unverified";
+  return "valid";
 };
 const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof resolveRequest>>,
   origin?: { provider: string; modelId: string }) => {
   // Pi owns login and refresh. Opaque account metadata cannot establish a
   // client-side identity: on the original route, the backend validates its
-  // encrypted checkpoint under Pi's current auth. Never pin it to a token.
-  if (data.scope?.credential) return scopeState(data.scope, request.scope);
+  // encrypted checkpoint under Pi's current auth. Never pin OAuth to a token.
+  if (data.scope?.credential) {
+    const state = scopeState(data.scope, request.scope);
+    if (state === "unverified" && data.version === 1 && data.scope.credential === "api_key"
+      && data.scope.account === request.scope.account && matchesLegacyBinding(data.binding, request)) return "valid";
+    return state;
+  }
   if (data.scope && scopeState(data.scope, request.scope) !== "valid") return "incompatible";
   if (matchesLegacyBinding(data.binding, request)) return "valid";
   const model = data.model ?? origin;

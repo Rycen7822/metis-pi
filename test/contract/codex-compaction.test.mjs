@@ -365,6 +365,52 @@ test("Pi OAuth refresh resumes scoped checkpoints through ciphertext rotation an
   assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
 });
 
+test("Pi refresh during checkpoint publication uses known account evidence, not token equality", async t => {
+  for (const phase of ["compaction", "portable"]) for (const account of ["known", "opaque"]) {
+    await t.test(`${phase}: ${account}`, async t => {
+      const routeModel = account === "known" ? model : responsesModel;
+      const access = "x." + Buffer.from(JSON.stringify({ client_id: "dynamic_agent_client", jti: "mid-flight-refresh",
+        "https://api.openai.com/auth": account === "known" ? { chatgpt_account_id: "offline-test" }
+          : { per_user_salt: "offline", encrypted_auth_metadata: "rotated-opaque" },
+      })).toString("base64url") + ".x";
+      let expire = false, refreshed = 0;
+      const expireCredential = () => {
+        if (!expire) return;
+        expire = false;
+        const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+        auth[routeModel.provider].expires = Date.now() - 1;
+        writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+      };
+      const h = await host(t, { routeModel, oauth: true, beforeBind(runtime) {
+        t.mock.method(runtime.getProvider(routeModel.provider).auth.oauth, "refresh", async credential => {
+          refreshed++;
+          return { ...credential, access, refresh: "pi-owned-rotation", expires: Date.now() + 3_600_000 };
+        });
+      }, response: () => { expireCredential(); return sse(checkpointEvents()); },
+      normalResponse: () => { expireCredential(); return answer(); } });
+      if (phase === "portable") {
+        await h.session.compact();
+        await h.session.setModel({ ...routeModel, id: "gpt-6-sol" });
+      }
+      expire = true;
+      if (phase === "compaction") {
+        if (account === "known") await h.session.compact();
+        else await assert.rejects(h.session.compact(), /cancel/i);
+        assert.equal(compactions(h).length, account === "known" ? 1 : 0);
+      } else {
+        const before = h.bodies.length;
+        await h.session.prompt("FINISH THE PORTABLE SUMMARY ACROSS PI REFRESH");
+        const portable = h.sm.getBranch().filter(entry => entry.type === "custom" && entry.customType === "metisCodexPortableSummary");
+        assert.equal(portable.length, account === "known" ? 1 : 0);
+        assert.equal(h.bodies.length, before + (account === "known" ? 2 : 1));
+      }
+      assert.equal(refreshed, 1, "the native Pi broker must actually refresh between resolution and publication");
+      if (account === "known") assert.deepEqual(h.notices, []);
+      else assert.match(h.notices.join("\n"), /source changed/);
+    });
+  }
+});
+
 async function rotateOAuth(t, h, catalog = false) {
   const fetch = globalThis.fetch;
   const access = "x." + Buffer.from(JSON.stringify({ client_id: "dynamic_agent_client", jti: "rotation",
@@ -549,6 +595,54 @@ test("credential kind changes during compaction prevent publication even with th
   await assert.rejects(h.session.compact(), /cancel/i);
   assert.equal(compactions(h).length, 0);
   assert.match(h.notices.join("\n"), /source changed/);
+});
+
+test("plain API key rotation cannot replay v1 or v2 checkpoints under another tenant", async t => {
+  for (const version of [1, 2]) await t.test(`v${version}`, async t => {
+    const original = "sk-offline-original-tenant", replacement = "sk-offline-other-tenant";
+    const h = await host(t, { routeModel: responsesModel, oauth: false,
+      credential: { type: "api_key", key: original } });
+    await h.session.compact();
+    const data = compactions(h).at(-1).details[key];
+    assert.equal(data.scope.account, undefined, "the fixture must not supply JWT account evidence");
+    if (version === 1) {
+      data.version = 1;
+      data.binding = createHash("sha256").update(JSON.stringify([
+        responsesModel.provider, responsesModel.api, responsesModel.id, responsesModel.baseUrl, original, undefined,
+      ])).digest("hex");
+      delete data.scope.apiKeyDigest;
+    }
+    const unchanged = h.bodies.length;
+    await h.session.prompt("RESUME UNDER THE EXACT ORIGINAL API KEY");
+    assert.equal(h.bodies.length, unchanged + 1);
+    assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+    assert.equal(JSON.stringify(data).includes(original), false, "checkpoint metadata cannot store the raw API key");
+    const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+    auth.openai = { type: "api_key", key: replacement };
+    writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+    await h.runtime.refresh({ allowNetwork: false });
+    const before = h.bodies.length;
+    await h.session.prompt("MUST NOT SEND THE ORIGINAL TENANT'S HISTORY");
+    assert.equal(h.bodies.length, before, "neither ciphertext nor retained plaintext may reach the replacement key");
+    assert.equal(compactions(h).length, 1);
+    await h.session.compact();
+    assert.equal(compactions(h).length, 2, "explicit bounded rebuilding remains available");
+    assert.equal(h.headers.at(-1).get("authorization"), `Bearer ${replacement}`);
+    assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+  });
+});
+
+test("newly visible OAuth account evidence cannot silently rebind an opaque checkpoint", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  assert.equal(compactions(h).at(-1).details[key].scope.account, undefined);
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  auth.openai.access = FAKE_API_KEY;
+  writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  const before = h.bodies.length;
+  await h.session.prompt("DO NOT GUESS THE OLD CHECKPOINT'S ACCOUNT");
+  assert.equal(h.bodies.length, before);
+  assert.equal(compactions(h).length, 1);
 });
 
 test("loss of a known account pauses replay instead of expanding the checkpoint", async t => {
