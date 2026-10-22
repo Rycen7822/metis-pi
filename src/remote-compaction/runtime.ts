@@ -86,13 +86,18 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
 }
 async function resolveRequest(ctx: ExtensionContext, model: Model<Api>, resolvedAuth?: RequestAuth) {
   const provider = ctx.modelRegistry.getProvider(model.provider);
+  // The catalog's OAuth flag can lag another process's login/logout. Read the
+  // source with live broker auth, preserving Pi's model-level header resolution.
+  const live = resolvedAuth === undefined ? await ctx.modelRegistry.getProviderAuth(model.provider) : undefined;
   const auth = resolvedAuth ?? await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? "Codex authentication unavailable" : safeError(auth.error));
   if (!provider) throw new Error("Unsupported Codex API");
+  if (resolvedAuth === undefined && live?.auth.apiKey !== auth.apiKey)
+    throw new Error("Codex authentication changed during resolution; retry with the current authentication");
   const account = tokenAccount(auth.apiKey), header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
   const baseScope = bindingScope(model, url, account, header);
   // The only explicit auth override is the read-only legacy Codex CLI login.
-  const scope: CheckpointScope = resolvedAuth !== undefined || ctx.modelRegistry.isUsingOAuth(model)
+  const scope: CheckpointScope = resolvedAuth !== undefined || live?.source === "OAuth"
     ? { ...baseScope, credential: "oauth" }
     : { ...baseScope, credential: "api_key", apiKeyDigest: hash(auth.apiKey) };
   const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };
@@ -149,7 +154,11 @@ async function codexRequest(ctx: ExtensionContext, model: Model<Api>) {
     baseUrl: "https://chatgpt.com/backend-api", headers: undefined,
   };
   if (legacyModel.api !== "openai-codex-responses") throw new Error("Unsupported Codex API");
-  if (ctx.modelRegistry.isUsingOAuth(legacyModel)) return resolveRequest(ctx, legacyModel);
+  if ((await ctx.modelRegistry.getProviderAuth(legacyModel.provider))?.source === "OAuth") {
+    const request = await resolveRequest(ctx, legacyModel);
+    if (request.scope.credential !== "oauth") throw new Error("Codex OAuth changed; retry with the current authentication");
+    return request;
+  }
   let token: unknown;
   try {
     const data = record(JSON.parse(await readFile(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"), "utf8")));
@@ -487,7 +496,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const request = remote && model ? await resolveRequest(ctx, model) : undefined;
       if (request?.auth.apiKey) secrets.push(request.auth.apiKey);
       const hybrid = model?.provider === "openai" && model.api === "openai-responses"
-        && ctx.modelRegistry.isUsingOAuth(model);
+        && request?.scope.credential === "oauth";
       const compactor = hybrid ? await codexRequest(ctx, model) : request;
       if (compactor?.auth.apiKey) secrets.push(compactor.auth.apiKey);
       diagnostic.compactorProvider = compactor?.model.provider;

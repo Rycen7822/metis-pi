@@ -566,7 +566,7 @@ test("legacy checkpoint materializes a portable summary on a proven model change
 });
 
 test("credential kind changes pause ordinary replay without expanding history", async t => {
-  for (const mode of ["api-to-oauth", "oauth-to-api", "same-token-oauth-to-api"]) await t.test(mode, async t => {
+  for (const refresh of [false, true]) for (const mode of ["api-to-oauth", "oauth-to-api", "same-token-oauth-to-api"]) await t.test(`${mode}: catalog ${refresh ? "refreshed" : "unchanged"}`, async t => {
     const oauth = mode !== "api-to-oauth";
     const h = await host(t, { routeModel: responsesModel, oauth });
     if (!oauth) writeCodexLogin(h.codexDir);
@@ -575,7 +575,8 @@ test("credential kind changes pause ordinary replay without expanding history", 
     auth.openai = oauth ? { type: "api_key", key: mode === "same-token-oauth-to-api" ? newOAuthKey : "sk-offline-new-key" }
       : { type: "oauth", access: newOAuthKey, refresh: "offline-new-login", clientId: "dynamic_agent_client", expires: Date.now() + 3600000 };
     writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
-    await h.runtime.refresh({ allowNetwork: false });
+    if (refresh) await h.runtime.refresh({ allowNetwork: false });
+    else assert.equal(h.runtime.isUsingOAuth("openai"), oauth, "the cached catalog still describes the old credential kind");
     const calls = h.bodies.length;
     await h.session.prompt("RECOVER UNDER NEW CREDENTIAL KIND");
     assert.equal(h.bodies.length, calls);
@@ -583,13 +584,13 @@ test("credential kind changes pause ordinary replay without expanding history", 
     await h.session.compact();
     assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false,
       "recompaction rebuilds instead of reusing the old credential kind's checkpoint");
+    assert.equal(h.urls.at(-1).endsWith("/responses/compact"), oauth, "rebuild routing uses the live credential kind");
   });
 });
 
-test("credential kind changes during compaction prevent publication even with the same token", async t => {
-  const h = await host(t, { routeModel: responsesModel, oauth: true, async response({ session }) {
+test("credential kind changes during compaction prevent publication without a catalog refresh", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true, response() {
     writeFileSync(join(h.dir, "auth.json"), JSON.stringify({ openai: { type: "api_key", key: newOAuthKey } }));
-    await session.modelRuntime.refresh({ allowNetwork: false });
     return sse(checkpointEvents());
   } });
   await assert.rejects(h.session.compact(), /cancel/i);
@@ -930,6 +931,8 @@ test("Pi re-login resumes a scoped checkpoint and can migrate it to another prov
   const checkpoint = compactions(h).at(-1).details[key];
   checkpoint.version = 1;
   checkpoint.binding = "0".repeat(64);
+  assert.equal(checkpoint.scope.account, undefined, "neither authorization exposes an account");
+  assert.notEqual(access, newOAuthKey);
   await h.runtime.logout("openai");
   await h.runtime.login("openai", "oauth", { signal: new AbortController().signal, notify() {}, prompt: async () => "" });
   const before = h.bodies.length;
@@ -937,6 +940,7 @@ test("Pi re-login resumes a scoped checkpoint and can migrate it to another prov
   assert.equal(h.bodies.length, before + 1);
   assert.equal(h.headers.at(-1).get("authorization"), `Bearer ${access}`);
   assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /ORIGINAL USER/, "opaque OAuth replay sends retained plaintext to the current account");
   assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work/);
   const { ModelRegistry } = await import("@earendil-works/pi-coding-agent");
   await h.session.setModel(new ModelRegistry(h.runtime).find("other-codex", "other"));
