@@ -40,7 +40,15 @@ summarizerFallbackModels = ["provider/fallback-1", "provider/fallback-2", "provi
 
 `/pruner compaction-summary-limit 32768` 设置摘要输出上限，`/pruner compaction-summary-limit 0` 恢复 Pi 默认，省略数字查看当前值；`/pruner settings` 可选择预设。设置立即生效并保存，自动精简和 OCC 关闭时仍有效，适用于原生手动、阈值、溢出恢复及 OCC。不改变 `reserveTokens`、压缩触发线、普通 agent 回复或工具/链摘要预算。原生拆分压缩中的历史、当前轮摘要各自受限，Pi 的当前轮预算可能更小；这是单次生成上限，不保证合并后的总长度。摘要触及 token 上限导致 `length` 时拒绝发布，保留原历史。
 
-OCC 通过受支持的 `customInstructions` 请求约 **16,384 输出文本 tokens** 的软目标，保留必要事实、不确定性和完整语句；不降低 Pi/模型/provider 的硬上限，也不更改已有 32,768 等自定义上限。Pi 1.3.0 的普通原生压缩仍使用原始 `customInstructions`，且不经过普通请求的 payload 钩子，故该软目标**不自动注入普通原生手动/阈值/溢出路径**；这些路径保持 Pi 原行为，可用 Pi `/compact` 自定义指令显式请求软目标。不得将 16K 当作统一硬 cap 或可用容量保留值。
+Pi 1.4 不再用 `reserveTokens` 的比例限制摘要输出。`compactionSummaryMaxTokens` 为正时，本包只在该次压缩信号对应的 uncached `ModelRuntime.streamSimple` 请求上施加上限，保留原生路由、鉴权、retry、split-turn 和唯一持久化；0 不接管原生生成。
+
+Hook 无法安装时明确取消，不发送未限额摘要。不保证绕过 SDK runtime 的自定义 Agent stream 能被限额。
+
+OCC 的保守输出预算使用模型上限与同一显式 cap，容量/成本估计与发送预算一致，不再使用 `0.8 × reserve`。默认 0 不表示无限输出，仍受模型/provider/上下文限制。
+
+若模型未声明有限输出上限且没有显式 cap，OCC 会提示 `unknown-output-limit` 并保留原文，不把无限值写入估计或偷偷改走无保护摘要。设定明确 cap 后可恢复这条路径。
+
+OCC 通过受支持的 `customInstructions` 请求约 **16,384 输出文本 tokens** 的软目标，保留必要事实、不确定性和完整语句；不降低 Pi/模型/provider 的硬上限，也不更改已有 32,768 等自定义上限。Pi 1.4.0 的普通原生压缩仍使用原始 `customInstructions`，且不经过普通请求的 payload 钩子，故该软目标**不自动注入普通原生手动/阈值/溢出路径**；这些路径保持 Pi 原行为，可用 Pi `/compact` 自定义指令显式请求软目标。不得将 16K 当作统一硬 cap 或可用容量保留值。
 
 `off` 停自动精简，回读和既有图片上限仍可用；完全禁用需过滤入口。外部 pi-condense 改用内置入口时保留 settings、session 和 blobs；检测到已有 context_tree_query 会跳过本入口并警告。
 
@@ -153,4 +161,4 @@ prune 用量统计本次加载以来额外摘要，重复通知覆盖、切分�
 
 来源归属见 [NOTICE](../../NOTICE)，完整许可见 [LICENSE](../provenance/condense/LICENSE)。
 
-Pi 1.3.0 的原生文本摘要省略历史 thinking，保留可见回复、工具调用与结果；Metis 的加密 checkpoint 请求仍由 provider 编码并回放原生条目。
+Pi 1.4.0 的原生文本摘要省略历史 thinking，保留可见回复、工具调用与结果；Metis 的加密 checkpoint 请求仍由 provider 编码并回放原生条目。

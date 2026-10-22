@@ -2,7 +2,7 @@
 
 ## 环境与常用命令
 
-Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 1.3.0。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
+Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 1.4.0。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
 子代理开发与验证还需要 Python 3.11+；测试依赖（schema 校验、pytest 和 pytest-xdist）使用 `python3 -m pip install -r test/subagents/requirements.txt` 安装，运行核心只使用 Python 标准库。
 
 ```bash
@@ -42,7 +42,7 @@ core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接
 
 严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
 
-CI 在 Pi 1.3.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿主包及运行时 `pi-mcp` 的版本一致；另一个 job 从自有源码重建 Rust 搜索引擎、校验提交的二进制一致并运行继承的单元检查。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
+CI 在 Pi 1.4.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿主包及运行时 `pi-mcp` 的版本一致；另一个 job 从自有源码重建 Rust 搜索引擎、校验提交的二进制一致并运行继承的单元检查。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
 
 PR、main/tag push 和手动运行保留完整验证；功能分支只有在查到同仓库、同分支、同 SHA 的开放且可合并 PR 时才省去重复 push 全测，状态未知或查询失败仍全跑。同一 PR 的新提交取消旧运行，主干、tag 和手动运行使用独立并发组。
 

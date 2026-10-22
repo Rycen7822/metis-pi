@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const CI_PATH = ".github/workflows/ci.yml";
 const ADMISSION_JOB = "Check duplicate feature push";
-const VALIDATION_JOB = "Pi 1.3.0";
+const VALIDATION_JOB = "Pi 1.4.0";
 
 export async function cancelDuplicatePush({ repository, runId, pullNumber, trustedRef, mergeRef, request, sleep = delay, log = console.log }) {
   let cancellationAttempted = false;

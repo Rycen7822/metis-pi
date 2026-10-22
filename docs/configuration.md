@@ -83,7 +83,7 @@ extensions = [".py", ".pyi"]
 
 ## MCP
 
-需要 Pi >=1.3.0。Metis MCP 默认关闭；首次使用时显式切换：
+需要 Pi 1.4.0。Metis MCP 默认关闭；首次使用时显式切换：
 
 1. 禁用或移除 `pi-mcp-adapter`，用 `pi config` 禁用内置 `mcp` 扩展；保留内置 `codemode`、`tool-search`。原生 `pi mcp` CLI 仍可用。
 2. 在全局 TOML 设置下列策略。

@@ -28,4 +28,4 @@ composer 为 `￥`、第二个及之后的 `/` 补发查询；输入展开由 `s
 
 显示补丁包装宿主 `SkillInvocationMessageComponent.handleMouse/updateDisplay`，按原型与方法防重复；缺失时退避，内部结构变化仍需验证。
 
-`src/skills/tokens.ts` 管解析/守卫，`skill-input.ts` / `skill-mux.ts` 管展开/查询，`skill-fold.ts` / `skill-label.ts` / `skill-host-patch.ts` 管显示与宿主补丁。
+`src/skills/tokens.ts` 管解析/守卫，`skill-input.ts` / `skill-mux.ts` 管展开/查询，`skill-label.ts` / `skill-host-patch.ts` 管标签与宿主补丁；点击与拖选由 Pi 1.4 自身的 `SkillInvocationMessageComponent` 处理。

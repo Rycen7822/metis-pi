@@ -231,7 +231,7 @@ exclude = []
 | `maxAgentsPerScope` | `16` | 每个父会话 scope 的活跃/清理未验证 worker 上限；历史不占容量。 |
 | `rpcTimeoutSeconds` | `20` | worker RPC 请求秒数。 |
 | `startupTimeoutSeconds` | `30` | SDK 启动握手秒数。 |
-| `defaultIdleTimeoutSeconds` | `1800` | 无进展超时，任务参数可覆写；不是任务总时长上限。 |
+| `defaultIdleTimeoutSeconds` | `1800` | 模型无进展超时，任务参数可覆写；不是任务总时长上限。原生压缩/摘要重试使用独立有界维护窗口，见[生命周期](docs/subagents/lifecycle.md)。 |
 | `maxWaitSeconds` | `3600` | 后端 wait 轮询上限秒数；不扩大工具 schema 本身的上限。 |
 | `residentIdleTimeoutSeconds` | `1800` | 已结束/空闲的驻留 worker 回收时间秒数。 |
 | `eventMaxCountPerAgent` | `20000` | 单代理最多保留的事件数。 |

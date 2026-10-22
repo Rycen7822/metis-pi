@@ -4,7 +4,7 @@ Metis provides durable subagents through the `subagents` namespace in Pi. Tools 
 
 ## Requirements and configuration
 
-- Linux/WSL, Python 3.11+, Node.js 22.19+ and Pi SDK 1.3.0+.
+- Linux/WSL, Python 3.11+, Node.js 22.19+ and Pi SDK 1.4.0.
 - The child uses its parent's SDK, Node executable and agent directory.
 - Global preferences are `[subagents]` in `<agentDir>/metis-pi.toml`. `enabled` controls registration; capacity, timeouts, `childEnv` and profiles are backend policy loaded at daemon startup.
 - Profiles select built-in tools, extensions, skills and optional model/thinking overrides. Read access adds the native read-only tool policy; this is not an operating-system sandbox.

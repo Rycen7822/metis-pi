@@ -2,11 +2,11 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A compact, Codex-style transcript UI for Pi, with separate extensions for goals, skill input, condense, and execution tools. Current version: **0.21.0**. Development and host checks target **Pi 1.3.0**.
+A compact, Codex-style transcript UI for Pi, with separate extensions for goals, skill input, condense, and execution tools. Current version: **0.21.0**. Development and host checks target **Pi 1.4.0**.
 
 ## Installation
 
-Requires Node.js >=22.19.0 and Pi >=1.3.0. From a local checkout, run:
+Requires Node.js >=22.19.0 and Pi 1.4.0. From a local checkout, run:
 
 ```bash
 pi install .
