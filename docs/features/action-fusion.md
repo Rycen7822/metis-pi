@@ -1,8 +1,8 @@
 # 修改后执行命令
 
-Action Fusion 为 Pi edit/write 增加明确的后续命令，修改成功才执行，分别保留修改状态、diff 与日志。入口为 `extensions/action-fusion.ts`；禁用方法见 [配置](../configuration.md)，不受显示总开关控制。
+Action Fusion 为 Pi edit/write 增加明确的后续命令，修改成功才执行，分别保留修改状态、diff 与日志。入口为 `extensions/action-fusion.ts`，实现在 `src/execution/action-fusion.ts` 与 `action-fusion-command.ts`；禁用方法见 [配置](../configuration.md)，不受显示总开关控制。
 
-原参数可追加 `then_run: {command: "npm test", timeout: 60}`。timeout 为可省略的秒数，显式超时终止命令；仅包装 Pi builtin，第三方同名工具保留。
+原参数可追加 `then_run: {command: "npm test", timeout: 60}`。timeout 为可省略的秒数，显式超时终止命令。只包装 Pi builtin edit/write，第三方同名工具保留。
 
 原生 codemode 示例：
 
@@ -16,9 +16,9 @@ text(await tools.write({
 | 情况 | 结果 |
 | --- | --- |
 | 修改失败 | 跳过命令，保留诊断。 |
-| 命令失败、超时、取消 | 不回滚成功修改，保留命令状态；已确认的非零退出码也写入正文。原生 codemode 调用会 reject，脚本通过 try/catch 读取错误正文。 |
+| 命令失败、超时、取消 | 不回滚成功修改，保留命令状态；非零退出码也写入正文。原生 codemode 调用会 reject，脚本通过 try/catch 读取错误正文。 |
 | 命令再次改同一文件 | diff 固定于命令开始前。 |
-| 并发融合 | 按规范化修改路径排队，排队取消不修改文件。 |
+| 并发融合 | 按规范化修改路径排队，排队期间取消则不修改文件。 |
 
 一次融合只有一个工具结果，不制造额外 assistant/goal 事件。路径排队不隔离外部进程或锁定命令全部文件；并行工作仍需独立目录。
 

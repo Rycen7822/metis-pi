@@ -5,12 +5,21 @@ export const KEY = "metisCodexRemoteCompaction";
 export const MARKER = "[Metis Codex remote checkpoint ";
 export const MAX_BYTES = 8 * 1024 * 1024;
 export type Item = Record<string, any>;
-export interface BindingScope { route: string; account?: string; credential?: "oauth" | "api_key" }
-export interface Checkpoint {
-  version: 1; marker: string; binding: string; history: Item[];
-  scope?: BindingScope; protocol?: "responses"; codexBinding?: string;
+export interface BindingScope {
+  route: string; account?: string; credential?: "oauth" | "api_key"; apiKeyDigest?: string;
+}
+export type CheckpointScope = BindingScope & (
+  { credential: "oauth"; apiKeyDigest?: never } | { credential: "api_key"; apiKeyDigest: string }
+);
+interface CheckpointData {
+  marker: string; history: Item[]; protocol?: "responses";
   model?: { provider: string; modelId: string };
 }
+export type Checkpoint = CheckpointData & (
+  // Read-only compatibility with token/grant-bound v1 checkpoints.
+  { version: 1; binding: string; scope?: BindingScope; codexBinding?: string; codexScope?: BindingScope }
+  | { version: 2; scope: CheckpointScope; codexScope?: CheckpointScope; binding?: never; codexBinding?: never }
+);
 export const record = (value: unknown): Item => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 export const digest = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 export const isMarker = (value: unknown): value is string => typeof value === "string"
@@ -27,12 +36,18 @@ export function responsesHistory(value: unknown): value is Item[] {
 
 export function checkpoint(entry: CompactionEntry): Checkpoint | undefined {
   const data = record(record(entry.details)[KEY]);
-  if (!isMarker(entry.summary) || data.version !== 1 || data.marker !== entry.summary
-    || typeof data.binding !== "string" || !Array.isArray(data.history)) return;
+  if (!isMarker(entry.summary) || ![1, 2].includes(data.version) || data.marker !== entry.summary
+    || !Array.isArray(data.history)) return;
+  if (data.version === 1 && typeof data.binding !== "string") return;
+  if (data.version === 2 && data.scope === undefined) return;
   if (data.model !== undefined && (typeof record(data.model).provider !== "string" || typeof record(data.model).modelId !== "string")) return;
-  if (data.scope && (!digest(data.scope.route)
-    || data.scope.account !== undefined && !digest(data.scope.account)
-    || data.scope.credential !== undefined && !["oauth", "api_key"].includes(data.scope.credential))) return;
+  for (const scope of [data.scope, data.codexScope]) {
+    if (scope !== undefined && (!digest(record(scope).route)
+      || scope.account !== undefined && !digest(scope.account)
+      || (data.version === 2 || scope.credential !== undefined) && !["oauth", "api_key"].includes(scope.credential))) return;
+    if (scope !== undefined && (scope.apiKeyDigest !== undefined && (scope.credential !== "api_key" || !digest(scope.apiKeyDigest))
+      || data.version === 2 && scope.credential === "api_key" && !digest(scope.apiKeyDigest))) return;
+  }
   if (JSON.stringify(data.history).length > MAX_BYTES) return;
   if (data.protocol === "responses") return responsesHistory(data.history) ? data as Checkpoint : undefined;
   if (data.protocol !== undefined) return;

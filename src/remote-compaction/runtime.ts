@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupSessionResources, getCurrentSystemMessage, normalizeContext,
-  type Model, type Api, type OAuthAuth, type OAuthLoginCallbacks, type ThinkingLevel,
+  type Model, type Api, type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection, convertToLlm, estimateTokens,
@@ -18,18 +18,14 @@ import {
 import {
   KEY, MARKER, MAX_BYTES, record, digest, ours, checkpoint, rawBranch,
   summaryText, matchesMarker, replaceMarker, responsesHistory,
-  type Item, type BindingScope, type Checkpoint,
+  type Item, type BindingScope, type CheckpointScope, type Checkpoint,
 } from "./checkpoint.ts";
 
 const TIMEOUT = 300_000;
-const OAUTH_IDENTITY = "metisCodexCheckpointIdentity";
-const OAUTH_LEGACY = "metisCodexCheckpointLegacyBindings";
 const PORTABLE = "metisCodexPortableSummary";
 const MAX_SUMMARY_BYTES = 64 * 1024;
 const isPortableSummary = (value: unknown): value is string => typeof value === "string"
   && value.trim().length > 0 && !value.trimStart().startsWith(MARKER) && Buffer.byteLength(value) <= MAX_SUMMARY_BYTES;
-interface LegacyBinding extends BindingScope { binding: string }
-interface GrantIdentity { identity: string; legacy: LegacyBinding[] }
 type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 // Native entries are append-only: the last source entry identifies its ancestry, excluding extension journals.
@@ -40,17 +36,6 @@ const sourceVersion = ({ sessionManager }: ExtensionContext) => {
     entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
   return entry?.id;
 };
-const legacyBinding = (value: unknown): value is LegacyBinding => {
-  const entry = record(value);
-  return digest(entry.route) && digest(entry.binding) && (entry.account === undefined || digest(entry.account));
-};
-const credentialGrant = (credential: Record<string, unknown>): GrantIdentity => {
-  const identity = credential[OAUTH_IDENTITY], legacy = credential[OAUTH_LEGACY];
-  return {
-    identity: digest(identity) ? identity : hash(credential.access),
-    legacy: digest(identity) && Array.isArray(legacy) ? legacy.filter(legacyBinding) : [],
-  };
-};
 const safeError = (value: unknown, secrets: string[] = []): string => {
   let text = typeof value === "string" ? value : value instanceof Error ? value.message : "provider request failed";
   for (const secret of secrets) text = text.replaceAll(secret, "[redacted]");
@@ -59,8 +44,10 @@ const safeError = (value: unknown, secrets: string[] = []): string => {
     .replace(/\bsk-[A-Za-z0-9_-]+/g, "[redacted]").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1500);
 };
 const tokenAccount = (key: string): unknown => {
-  try { return JSON.parse(Buffer.from(key.split(".")[1], "base64url").toString())["https://api.openai.com/auth"]?.chatgpt_account_id; }
-  catch { return undefined; }
+  try {
+    const account = JSON.parse(Buffer.from(key.split(".")[1], "base64url").toString())["https://api.openai.com/auth"]?.chatgpt_account_id;
+    return typeof account === "string" && account ? account : undefined;
+  } catch { return undefined; }
 };
 const accountHeader = (model: Model<Api>, auth: { headers?: Record<string, string | null> }) =>
   Object.entries({ ...model.headers, ...auth.headers }).findLast(([name]) => name.toLowerCase() === "chatgpt-account-id")?.[1] ?? undefined;
@@ -70,7 +57,7 @@ const sameRoute = (before: Model<Api>, after: Model<Api> | undefined) => after !
   && before.provider === after.provider && before.api === after.api && before.id === after.id && before.baseUrl === after.baseUrl;
 const boundIdentity = (model: Model<Api>, url: string, identity: unknown, header?: string) =>
   hash([...route(model, url), identity, header]);
-const bindingScope = (model: Model<Api>, url: string, account: unknown, header?: string): BindingScope => ({
+const bindingScope = (model: Model<Api>, url: string, account: unknown, header?: string): Pick<BindingScope, "route" | "account"> => ({
   route: hash(route(model, url.replace(/\/+$/, ""))),
   ...(account !== undefined || header !== undefined ? { account: hash([account, header]) } : {}),
 });
@@ -97,51 +84,81 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   return { entry, origin: origin?.type === "model_change" ? origin : undefined,
     data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
 }
-async function requestBinding(ctx: ExtensionContext, model: Model<Api>, accounts: Map<string, GrantIdentity>, resolvedAuth?: RequestAuth) {
+async function resolveRequest(ctx: ExtensionContext, model: Model<Api>, resolvedAuth?: RequestAuth) {
   const provider = ctx.modelRegistry.getProvider(model.provider);
+  // The catalog's OAuth flag can lag another process's login/logout. Read the
+  // source with live broker auth, preserving Pi's model-level header resolution.
+  const live = resolvedAuth === undefined ? await ctx.modelRegistry.getProviderAuth(model.provider) : undefined;
   const auth = resolvedAuth ?? await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? "Codex authentication unavailable" : safeError(auth.error));
-  const account = tokenAccount(auth.apiKey), grant = accounts.get(hash(auth.apiKey));
   if (!provider) throw new Error("Unsupported Codex API");
-  const header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
-  const scope: BindingScope = { ...bindingScope(model, url, account, header),
-    credential: ctx.modelRegistry.isUsingOAuth(model) ? "oauth" : "api_key" };
+  if (resolvedAuth === undefined && live?.auth.apiKey !== auth.apiKey)
+    throw new Error("Codex authentication changed during resolution; retry with the current authentication");
+  const account = tokenAccount(auth.apiKey), header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
+  const baseScope = bindingScope(model, url, account, header);
+  // The only explicit auth override is the read-only legacy Codex CLI login.
+  const scope: CheckpointScope = resolvedAuth !== undefined || live?.source === "OAuth"
+    ? { ...baseScope, credential: "oauth" }
+    : { ...baseScope, credential: "api_key", apiKeyDigest: hash(auth.apiKey) };
   const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };
-  return { identity: boundIdentity(model, url.replace(/\/+$/, ""), account ?? grant?.identity ?? auth.apiKey, header),
-    legacyIdentity: boundIdentity(model, url, account ?? auth.apiKey, header),
-    legacyBindings: grant?.legacy.filter(entry => entry.route === scope.route && entry.account === scope.account)
-      .map(entry => entry.binding) ?? [], scope,
+  return { scope,
     registration: ctx.modelRegistry.getRegisteredProviderConfig(model.provider),
     nativeOwner: ctx.modelRegistry.getRegisteredNativeProvider(model.provider),
     provider, model: { ...model, headers: model.headers ? { ...model.headers } : undefined,
-      baseUrl: auth.baseUrl ?? model.baseUrl }, auth: snapshot };
+      baseUrl: url }, auth: snapshot };
 }
-const sameProvider = (before: Awaited<ReturnType<typeof requestBinding>>, after: Awaited<ReturnType<typeof requestBinding>>) =>
+const sameProvider = (before: Awaited<ReturnType<typeof resolveRequest>>, after: Awaited<ReturnType<typeof resolveRequest>>) =>
   before.registration === after.registration && before.nativeOwner === after.nativeOwner
-  && before.scope.credential === after.scope.credential
+  && scopeState(before.scope, after.scope) === "valid"
+  // A stable known account can authorize an in-flight OAuth refresh. With an
+  // opaque account, a changed token cannot prove the result still belongs here.
+  && (before.auth.apiKey === after.auth.apiKey || before.scope.credential === "oauth" && before.scope.account !== undefined)
   && JSON.stringify([before.auth.headers, before.auth.env, before.model.baseUrl])
     === JSON.stringify([after.auth.headers, after.auth.env, after.model.baseUrl]);
-const matchesBinding = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>) =>
-  data.binding === request.identity || data.binding === request.legacyIdentity || request.legacyBindings.includes(data.binding);
-const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>,
+// V1 API keys and unscoped records need the old key/account binding. OAuth
+// checkpoints never pin access tokens, and Pi credentials are untouched.
+const matchesLegacyBinding = (binding: string | undefined, request: Awaited<ReturnType<typeof resolveRequest>>) => {
+  if (!binding) return false;
+  const account = tokenAccount(request.auth.apiKey!), header = accountHeader(request.model, request.auth);
+  return [request.model.baseUrl, request.model.baseUrl.replace(/\/+$/, "")].some(url =>
+    binding === boundIdentity(request.model, url, account ?? request.auth.apiKey, header));
+};
+const scopeState = (previous: BindingScope, current: BindingScope) => {
+  if (previous.route !== current.route || previous.credential && previous.credential !== current.credential
+    || previous.account && current.account && previous.account !== current.account
+    || previous.apiKeyDigest && previous.apiKeyDigest !== current.apiKeyDigest) return "incompatible";
+  if (previous.account !== current.account || previous.credential === "api_key" && !previous.apiKeyDigest) return "unverified";
+  return "valid";
+};
+const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof resolveRequest>>,
   origin?: { provider: string; modelId: string }) => {
-  const previous = data.scope, current = request.scope;
-  if (previous?.credential && previous.credential !== current.credential) return "incompatible";
-  if (matchesBinding(data, request)) return "valid";
-  if (origin && (origin.provider !== request.model.provider || origin.modelId !== request.model.id)) return "incompatible";
-  if (previous && (previous.route !== current.route
-    || previous.account && current.account && previous.account !== current.account)) return "incompatible";
-  if (previous?.credential === "api_key" && current.credential === "api_key") return "incompatible";
+  // Pi owns login and refresh. Opaque account metadata cannot establish a
+  // client-side identity: on the original route, the backend validates its
+  // encrypted checkpoint under Pi's current auth. Never pin OAuth to a token.
+  if (data.scope?.credential) {
+    const state = scopeState(data.scope, request.scope);
+    if (state === "unverified" && data.version === 1 && data.scope.credential === "api_key"
+      && data.scope.account === request.scope.account && matchesLegacyBinding(data.binding, request)) return "valid";
+    return state;
+  }
+  if (data.scope && scopeState(data.scope, request.scope) !== "valid") return "incompatible";
+  if (matchesLegacyBinding(data.binding, request)) return "valid";
+  const model = data.model ?? origin;
+  if (model && (model.provider !== request.model.provider || model.modelId !== request.model.id)) return "incompatible";
   return "unverified";
 };
 
-async function codexRequest(ctx: ExtensionContext, model: Model<Api>, accounts: Map<string, GrantIdentity>) {
+async function codexRequest(ctx: ExtensionContext, model: Model<Api>) {
   const legacyModel: Model<Api> = ctx.modelRegistry.find("openai-codex", model.id) ?? {
     ...model, provider: "openai-codex", api: "openai-codex-responses",
     baseUrl: "https://chatgpt.com/backend-api", headers: undefined,
   };
   if (legacyModel.api !== "openai-codex-responses") throw new Error("Unsupported Codex API");
-  if (ctx.modelRegistry.isUsingOAuth(legacyModel)) return requestBinding(ctx, legacyModel, accounts);
+  if ((await ctx.modelRegistry.getProviderAuth(legacyModel.provider))?.source === "OAuth") {
+    const request = await resolveRequest(ctx, legacyModel);
+    if (request.scope.credential !== "oauth") throw new Error("Codex OAuth changed; retry with the current authentication");
+    return request;
+  }
   let token: unknown;
   try {
     const data = record(JSON.parse(await readFile(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"), "utf8")));
@@ -149,8 +166,8 @@ async function codexRequest(ctx: ExtensionContext, model: Model<Api>, accounts: 
   } catch { /* A missing or unreadable CLI login cannot authorize compression. */ }
   if (typeof token !== "string" || !token) throw new Error("Legacy Codex OAuth unavailable; sign in with codex login");
   // CLI credentials belong to the official backend, not a configured proxy.
-  return requestBinding(ctx,
-    { ...legacyModel, baseUrl: "https://chatgpt.com/backend-api", headers: undefined }, accounts,
+  return resolveRequest(ctx,
+    { ...legacyModel, baseUrl: "https://chatgpt.com/backend-api", headers: undefined },
     { ok: true, apiKey: token });
 }
 
@@ -177,7 +194,7 @@ function responsesCompactionFetch(capture: (output: unknown) => void, fetcher: t
   };
 }
 
-async function capturePayload(request: Awaited<ReturnType<typeof requestBinding>>, context: ReturnType<typeof normalizeContext>,
+async function capturePayload(request: Awaited<ReturnType<typeof resolveRequest>>, context: ReturnType<typeof normalizeContext>,
   signal: AbortSignal, sessionId?: string, reasoning?: ThinkingLevel): Promise<Item> {
   let captured: Item | undefined;
   await request.provider.streamSimple(request.model, context, {
@@ -192,7 +209,7 @@ async function capturePayload(request: Awaited<ReturnType<typeof requestBinding>
   return captured;
 }
 
-async function authoredUserInput(request: Awaited<ReturnType<typeof requestBinding>>,
+async function authoredUserInput(request: Awaited<ReturnType<typeof resolveRequest>>,
   messages: Parameters<typeof convertToLlm>[0], signal: AbortSignal): Promise<Item[]> {
   if (!messages.length) return [];
   const body = await capturePayload(request, normalizeContext({ messages: convertToLlm(messages) }), signal);
@@ -219,106 +236,6 @@ function retainedUsers(input: Item[]): Item[] {
 }
 
 export function registerCodexCompaction(pi: ExtensionAPI) {
-  const accounts = new Map<string, GrantIdentity>();
-  const trackedOAuth = new Map<object, () => void | Promise<unknown>>();
-  const trackOAuth = (ctx: ExtensionContext) => {
-    for (const id of ["openai", "openai-codex"]) {
-      const oauth = ctx.modelRegistry.getProvider(id)?.auth.oauth;
-      if (!oauth) continue;
-      const registry = ctx.modelRegistry;
-      const native = registry.getRegisteredNativeProvider(id)?.auth.oauth;
-      const configured = registry.getRegisteredProviderConfig(id)?.oauth;
-      if (!native && !configured && !oauth.isSubscription) continue;
-      const owner = native ?? configured;
-      if (owner && trackedOAuth.has(owner)) continue;
-      const source = native ?? oauth;
-      const refresh = source.refresh, toAuth = source.toAuth;
-      const configuredRefresh = configured?.refreshToken;
-      const remember = (credential: Record<string, unknown>, key: string) => {
-        accounts.set(hash(key), credentialGrant(credential));
-        if (accounts.size > 16) accounts.delete(accounts.keys().next().value!);
-      };
-      // These digests migrate token-bound checkpoints only after the broker
-      // successfully exchanges that exact old credential under its store lock.
-      const trackedRefresh: typeof refresh = async (credential, signal) => {
-        let legacy: LegacyBinding[] = [];
-        try {
-          const resolved = await oauth.toAuth(credential);
-          const models = [ctx.model, ...registry.getAll()]
-            .filter((m): m is Model<Api> => Boolean(m && m.provider === id)).slice(0, 64);
-          legacy = resolved.apiKey ? models.map(model => {
-            const url = resolved.baseUrl ?? model.baseUrl, account = tokenAccount(resolved.apiKey!), header = accountHeader(model, resolved);
-            return { ...bindingScope(model, url, account, header),
-              binding: boundIdentity(model, url, account ?? resolved.apiKey, header) };
-          }) : [];
-        } catch { /* Observing an expired grant must never block the broker's refresh. */ }
-        const next = configuredRefresh
-          ? { ...await configuredRefresh.call(configured, credential, signal), type: "oauth" as const }
-          : await refresh.call(source, credential, signal);
-        const grant = credentialGrant(credential);
-        const bindings = [...new Map([
-          ...grant.legacy, ...legacy,
-        ].map(entry => [`${entry.route}:${entry.account}:${entry.binding}`, entry])).values()];
-        // Retain the original migration proof and recent token-bound checkpoints.
-        const retained = bindings.length > 128 ? [...bindings.slice(0, 64), ...bindings.slice(-64)] : bindings;
-        return { ...next, [OAUTH_IDENTITY]: grant.identity, [OAUTH_LEGACY]: retained };
-      };
-      const trackedToAuth: typeof toAuth = async credential => {
-        const resolved = await toAuth.call(source, credential);
-        if (resolved.apiKey) remember(credential, resolved.apiKey);
-        return resolved;
-      };
-      if (native) {
-        native.refresh = trackedRefresh; native.toAuth = trackedToAuth;
-        trackedOAuth.set(native, () => {
-          if (native.refresh === trackedRefresh) native.refresh = refresh;
-          if (native.toAuth === trackedToAuth) native.toAuth = toAuth;
-        });
-      } else {
-        const originalKey = configured?.getApiKey;
-        const trackedKey = (credential: Parameters<OAuthAuth["toAuth"]>[0]) => {
-          const key = configured ? originalKey!(credential) : credential.access;
-          remember(credential, key);
-          return key;
-        };
-        const registration = configured ?? {
-          name: oauth.name, isSubscription: oauth.isSubscription,
-          login: (callbacks: OAuthLoginCallbacks) => oauth.login({
-            signal: callbacks.signal ?? new AbortController().signal,
-            notify: event => {
-              if (event.type === "auth_url") callbacks.onAuth(event);
-              else if (event.type === "device_code") callbacks.onDeviceCode(event);
-              else callbacks.onProgress?.(event.message);
-            },
-            prompt: async prompt => {
-              if (prompt.type === "select") return await callbacks.onSelect({ ...prompt, options: [...prompt.options] }) ?? "";
-              // Pi's adapter spreads these fields back into the native prompt,
-              // preserving its type and callback-race cancellation signal.
-              return callbacks.onPrompt(prompt);
-            },
-          }),
-          refreshToken: trackedRefresh,
-          getApiKey: trackedKey,
-        };
-        if (configured) {
-          registration.refreshToken = trackedRefresh;
-          registration.getApiKey = trackedKey;
-        } else registry.registerProvider(id, { oauth: registration });
-        trackedOAuth.set(registration, () => {
-          if (configured) {
-            if (registration.refreshToken === trackedRefresh) registration.refreshToken = configuredRefresh!;
-            if (registration.getApiKey === trackedKey) registration.getApiKey = originalKey!;
-          } else {
-            const current = registry.getRegisteredProviderConfig(id);
-            if (current?.oauth !== registration) return;
-            delete current.oauth;
-            if (!Object.keys(current).length) registry.unregisterProvider(id);
-          }
-          return registry.refresh({ allowNetwork: false });
-        });
-      }
-    }
-  };
   const contextBudget = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext,
     outputReserve = ctx.model?.maxTokens ?? 0, subject = "Restored history", additionalInputTokens = 0) => {
     const system = getCurrentSystemMessage(messages);
@@ -351,14 +268,10 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   };
   subscribeOwner();
   const invalidate = () => { generation++; pending?.abort(); };
-  pi.on("session_start", (_event, ctx) => { invalidate(); subscribeOwner(); trackOAuth(ctx); });
+  pi.on("session_start", () => { invalidate(); subscribeOwner(); });
   pi.on("session_tree", invalidate);
   pi.on("model_select", invalidate);
-  pi.on("session_shutdown", async () => {
-    invalidate(); unsubscribeOwner?.();
-    await Promise.all([...trackedOAuth.values()].map(release => release()));
-    trackedOAuth.clear(); accounts.clear();
-  });
+  pi.on("session_shutdown", () => { invalidate(); unsubscribeOwner?.(); });
   pi.on("session_before_switch", invalidate);
   pi.on("session_before_tree", invalidate);
   pi.on("session_before_fork", invalidate);
@@ -411,7 +324,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const origin = data.model ?? current.origin;
       const model = origin && ctx.modelRegistry.find(origin.provider, origin.modelId);
       if (!model || !isRemoteModel(model)) throw new Error("Original checkpoint model is unavailable; restore its provider before retrying");
-      const request = await requestBinding(ctx, model, accounts);
+      const request = await resolveRequest(ctx, model);
       if (bindingState(data, request, current.origin) !== "valid")
         throw new Error("Original checkpoint identity could not be verified; restore its authentication before retrying");
       if (!sourceUnchanged())
@@ -439,8 +352,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         summary = result.content.filter(part => part.type === "text").map(part => part.text).join("\n").trim();
         if (!isPortableSummary(summary))
           throw new Error("Portable summary is empty or invalid");
-        const final = await requestBinding(ctx, model, accounts);
-        if (signal.aborted || !sourceUnchanged() || request.identity !== final.identity || !sameProvider(request, final))
+        const final = await resolveRequest(ctx, model);
+        if (signal.aborted || !sourceUnchanged() || !sameProvider(request, final))
           throw new Error("Portable summary source changed; retry with the current session");
         pi.appendEntry(PORTABLE, { checkpoint: current.entry.id, fingerprint: portableHash(current), summary, usage: result.usage });
       } finally {
@@ -455,7 +368,6 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   // Keep opaque checkpoints on their original route. Other models use a durable
   // text summary of that same boundary, never the uncompressed source ledger.
   pi.on("context", async (_event, ctx) => {
-    trackOAuth(ctx);
     preparedModel = ctx.model ? { ...ctx.model } : undefined;
     preparedSession = ctx.sessionManager.getSessionId();
     preparedGeneration = generation;
@@ -471,7 +383,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     preparedSource = sourceVersion(ctx);
     if (current.data && isRemoteModel(ctx.model)) {
       try {
-        const state = bindingState(current.data, await requestBinding(ctx, ctx.model, accounts), current.origin);
+        const state = bindingState(current.data, await resolveRequest(ctx, ctx.model), current.origin);
         if (state === "valid") {
           preparedMarker = current.entry.summary;
           return;
@@ -550,7 +462,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     const current = active(ctx);
     if (!current?.data) { cancelRequest(ctx); return emptyPayload(event.payload); }
     try {
-      const request = await requestBinding(ctx, requestModel, accounts);
+      const request = await resolveRequest(ctx, requestModel);
       // Authentication may yield to history edits, appends or session/model
       // switches. Revalidate the native source version and use the same ordinary
       // cancellation path as before await, rather than an authentication error.
@@ -573,7 +485,6 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     const secrets: string[] = [];
     const sanitize = (value: unknown) => safeError(value, secrets);
     try {
-      trackOAuth(ctx);
       const previous = active(ctx);
       if (!remote && !previous) return;
       const waits: Promise<void>[] = [];
@@ -582,17 +493,18 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const version = generation, model = ctx.model;
       const branch = ctx.sessionManager.getBranch();
       const session = ctx.sessionManager.getSessionId(), source = sourceVersion(ctx);
-      const request = remote && model ? await requestBinding(ctx, model, accounts) : undefined;
+      const request = remote && model ? await resolveRequest(ctx, model) : undefined;
       if (request?.auth.apiKey) secrets.push(request.auth.apiKey);
-      const identity = request?.identity;
       const hybrid = model?.provider === "openai" && model.api === "openai-responses"
-        && ctx.modelRegistry.isUsingOAuth(model);
-      const compactor = hybrid ? await codexRequest(ctx, model, accounts) : request;
+        && request?.scope.credential === "oauth";
+      const compactor = hybrid ? await codexRequest(ctx, model) : request;
       if (compactor?.auth.apiKey) secrets.push(compactor.auth.apiKey);
       diagnostic.compactorProvider = compactor?.model.provider;
       diagnostic.compactorApi = compactor?.model.api;
       const reusable = previous?.data && request && bindingState(previous.data, request, previous.origin) === "valid"
-        && (!hybrid || previous.data.codexBinding === compactor?.identity);
+        && (!hybrid || compactor && (previous.data.codexScope
+          ? scopeState(previous.data.codexScope, compactor.scope) === "valid"
+          : matchesLegacyBinding(previous.data.codexBinding, compactor)));
       if (previous?.data && request && bindingState(previous.data, request, previous.origin) === "unverified"
         && !savedPortable(previous, ctx) && event.reason !== "manual")
         throw new Error("Remote checkpoint identity could not be verified; checkpoint was preserved. "
@@ -652,7 +564,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         event.preparation.tokensBefore = projected.messages.reduce((n, m) => n + estimateTokens(m), 0);
         return;
       }
-      if (!isRemoteModel(model) || !request || !compactor || !identity) throw new Error("Unsupported Codex API");
+      if (!isRemoteModel(model) || !request || !compactor) throw new Error("Unsupported Codex API");
       const responses = model.api === "openai-responses" && !hybrid;
       if (!prefix.some(m => m.role !== "system")) throw new Error("No discarded history to compact");
       pending?.abort(); const controller = new AbortController(); pending = controller;
@@ -750,12 +662,10 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         history = [...retainedUsers(retainedInput), compactionItem];
       }
       if (JSON.stringify(history).length > MAX_BYTES) throw new Error("Codex checkpoint too large");
-      const finalRequest = await requestBinding(ctx, model, accounts);
-      const finalCompactor = hybrid ? await codexRequest(ctx, model, accounts) : compactor;
+      const finalRequest = await resolveRequest(ctx, model);
+      const finalCompactor = hybrid ? await codexRequest(ctx, model) : compactor;
       if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== sourceVersion(ctx)
-        || identity !== finalRequest.identity
         || !sameProvider(request, finalRequest)
-        || compactor.identity !== finalCompactor.identity
         || !sameProvider(compactor, finalCompactor) || signal.aborted)
         throw new Error("Compaction source changed");
       const marker = `${MARKER}${randomUUID()}]`;
@@ -764,9 +674,9 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       return { compaction: { summary: marker, firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore, usage: result.usage,
         details: { readFiles, modifiedFiles, [KEY]: {
-          version: 1, marker, binding: identity, scope: request.scope, history, ...(responses ? { protocol: "responses" as const } : {}),
+          version: 2, marker, scope: request.scope, history, ...(responses ? { protocol: "responses" as const } : {}),
           model: { provider: model.provider, modelId: model.id },
-          ...(hybrid ? { codexBinding: compactor.identity } : {}),
+          ...(hybrid ? { codexScope: compactor.scope } : {}),
         } satisfies Checkpoint } } };
     } catch (error) {
       pending?.abort(); pending = undefined;

@@ -1,74 +1,51 @@
 # Subagent lifecycle
 
-Metis owns the Python service under `src/subagents/backend` and the child Pi runner under `src/subagents/worker`; parent-session coordination lives in `host`, and presentation in `ui`. Each parent Pi session has its own scope. Reload reconnects the frontend; closing the parent does not silently kill background tasks. An interrupt stops the current work; close terminates the owned worker; respawn reuses its durable session without replaying old input.
+Python Runtime owns scheduling and the ledger; the JS worker owns a child Pi session. Parent coordination lives in `src/subagents/host`, presentation in `ui`. Each parent session has a scope; frontend reload reconnects it, and closing the frontend does not silently kill work.
 
-After 30 consecutive seconds without active, queued or input-waiting runs, the shared daemon closes admission and parks its settled workers with verified cleanup, then exits. In-flight requests and notification sends finish first; unknown cleanup or active tools prevent automatic exit. Durable sessions, results and unread attention remain in the ledger. Explicit spawn/follow-up and other requested reads restart the daemon on demand; a passive watch or automatic parent synchronization does not keep an otherwise unused daemon alive or create a restart loop. The native frontend also releases an unused IPC helper without surrendering its logical session lease; reconnect cannot replace a later frontend owner.
+## Idle shutdown and cleanup
 
-Parent mailboxes use provider-supported safe streaming boundaries on Pi 1.4.0: after a completed thinking block or explicitly signed commentary block, the frontend claims pending attention and cancels only that provider request. The next model request receives the existing receipt-backed notification. Already-emitted tool calls are not preempted or replayed; final answers, unsigned text, failed/empty claims and unsupported hook ownership retain ordinary turn-end delivery. Genuine provider errors and user cancellation remain errors/cancellation, not successful yields. The saved notification records `samplingYield` for diagnostics, and question arrivals display one immediate UI notice per notification ID.
+After **30 consecutive idle seconds** without active, queued or input-waiting runs, the daemon closes admission, finishes in-flight requests and notifications, parks settled workers with verified cleanup, then exits. Unknown cleanup or active tools prevent automatic exit. Sessions, results and attention remain durable.
 
-This is not token-by-token or instantaneous interruption: a long single thinking block still waits for its end, and a provider must honor request cancellation for draining to finish. No new configuration, provider, tool permission or model/thinking change is required. Reload/closing the frontend unregisters only its sampling owner without restoring over a later wrapper; background work and durable receipts keep their existing lifecycle.
+Explicit requests restart the daemon on demand; passive watches and automatic synchronization do not create restart loops. The frontend can release an unused IPC helper while retaining its logical session lease; reconnect cannot replace a later owner.
 
-Native `compaction_start/end` and `summarization_retry_*` are owned maintenance, not ordinary model silence. They share one absolute window of `max(idle_timeout_seconds, 1800)` seconds; nested retries do not extend it. A matching final end restores the ordinary idle budget, while a truly hung maintenance call is still terminated. Cancellation, settlement and the next run clear the maintenance state. This is independent of Pi's HTTP timeout and does not change user settings.
+Interrupt stops current work; close terminates its owned worker. A verified parked/closed worker resumes from its saved session without replaying old input. Per-scope capacity includes live and cleanup-unverified workers, not retained history alone.
 
-Managed children cannot replace, fork, reload or navigate their own sessions.
-Access is a tool policy, not an operating system sandbox. Writer admission rejects
-overlapping declared cwd subtrees; it does not constrain actual write paths.
-Write tools, shell commands and extensions can write outside the declared cwd,
-including another writer's directory. Assign separate workspaces and explicit
-task boundaries, and treat stronger filesystem isolation as a separate requirement.
-Queued input is not consumed input. Tool result delivery automatically consumes
-the returned terminal notices; no separate confirmation is required. Pi consumes
-only receipts saved to the parent's current session branch. Failed delivery leaves attention pending.
-Results ready during a tool turn enter the next model request before the final
-reply. Later completions still wake an idle parent; delivered results do not repeat.
-Inputs marked `not_consumed` after interruption are not replayed into a new task;
-resend them explicitly if they are still wanted.
-Status-only `list` queries preserve attention. Result files remain available for paging and rereading. Default wait and the
-outstanding list include active and not-yet-delivered runs. Explicit run IDs can
-always reread a result. An uncertain mutation is never retried automatically.
-Native mutations save their generated operation identity and normalized arguments
-in the Pi branch before dispatch. Retransmitting that invocation reuses its key;
-transport failure exposes the same key instead of silently starting new work.
-Name-based wait locks concrete run IDs before blocking. Automatic answers are
-bound to a delivered question's run and worker generation and checked under the
-agent lock. `send_message` remains store-only when idle; `followup_task` starts work.
-`completed` means the model stopped normally; acceptance still requires checking
-the requested artifacts. Inspection usage counters are cumulative per run
-(`token_scope=run_total`); `last_message_output` and `max_message_output` measure
-individual assistant responses, not the run's total output or configured limit.
-Answering an expired UI request returns `input_not_found` without waking the
-worker or creating a new run. Local cwd preflight failures return structured
-`invalid_cwd` errors before launch.
+On Linux/WSL, a worker guard adopts and reaps orphaned descendants, including detached process groups, before releasing the session lease. A generation-specific receipt and process ownership prove cleanup. If the guard dies first, inspect descendants before operator reconciliation; unknown ownership is never cleared automatically.
 
-The per-scope limit covers live agents and workers whose cleanup is unverified.
-Settled idle workers are parked automatically; retained history does not consume
-capacity. Model and thinking configuration failures keep diagnostic identities
-and results, and release their original name after verified cleanup.
+## Notification and input delivery
 
-A failed worker can be inspected with `subagents_inspect_agent`; create a new agent with
-`subagents_spawn_agent` when its launch settings or saved session are unusable. A verified
-parked/closed agent resumes via `subagents_followup_task`. Unverified cleanup requires
-inspection before reuse. When a killed guard cannot provide its descendant receipt, inspect and remove remaining descendants before explicit operator reconciliation. Unknown ownership is never cleared automatically.
+| State | Contract |
+| --- | --- |
+| Accepted input | May still be queued; `not_consumed` input after interruption requires explicit resend if wanted. |
+| Terminal result | Reading delivery consumes its notices only after receipts are saved to the active parent branch. Failed delivery leaves attention pending. |
+| Status query | Preserves attention; default waits/outstanding lists include active and undelivered runs. |
+| Retained result | Explicit run IDs support paging and rereading after delivery. |
+| Uncertain mutation | Saved operation identity and normalized arguments are reused for identical retransmission; no automatic new work. |
 
-On Linux/WSL each worker guard adopts orphaned descendants, including detached
-shell process groups, and reaps them before releasing its session lease. Cleanup
-is verified from the guard's generation-specific receipt and process ownership.
-If the guard is killed before confirming cleanup, the state remains unknown;
-inspect remaining processes before reopening the workspace.
+Name-based wait locks concrete run IDs. Answers are bound to a delivered question, run and worker generation under the agent lock. Expired UI answers return `input_not_found` without waking work; invalid local cwd returns `invalid_cwd` before launch. `send_message` stores a note, while `followup_task` starts work.
 
-Children inherit the opening client's standard HTTP_PROXY, HTTPS_PROXY, ALL_PROXY,
-NO_PROXY and lowercase equivalents, even with `childEnv=[]`. These routing values stay in the scope's memory, never its persisted
-base environment or launches. Native Pi requests automatically rebind the authenticated parent's authorized environment and project trust after an idle restart.
-Other credential/environment names still require explicit `childEnv` authorization.
-Profile environment overrides remain authoritative. Managed SDK startup configures
-proxy-aware HTTP and WebSocket globals through public Undici APIs before extensions
-load; Pi's global `httpProxy` supplies missing HTTP(S) proxy variables, and its
-HTTP idle timeout applies to the dispatcher. NO_PROXY still permits direct traffic.
+Results ready during a tool turn enter the next request before the final reply; later completions wake an idle parent. `completed` means normal model stop, not successful acceptance. Inspection token counters are cumulative per run; `last_message_output` and `max_message_output` describe individual responses.
 
-Backend capacity/timeouts/profiles are read from global
-`metis-pi.toml` at daemon startup; reload does not change a resident daemon's loaded
-policy. The packaged TOML participates in its source fingerprint.
+## Streaming and maintenance
 
-Runtime upgrades and backend policy changes require letting work finish and waiting for verified idle shutdown before reconnecting. A frontend reload reconnects and retains the parent session's scope; it does not upgrade a still-running daemon.
+At provider-supported safe boundaries—completed thinking or explicitly signed commentary—the frontend can claim pending attention and cancel that provider request. The next request receives receipt-backed notifications. Emitted tool calls are not preempted or replayed; final answers, unsigned text and unsupported hooks use turn-end delivery. Genuine errors and user cancellation remain errors/cancellation.
 
-The native frontend checks the loaded backend's source fingerprint before every request, including updates within the same package version. A mismatch reports `version_mismatch` instead of silently using stale code; it never interrupts background work. A real automatic synchronization failure produces one warning and pauses watch/boundary/settlement RPCs for that frontend; explicit tools still report errors. A normal idle exit is silent and foreground activity resumes watching. Unknown mutation outcomes remain uncertain and are never automatically retried.
+This is not token-by-token interruption: long thinking blocks wait for their end, and cancellation must drain. Questions show one immediate notice per notification ID; `samplingYield` records the handoff. Closing or reloading releases only that frontend's sampling owner.
+
+Native compaction and summarization retries share an absolute maintenance window of `max(idle_timeout_seconds, 1800)` seconds. Nested retries do not extend it; the matching final end restores the ordinary idle budget. Settlement, cancellation and the next run clear maintenance state. This does not change Pi HTTP timeout or user settings.
+
+## Access and environment
+
+Managed children cannot replace, fork, reload or navigate their sessions. Read/write admission is not an OS sandbox: shell commands and extensions can write outside declared cwd. Use separate workspaces for writers when stronger isolation is needed.
+
+Children inherit standard HTTP(S)/ALL/NO_PROXY variables and lowercase equivalents, even with `childEnv=[]`. Routing values remain in scope memory, not persisted base environment or launches. Other credential names require explicit `childEnv`; profile overrides win. Native authenticated requests rebind authorized environment and project trust after idle restart.
+
+SDK startup configures proxy-aware HTTP and WebSocket globals before extensions. Pi `httpProxy` supplies missing HTTP(S) variables; HTTP idle timeout applies to the dispatcher, while NO_PROXY permits direct traffic.
+
+## Configuration and upgrades
+
+Global TOML capacity, timeouts and profiles are read at daemon startup. Let work finish and wait for verified idle shutdown before updating runtime or backend policy; frontend reload does not replace resident code.
+
+Every request checks the backend source fingerprint, including same-package-version changes. `version_mismatch` reports a mismatch without interrupting work. Automatic synchronization failure warns once and pauses watch/boundary/settlement RPCs for that frontend; explicit tools still report errors. Normal idle exit is silent, and foreground activity resumes watching.
+
+For unusable launch settings or saved sessions, inspect the failed worker and start a new agent. Verified parked workers use followup; cleanup-unverified workers require inspection before reuse.

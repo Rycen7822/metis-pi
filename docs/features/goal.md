@@ -1,44 +1,39 @@
 # 长任务目标
 
-目标保存为 Pi session 的 `goal` custom entry v2，从当前分支恢复；活动目标在回合结束后按需续跑。
+目标与用量保存在当前 Pi session 分支；活动目标在回合结束后按需续跑。
 
 | 命令 | 操作 |
 | --- | --- |
 | `/goal <objective>` / `/goal` | 创建或替换 / 查看。 |
 | `/goal edit` / `pause` / `resume` / `clear` | 修改 / 暂停 / 恢复 / 清除。 |
 
-`active` 注入提示并续跑；`paused`、`blocked`、`usageLimited` 停止，可由用户恢复；`budgetLimited` 达到预算后停止；`complete` 可由新目标替换。错误停止续跑，额度错误进入 usageLimited；无 UI 的中断暂停，有 UI 时询问。
+`active` 允许续跑；`paused`、`blocked`、`usageLimited` 停止，可由用户恢复；`budgetLimited` 达到预算后停止，`complete` 可由新目标替换。错误停止续跑，额度错误进入 usageLimited；交互中断询问用户，无 UI 时暂停。
 
 ## 模型工具
 
-统一使用 `goal` 工具，必填 `action`：
+`goal` 的权限与用户命令不同：
 
-| action | 参数与约束 |
+| action | 约束 |
 | --- | --- |
-| `get` | 读取状态、时间、用量和剩余预算，不修改目标。 |
-| `create` | 必填 `objective`，可选 `token_budget`。仅用户或 system/developer 明确要求时创建，仅明确要求预算时设置；已有未完成目标时失败，已完成目标可替换。 |
-| `update` | 必填 `status`，只允许 `complete` / `blocked`；实际达成且无剩余必需工作才完成，同一阻塞连续至少三轮且陷入僵局才 blocked。不能因停止工作或预算将尽而完成，也不能暂停、恢复或设置额度状态。 |
+| `get` | 只读状态、时间、用量和剩余预算。 |
+| `create` | 必填 `objective`；仅用户或 system/developer 明确要求时创建，只有明确要求预算才传 `token_budget`。未完成目标不能替换。 |
+| `update` | 仅 `status: "complete" / "blocked"`。实际达成且没有必需工作才 complete；同一阻塞连续至少三轮且已陷入僵局才 blocked。不能用来暂停、恢复或修改额度状态。 |
 
-例如 `goal({action: "get"})`、`goal({action: "create", objective: "完成指定任务"})`、`goal({action: "update", status: "complete"})`。必填字段按 action 校验；状态持久化和 `/goal` 命令保持不变。
-
-UI 与模型权限不同；禁用入口见 [配置](../configuration.md)。
+例如 `goal({action: "get"})`。不能因为停止工作或预算将尽宣告完成。
 
 ## 查看与编辑弹窗
 
-在全屏界面点击左下角的 **Pursuing goal**（暂停、阻塞、完成等状态行也可点击）打开目标弹窗；TUI 中直接输入 `/goal` 也可打开。左上显示当前状态和累计运行时间，右上 **[X]** 关闭。
+在全屏界面点击左下目标状态行，或输入 `/goal` 打开弹窗；RPC/非交互模式使用文本查看。
 
-- 点击 **Edit** 后原位置变成 **Editing**，右侧出现 **Cancel**、**Save**，正文即可编辑；再次点击 **Editing** 会聚焦正文。
-- **Cancel** 或编辑时按 `Esc` 放弃草稿并返回查看；**Save** 或 `Ctrl+S` 校验并保存。关闭弹窗同样不保存。只读时 `Ctrl+E` 开始编辑，`Esc` 关闭；正文支持换行、粘贴和键盘翻页。
-- 查看和取消不修改目标或触发续跑；保存沿用 `/goal edit` 的校验与持久化，不重置目标 ID、计时、用量或预算。与原命令一致，编辑已完成或预算受限的目标会恢复 active。
-- 保存失败会保留草稿。编辑期间目标被其他入口修改时不覆盖新内容，可用 Cancel 后重新 Edit；切换会话/分支或关闭扩展时丢弃草稿并关闭弹窗。
-
-RPC/非交互模式保留原来的 `/goal` 文本查看方式，不创建终端弹窗。
+- **Edit / Ctrl+E** 开始编辑；**Save / Ctrl+S** 校验保存。
+- **Cancel / 编辑时 Esc** 放弃草稿，回到查看；查看时 **Esc / [X]** 关闭。
+- 查看和取消不触发续跑。保存保留 ID、计时、用量和预算；编辑 complete 或 budgetLimited 目标恢复 active。
+- 保存失败保留草稿；其他入口已修改目标时不覆盖。会话/分支切换或扩展关闭会丢弃草稿。
 
 ## 计时、用量与续跑
 
-- active 每秒刷新 Footer，只读快照；状态切换和回合结算按整秒记账，保留余毫秒。
-- 重载/关闭/分支恢复释放旧 timer/context；恢复目标只有一个计时器，不累计离线时间。
-- 用量属于开始该回合的目标，新目标不继承旧回合用量；Pi 的 input 已排除 cacheRead，直接加 output，无测量字段时回退 totalTokens。完成工具回执显示当时用量，最终回复的用量在 agent_end 后结算。
-- 取分支最后一条 goal 记录；提示只保留当前目标最近续跑消息，移除 UI 消息。OCC 协调见 [condense](condense.md)。
+active 每秒刷新 Footer，状态变化和回合结算记账；重载、关闭和分支恢复释放旧 timer，不累计离线时间。
 
-入口拥有宿主 I/O；`src/goal/state.ts` 拥有状态和计账。Apache-2.0 来源与修改归属见 [NOTICE](../../NOTICE)。
+每轮用量归属于开始该轮的目标，新目标不继承旧回合。优先使用非缓存 input + output，缺失时回退 totalTokens；最终回复在 agent_end 后结算，所以完成工具回执不含尚未结束的回复用量。
+
+提示保留当前目标的有效续跑消息；OCC 的维护和续跑协调见 [condense](condense.md)。状态与计账归 `src/goal/state.ts`，来源归属见 [NOTICE](../../NOTICE)。入口开关见[配置](../configuration.md)。

@@ -2,8 +2,14 @@
 
 - Main documentation: {{PI_README}}
 - Additional docs: {{PI_DOCS}}
-- Examples: {{PI_EXAMPLES}} (extensions, custom tools, SDK)
-- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
-- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)
-- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
-- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)
+- Examples: {{PI_EXAMPLES}}
+
+Resolve `docs/...` and `examples/...` under those SDK locations, not the current project. Read the relevant API docs and examples before implementation, following cross-references needed for the task.
+
+| Topic | Documentation |
+| --- | --- |
+| Extensions, tools, SDK | `docs/extensions.md`, `docs/sdk.md`, `examples/extensions/` |
+| UI | `docs/tui.md`, `docs/themes.md`, `docs/keybindings.md` |
+| Agent resources | `docs/skills.md`, `docs/prompt-templates.md`, `docs/packages.md` |
+| Models and environment | `docs/models.md`, `docs/custom-provider.md`, `docs/environment-variables.md` |
+| MCP and codemode | `docs/mcp.md`, `docs/codemode.md` (including classifiers and image models) |
