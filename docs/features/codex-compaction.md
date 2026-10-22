@@ -1,6 +1,6 @@
 # OpenAI / Codex 远端压缩
 
-`extensions/codex-compaction.ts` 默认接管 **provider 为 `openai` 或 `openai-codex`，且 API 为 `openai-responses` 或 `openai-codex-responses`** 的 Pi `/compact`、自动阈值压缩及 context-overflow 恢复。其他 API/provider 没有远端 checkpoint 时继续使用原来的 Pi/Condense/OCC 路径。无需新增配置，不改变模型、thinking 或登录账号；原生 OAuth 刷新时会保存非秘密的检查点连续性字段。
+`extensions/codex-compaction.ts` 默认接管 **provider 为 `openai` 或 `openai-codex`，且 API 为 `openai-responses` 或 `openai-codex-responses`** 的 Pi `/compact`、自动阈值压缩及 context-overflow 恢复。其他 API/provider 没有远端 checkpoint 时继续使用原来的 Pi/Condense/OCC 路径。无需新增配置，不改变模型、thinking 或登录账号。登录、退出、device ID、凭据刷新与存储完全由 Pi 管理；Metis 只消费 Pi 解析好的请求认证，不注册、替换或包装内置 OAuth，也不向凭据写入私有字段。
 
 ## 协议与会话
 
@@ -16,17 +16,17 @@
 
 启用 appearance 时，压缩卡片将 `tokensBefore` 明确显示为 `estimated context`，不把它当作压缩请求的实测输入。匹配的压缩条目包含有效用量时，另显示 `Summary request input (provider-reported)`，按 `usage.input + cacheRead + cacheWrite` 计算，不混入输出 tokens。旧条目、缺失/全零用量或条目匹配不明确时省略实测行，不捏造数字；展示不会改写历史、摘要或模型输入。
 
-新 OAuth 的双路径压缩保留原历史中 system/tool 增量的顺序，使用新 provider 编码的请求前缀、当前模型与 thinking 设置、同一 session cache key；旧 provider 负责传输、SSE 解析和重试。自定义压缩指令加在历史尾部，不重写前面的系统提示。这为缓存复用保留条件，不保证每次命中。checkpoint 绑定原来的日常路径，同时记录压缩路径身份；旧 Codex 账号改变后，再次压缩会先使用文字摘要，避免把前一个账号的 checkpoint 发送给新账号。
+新 OAuth 的双路径压缩保留原历史中 system/tool 增量的顺序，使用新 provider 编码的请求前缀、当前模型与 thinking 设置、同一 session cache key；旧 provider 负责传输、SSE 解析和重试。自定义压缩指令加在历史尾部，不重写前面的系统提示。这为缓存复用保留条件，不保证每次命中。checkpoint 记录原来的日常路径与压缩路径范围；已知旧 Codex 账号改变后，再次压缩会先使用文字摘要，避免把前一个账号的 checkpoint 发送给新账号。
 
-原始 session 条目不删除。检查点仍绑定原模型、provider、API、请求地址、凭据类型及已知账号；普通请求不会因切换这些字段、损坏 metadata、覆盖源被编辑或认证失败而恢复整段原文。
+原始 session 条目不删除。v2 检查点记录原模型、provider、API、请求地址、凭据类型及可见的已知账号，不保存 token/grant 绑定；普通请求不会因切换这些字段、损坏 metadata、覆盖源被编辑或认证失败而恢复整段原文。Pi 正常刷新或重新登录后，同一路由不会仅因 token 变化而被 Metis 拒绝；OAuth 账号信息不透明时，Metis 不猜测账户身份，由原后端使用 Pi 当前认证验证密文。已知账号不匹配或原有账号信息缺失时仍不回放；后端拒绝也不会自动展开原始历史。
 
 首次跨模型或 provider 使用检查点时，会通过**原模型和已验证的原认证路径**，将加密 prefix 转成可跨模型使用的文字摘要；不会把密文发送给目标 provider。这会额外产生一次摘要请求，使用 low reasoning，最多输出 8,192 tokens。摘要以 `metisCodexPortableSummary` custom entry 持久化，绑定检查点 ID 和内容指纹，同时记录用量；后续切换和重启复用它，无需重复生成。近期尾部保留一次，切回原路由仍可继续回放原密文。新检查点额外保存原模型定位信息，旧记录使用原生 `model_change` 恢复来源。
 
 没有可用文字摘要且无法验证原检查点、原模型不可用、摘要生成失败或源内容被编辑时，明确暂停请求并保留账本，不展开原文、不只发送占位符。已持久化的有效文字摘要不依赖原登录继续可用；目标模型本身仍需有效认证。源编辑会使对应摘要失效。生成、发布和请求发送前都会检查会话、分支、模型、认证和取消状态，过期结果不会发布。
 
-手动与自动压缩优先沿用有效密文或文字摘要。只有用户在**原模型和原请求路由**显式执行 `/compact` 修复损坏检查点、源编辑或已无法证明连续性的认证时，才允许从 canonical 原文重建；经过 Goal 隐藏消息过滤、Condense 投影和容量检查，成功后发布新检查点。换模型后的 `/compact` 或摘要生成失败不会自动转成原文重建。认证暂时失败应先恢复登录；无法安全重建时可以通过 `/tree` 选择更早的恢复位置，原分支始终保留。
+手动与自动压缩优先沿用有效密文或文字摘要。只有用户在**原模型和原请求路由**显式执行 `/compact` 修复损坏检查点、源编辑或不再适用的账户/凭据范围时，才允许从 canonical 原文重建；经过 Goal 隐藏消息过滤、Condense 投影和容量检查，成功后发布新检查点。换模型后的 `/compact` 或摘要生成失败不会自动转成原文重建。认证暂时失败应先恢复登录；无法安全重建时可以通过 `/tree` 选择更早的恢复位置，原分支始终保留。
 
-OAuth 追踪挂在 Pi 公开的注册配置或原生 provider 来源上，目录刷新重新组合包装对象时仍保持有效；保留已有模型、API、header 和登录提示行为，不依赖 OAuth 显示名称。成功观察到原凭据刷新后，会保存稳定 grant 摘要及按模型、路由、已知账号限定的旧 binding 摘要，支持旧 token-bound 检查点迁移。迁移模型集合在刷新时读取，当前模型优先；摘要记录同时保留最初证明和最近证明，最多 128 条。读取旧凭据进行迁移簿记失败，不阻断原生续期。不能验证的外部凭据替换不会被自动当作同一个 grant。
+已有 v1 检查点保持只读兼容：带路由和凭据类型 scope 的记录沿用该范围，不再要求恢复旧 token/grant；没有完整 scope 的更早记录，仅在当前认证仍能匹配原绑定时复用，否则需在原模型/路由显式 `/compact` 重建，或使用已有 portable 摘要、`/tree` 恢复。Metis 不清理或迁移个人认证文件，也不再维护旧的 `metisCodexCheckpointIdentity` / `metisCodexCheckpointLegacyBindings` 字段。
 
 ## 失败与边界
 
