@@ -1,9 +1,9 @@
-import { isIP } from "node:net";
 import { join } from "node:path";
 import { metisConfigPath } from "../configuration/store.ts";
 import { readWebAccessConfig, updateWebAccessConfig } from "../configuration/web-access.ts";
 import { webAccessAgentDir, WEB_CREDENTIALS_FILE } from "../configuration/web-access.ts";
 import { webFetch } from "./proxy-transport.ts";
+import { isLoopbackHostname } from "./hostname.ts";
 
 export function getWebSearchConfigDir(): string {
 	return webAccessAgentDir();
@@ -73,13 +73,6 @@ interface ApiBaseUrlOptions {
 	defaultValue: string;
 	environmentKey: string;
 	environmentValue: string | undefined;
-}
-
-export function isLoopbackHostname(hostnameValue: string): boolean {
-	const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-	return normalized === "localhost"
-		|| normalized === "::1"
-		|| (isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127");
 }
 
 export function resolveApiBaseUrl(options: ApiBaseUrlOptions): string {

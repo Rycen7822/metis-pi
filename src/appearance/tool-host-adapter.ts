@@ -417,7 +417,12 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
   function restoreOwned(): void {
     for (const [key, hook] of hooks) {
       try {
-        if (ownsHook(key, hook)) Object.defineProperty(hook.target, key, hook.original);
+        if (ownsHook(key, hook)) {
+          const current = Object.getOwnPropertyDescriptor(hook.target, key);
+          const restored = Object.hasOwn(hook.original, "value")
+            ? { value: hook.original.value } : { get: hook.original.get };
+          Reflect.defineProperty(hook.target, key, { ...current, ...restored });
+        }
       } catch { /* A frozen target keeps an inactive wrapper. */ }
     }
     try {

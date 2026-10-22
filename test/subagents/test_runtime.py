@@ -386,8 +386,8 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         usage = json.loads(self.rt.store.one("SELECT usage FROM runs WHERE id=?", (s["run_id"],))["usage"])
         self.assertEqual(usage.get("totalTokens"), 110)
 
-    async def test_auto_compaction_retry_does_not_end_the_run_early(self):
-        # Auto-compaction also runs after agent_end: the overflow message and the
+    async def test_compaction_boundary_after_overflow_does_not_end_the_run_early(self):
+        # Pi compacts by itself around an overflow: the overflow message and the
         # compaction boundary must not become the run's result, and the run must
         # settle only after the retried run and its post-run work are done.
         s = await self.spawn("compact=1|settle=0.3|work")
@@ -399,8 +399,10 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             e["type"]
             for e in self.rt.store.all("SELECT type FROM events WHERE agent_id=? ORDER BY created", (s["agent_id"],))
         ]
+        self.assertEqual([kind for kind in kinds if kind.startswith("compaction_")],
+                         ["compaction_start", "compaction_end"])
         self.assertEqual(kinds.count("run_terminal"), 1)
-        self.assertIn("auto_compaction_end", kinds)
+        self.assertEqual(kinds.count("message"), 3, "overflow, compacted continuation and final answer are recorded once each")
 
     async def test_output_limit_is_failed_without_stale_preambles_and_can_resume(self):
         for mode, body in [("thinking", ""), ("text", "Incomplete answer")]:
@@ -1703,6 +1705,114 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         )
         await self.rt.check_idle()
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "timed_out")
+
+    async def test_long_compaction_is_bounded_owned_work_not_model_silence(self):
+        # A normal long summary call emits no ordinary text/thinking delta. It must
+        # outlive the run's short silence budget without any fabricated progress,
+        # and the ordinary budget must apply again from the boundary it ended at.
+        s = await self.spawn("model=silent|delay=120|work", idle_timeout_seconds=1)
+        w = self.rt.workers[s["agent_id"]]
+        self.rt.on_event(w, {"type": "compaction_start", "reason": "threshold"})
+        self.assertEqual(w.run.maintenance, "compaction")
+        self.assertEqual(w.run.maintenance_window(), 1800, "the shipped default idle budget is the floor")
+        self.assertIsNone(w.run.idle_seconds(), "owned maintenance work is not model silence")
+        w.run.last_progress -= 120
+        await self.rt.check_idle()
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
+        # Ending the summary restarts the silence budget instead of inheriting the
+        # 120 s that belonged to owned work.
+        self.rt.on_event(
+            w, {"type": "compaction_end", "reason": "threshold", "result": None, "aborted": False, "willRetry": False}
+        )
+        self.assertIsNone(w.run.maintenance)
+        self.assertLess(w.run.idle_seconds(), 1)
+        await self.rt.check_idle()
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
+        # A duplicate terminal event with no open window must not refresh the
+        # ordinary budget either: it belongs to work that already finished.
+        marker = w.run.last_progress
+        self.rt.on_event(
+            w, {"type": "compaction_end", "reason": "threshold", "result": None, "aborted": False, "willRetry": False}
+        )
+        self.assertEqual(w.run.last_progress, marker)
+        w.run.last_progress -= 2
+        await self.rt.check_idle()
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "timed_out")
+
+    async def test_summarization_retry_backoff_never_extends_the_watchdog(self):
+        # Pi's summarization retry runs inside the same phase: repeated
+        # schedule/attempt events must not reset or grow the one window.
+        s = await self.spawn("model=silent|delay=120|work", idle_timeout_seconds=1)
+        w = self.rt.workers[s["agent_id"]]
+        self.rt.on_event(w, {"type": "compaction_start", "reason": "threshold"})
+        deadline = w.run.maintenance_deadline
+        for attempt in range(1, 4):
+            self.rt.on_event(
+                w,
+                {
+                    "type": "summarization_retry_scheduled",
+                    "attempt": attempt,
+                    "maxAttempts": 5,
+                    "delayMs": 60_000,
+                    "errorMessage": "overloaded",
+                },
+            )
+            self.rt.on_event(
+                w, {"type": "summarization_retry_attempt_start", "source": "compaction", "reason": "threshold"}
+            )
+            self.assertEqual(w.run.maintenance_deadline, deadline, "a retry must not postpone the watchdog")
+        w.run.last_progress -= 120
+        await self.rt.check_idle()
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
+        # A nested retry ends its own phase; the enclosing compaction still owns the
+        # run, so the window and the ordinary budget stay closed.
+        self.rt.on_event(w, {"type": "summarization_retry_finished"})
+        self.assertEqual(w.run.maintenance, "compaction")
+        self.assertEqual(w.run.maintenance_deadline, deadline)
+        self.assertIsNone(w.run.idle_seconds())
+        self.rt.on_event(
+            w, {"type": "compaction_end", "reason": "threshold", "result": None, "aborted": False, "willRetry": False}
+        )
+        self.assertIsNone(w.run.maintenance, "the last phase closes the window")
+        self.assertLess(w.run.idle_seconds(), 1)
+
+    async def test_hung_maintenance_is_stopped_by_its_own_watchdog(self):
+        # The bounded window, not the run's short silence budget, is the only thing
+        # that may stop a maintenance phase that never finishes.
+        s = await self.spawn("model=silent|delay=120|work", idle_timeout_seconds=1)
+        w = self.rt.workers[s["agent_id"]]
+        pid = w.proc.pid
+        self.rt.on_event(w, {"type": "compaction_start", "reason": "threshold"})
+        self.assertEqual(w.run.maintenance, "compaction")
+        w.run.last_progress -= 3600
+        await self.rt.check_idle()
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running",
+                         "a long compaction is not model silence")
+        w.run.maintenance_deadline -= 3600
+        await self.rt.check_idle()
+        run = self.rt.store.run(self.scope, s["run_id"])
+        self.assertEqual(run["state"], "timed_out")
+        self.assertIn("compaction", run["error"])
+        self.assertIn("presumed hung", run["error"])
+        self.assertEqual(group_members(pid), [], "the watchdog stops the real worker")
+        self.assertIsNone(w.run.maintenance, "the stopped run keeps no maintenance window")
+
+    async def test_cancelled_maintenance_is_not_retried_and_next_run_starts_clean(self):
+        s = await self.spawn("model=silent|delay=120|work", idle_timeout_seconds=1)
+        w = self.rt.workers[s["agent_id"]]
+        pid = w.proc.pid
+        self.rt.on_event(w, {"type": "compaction_start", "reason": "overflow"})
+        await self.mutation("interrupt", s["agent_id"])
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "interrupted")
+        self.assertIsNone(w.run.maintenance, "interruption clears the bound run's window")
+        self.assertEqual(group_members(pid), [])
+        # The next run owns a fresh projection: no carried window, no carried phase.
+        n = await self.mutation("respawn", s["agent_id"], message="next")
+        fresh = self.rt.workers[s["agent_id"]]
+        self.assertIsNone(fresh.run.maintenance)
+        done = await self.wait(n["run_id"])
+        self.assertEqual(done["runs"][0]["state"], "completed", done)
+        await self.mutation("close", s["agent_id"])
 
 
     async def test_failed_worker_registration_only_stops_its_verified_guard(self):

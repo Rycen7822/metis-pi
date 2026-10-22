@@ -419,11 +419,7 @@ async function command(request) {
           availableThinking: session.getAvailableThinkingLevels(),
           configurationError: thinkingError,
           isStreaming: Boolean(queue.active),
-          pendingMessageCount: queue.active?.inputs.length ?? 0,
         });
-        break;
-      case "get_commands":
-        reply({ commands: resources.runtime.getCommands() });
         break;
       case "prompt":
         if (thinkingError) throw new Error(thinkingError);

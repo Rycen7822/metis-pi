@@ -1,3 +1,4 @@
+import { documentKey } from "./files.ts";
 import type { LspPosition, LspTextEdit, WorkspaceEdit } from "./types.ts";
 
 export function positionAt(text: string, offset: number): LspPosition {
@@ -83,9 +84,10 @@ function textEditRangesConflict(left: { start: number; end: number }, right: { s
 
 export function collectWorkspaceEdits(edit: WorkspaceEdit | undefined, uri: string) {
   if (!edit) return [];
+  const key = documentKey(uri);
   if (edit.documentChanges) {
-    return edit.documentChanges.flatMap((change) => (change.textDocument?.uri === uri ? (change.edits ?? []) : []));
+    return edit.documentChanges.flatMap(change =>
+      change.textDocument?.uri && documentKey(change.textDocument.uri) === key ? (change.edits ?? []) : []);
   }
-
-  return edit.changes?.[uri] ?? [];
+  return Object.entries(edit.changes ?? {}).flatMap(([uri, edits]) => documentKey(uri) === key ? edits : []);
 }

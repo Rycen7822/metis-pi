@@ -119,8 +119,9 @@ async function queryFixture(t: TestContext, contextWindow = 1000) {
     } });
   const registry = new ModelRegistry(runtime);
   t.mock.method(registry, "getApiKeyAndHeaders", () => { assert.fail("Recall must not request another auth snapshot"); });
-  const ctx = { cwd: dir, model: registry.find(model.provider, model.id)!, modelRegistry: registry } as ExtensionToolContext;
-  return { dir, sessions, tool: tool!, runtime, ctx, captured };
+  const ctx: Partial<ExtensionToolContext> = { cwd: dir, model: registry.find(model.provider, model.id)!, modelRegistry: registry,
+    sessionManager: SessionManager.inMemory(dir) };
+  return { dir, sessions, tool: tool!, runtime, ctx: ctx as ExtensionToolContext, captured };
 }
 
 test("the public grouped Recall tool reads native string messages and rejects empty patterns", async t => {

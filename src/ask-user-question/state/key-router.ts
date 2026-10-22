@@ -189,7 +189,8 @@ function routeKeyAction(data: string, state: QuestionnaireState, runtime: Questi
 
 	// Cancel/confirm retain each mode's behavior before collapse. A raw listener reopens
 	// a hidden overlay; hosts without that listener retain a visible collapsed row.
-	// Invalid/off shortcuts must not reach pi-tui's key parser.
+	// Config is resolved at the boundary, but an in-process update can retain an older runtime.
+	// Missing/off keys must not reach pi-tui's parser.
 	if (
 		typeof runtime.collapseKey === "string" &&
 		runtime.collapseKey !== "off" &&

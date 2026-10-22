@@ -336,7 +336,8 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
           session.nextEmptyPollYieldMs = growEmptyPollYield(Math.max(execYieldMs, waitedMs), maxEmptyWriteYieldTimeMs);
         return finishResult(session, waitedMs, input.max_output_tokens);
       } catch (error) {
-        if (signal?.aborted) deleteSession(session);
+        if (!signal?.aborted) void session.process.terminate().catch(() => {});
+        try { deleteSession(session); } catch { /* Preserve the execution failure if cleanup also fails. */ }
         throw error;
       } finally {
         abortCleanup();
@@ -394,6 +395,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
                 : undefined,
             )
           : 0;
+      if (signal?.aborted) throw new Error("write_stdin aborted");
       await session.process.waitForStartup(signal);
       if (session.process.started && !session.finalized) await session.process.poll(0);
       if (isEmptyPoll && session.exitCode === undefined)

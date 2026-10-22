@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { registerOcc } from "../../src/condense/occ.ts";
+import { createCompactionOutputLimiter } from "../../src/condense/output-limit.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { TokenEstimator } from "../../src/condense/token-estimator.ts";
 import { detectChains } from "../../src/condense/chain-detector.ts";
@@ -63,6 +64,9 @@ async function host(
     // Isolate native/OCC ownership unless this fixture explicitly supplies a
     // local-summary provider; the shipped pressure default now admits it.
     autoBudgetThreshold: localSummary ? 0.7 : null,
+    // Economic scenarios have an explicit small budget, independent of Pi's
+    // native defaults; native-default cases below deliberately override with 0.
+    compactionSummaryMaxTokens: 400,
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
     ...pruneOverrides,
   }) }));
@@ -241,7 +245,7 @@ async function host(
   loaded.session.subscribe((event) => {
     if (event.type === "compaction_start" || event.type === "compaction_end") events.push(event);
   });
-  return { ...loaded, sm, calls, errors, notices, eventBus, events, settingsManager };
+  return { ...loaded, sm, calls, errors, notices, eventBus, events, settingsManager, modelRuntime };
 }
 
 for (const enabled of [false, true]) {
@@ -296,7 +300,7 @@ for (const enabled of [false, true]) {
   });
 }
 
-for (const [limit, expected] of [[0, 400], [64, 64], [2048, 400]]) {
+for (const [limit, expected] of [[0, undefined], [64, 64], [512, 512], [2048, 1000]]) {
   test(`native manual summary ceiling ${limit} preserves Pi limits, previous summary and ordinary requests`, async t => {
     const h = await host(t, { pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: limit } });
     await h.session.prompt("Continue real inspection work. " + "RECENT_WORK ".repeat(500)); await h.session.waitForIdle();
@@ -308,9 +312,95 @@ for (const [limit, expected] of [[0, 400], [64, 64], [2048, 400]]) {
     assert.equal(h.calls.find(c => !c.summarizing).maxTokens, undefined);
     await h.session.compact();
     assert.match(JSON.stringify(h.calls.filter(c => c.summarizing).at(-1).context), /Derived progress: investigation continues/);
-    assert.ok(h.calls.filter(c => c.summarizing).every(c => c.maxTokens <= expected));
+    assert.ok(h.calls.filter(c => c.summarizing).every(c => expected === undefined ? c.maxTokens === undefined : c.maxTokens <= expected));
+    assert.ok(compactions(h).every(entry => !entry.fromHook), "Pi remains the native publisher and fileOps owner");
+    assert.ok(compactions(h).at(-1).details.readFiles.includes("old.log"), "file sets survive repeated native compactions");
   });
 }
+
+test("native output cap leaves same-signal non-summary requests alone", async t => {
+  let h, nested = false;
+  h = await host(t, {
+    pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: 64 },
+    async onSummary({ options }) {
+      if (nested) return;
+      nested = true;
+      await h.modelRuntime.streamSimple(h.session.model, {
+        systemPrompt: "OCC_TEST", messages: [{ role: "user", content: "Routing request", timestamp: 1 }],
+      }, { signal: options.signal }).result();
+    },
+  });
+  await h.session.compact();
+  assert.equal(h.calls.find(c => c.summarizing).maxTokens, 64);
+  assert.equal(h.calls.find(c => !c.summarizing).maxTokens, undefined);
+});
+
+test("native output leases preserve a later wrapper and can be acquired again", async t => {
+  const descriptor = Object.getOwnPropertyDescriptor(ModelRuntime.prototype, "streamSimple");
+  let later;
+  const h = await host(t, {
+    pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: 64 },
+    onSummary() {
+      if (later) return;
+      const retained = ModelRuntime.prototype.streamSimple;
+      later = function (...args) { return retained.apply(this, args); };
+      ModelRuntime.prototype.streamSimple = later;
+    },
+  });
+  try {
+    await h.session.compact();
+    assert.equal(ModelRuntime.prototype.streamSimple, later, "release does not remove another owner");
+    await h.session.prompt("CONTINUED WORK ".repeat(500)); await h.session.waitForIdle();
+    assert.equal(h.calls.find(c => !c.summarizing).maxTokens, undefined, "retained old wrapper is inert");
+    await h.session.compact();
+    assert.ok(h.calls.filter(c => c.summarizing).every(c => c.maxTokens === 64));
+    await h.session.extensionRunner.emit({ type: "session_shutdown" });
+    assert.equal(ModelRuntime.prototype.streamSimple, later, "activation release restores the later owner");
+  } finally { Object.defineProperty(ModelRuntime.prototype, "streamSimple", descriptor); }
+});
+
+test("overlapping summary signals and activations retain independent output limits", async t => {
+  const h = await host(t);
+  const descriptor = Object.getOwnPropertyDescriptor(ModelRuntime.prototype, "streamSimple");
+  const first = createCompactionOutputLimiter(), second = createCompactionOutputLimiter();
+  const a = new AbortController().signal, b = new AbortController().signal;
+  const request = async signal => {
+    await h.modelRuntime.streamSimple(h.session.model, {
+      systemPrompt: "OCC_TEST", messages: [{ role: "user", content: "Independent request", timestamp: 1 }],
+    }, { signal, cacheRetention: "none" }).result();
+    return h.calls.at(-1).maxTokens;
+  };
+  try {
+    first.limit(a, 64); first.limit(b, 128); second.limit(a, 32);
+    assert.equal(await request(a), 32);
+    assert.equal(await request(b), 128);
+    first.release();
+    assert.throws(() => first.limit(a, 64), /cancelled/, "a released activation cannot register more work");
+    assert.equal(await request(a), 32, "releasing one activation keeps the other activation's cap");
+    assert.equal(await request(b), undefined);
+    Object.defineProperty(ModelRuntime.prototype, "streamSimple", { writable: false });
+    second.release();
+    assert.equal(await request(a), undefined);
+    assert.equal(Object.getOwnPropertyDescriptor(ModelRuntime.prototype, "streamSimple").writable, false);
+    assert.equal(ModelRuntime.prototype.streamSimple, descriptor.value);
+  } finally {
+    first.release(); second.release();
+    Object.defineProperty(ModelRuntime.prototype, "streamSimple", descriptor);
+  }
+});
+
+test("an unavailable output hook cancels before sending any uncapped summary", async t => {
+  const h = await host(t, { captureNotices: true,
+    pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: 64 } });
+  const descriptor = Object.getOwnPropertyDescriptor(ModelRuntime.prototype, "streamSimple");
+  Object.defineProperty(ModelRuntime.prototype, "streamSimple", { ...descriptor, writable: false });
+  try {
+    await assert.rejects(h.session.compact(), /cancel/i);
+    assert.equal(h.calls.length, 0);
+    assert.equal(compactions(h).length, 0);
+    assert.ok(h.notices.some(({ message }) => /output hook unavailable/.test(message)));
+  } finally { Object.defineProperty(ModelRuntime.prototype, "streamSimple", descriptor); }
+});
 
 for (const reason of ["threshold", "overflow"]) {
   test(`native ${reason} summary ceiling works with pruning and OCC off`, async t => {
@@ -325,6 +415,32 @@ for (const reason of ["threshold", "overflow"]) {
     assert.equal(h.settingsManager.getCompactionSettings(h.session.model).reserveTokens, 500);
   });
 }
+
+test("OCC zero cap uses the model output upper bound for generation and its decision", async t => {
+  const h = await host(t, { pruneOverrides: { compactionSummaryMaxTokens: 0 } });
+  await h.session.prompt("Continue inspection without deploying."); await h.session.waitForIdle();
+  assert.equal(h.calls.find(c => c.summarizing).maxTokens, h.session.model.maxTokens);
+  const decision = h.sm.getBranch().find(e => e.customType === "metis-occ-decision" && e.data.reason === "accepted").data;
+  assert.equal(decision.summaryOutputUpperBound, h.session.model.maxTokens);
+});
+
+for (const cap of [0, 64]) test(`unknown model output bound uses ${cap ? "the explicit OCC cap" : "a diagnosed conservative rejection"}`, async t => {
+  const h = await host(t, { pruneOverrides: { compactionSummaryMaxTokens: cap },
+    beforeLoad(_sm, model) { model.maxTokens = 0; } });
+  await h.session.prompt("Continue inspection without deploying."); await h.session.waitForIdle();
+  const decisions = h.sm.getBranch().filter(e => e.customType === "metis-occ-decision").map(e => e.data);
+  if (cap) {
+    const accepted = decisions.find(d => d.reason === "accepted");
+    assert.equal(accepted.summaryOutputUpperBound, cap);
+    assert.equal(h.calls.find(c => c.summarizing).maxTokens, cap);
+  } else {
+    const skipped = decisions.find(d => d.reason === "unknown-output-limit");
+    assert.ok(skipped, "unknown output size is not mislabeled protected-content-too-large");
+    assert.equal(skipped.summaryOutputUpperBound, undefined, "never serialize an infinite budget");
+    assert.equal(compactions(h).length, 0, "unknown budget cannot authorize pruning retained sources");
+    assert.ok(!h.calls.some(c => c.summarizing), "do not fall through to an unprotected replacement summary");
+  }
+});
 
 test("custom native summary ceiling makes OCC use the same bounded output for costs, headroom and generation", async t => {
   const h = await host(t, { auto: true, compactionOverrides: { reserveTokens: 600000 },
@@ -347,7 +463,7 @@ test("a capped native summary ending at length does not publish a partial checkp
   await assert.rejects(h.session.compact(), /token cap/);
   assert.equal(compactions(h).length, 0);
   assert.deepEqual(h.sm.buildSessionProjection(), before);
-  assert.equal(h.calls.find(c => c.summarizing).maxTokens, 40, "Pi keeps its smaller split-turn budget within the configured ceiling");
+  assert.equal(h.calls.find(c => c.summarizing).maxTokens, 64, "native split-turn generation uses the explicit cap, not reserve percentages");
 });
 
 test("real AgentSession automatically commits OCC once, protects source requirements and recalls exact evidence", async t => {
@@ -1213,6 +1329,7 @@ for (const exhaustWait of [false, true])
         },
       }),
     );
+    const settingsManager = SettingsManager.create(dir, dir);
     const branch = [
       { type: "message", id: "request", message: { role: "user" } },
       {
@@ -1244,6 +1361,7 @@ for (const exhaustWait of [false, true])
     };
     const occ = registerOcc(
       {
+        getSettings: () => settingsManager.getSettings(),
         on(name, fn) {
           hooks.set(name, fn);
         },

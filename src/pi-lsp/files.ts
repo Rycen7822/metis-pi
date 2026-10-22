@@ -1,8 +1,19 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { LspServerAdapter } from "./types.ts";
+
+// Servers may re-encode file URIs (e.g. file:///c%3A vs file:///C:).
+// Diagnostics and edits share path identity; non-file URIs remain opaque.
+export function documentKey(uri: string) {
+  try {
+    const filePath = path.normalize(fileURLToPath(uri));
+    return process.platform === "win32" ? filePath.toLowerCase() : filePath;
+  } catch {
+    return uri;
+  }
+}
 
 export function resolveRoot(root?: string) {
   const resolvedRoot = path.resolve(root?.trim() || process.cwd());

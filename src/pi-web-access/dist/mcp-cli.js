@@ -14,13 +14,163 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/configuration/store.ts
+import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { parse, stringify } from "smol-toml";
+import { lockSync } from "proper-lockfile";
+function parseMetisConfig(text4, path = METIS_CONFIG_FILE) {
+  try {
+    return parse(text4.replace(/^\uFEFF/, ""));
+  } catch (error) {
+    throw new MetisConfigError(path, `invalid TOML: ${error.message}`);
+  }
+}
+function defaultMetisConfig() {
+  defaults ??= parseMetisConfig(bundledTemplate());
+  return structuredClone(defaults);
+}
+function readMetisConfigText(agentDir, read = readOptionalConfigFile) {
+  const path = metisConfigPath(agentDir);
+  try {
+    return read(path);
+  } catch (error) {
+    throw new MetisConfigError(path, error.code ?? String(error));
+  }
+}
+var METIS_CONFIG_FILE, metisConfigPath, isMetisConfigTable, readOptionalConfigFile, MetisConfigError, template, bundledTemplate, defaults;
+var init_store = __esm({
+  "src/configuration/store.ts"() {
+    "use strict";
+    METIS_CONFIG_FILE = "metis-pi.toml";
+    metisConfigPath = (agentDir) => join(agentDir, METIS_CONFIG_FILE);
+    isMetisConfigTable = (value) => !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
+    readOptionalConfigFile = (path) => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch (error) {
+        if (error.code === "ENOENT") return void 0;
+        throw error;
+      }
+    };
+    MetisConfigError = class extends Error {
+      path;
+      reason;
+      constructor(path, reason) {
+        super(`Configuration unreadable at ${path}: ${reason}`);
+        this.path = path;
+        this.reason = reason;
+        this.name = "MetisConfigError";
+      }
+    };
+    bundledTemplate = () => template ??= readFileSync(new URL("../../metis-pi.toml", new URL("../../configuration/store.ts", import.meta.url).href), "utf8");
+  }
+});
+
+// src/configuration/web-access.ts
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+import { fileURLToPath } from "node:url";
+function webAccessAgentDir() {
+  let configured = process.env["PI_CODING_AGENT_DIR"];
+  if (!configured) return join2(homedir(), ".pi", "agent");
+  if (process.platform === "win32" && !configured.includes("\\")) {
+    const drive = configured.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+    if (drive) configured = `${drive[1].toUpperCase()}:\\${drive[2]?.replaceAll("/", "\\") ?? ""}`;
+  }
+  if (configured === "~") return homedir();
+  if (configured.startsWith("~/") || process.platform === "win32" && configured.startsWith("~\\"))
+    return join2(homedir(), configured.slice(2));
+  return configured.startsWith("file://") ? fileURLToPath(configured) : configured;
+}
+function readWebAccessCredentials(agentDir, read) {
+  const path = join2(agentDir, WEB_CREDENTIALS_FILE), text4 = read(path);
+  if (text4 === void 0) return {};
+  let config;
+  try {
+    config = JSON.parse(text4.replace(/^\uFEFF/, ""));
+  } catch (error) {
+    const position = error.message.match(/at position \d+(?: \(line \d+ column \d+\))?/i);
+    throw new Error(`Failed to parse ${path}: not valid JSON${position ? `, ${position[0]}` : ""}`);
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error(`Invalid config in ${path}: expected a JSON object`);
+  }
+  return splitWebAccessConfig(config).credentials;
+}
+function splitWebAccessConfig(config) {
+  const preferences = {}, credentials = {};
+  for (const [key, value] of Object.entries(config)) {
+    let sensitive = /(?:apiKey|token|password|secret)$/i.test(key) || key === "searxngHeaders" || key === "degoogHeaders";
+    if (key === "proxy" && typeof value === "string") {
+      try {
+        const url = new URL(value);
+        sensitive ||= !!(url.username || url.password);
+      } catch {
+      }
+    }
+    Object.defineProperty(sensitive ? credentials : preferences, key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  }
+  return { preferences, credentials };
+}
+function readWebAccessConfig(agentDir) {
+  try {
+    const path = metisConfigPath(agentDir), text4 = readMetisConfigText(agentDir);
+    const webCredentials = readWebAccessCredentials(agentDir, readOptionalConfigFile);
+    if (text4 !== void 0 && (cachedWebToml?.path !== path || cachedWebToml.text !== text4)) {
+      cachedWebToml = { path, text: text4, config: parseMetisConfig(text4, path) };
+    }
+    const config = text4 === void 0 ? {} : cachedWebToml.config["webAccess"] ?? {};
+    if (!isMetisConfigTable(config)) throw new MetisConfigError(path, "webAccess must be a table");
+    const { preferences, credentials } = splitWebAccessConfig(config);
+    if (Object.keys(credentials).length) {
+      throw new MetisConfigError(path, `webAccess credentials belong in ${WEB_CREDENTIALS_FILE}`);
+    }
+    const webDefaults = defaultMetisConfig()["webAccess"];
+    return structuredClone({
+      ...isMetisConfigTable(webDefaults) ? webDefaults : {},
+      ...preferences,
+      ...webCredentials
+    });
+  } catch (error) {
+    if (error instanceof MetisConfigError) throw new Error(`Failed to parse ${error.path}: ${error.reason}`, { cause: error });
+    throw error;
+  }
+}
+var WEB_CREDENTIALS_FILE, cachedWebToml;
+var init_web_access = __esm({
+  "src/configuration/web-access.ts"() {
+    "use strict";
+    init_store();
+    WEB_CREDENTIALS_FILE = "web-search.json";
+  }
+});
+
+// src/pi-web-access/hostname.ts
+import { isIP } from "node:net";
+function normalizeHostname(hostname) {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+}
+function isLoopbackHostname(hostname) {
+  const normalized = normalizeHostname(hostname);
+  return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
+}
+var init_hostname = __esm({
+  "src/pi-web-access/hostname.ts"() {
+  }
+});
+
 // src/pi-web-access/proxy-transport.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { readWebAccessConfig, webAccessAgentDir } from "../../configuration/web-access.ts";
+import { join as join3 } from "node:path";
 function normalizeProxyUrl(value, source) {
   if (value === void 0 || value === null) return null;
   if (typeof value !== "string") throw new Error(`${source} must be an http(s) or socks proxy URL string`);
@@ -81,15 +231,15 @@ function noProxyEntryMatches(hostname, port, entry) {
     }
   }
   if (entryPort !== void 0 && entryPort !== port) return false;
-  host = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  host = normalizeHostname(host);
   if (!host) return false;
   if (hostname === host) return true;
   const suffix = host.startsWith("*.") ? host.slice(1) : host.startsWith(".") ? host : `.${host}`;
   return hostname.endsWith(suffix);
 }
 function isProxyBypassedUrl(url) {
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1" || hostname === "::1") return true;
+  const hostname = normalizeHostname(url.hostname);
+  if (isLoopbackHostname(hostname) || hostname.endsWith(".localhost")) return true;
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   const noProxy = process.env.NO_PROXY || process.env.no_proxy;
   return Boolean(noProxy && noProxy.split(",").some((entry) => noProxyEntryMatches(hostname, port, entry)));
@@ -214,10 +364,10 @@ async function fetchViaCurl(url, init, proxyUrl) {
 async function fetchViaCurlOnce(url, init, proxyUrl) {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  const dir = await mkdtemp(join(tmpdir(), "pi-web-access-proxy-"));
-  const headerFile = join(dir, "headers");
-  const bodyFile = join(dir, "body");
-  const requestBodyFile = join(dir, "request-body");
+  const dir = await mkdtemp(join3(tmpdir(), "pi-web-access-proxy-"));
+  const headerFile = join3(dir, "headers");
+  const bodyFile = join3(dir, "body");
+  const requestBodyFile = join3(dir, "request-body");
   const args = [
     "--disable",
     "--silent",
@@ -350,6 +500,8 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
 var proxyStorage, CurlTransportError;
 var init_proxy_transport = __esm({
   "src/pi-web-access/proxy-transport.ts"() {
+    init_web_access();
+    init_hostname();
     proxyStorage = new AsyncLocalStorage();
     CurlTransportError = class extends Error {
     };
@@ -357,22 +509,18 @@ var init_proxy_transport = __esm({
 });
 
 // src/pi-web-access/utils.ts
-import { isIP } from "node:net";
-import { join as join2 } from "node:path";
-import { metisConfigPath } from "../../configuration/store.ts";
-import { readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../configuration/web-access.ts";
-import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../configuration/web-access.ts";
+import { join as join4 } from "node:path";
 function getWebSearchConfigDir() {
-  return webAccessAgentDir2();
+  return webAccessAgentDir();
 }
 function getWebSearchConfigPath() {
-  return join2(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
+  return join4(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
 }
 function getWebAccessConfigPath() {
   return metisConfigPath(getWebSearchConfigDir());
 }
 function loadWebAccessConfig() {
-  return readWebAccessConfig2(getWebSearchConfigDir());
+  return readWebAccessConfig(getWebSearchConfigDir());
 }
 function normalizeSearchBaseUrl(value) {
   if (typeof value !== "string") return null;
@@ -409,10 +557,6 @@ function normalizeSearchHeaders(value) {
     headers[name] = headerValue.trim();
   }
   return headers;
-}
-function isLoopbackHostname(hostnameValue) {
-  const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
 }
 function resolveApiBaseUrl(options) {
   const fromEnvironment = options.environmentValue !== void 0;
@@ -476,7 +620,11 @@ async function fetchWithCredentialRedirects(url, init, credentialHeaders, creden
 var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, GOOGLE_RECENCY_TBS;
 var init_utils = __esm({
   "src/pi-web-access/utils.ts"() {
+    init_store();
+    init_web_access();
+    init_web_access();
     init_proxy_transport();
+    init_hostname();
     API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
     MAX_API_REDIRECTS = 5;
@@ -909,9 +1057,6 @@ function parseChromeProfile(value, label) {
   }
   return normalized;
 }
-function normalizeHostname(hostname) {
-  return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-}
 function hostMatches(hostname, allowedHost) {
   return hostname === allowedHost || hostname.endsWith(`.${allowedHost}`);
 }
@@ -919,16 +1064,17 @@ var WEB_SEARCH_CONFIG_PATH, AUTH_PROFILE_NAME_PATTERN;
 var init_auth_fetch = __esm({
   "src/pi-web-access/auth-fetch.ts"() {
     init_utils();
+    init_hostname();
     WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
     AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
   }
 });
 
 // src/pi-web-access/gemini-adc.ts
-import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync as readFileSync3 } from "node:fs";
 import { createSign } from "node:crypto";
-import { homedir } from "node:os";
-import { join as join4 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { join as join6 } from "node:path";
 function loadConfig2() {
   return cachedConfig2 ??= loadWebAccessConfig();
 }
@@ -1015,7 +1161,7 @@ async function loadAdcFile() {
   if (!path || !existsSync(path)) {
     throw new Error(`Google Application Default Credentials file not found at ${path}`);
   }
-  const raw = readFileSync2(path, "utf-8");
+  const raw = readFileSync3(path, "utf-8");
   try {
     return parseAdcFile(raw);
   } catch (err) {
@@ -1126,7 +1272,7 @@ var init_gemini_adc = __esm({
     init_utils();
     init_proxy_transport();
     init_credential_source();
-    DEFAULT_ADC_PATH = join4(homedir(), ".config", "gcloud", "application_default_credentials.json");
+    DEFAULT_ADC_PATH = join6(homedir2(), ".config", "gcloud", "application_default_credentials.json");
     TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
     VERTEX_HOST = "https://aiplatform.googleapis.com";
     VERTEX_API_VERSION = "v1";
@@ -1437,9 +1583,9 @@ var init_gemini_web_config = __esm({
 // src/pi-web-access/chrome-cookies.ts
 import { execFile } from "node:child_process";
 import { pbkdf2Sync, createDecipheriv } from "node:crypto";
-import { copyFileSync, existsSync as existsSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync3, realpathSync, rmSync } from "node:fs";
-import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
-import { isAbsolute, join as join5, sep } from "node:path";
+import { copyFileSync, existsSync as existsSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync4, realpathSync, rmSync } from "node:fs";
+import { tmpdir as tmpdir2, homedir as homedir3 } from "node:os";
+import { isAbsolute, join as join7, sep } from "node:path";
 async function getGoogleCookies(options) {
   return getBrowserCookiesForHosts({
     hosts: GOOGLE_ORIGINS.map((origin) => new URL(origin).hostname),
@@ -1477,7 +1623,7 @@ async function getBrowserCookiesForHosts(options) {
   if (hosts.length === 0) {
     return failure("No valid cookie hosts were requested.");
   }
-  const home = currentPlatform === "win32" ? process.env.USERPROFILE || homedir2() : homedir2();
+  const home = currentPlatform === "win32" ? process.env.USERPROFILE || homedir3() : homedir3();
   let sawCookieDatabase = false;
   let sawRequiredCookies = false;
   let sawAnyHostCookie = false;
@@ -1504,9 +1650,9 @@ async function getBrowserCookiesForHosts(options) {
         continue;
       }
       sawCookieDatabase = true;
-      const tempDir = mkdtempSync(join5(tmpdir2(), "pi-chrome-cookies-"));
+      const tempDir = mkdtempSync(join7(tmpdir2(), "pi-chrome-cookies-"));
       try {
-        const tempDb = join5(tempDir, "Cookies");
+        const tempDb = join7(tempDir, "Cookies");
         copyFileSync(cookiesPath, tempDb);
         copySidecar(cookiesPath, tempDb, "-wal");
         copySidecar(cookiesPath, tempDb, "-shm");
@@ -1647,7 +1793,7 @@ function normalizeProfileName(value) {
 }
 function resolveProfilePath(home, config, profile) {
   const basePath = browserBasePath(home, config);
-  const profilePath = join5(basePath, profile);
+  const profilePath = join7(basePath, profile);
   if (!cookieDatabasePath(profilePath, config)) return null;
   try {
     const baseRealPath = realpathSync(basePath);
@@ -1659,13 +1805,13 @@ function resolveProfilePath(home, config, profile) {
   }
 }
 function cookieDatabasePath(profilePath, config) {
-  const networkCookies = join5(profilePath, "Network", "Cookies");
+  const networkCookies = join7(profilePath, "Network", "Cookies");
   if (config.usesLocalAppData && existsSync2(networkCookies)) return networkCookies;
-  const legacyCookies = join5(profilePath, "Cookies");
+  const legacyCookies = join7(profilePath, "Cookies");
   return existsSync2(legacyCookies) ? legacyCookies : null;
 }
 function browserBasePath(home, config) {
-  return config.usesLocalAppData ? join5(process.env.LOCALAPPDATA || join5(home, "AppData", "Local"), config.baseDir) : join5(home, config.baseDir);
+  return config.usesLocalAppData ? join7(process.env.LOCALAPPDATA || join7(home, "AppData", "Local"), config.baseDir) : join7(home, config.baseDir);
 }
 function normalizeCookieNames(names) {
   if (!names?.length) return void 0;
@@ -1681,7 +1827,7 @@ function listBrowserProfiles(home, config) {
   const profiles = /* @__PURE__ */ new Set();
   try {
     for (const entry of readdirSync2(basePath, { withFileTypes: true })) {
-      if (entry.isDirectory() && cookieDatabasePath(join5(basePath, entry.name), config)) profiles.add(entry.name);
+      if (entry.isDirectory() && cookieDatabasePath(join7(basePath, entry.name), config)) profiles.add(entry.name);
     }
   } catch {
   }
@@ -1758,7 +1904,7 @@ function readBrowserPasswords(config, currentPlatform) {
 }
 async function readWindowsEncryptionKey(config, home) {
   try {
-    const localState = JSON.parse(readFileSync3(join5(browserBasePath(home, config), "Local State"), "utf8"));
+    const localState = JSON.parse(readFileSync4(join7(browserBasePath(home, config), "Local State"), "utf8"));
     const encodedKey = localState.os_crypt?.encrypted_key;
     if (typeof encodedKey !== "string") return null;
     const protectedKey = Buffer.from(encodedKey, "base64");
@@ -2035,7 +2181,7 @@ var init_chrome_cookies = __esm({
 });
 
 // src/pi-web-access/gemini-web.ts
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { basename } from "node:path";
 function createGeminiFetch(undiciImpl) {
   const agent = new undiciImpl.EnvHttpProxyAgent({
@@ -2167,7 +2313,7 @@ async function fetchWithCookieRedirects(url, cookieHeader, maxRedirects, signal)
   throw new Error(`Too many redirects (>${maxRedirects})`);
 }
 async function uploadFile(file, cookieHeader, signal) {
-  const data = readFileSync4(file.path);
+  const data = readFileSync5(file.path);
   const fileName = basename(file.path);
   const boundary = "----FormBoundary" + Math.random().toString(36).slice(2);
   const header = `--${boundary}\r
@@ -3658,7 +3804,7 @@ function parseDomainEntries(value, field) {
   });
 }
 function normalizeDomainEntry(entry) {
-  const hostname = normalizeHostname2(entry.trim());
+  const hostname = normalizeHostname(entry.trim());
   if (!hostname || /\s|[\\/?:#@]/.test(hostname)) return null;
   if (net.isIP(hostname)) return hostname;
   if (hostname.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname)) return null;
@@ -3699,7 +3845,7 @@ async function resolveRemoteUrl(rawUrl, options = {}) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Only HTTP and HTTPS URLs can be fetched remotely");
   }
-  const hostname = normalizeHostname2(url.hostname);
+  const hostname = normalizeHostname(url.hostname);
   if (!hostname) throw new Error("URL must include a hostname");
   const route = resolveWebProxy(url, options.proxy);
   if (hostname === "localhost") {
@@ -3734,7 +3880,7 @@ async function resolveRemoteUrl(rawUrl, options = {}) {
   for (const { address } of addresses) {
     assertPublicAddress(address, hostname, allowRanges);
   }
-  return { url, proxy: route.proxy, addresses: addresses.map(({ address }) => ({ address: normalizeHostname2(address), family: net.isIP(normalizeHostname2(address)) })) };
+  return { url, proxy: route.proxy, addresses: addresses.map(({ address }) => ({ address: normalizeHostname(address), family: net.isIP(normalizeHostname(address)) })) };
 }
 async function fetchRemoteUrl(url, init = {}, options = {}) {
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
@@ -3746,10 +3892,10 @@ async function fetchRemoteUrl(url, init = {}, options = {}) {
     const current = resolved.url;
     if (options.beforeRequest) requestInit = await options.beforeRequest(new URL(current.toString()), requestInit);
     const addresses = resolved.addresses;
-    const checkedHostname = normalizeHostname2(current.hostname);
+    const checkedHostname = normalizeHostname(current.hostname);
     const dispatcher = resolved.proxy === null && addresses?.length ? new Agent({ connect: {
       lookup(hostname, lookupOptions, callback) {
-        if (normalizeHostname2(hostname) !== checkedHostname) {
+        if (normalizeHostname(hostname) !== checkedHostname) {
           callback(new Error("Unexpected hostname for validated DNS route"), "", 4);
         } else if (lookupOptions.all) callback(null, addresses);
         else callback(null, addresses[0].address, addresses[0].family);
@@ -3786,9 +3932,6 @@ async function fetchRemoteUrl(url, init = {}, options = {}) {
   }
   throw new Error(`Too many redirects fetching ${resolved.url.toString()}`);
 }
-function normalizeHostname2(hostname) {
-  return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-}
 function assertDomainPolicy(hostname, policy) {
   if (!policy) return;
   if (policy.deny.some((entry) => domainMatches(hostname, entry))) {
@@ -3802,7 +3945,7 @@ function domainMatches(hostname, entry) {
   return hostname === entry || hostname.endsWith(`.${entry}`);
 }
 function assertPublicAddress(address, hostname, allowRanges = []) {
-  const normalized = normalizeHostname2(address);
+  const normalized = normalizeHostname(address);
   const ipVersion = net.isIP(normalized);
   if (ipVersion === 0) throw new Error(`Resolved non-IP address for ${hostname}: ${address}`);
   if (isInAllowedRange(normalized, ipVersion, allowRanges)) return;
@@ -3954,6 +4097,7 @@ var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, WEB_SEARCH_
 var init_ssrf_protection = __esm({
   "src/pi-web-access/ssrf-protection.ts"() {
     init_utils();
+    init_hostname();
     init_proxy_transport();
     DEFAULT_MAX_REDIRECTS = 5;
     REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
@@ -4256,6 +4400,7 @@ var CONFIG_PATH14, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10,
 var init_firecrawl = __esm({
   "src/pi-web-access/firecrawl.ts"() {
     init_utils();
+    init_hostname();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
@@ -4775,7 +4920,7 @@ import { execFile as execFile2 } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
 import { existsSync as existsSync3, readdirSync as readdirSync3, statSync } from "node:fs";
 import { readFile as readFile2 } from "node:fs/promises";
-import { resolve, extname, basename as basename2, join as join6, dirname } from "node:path";
+import { resolve, extname, basename as basename2, join as join8, dirname as dirname2 } from "node:path";
 function shouldRethrow(err) {
   const message = err instanceof Error ? err.message : String(err);
   return message.startsWith("Failed to parse ");
@@ -4840,13 +4985,13 @@ function isVideoFile(input) {
 function resolveFilePath(filePath) {
   const absolutePath = resolve(filePath);
   if (existsSync3(absolutePath)) return absolutePath;
-  const dir = dirname(absolutePath);
+  const dir = dirname2(absolutePath);
   const base = basename2(absolutePath);
   if (!existsSync3(dir)) return null;
   try {
     const normalizedBase = normalizeSpaces(base);
     const match = readdirSync3(dir).find((f) => normalizeSpaces(f) === normalizedBase);
-    return match ? join6(dir, match) : null;
+    return match ? join8(dir, match) : null;
   } catch {
     return null;
   }
@@ -5106,8 +5251,8 @@ function loadYouTubeConfig() {
   const raw = loadWebAccessConfig();
   const yt = raw.youtube ?? {};
   cachedConfig35 = {
-    enabled: normalizeEnabled2(yt.enabled, defaults.enabled),
-    preferredModel: normalizePreferredModel2(yt.preferredModel, defaults.preferredModel)
+    enabled: normalizeEnabled2(yt.enabled, defaults2.enabled),
+    preferredModel: normalizePreferredModel2(yt.preferredModel, defaults2.preferredModel)
   };
   return cachedConfig35;
 }
@@ -5302,7 +5447,7 @@ ${answer}
     return null;
   }
 }
-var execFileAsync2, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig35;
+var execFileAsync2, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults2, cachedConfig35;
 var init_youtube_extract = __esm({
   "src/pi-web-access/youtube-extract.ts"() {
     init_utils();
@@ -5323,7 +5468,7 @@ var init_youtube_extract = __esm({
 
 Format as markdown.`;
     YOUTUBE_REGEX = /(?:(?:www\.|m\.)?youtube\.com\/(?:watch\?.*v=|shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
-    defaults = { enabled: true, preferredModel: "gemini-3.6-flash" };
+    defaults2 = { enabled: true, preferredModel: "gemini-3.6-flash" };
     cachedConfig35 = null;
   }
 });
@@ -6229,7 +6374,7 @@ var init_gemini_pdf_extract = __esm({
 // src/pi-web-access/pdf-extract.ts
 import { writeFile as writeFile2, mkdir } from "node:fs/promises";
 import { createHash as createHash2 } from "node:crypto";
-import { join as join7, basename as basename3 } from "node:path";
+import { join as join9, basename as basename3 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 function loadPDFConfig() {
   const root = loadWebAccessConfig();
@@ -6388,7 +6533,7 @@ async function writeMarkdownResult(options) {
   }
   const content = lines.join("\n");
   const outputFilename = options.filename || `${sanitizeFilename(options.title)}-${createHash2("sha256").update(JSON.stringify([options.url, content])).digest("hex")}.md`;
-  const outputPath = join7(options.outputDir, outputFilename);
+  const outputPath = join9(options.outputDir, outputFilename);
   await mkdir(options.outputDir, { recursive: true });
   await writeFile2(outputPath, content, "utf-8");
   return {
@@ -6457,7 +6602,7 @@ var init_pdf_extract = __esm({
     MAX_PDF_MAX_SIZE_MB = 50;
     MAX_DATALAB_TIMEOUT_MS = 3e5;
     DEFAULT_MAX_PAGES = 100;
-    DEFAULT_OUTPUT_DIR = join7(tmpdir3(), "pi-web-pdf");
+    DEFAULT_OUTPUT_DIR = join9(tmpdir3(), "pi-web-pdf");
     PAGE_MARKER_PATTERN2 = /^<!-- Page (\d+) -->$/gm;
   }
 });
@@ -6641,22 +6786,22 @@ import {
   constants as fsConstants,
   existsSync as existsSync4,
   lstatSync as lstatSync2,
-  mkdirSync as mkdirSync2,
+  mkdirSync as mkdirSync3,
   mkdtempSync as mkdtempSync2,
   openSync as openSync2,
-  readFileSync as readFileSync5,
+  readFileSync as readFileSync6,
   readSync,
   readdirSync as readdirSync4,
   realpathSync as realpathSync2,
   rmSync as rmSync2,
   statSync as statSync2,
-  unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync2
+  unlinkSync as unlinkSync3,
+  writeFileSync as writeFileSync3
 } from "node:fs";
 import { lstat as lstatAsync, open as openAsync, opendir as opendirAsync, readFile as readFileAsync, realpath as realpathAsync, rm as rmAsync } from "node:fs/promises";
 import { execFile as execFile5, spawn as spawn2 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { basename as basename4, dirname as dirname2, extname as extname2, join as join8, resolve as resolvePath, sep as pathSep } from "node:path";
+import { basename as basename4, dirname as dirname3, extname as extname2, join as join10, resolve as resolvePath, sep as pathSep } from "node:path";
 function normalizeEnabled3(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -6682,7 +6827,7 @@ function normalizeClonePath(value, fallback) {
 }
 function loadGitHubConfig() {
   if (cachedConfig37) return cachedConfig37;
-  const defaults2 = {
+  const defaults3 = {
     enabled: true,
     maxRepoSizeMB: 350,
     cloneTimeoutSeconds: 30,
@@ -6691,10 +6836,10 @@ function loadGitHubConfig() {
   const raw = loadWebAccessConfig();
   const gc = raw.githubClone ?? {};
   cachedConfig37 = {
-    enabled: normalizeEnabled3(gc.enabled, defaults2.enabled),
-    maxRepoSizeMB: normalizePositiveNumber(gc.maxRepoSizeMB, defaults2.maxRepoSizeMB),
-    cloneTimeoutSeconds: normalizePositiveNumber(gc.cloneTimeoutSeconds, defaults2.cloneTimeoutSeconds),
-    clonePath: normalizeClonePath(gc.clonePath, defaults2.clonePath)
+    enabled: normalizeEnabled3(gc.enabled, defaults3.enabled),
+    maxRepoSizeMB: normalizePositiveNumber(gc.maxRepoSizeMB, defaults3.maxRepoSizeMB),
+    cloneTimeoutSeconds: normalizePositiveNumber(gc.cloneTimeoutSeconds, defaults3.cloneTimeoutSeconds),
+    clonePath: normalizeClonePath(gc.clonePath, defaults3.clonePath)
   };
   return cachedConfig37;
 }
@@ -6746,7 +6891,7 @@ function cacheKey(owner, repo, ref) {
 }
 function readLinuxBootId() {
   try {
-    const bootId = readFileSync5("/proc/sys/kernel/random/boot_id", "utf-8").trim();
+    const bootId = readFileSync6("/proc/sys/kernel/random/boot_id", "utf-8").trim();
     return bootId.length > 0 ? bootId : null;
   } catch {
     return null;
@@ -6771,7 +6916,7 @@ function parseLinuxProcessInfo(stat) {
 }
 function readLinuxProcessInfo(pid) {
   try {
-    return parseLinuxProcessInfo(readFileSync5(`/proc/${pid}/stat`, "utf-8"));
+    return parseLinuxProcessInfo(readFileSync6(`/proc/${pid}/stat`, "utf-8"));
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
       return { state: "", startTime: null, dead: true };
@@ -6806,8 +6951,8 @@ function currentCloneRuntimeOwner() {
   return owner;
 }
 function writeCloneRuntimeOwner(runtimePath) {
-  const ownerPath = join8(runtimePath, CLONE_RUNTIME_OWNER_FILENAME);
-  writeFileSync2(ownerPath, JSON.stringify(currentCloneRuntimeOwner()), {
+  const ownerPath = join10(runtimePath, CLONE_RUNTIME_OWNER_FILENAME);
+  writeFileSync3(ownerPath, JSON.stringify(currentCloneRuntimeOwner()), {
     encoding: "utf-8",
     flag: "wx",
     mode: 384
@@ -6841,7 +6986,7 @@ function parseCloneRuntimeOwner(text4) {
   return owner;
 }
 async function readCloneRuntimeOwner(runtimePath) {
-  const ownerPath = join8(runtimePath, CLONE_RUNTIME_OWNER_FILENAME);
+  const ownerPath = join10(runtimePath, CLONE_RUNTIME_OWNER_FILENAME);
   let file;
   try {
     const entry = await lstatAsync(ownerPath);
@@ -6884,10 +7029,10 @@ async function cloneRuntimeOwnerIsDead(owner, bootId) {
 async function removeCloneRuntimeAsync(parentPath, runtimePath) {
   const normalizedParentPath = resolvePath(parentPath);
   const normalizedRuntimePath = resolvePath(runtimePath);
-  if (dirname2(normalizedRuntimePath) !== normalizedParentPath || !basename4(normalizedRuntimePath).startsWith("runtime-")) return;
+  if (dirname3(normalizedRuntimePath) !== normalizedParentPath || !basename4(normalizedRuntimePath).startsWith("runtime-")) return;
   try {
     const realRuntimePath = await realpathAsync(normalizedRuntimePath);
-    if (dirname2(realRuntimePath) !== normalizedParentPath || basename4(realRuntimePath) !== basename4(normalizedRuntimePath)) return;
+    if (dirname3(realRuntimePath) !== normalizedParentPath || basename4(realRuntimePath) !== basename4(normalizedRuntimePath)) return;
     const entry = await lstatAsync(normalizedRuntimePath);
     if (entry.isSymbolicLink() || !entry.isDirectory()) return;
     await rmAsync(normalizedRuntimePath, { recursive: true, force: true });
@@ -6904,11 +7049,11 @@ async function sweepStaleCloneRuntimes(parentPath) {
       try {
         if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
         const runtimePath = resolvePath(normalizedParentPath, entry.name);
-        if (dirname2(runtimePath) !== normalizedParentPath) continue;
+        if (dirname3(runtimePath) !== normalizedParentPath) continue;
         const runtimeEntry = await lstatAsync(runtimePath);
         if (!runtimeEntry.isDirectory() || runtimeEntry.isSymbolicLink()) continue;
         const realRuntimePath = await realpathAsync(runtimePath);
-        if (dirname2(realRuntimePath) !== normalizedParentPath || basename4(realRuntimePath) !== basename4(runtimePath)) continue;
+        if (dirname3(realRuntimePath) !== normalizedParentPath || basename4(realRuntimePath) !== basename4(runtimePath)) continue;
         const owner = await readCloneRuntimeOwner(runtimePath);
         if (!owner || !await cloneRuntimeOwnerIsDead(owner, bootId)) continue;
         await removeCloneRuntimeAsync(normalizedParentPath, runtimePath);
@@ -6928,10 +7073,10 @@ function startStaleCloneRuntimeCleanup(parentPath) {
 function removeCloneRuntime(parentPath, runtimePath) {
   const normalizedParentPath = resolvePath(parentPath);
   const normalizedRuntimePath = resolvePath(runtimePath);
-  if (dirname2(normalizedRuntimePath) !== normalizedParentPath || !basename4(normalizedRuntimePath).startsWith("runtime-")) return;
+  if (dirname3(normalizedRuntimePath) !== normalizedParentPath || !basename4(normalizedRuntimePath).startsWith("runtime-")) return;
   try {
     const entry = lstatSync2(normalizedRuntimePath);
-    if (entry.isSymbolicLink()) unlinkSync2(normalizedRuntimePath);
+    if (entry.isSymbolicLink()) unlinkSync3(normalizedRuntimePath);
     else rmSync2(normalizedRuntimePath, { recursive: true, force: true });
   } catch {
   }
@@ -6942,13 +7087,13 @@ function getCloneRuntimeRoot(config) {
   let runtimePath = null;
   try {
     const configuredPath = resolvePath(config.clonePath);
-    mkdirSync2(configuredPath, { recursive: true });
+    mkdirSync3(configuredPath, { recursive: true });
     parentPath = realpathSync2(configuredPath);
     startStaleCloneRuntimeCleanup(parentPath);
-    runtimePath = mkdtempSync2(join8(parentPath, "runtime-"));
+    runtimePath = mkdtempSync2(join10(parentPath, "runtime-"));
     chmodSync(runtimePath, 448);
     const rootPath = realpathSync2(runtimePath);
-    if (dirname2(rootPath) !== parentPath) {
+    if (dirname3(rootPath) !== parentPath) {
       removeCloneRuntime(parentPath, runtimePath);
       return null;
     }
@@ -6966,7 +7111,7 @@ function cloneDestination(config, owner, repo, ref) {
     if (!rootPath) return null;
     const digest = createHash3("sha256").update(JSON.stringify([owner, repo, ref ?? null])).digest("hex");
     const localPath = resolvePath(rootPath, digest);
-    if (dirname2(localPath) !== rootPath) return null;
+    if (dirname3(localPath) !== rootPath) return null;
     return { rootPath, localPath };
   } catch {
     return null;
@@ -6975,10 +7120,10 @@ function cloneDestination(config, owner, repo, ref) {
 function removeCloneDestination(destination) {
   const rootPath = resolvePath(destination.rootPath);
   const localPath = resolvePath(destination.localPath);
-  if (dirname2(localPath) !== rootPath || !/^[0-9a-f]{64}$/.test(basename4(localPath))) return false;
+  if (dirname3(localPath) !== rootPath || !/^[0-9a-f]{64}$/.test(basename4(localPath))) return false;
   try {
     const entry = lstatSync2(localPath);
-    if (entry.isSymbolicLink()) unlinkSync2(localPath);
+    if (entry.isSymbolicLink()) unlinkSync3(localPath);
     else rmSync2(localPath, { recursive: true, force: true });
     return true;
   } catch (err) {
@@ -7122,7 +7267,7 @@ function resolveWithinRepo(rootPath, relativePath) {
 }
 function readTextFile(path) {
   try {
-    return readFileSync5(path, "utf-8");
+    return readFileSync6(path, "utf-8");
   } catch {
     return null;
   }
@@ -8409,6 +8554,7 @@ var CONFIG_PATH33, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
   "src/pi-web-access/crawl4ai.ts"() {
     init_utils();
+    init_hostname();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
@@ -12597,8 +12743,8 @@ var Module = (input) => If(If(ModuleDeclaration(input), ([_0, input2]) => If(Mod
 var Script = (input) => If(If(Module(input), ([_0, input2]) => [_0, input2], () => If(GenericType(input), ([_0, input2]) => [_0, input2], () => If(Type(input), ([_0, input2]) => [_0, input2], () => []))), ([_0, input2]) => [ScriptMapping(_0), input2]);
 
 // node_modules/typebox/build/type/engine/patterns/template.mjs
-function ParseTemplateIntoTypes(template) {
-  const parsed = TemplateLiteralTypes(`\`${template}\``);
+function ParseTemplateIntoTypes(template2) {
+  const parsed = TemplateLiteralTypes(`\`${template2}\``);
   const result = guard_exports.IsEqual(parsed.length, 2) ? parsed[0] : Unreachable();
   return result;
 }
@@ -12680,8 +12826,8 @@ function IsTemplateLiteralDeferred(value) {
 function TemplateLiteralFromTypes(types) {
   return TemplateLiteralAction(types, {});
 }
-function TemplateLiteralFromString(template) {
-  const types = ParseTemplateIntoTypes(template);
+function TemplateLiteralFromString(template2) {
+  const types = ParseTemplateIntoTypes(template2);
   return TemplateLiteralFromTypes(types);
 }
 function TemplateLiteral2(input, options = {}) {
@@ -19377,9 +19523,9 @@ async function searchWithCurrentModelOpenAI(query, options = {}, ctx) {
 }
 
 // src/pi-web-access/storage.ts
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync2, readdirSync, renameSync as renameSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 init_utils();
-import { join as join3 } from "node:path";
+import { join as join5 } from "node:path";
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 var FETCH_CACHE_DIR = "web-search-cache";
 var FETCH_CACHE_VERSION = 1;
@@ -19398,11 +19544,11 @@ function getFetchCacheDir() {
   if (configured !== void 0 && (typeof configured !== "string" || !configured.trim())) {
     throw new Error("webAccess.cacheRoot must be a non-empty directory path");
   }
-  return join3(configured || getWebSearchConfigDir(), FETCH_CACHE_DIR);
+  return join5(configured || getWebSearchConfigDir(), FETCH_CACHE_DIR);
 }
 function fetchCachePath(key) {
   if (!CACHE_KEY_PATTERN.test(key)) return null;
-  return join3(getFetchCacheDir(), key);
+  return join5(getFetchCacheDir(), key);
 }
 function truncateMetadataText(value) {
   if (!value) return "";
@@ -19446,7 +19592,7 @@ function enforceMode(fd, mode) {
 }
 function safeFetchCacheDir(create) {
   const dir = getFetchCacheDir();
-  if (create) mkdirSync(dir, { recursive: true, mode: 448 });
+  if (create) mkdirSync2(dir, { recursive: true, mode: 448 });
   let before;
   try {
     before = lstatSync(dir);
@@ -19498,10 +19644,10 @@ function unlinkCacheFile(dir, file) {
     return false;
   }
   try {
-    const path = join3(dir, file.name);
+    const path = join5(dir, file.name);
     const current = lstatSync(path);
     if (current.isSymbolicLink() || !current.isFile() || current.dev !== file.dev || current.ino !== file.ino) return false;
-    unlinkSync(path);
+    unlinkSync2(path);
     return true;
   } catch (err) {
     return err.code === "ENOENT";
@@ -19542,7 +19688,7 @@ function readCachedFetchData(data) {
     const opened = openRegularFile(path);
     fd = opened.fd;
     enforceMode(fd, 384);
-    const parsed = JSON.parse(readFileSync(fd, "utf8"));
+    const parsed = JSON.parse(readFileSync2(fd, "utf8"));
     if (!isValidStoredData(parsed) || parsed.type !== "fetch" || parsed.id !== data.id || !isInlineFetchData(parsed)) {
       return unavailableFetchData(data, "Cached fetched content is invalid");
     }

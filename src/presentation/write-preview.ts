@@ -7,44 +7,29 @@ import type { ColorLevel } from "./palette.ts";
 import type { DiffLayoutOps } from "./contracts.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
 
-/** Write call stage, resolved from host context fields (not just isPartial). */
+/** Live write-call stage. The preview component mounts only while the call has
+ * no final result, so the completed/failed states belong to the call title. */
 export type WriteStage =
   | "receiving-arguments"  // streaming args; content may be partially present
   | "arguments-ready"      // argsComplete=true, execution not started
-  | "executing"            // markExecutionStarted happened
-  | "succeeded"            // final result present and not an error
-  | "failed-or-aborted";   // error/aborted result
+  | "executing";           // markExecutionStarted happened
 
-export interface WriteStageContext {
-  argsComplete?: boolean;
-  executionStarted?: boolean;
-  isError?: boolean;
-  hasResult?: boolean;
-  aborted?: boolean;
-}
-
-export function resolveWriteStage(context: WriteStageContext): WriteStage {
-  if (context.hasResult) return context.isError || context.aborted ? "failed-or-aborted" : "succeeded";
-  if (context.executionStarted) return "executing";
-  if (context.argsComplete) return "arguments-ready";
-  return "receiving-arguments";
+export function resolveWriteStage(argsComplete: boolean, executionStarted: boolean): WriteStage {
+  if (executionStarted) return "executing";
+  return argsComplete ? "arguments-ready" : "receiving-arguments";
 }
 
 export const WRITE_PREVIEW_MAX_ROWS = 12;
 
 /** Status text for the write stage. */
-export function stageLabel(stage: WriteStage, aborted?: boolean): { label: string } {
+export function stageLabel(stage: WriteStage): string {
   switch (stage) {
     case "receiving-arguments":
-      return { label: "Receiving content · preview, not yet committed" };
+      return "Receiving content · preview, not yet committed";
     case "arguments-ready":
-      return { label: "Content ready · preview, not yet committed" };
+      return "Content ready · preview, not yet committed";
     case "executing":
-      return { label: "Writing file…" };
-    case "succeeded":
-      return { label: "Written" };
-    case "failed-or-aborted":
-      return { label: aborted ? "Aborted" : "Failed" };
+      return "Writing file…";
   }
 }
 
@@ -72,10 +57,9 @@ export function renderWritePreview(
     colorLevel: ColorLevel;
     layout: DiffLayoutOps;
     gutter: string;
-    /** Rows the CALLER already renders above the body (header). The stage
-     * line + hint live INSIDE this budget; the header does not. */
-    headerRows?: number;
-    /** Explicit physical-row budget for the body (default: WRITE_PREVIEW_MAX_ROWS). */
+    /** Explicit physical-row budget for the stage line, body and hint
+     * (default: WRITE_PREVIEW_MAX_ROWS). A caller that renders its own header
+     * above this body deducts that header before calling. */
     maxRows?: number;
     /** Selection-copy provenance: one CopyRow per emitted row. */
     copyOut?: CopyRow[];
@@ -83,7 +67,6 @@ export function renderWritePreview(
 ): string[] {
   const { width, stage, expanded, theme, colorLevel, gutter } = options;
   const totalBudget = Math.max(0, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
-  const headerRows = Math.max(0, options.headerRows ?? 0);
   // A renderer must never take the host process down — degrade to ASCII layout ops when missing.
   const layout: DiffLayoutOps = options.layout ?? {
     wrap: (text: string) => [text],
@@ -91,22 +74,19 @@ export function renderWritePreview(
   };
   // Full deduction: gutter + line-number column + one separator space.
   const gutterWidth = Math.max(0, layout.visibleWidth(gutter));
-  const bodyBudget = Math.max(1, totalBudget - headerRows - 1 /* stage line */);
+  // The stage line is inside the same budget; 0 leaves the stage line only.
+  const bodyBudget = Math.max(0, totalBudget - 1);
   const maxNumber = Number.MAX_SAFE_INTEGER.toString().length;
   // Number width from the ACTUAL last line number, not the total — they differ once truncation starts.
   const raw = safePrefix(contentPrefix);
   const normalized = raw ? (raw.endsWith("\n") ? raw.slice(0, -1) : raw) : "";
   const allLines = totalBudget > 0 && normalized ? normalized.split("\n").map((line) => line.replace(/\r$/, "")) : [];
-  const totalLogicalLines = allLines.length;
-  const numberWidth = Math.min(maxNumber, Math.max(1, String(Math.max(1, totalLogicalLines)).length));
+  const numberWidth = Math.min(maxNumber, Math.max(1, String(allLines.length).length));
   const bodyWidth = Math.max(1, width - gutterWidth - numberWidth - 1);
 
-  const stageInfo = stageLabel(stage);
   const dim = colorLevel.kind === "none" ? "" : "\x1b[2m";
   const dimOff = colorLevel.kind === "none" ? "" : "\x1b[22m";
-  const stageText = normalized
-    ? stageInfo.label
-    : stage === "receiving-arguments" ? "Receiving arguments…" : stageInfo.label;
+  const stageText = !normalized && stage === "receiving-arguments" ? "Receiving arguments…" : stageLabel(stage);
   const stageRow = `${dim}${gutter}${stageText}${dimOff}`;
   const copy = options.copyOut;
   const copyStart = copy?.length ?? 0;

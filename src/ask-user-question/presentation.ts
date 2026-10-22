@@ -63,38 +63,15 @@ export interface Presentation {
 	/** True → focused overlay (`ctx.ui.custom` overlay options); false → Pi's editor slot. */
 	overlay: boolean;
 	rowBudget: RowBudget;
-	/** Frees the inline slot; present only when this presentation claimed it. Call once, on teardown. */
-	release?: () => void;
 }
 
-// Pi runs tool calls in parallel by default and has a single editor slot: a second
-// inline mount would replace the first, whose `custom()` promise would never settle.
-// Overlays stack safely, so a questionnaire that finds the slot taken degrades to one
-// instead of waiting — waiting could stall on a lane's parked question indefinitely.
-let inlineSlotHeld = false;
-
-function claimInlineSlot(): (() => void) | undefined {
-	if (inlineSlotHeld) return undefined;
-	inlineSlotHeld = true;
-	let released = false;
-	return () => {
-		if (released) return;
-		released = true;
-		inlineSlotHeld = false;
-	};
-}
+// Pi 1.4 owns inline dialog stacking, focus restoration and per-dialog removal.
+export const INLINE_PRESENTATION: Presentation = Object.freeze({
+	overlay: false,
+	rowBudget: inlineRowBudget,
+});
 
 export const OVERLAY_PRESENTATION: Presentation = Object.freeze({
 	overlay: true,
 	rowBudget: fullRowBudget,
 });
-
-/**
- * Inline in Pi's editor slot — where Pi's own select/input/editor prompts mount, so the
- * transcript keeps scrolling while a question is open (#253). The overlay is only the
- * fallback when another questionnaire already holds the slot.
- */
-export function resolvePresentation(): Presentation {
-	const release = claimInlineSlot();
-	return release ? { overlay: false, rowBudget: inlineRowBudget, release } : OVERLAY_PRESENTATION;
-}

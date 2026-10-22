@@ -6,6 +6,7 @@ import { join, delimiter } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { VERSION } from "@earendil-works/pi-coding-agent";
 import { McpServerSession } from "../../src/mcp/session.ts";
 import { readMcpConfiguration } from "../../src/mcp/config.ts";
 import { CatalogCache } from "../../src/mcp/catalog.ts";
@@ -13,20 +14,30 @@ import { McpCredentials, createAuth } from "../../src/mcp/auth.ts";
 import { convertResult, syncTools } from "../../src/mcp/tools.ts";
 import { startHttp, image } from "../helpers/mcp-server.mjs";
 const run = promisify(execFile), cli = fileURLToPath(new URL("../../node_modules/.bin/pi", import.meta.url));
+const withBom = (value) => `\uFEFF${JSON.stringify(value)}`;
+const serverEntries = (result) => result.servers.map((entry) => [entry.name, entry.scope]);
 
-test("MCP policy is global-only while Pi trusted project server definitions still work", t => {
+test("MCP policy is global-only while BOM-prefixed global and trusted project definitions keep Pi override semantics", t => {
   const dir = mkdtempSync(join(tmpdir(), "metis-mcp-config-")), cwd = join(dir, "project");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(cwd, ".pi"), { recursive: true });
   writeFileSync(join(dir, "metis-pi.toml"), '[mcp]\nenabled=true\nidleTimeoutSeconds=123\nkeepAliveServers=["global"]\n');
   writeFileSync(join(cwd, ".pi", "metis-pi.toml"), '[mcp]\nenabled=false\nidleTimeoutSeconds=1\n');
-  writeFileSync(join(cwd, ".pi", "mcp.json"), '{"mcpServers":{"project":{"url":"http://localhost:1234/mcp"}}}');
+  writeFileSync(join(dir, "mcp.json"), withBom({ autoEnableCodemode: false, mcpServers: {
+    global: { url: "http://localhost:1234/global" }, shared: { url: "http://localhost:1234/global-shared" } } }));
+  writeFileSync(join(cwd, ".pi", "mcp.json"), withBom({ mcpServers: {
+    project: { url: "http://localhost:1234/project" }, shared: { url: "http://localhost:1234/project-shared" } } }));
   for (const trusted of [false, true]) {
     const result = readMcpConfiguration(dir, cwd, trusted);
     assert.deepEqual(result.policy, { enabled: true, idleTimeoutSeconds: 123, keepAliveServers: ["global"] });
-    assert.equal(result.servers.length, trusted ? 1 : 0);
+    assert.equal(result.autoEnableCodemode, false, "a BOM-prefixed autoEnableCodemode value is still honored");
+    assert.deepEqual(serverEntries(result), trusted
+      ? [["global", "global"], ["shared", "project"], ["project", "project"]]
+      : [["global", "global"], ["shared", "global"]]);
     assert.deepEqual(result.errors, []);
   }
+  const shared = readMcpConfiguration(dir, cwd, true).servers.find(entry => entry.name === "shared");
+  assert.equal(shared.config.url, "http://localhost:1234/project-shared");
 });
 
 test("HTTP preserves result/images, filters Apps, retries only expired sessions and observes live catalog changes", async (t) => {
@@ -84,7 +95,8 @@ test("tools register before failing resources, with resources and MIME filtering
   t.after(async () => { await owner.shutdown(); await fixture.close(); rmSync(dir, { recursive: true, force: true }); });
   await owner.discover();
   assert.equal(owner.state, "connected");
-  assert.equal(fixture.state.clientInfo.version, "1.3.0");
+  assert.equal(fixture.state.clientInfo.name, "pi");
+  assert.equal(fixture.state.clientInfo.version, VERSION);
   assert.deepEqual(owner.catalog.tools.map(tool => tool.name), ["echo"]);
   assert.equal(owner.catalog.hasResources, true);
   assert.deepEqual(owner.catalog.resources, []);

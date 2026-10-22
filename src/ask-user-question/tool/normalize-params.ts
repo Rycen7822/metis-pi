@@ -36,20 +36,6 @@ function normalizeStringFields<T extends object>(obj: T, keys: readonly (keyof T
 }
 
 /**
- * Return a copy of the tool params with every user-facing string field
- * (`question`, `header`, `options[].label`, `options[].description`,
- * `options[].preview`) line-terminator-normalized. Shares the SDK's pre-schema
- * preparation path, also covering direct execute calls, so reserved-label and duplicate-label
- * guards compare the text the user will actually see (`"Other\r"` must not
- * slip past `reserved_label`), and so the TUI, the RPC dialog walker, the
- * envelope echo, and the `rpiv:ask-user:prompt` payload all carry the same
- * clean text. Pure: the input object is never mutated.
- */
-export function normalizeQuestionParams(params: QuestionParams): QuestionParams {
-	return prepareQuestionArguments(params);
-}
-
-/**
  * Pi's `prepareArguments` hook: undo double-encoded tool arguments before schema
  * validation (#244). Some tool-call parsers (vLLM/LiteLLM-served GLM/Qwen-class
  * models) intermittently emit nested structures as JSON strings — `questions` itself,
@@ -58,6 +44,8 @@ export function normalizeQuestionParams(params: QuestionParams): QuestionParams 
  * passed through untouched so validation still reports the real problem. The same
  * applies one level down to `options`. Text is normalized before the SDK applies
  * schema length limits; invalid field types are left for that validation.
+ * Does not mutate the input. The execute path shares this preparation so semantic
+ * guards and every UI/envelope consumer compare the text the user actually sees.
  */
 export function prepareQuestionArguments(args: unknown): QuestionParams {
 	if (!isRecord(args)) return args as QuestionParams;

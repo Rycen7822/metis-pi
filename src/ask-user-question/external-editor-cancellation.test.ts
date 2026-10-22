@@ -4,7 +4,6 @@ import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
 import { ASK_USER_BLOCKED_EVENT } from "./events.ts";
-import { resolvePresentation } from "./presentation.ts";
 import type { QuestionnaireSessionComponent } from "./state/questionnaire-session.ts";
 
 const edit = vi.fn();
@@ -86,7 +85,7 @@ describe("external editor invocation ownership", () => {
 		expect(call.captured.eventsEmitted.get(ASK_USER_BLOCKED_EVENT)?.at(-1)).toEqual({ active: false });
 	});
 
-	it("keeps the inline slot and blocked event until editor cleanup finishes", async () => {
+	it("keeps the blocked event until editor cleanup finishes", async () => {
 		vi.doMock(editorModule, () => ({ editWithExternalEditor: edit }));
 		let close!: () => void;
 		let started!: () => void;
@@ -109,20 +108,13 @@ describe("external editor invocation ownership", () => {
 			call.controller.abort();
 			expect(signal.aborted).toBe(true);
 			expect(call.captured.eventsEmitted.get(ASK_USER_BLOCKED_EVENT)?.at(-1)).toEqual({ active: true });
-			expect(resolvePresentation().overlay).toBe(true);
 		} finally {
 			call.controller.abort();
 			close?.();
 			settings.mockRestore();
 		}
 		expect(await outcome).toBeInstanceOf(Error);
-		const next = resolvePresentation();
-		try {
-			expect(next.overlay).toBe(false);
-			expect(call.ctx.ui.notify).not.toHaveBeenCalled();
-			expect(call.captured.eventsEmitted.get(ASK_USER_BLOCKED_EVENT)?.at(-1)).toEqual({ active: false });
-		} finally {
-			next.release?.();
-		}
+		expect(call.ctx.ui.notify).not.toHaveBeenCalled();
+		expect(call.captured.eventsEmitted.get(ASK_USER_BLOCKED_EVENT)?.at(-1)).toEqual({ active: false });
 	});
 });

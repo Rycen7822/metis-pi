@@ -27,7 +27,6 @@ import { asRecord } from "../../presentation/tool-names.ts";
 import { TranscriptState, normalizeMessageBlocks, semanticRuns, type SemanticRun, type MessageViewKey } from "./state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "../../presentation/thinking-view.ts";
 
-const ASSISTANT_SLOT = Symbol.for("Rycen7822.metis-pi.assistant-deco.v2");
 const THOUGHT_LABEL = Symbol.for("Rycen7822.metis-pi.thought-label.v1");
 const CLICK_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-click.v1");
 
@@ -172,7 +171,6 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   // are deliberately NOT used — comments, minification or benign patches
   // (e.g. zentui's wrapper) must not block installation.
   const original = descriptor.value as (this: unknown, ...args: unknown[]) => void;
-  const owner = {};
 
   // zentui's thinking wrapper may chain on the same method. Ownership is per
   // descriptor, so chain order works either way: an outer wrapper installed
@@ -304,7 +302,6 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   };
 
   try {
-    Object.defineProperty(prototype, ASSISTANT_SLOT, { value: owner, configurable: true });
     Object.defineProperty(prototype, key, { ...descriptor, value: wrapper });
   } catch {
     return {
@@ -324,12 +321,9 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       active = false;
       for (const update of pending) releasePreview(update);
       try {
-        if (Object.getOwnPropertyDescriptor(prototype, key)?.value === wrapper) {
-          Object.defineProperty(prototype, key, descriptor);
-        }
-        if (Object.getOwnPropertyDescriptor(prototype, ASSISTANT_SLOT)?.value === owner) {
-          Reflect.deleteProperty(prototype, ASSISTANT_SLOT);
-        }
+        const current = Object.getOwnPropertyDescriptor(prototype, key);
+        if (current?.value === wrapper)
+          Reflect.defineProperty(prototype, key, { ...current, value: descriptor.value });
       } catch { /* frozen prototype keeps an inert wrapper */ }
     },
   };

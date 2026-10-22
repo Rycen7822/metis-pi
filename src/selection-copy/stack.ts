@@ -21,9 +21,13 @@ export function stackComponents(components: Component[], composition: "flat-rows
       for (const rendered of snapshots) {
         const product = productFor(rendered);
         if (composition === "flat-rows") {
-          // Fusion takes rows only, never follows a child's placement chain.
+          // Fusion takes rows only, never follows a child's placement chain. A
+          // container child publishes a placement chain with no flat rows, so
+          // those lines fall back to native extraction instead of shifting every
+          // later row onto a sibling's provenance.
+          const flat = product && product.rows.length === rendered.length ? product.rows : undefined;
           rows.push(
-            ...(product?.rows ??
+            ...(flat ??
               rendered.map(() => ({
                 spans: [{ colStart: 0, colEnd: width, kind: "unknown" as const }],
                 breakBefore: "hard" as const,

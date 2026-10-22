@@ -35,6 +35,7 @@ export interface AskUserQuestionConfig {
 	 * keybinding ids (`modifier+key`, e.g. `ctrl+]`, `alt+o`, `ctrl+shift+h`). Defaults
 	 * to `"ctrl+]"`. Set this to a key that is reachable on your keyboard layout — Latin
 	 * American layouts (where `]` is on the shifted layer) often want `"ctrl+}"` instead.
+	 * Printable keys require Ctrl, Alt or Super so ordinary typing stays in the editor.
 	 * Pass `"off"` to disable the collapse shortcut entirely.
 	 */
 	collapseKey?: CollapseKeySpec;
@@ -76,6 +77,8 @@ function isValidCollapseKeySpec(spec: string): boolean {
 		modifiers.add(part);
 		base = base.slice(part.length + 1);
 	}
+	if ((base.length === 1 || base === "space") &&
+		!modifiers.has("ctrl") && !modifiers.has("alt") && !modifiers.has("super")) return false;
 	return base.length === 1 ? /[a-z0-9_+\-!@#$%^&*()|~`'":;,./<>?[\]{}=\\]/.test(base) : SPECIAL_KEYS.has(base);
 }
 

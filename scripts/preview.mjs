@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";
 import { makeRenderers } from "../src/presentation/renderers.ts";
-import { languageForPath } from "../src/presentation/tool-names.ts";
+import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { renderDiffLines } from "../src/presentation/diff.ts";
 import { detectColorLevel } from "../src/presentation/palette.ts";
 import { TranscriptState } from "../src/appearance/transcript/state.ts";
@@ -49,7 +49,7 @@ const renderers = makeRenderers(
   (input) => ({
     render: (width) => renderDiffLines({
       rows: input.rows, width, layout, colorLevel,
-      language: languageForPath(input.filePath), paint: undefined,
+      language: getLanguageFromPath(input.filePath), paint: undefined,
     }),
   }),
   // Width-aware shell factories — the SAME SGR-DIM output path as the live

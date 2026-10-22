@@ -2,7 +2,6 @@ import type { QuestionParams } from "./tool/types.ts";
 import { createMockCtx, createMockPi, mockStdout } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { BEL, registerAskUserQuestionTool } from "./ask-user-question.ts";
-import { hasDialogUI } from "./rpc-fallback.ts";
 
 type SelectFn = (title: string, options: string[]) => Promise<string | undefined>;
 type InputFn = (title: string, placeholder?: string) => Promise<string | undefined>;
@@ -19,7 +18,7 @@ function registerWithCapture() {
 	return { tool: captured.tools.get("ask_user_question")!, captured };
 }
 
-/** Mock ctx shaped like a pi ≥0.79 RPC host: `mode: "rpc"` + dialog primitives. */
+/** Native RPC context: explicit mode and SDK dialog primitives. */
 function ctxRpc(opts: { select?: SelectFn; input?: InputFn } = {}) {
 	return createMockCtx({
 		hasUI: true,
@@ -62,15 +61,6 @@ const MULTI = {
 async function run(tool: ReturnType<typeof register>, params: unknown, ctx: unknown) {
 	return await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 }
-
-describe("hasDialogUI", () => {
-	it("requires both select and input to be functions", () => {
-		expect(hasDialogUI({ select: async () => undefined, input: async () => "" })).toBe(true);
-		expect(hasDialogUI({ select: async () => undefined })).toBe(false);
-		expect(hasDialogUI({ input: async () => "" })).toBe(false);
-		expect(hasDialogUI(undefined)).toBe(false);
-	});
-});
 
 describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')", () => {
 	it("single-select uses ctx.ui.select and returns the chosen label in the envelope", async () => {
@@ -334,10 +324,8 @@ describe("ask_user_question.execute — RPC single-select replies", () => {
 	});
 });
 
-describe("ask_user_question.execute — dialog walker as custom()-undefined backstop", () => {
-	// RPC builds that predate ctx.mode: the mode guard misses, custom() resolves
-	// undefined, and the walker must still run off the capability signal.
-	it("falls back to the dialog walker when ctx.mode is unset and custom() resolves undefined", async () => {
+describe("ask_user_question.execute — native mode dispatch", () => {
+	it("keeps the blocked event active until the RPC dialog reply arrives", async () => {
 		const { tool, captured } = registerWithCapture();
 		const custom = vi.fn(async () => undefined);
 		let reply!: () => void;
@@ -345,6 +333,7 @@ describe("ask_user_question.execute — dialog walker as custom()-undefined back
 		const select = vi.fn(async () => answer);
 		const ctx = createMockCtx({
 			hasUI: true,
+			mode: "rpc",
 			ui: { custom: custom as never, select: select as never, input: vi.fn(async () => "") as never } as never,
 		});
 		const pending = run(tool, SINGLE, ctx);
@@ -357,12 +346,12 @@ describe("ask_user_question.execute — dialog walker as custom()-undefined back
 		}
 		const r = await pending;
 		expect(captured.eventsEmitted.get("rpiv:ask-user:blocked")?.at(-1)).toEqual({ active: false });
-		expect(custom).toHaveBeenCalledOnce();
+		expect(custom).not.toHaveBeenCalled();
 		expect(select).toHaveBeenCalledOnce();
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Which?"="B"') });
 	});
 
-	it("stays on the custom() path when ctx.mode is unset and custom() renders (TUI)", async () => {
+	it("uses custom rendering in TUI mode even when select is available", async () => {
 		const tool = register();
 		const custom = vi.fn(async () => ({
 			cancelled: false,
@@ -371,6 +360,7 @@ describe("ask_user_question.execute — dialog walker as custom()-undefined back
 		const select = vi.fn(async () => "should-not-be-called");
 		const ctx = createMockCtx({
 			hasUI: true,
+			mode: "tui",
 			ui: { custom: custom as never, select: select as never } as never,
 		});
 		const r = await run(tool, SINGLE, ctx);

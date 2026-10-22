@@ -9,7 +9,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { MouseRegion, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { installSkillLabelNames } from "../../src/skills/label.ts";
-import { installSkillFoldClick } from "../../src/skills/fold.ts";
 import { patchHostPrototype, type SkillPatch } from "../../src/skills/host-patch.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 
@@ -30,150 +29,105 @@ const mouse = (type: TuiMouseEvent["type"], extra: Partial<TuiMouseEvent> = {}):
 });
 const descriptor = (target: object, method: string) => Object.getOwnPropertyDescriptor(target, method);
 
-test("native skill labels and gestures survive rebuilds without stealing selection", (t) => {
+test("skill labels survive native rebuilds without taking ownership of mouse gestures", (t) => {
   class Entry extends SkillInvocationMessageComponent {}
   const forwarded = { handled: true as const };
-  // A prior plugin owns unclaimed events; native construction and toggles stay real.
   const prior = t.mock.method(Entry.prototype, "handleMouse", () => forwarded);
   const priorMouse = descriptor(Entry.prototype, "handleMouse");
   const leases: SkillPatch[] = [];
   const label = installSkillLabelNames(Entry);
-  const fold = installSkillFoldClick(Entry);
-  leases.push(label, fold);
+  leases.push(label);
   assert.equal(label.state, "patched");
-  assert.equal(fold.state, "patched");
   const display = Reflect.get(Entry.prototype, "updateDisplay");
-  const handler = Entry.prototype.handleMouse;
-  // A second install by the same extension joins the shared wrapper: one toggle,
-  // and that second owner can still release its own claim independently.
-  const again = [installSkillLabelNames(Entry), installSkillFoldClick(Entry)];
-  leases.push(...again);
-  assert.deepEqual(again.map((patch) => patch.state), ["already", "already"]);
+  const again = installSkillLabelNames(Entry);
+  leases.push(again);
+  assert.equal(again.state, "already");
   assert.equal(Reflect.get(Entry.prototype, "updateDisplay"), display);
-  assert.equal(Entry.prototype.handleMouse, handler);
-  // Only Entry is patched; the native class renders the literal expected name.
+  assert.deepEqual(descriptor(Entry.prototype, "handleMouse"), priorMouse);
   const baseline = new SkillInvocationMessageComponent({ ...block, name: "skill + other" });
   const entry = new Entry(block);
   assert.deepEqual(entry.render(160), baseline.render(160), "names join without changing native ANSI or hints");
   assert.deepEqual(new Entry({ ...block, name: " skill " }).render(160), baseline.render(160), "outer names are trimmed");
   const single = { ...block, content: "single skill body" };
   assert.deepEqual(new Entry(single).render(160), new SkillInvocationMessageComponent(single).render(160), "single skills stay native");
-  assert.doesNotMatch(rendered(entry), /body of other/);
   for (const expanded of [true, false]) {
-    const region = entry.children[0];
-    assert.ok(region instanceof MouseRegion);
-    const nativeHandler = t.mock.method(region, "handleMouse");
-    assert.deepEqual(entry.handleMouse(mouse("press")), { handled: true });
-    assert.equal(rendered(entry).includes("body of other"), !expanded, "press never toggles");
-    assert.deepEqual(entry.handleMouse(mouse("click")), { handled: true });
+    entry.setExpanded(expanded);
     baseline.setExpanded(expanded);
-    assert.deepEqual(entry.render(160), baseline.render(160), "rebuilt labels and the entire body retain native rendering");
+    assert.ok(entry.children[0] instanceof MouseRegion, "the native pointer region remains intact");
+    assert.deepEqual(entry.render(160), baseline.render(160), "rebuilt labels and body retain native rendering");
     assert.equal(rendered(entry).includes("body of other"), expanded);
-    assert.equal(nativeHandler.mock.callCount(), 0, "the nested native handler must not toggle again");
   }
-  assert.equal(prior.mock.callCount(), 0, "accepted gestures never reach the prior handler");
   const before = entry.render(160);
   const events = [
-    mouse("press", { shift: true }), mouse("click", { ctrl: true }), mouse("click", { alt: true }),
-    mouse("press", { button: "right" }), mouse("wheel", { button: "none" }), mouse("release"), undefined,
+    mouse("press"), mouse("click"), mouse("press", { shift: true }), mouse("click", { ctrl: true }),
+    mouse("click", { alt: true }), mouse("press", { button: "right" }),
+    mouse("wheel", { button: "none" }), mouse("release"), undefined,
   ];
   for (const event of events) {
     assert.equal(Reflect.apply(entry.handleMouse, entry, [event]), forwarded, "prior return identity survives");
     assert.equal(prior.mock.calls.at(-1)?.this, entry, "prior handler keeps its receiver");
   }
   assert.deepEqual(prior.mock.calls.map((call) => call.arguments), events.map((event) => [event]));
-  assert.doesNotMatch(rendered(entry), /body of other/);
-  assert.deepEqual(entry.render(160), before, "selection and delegated events leave rendering intact");
-  // Releasing every owner hands the class back to the wrappers it had before us.
+  assert.deepEqual(entry.render(160), before, "delegated events leave rendering intact");
   for (const patch of leases) patch.release();
-  assert.deepEqual(descriptor(Entry.prototype, "handleMouse"), priorMouse, "the prior plugin's descriptor is restored verbatim");
-  assert.equal(Object.hasOwn(Entry.prototype, "updateDisplay"), false, "our own method is removed again");
+  assert.deepEqual(descriptor(Entry.prototype, "handleMouse"), priorMouse);
+  assert.equal(Object.hasOwn(Entry.prototype, "updateDisplay"), false);
 });
 
-test("host decorations are owned leases: release, shared owners, reinstall, host upgrades", () => {
+test("host labels are owned leases: release, shared owners, reinstall, own methods", () => {
   class Entry extends SkillInvocationMessageComponent {}
-  // A non-enumerable own method proves release restores the descriptor, not just the value.
-  const third = function (this: SkillInvocationMessageComponent, event?: TuiMouseEvent) {
-    return event?.type === "press" ? { handled: true as const } : undefined;
-  };
-  Object.defineProperty(Entry.prototype, "handleMouse", { value: third, writable: true, enumerable: false, configurable: true });
-  const priorMouse = descriptor(Entry.prototype, "handleMouse");
-  const nativeLabel = strip(new SkillInvocationMessageComponent(block).render(160).join("\n"));
-
-  const first = installSkillFoldClick(Entry);
-  const labels = installSkillLabelNames(Entry);
-  assert.deepEqual([first.state, labels.state], ["patched", "patched"]);
-  assert.equal(rendered(new Entry(block)).includes("body of other"), false, "labels are joined while held");
-  assert.match(rendered(new Entry({ ...block, name: "skill" })), /skill \+ other/);
-
-  // A second owner (another enable path in the same process) shares the wrapper.
-  const second = installSkillFoldClick(Entry);
-  assert.equal(second.state, "already");
-  const patched = Entry.prototype.handleMouse;
-  first.release();
-  first.release(); // idempotent: a repeated unload must not detach the remaining owner
-  assert.equal(Entry.prototype.handleMouse, patched, "the remaining owner keeps the decoration");
-  const entry = new Entry(block);
-  assert.deepEqual(entry.handleMouse(mouse("click")), { handled: true }, "and it still toggles");
+  const nativeDisplay = Reflect.get(SkillInvocationMessageComponent.prototype, "updateDisplay");
+  const third = function (this: SkillInvocationMessageComponent) { return nativeDisplay.call(this); };
+  Object.defineProperty(Entry.prototype, "updateDisplay", { value: third, writable: true, enumerable: false, configurable: true });
+  const priorDisplay = descriptor(Entry.prototype, "updateDisplay");
+  const nativeLabel = rendered(new SkillInvocationMessageComponent(block));
+  const first = installSkillLabelNames(Entry);
+  const second = installSkillLabelNames(Entry);
+  assert.deepEqual([first.state, second.state], ["patched", "already"]);
+  const patched = Reflect.get(Entry.prototype, "updateDisplay");
+  first.release(); first.release();
+  assert.equal(Reflect.get(Entry.prototype, "updateDisplay"), patched, "remaining owner keeps the decoration");
+  assert.match(rendered(new Entry(block)), /skill \+ other/);
   second.release();
-  assert.deepEqual(descriptor(Entry.prototype, "handleMouse"), priorMouse, "the pre-existing wrapper comes back");
-  assert.equal(Reflect.apply(entry.handleMouse, entry, [mouse("click")]), undefined, "our gesture handler is gone");
+  assert.deepEqual(descriptor(Entry.prototype, "updateDisplay"), priorDisplay, "prior own descriptor returns");
+  assert.equal(rendered(new Entry(block)), nativeLabel, "labels fall back to native text");
 
-  labels.release();
-  assert.deepEqual(strip(new Entry(block).render(160).join("\n")), nativeLabel, "labels fall back to the host's own text");
-
-  // A released install can be installed again, and a wrapper added after ours wins:
-  // release must not overwrite the newer plugin's method.
-  const reinstall = installSkillFoldClick(Entry);
+  const reinstall = installSkillLabelNames(Entry);
   assert.equal(reinstall.state, "patched");
-  assert.notEqual(Entry.prototype.handleMouse, patched);
-  const later = function () { return undefined; };
-  Entry.prototype.handleMouse = later as never;
+  assert.notEqual(Reflect.get(Entry.prototype, "updateDisplay"), patched);
+  const later = function (this: SkillInvocationMessageComponent) { return nativeDisplay.call(this); };
+  Object.defineProperty(Entry.prototype, "updateDisplay", { ...priorDisplay, value: later });
   reinstall.release();
-  assert.equal(Entry.prototype.handleMouse, later as never, "a later third-party wrapper is never overwritten");
-  delete (Entry.prototype as { handleMouse?: unknown }).handleMouse;
-  assert.equal(installSkillFoldClick(Entry).state, "patched", "the shared lease is not left dangling");
+  assert.equal(Reflect.get(Entry.prototype, "updateDisplay"), later, "a later owner's method wins");
+  Reflect.deleteProperty(Entry.prototype, "updateDisplay");
+  const after = installSkillLabelNames(Entry);
+  assert.equal(after.state, "patched", "no dangling lease");
+  after.release();
 
-  // A newer host that ships its OWN method: release restores that method, not the base class one.
-  class Upgraded extends SkillInvocationMessageComponent {
-    override handleMouse(event: TuiMouseEvent) {
-      return super.handleMouse(event);
-    }
-  }
-  const own = descriptor(Upgraded.prototype, "handleMouse");
-  const upgraded = installSkillFoldClick(Upgraded);
-  assert.equal(upgraded.state, "patched");
-  upgraded.release();
-  assert.deepEqual(descriptor(Upgraded.prototype, "handleMouse"), own, "the upgraded implementation is restored");
-  assert.equal(Object.hasOwn(Upgraded.prototype, "handleMouse"), true);
-  // Degenerate hosts degrade instead of throwing, and still return a lease.
-  for (const unsupported of [undefined, {}, () => {}]) {
-    const patch = installSkillFoldClick(unsupported);
+  class OwnDisplay extends SkillInvocationMessageComponent {}
+  Object.defineProperty(OwnDisplay.prototype, "updateDisplay", { value: third, writable: true, configurable: true });
+  const own = descriptor(OwnDisplay.prototype, "updateDisplay");
+  const owned = installSkillLabelNames(OwnDisplay);
+  assert.equal(owned.state, "patched");
+  owned.release();
+  assert.deepEqual(descriptor(OwnDisplay.prototype, "updateDisplay"), own);
+  for (const unsupported of [undefined, {}, () => {}, class Empty {}]) {
+    const patch = installSkillLabelNames(unsupported);
     assert.equal(patch.state, "missing");
     patch.release();
   }
-  // A class without the method still gets the gesture (it inherits nothing to forward).
-  class Empty {}
-  const empty = installSkillFoldClick(Empty);
-  assert.equal(empty.state, "patched");
-  empty.release();
-  assert.equal(Object.hasOwn(Empty.prototype, "handleMouse"), false);
 });
 
-test("released skill decorations are inert even when a later plugin retains the wrapper", () => {
+test("released skill labels are inert even when a later plugin retains the wrapper", () => {
   class Entry extends SkillInvocationMessageComponent {}
   const native = new SkillInvocationMessageComponent(block);
-  const patch = installSkillFoldClick(Entry);
-  const retained = Entry.prototype.handleMouse;
-  const later = function (this: SkillInvocationMessageComponent, event: TuiMouseEvent) {
-    return retained.call(this, event);
-  };
-  Entry.prototype.handleMouse = later;
+  const patch = installSkillLabelNames(Entry);
+  const retained = Reflect.get(Entry.prototype, "updateDisplay");
+  const later = function (this: SkillInvocationMessageComponent) { return retained.call(this); };
+  Object.defineProperty(Entry.prototype, "updateDisplay", { value: later, writable: true, configurable: true });
   patch.release();
-  const entry = new Entry(block);
-  entry.handleMouse(mouse("click"));
-  assert.equal(Entry.prototype.handleMouse, later);
-  assert.deepEqual(entry.render(160), native.render(160), "released decoration cannot still toggle through another owner");
+  assert.equal(Reflect.get(Entry.prototype, "updateDisplay"), later);
+  assert.deepEqual(new Entry(block).render(160), native.render(160), "released labels cannot survive through another owner");
 });
 
 test("fresh module copies share the same host lease and restricted hosts stay native", async () => {
@@ -213,33 +167,27 @@ async function loadSkillEntry(t: TestContext) {
   return new ExtensionRunner(loaded.extensions, loaded.runtime, root, SessionManager.inMemory(root), models);
 }
 
-test("skill-entry owns its host decorations: unload/reload restores them, both stay independent", async (t) => {
+test("skill-entry owns its labels: unload/reload restores them without patching native mouse handling", async (t) => {
   const prototype = SkillInvocationMessageComponent.prototype;
-  // The host ships its own `updateDisplay`; `handleMouse` is inherited from Box.
   const native = {
     handleMouse: Object.getOwnPropertyDescriptor(prototype, "handleMouse"),
     updateDisplay: Object.getOwnPropertyDescriptor(prototype, "updateDisplay"),
   };
-  assert.equal(native.handleMouse, undefined, "nothing patches the host class before the factory runs");
-  assert.equal(typeof native.updateDisplay?.value, "function", "the host's own label method");
-
+  assert.equal(native.handleMouse, undefined);
+  assert.equal(typeof native.updateDisplay?.value, "function");
   const first = await loadSkillEntry(t);
-  assert.equal(first.hasHandlers("session_shutdown"), true, "the factory owns a release hook");
-  assert.deepEqual([Object.hasOwn(prototype, "handleMouse"), Object.hasOwn(prototype, "updateDisplay")], [true, true],
-    "installed during the factory, before any component is built");
-  const entry = new SkillInvocationMessageComponent(block);
-  assert.match(rendered(entry), /skill \+ other/, "both decorations are live");
-
-  // /reload emits session_shutdown on the old runner before the next generation loads.
+  assert.equal(first.hasHandlers("session_shutdown"), true);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(prototype, "handleMouse"), native.handleMouse);
+  assert.notEqual(Object.getOwnPropertyDescriptor(prototype, "updateDisplay")?.value, native.updateDisplay?.value,
+    "label lease is acquired before any component is built");
+  assert.match(rendered(new SkillInvocationMessageComponent(block)), /skill \+ other/);
   await first.emit({ type: "session_shutdown", reason: "reload" });
   assert.deepEqual(Object.getOwnPropertyDescriptor(prototype, "handleMouse"), native.handleMouse);
-  assert.deepEqual(Object.getOwnPropertyDescriptor(prototype, "updateDisplay"), native.updateDisplay,
-    "the host's own descriptor is restored, not deleted");
-  assert.doesNotMatch(rendered(new SkillInvocationMessageComponent(block)), /skill \+ other/, "labels are native again");
-
+  assert.deepEqual(Object.getOwnPropertyDescriptor(prototype, "updateDisplay"), native.updateDisplay);
+  assert.doesNotMatch(rendered(new SkillInvocationMessageComponent(block)), /skill \+ other/);
   const second = await loadSkillEntry(t);
-  assert.equal(Object.hasOwn(prototype, "handleMouse"), true, "a later generation installs again");
+  assert.deepEqual(Object.getOwnPropertyDescriptor(prototype, "handleMouse"), native.handleMouse);
+  assert.notEqual(Object.getOwnPropertyDescriptor(prototype, "updateDisplay")?.value, native.updateDisplay?.value);
   await second.emit({ type: "session_shutdown", reason: "quit" });
-  assert.equal(Object.hasOwn(prototype, "handleMouse"), false);
   assert.deepEqual(Object.getOwnPropertyDescriptor(prototype, "updateDisplay"), native.updateDisplay);
 });

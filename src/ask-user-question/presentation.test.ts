@@ -5,7 +5,6 @@ import {
 	INLINE_MIN_ROWS,
 	inlineRowBudget,
 	mustYieldInlineSlot,
-	resolvePresentation,
 	rowBudgetForHost,
 } from "./presentation.ts";
 
@@ -20,23 +19,6 @@ describe("row budgets", () => {
 		expect(inlineRowBudget(40)).toBe(28);
 		expect(inlineRowBudget(16)).toBe(INLINE_MIN_ROWS);
 		expect(inlineRowBudget(8)).toBe(8);
-	});
-});
-
-describe("resolvePresentation", () => {
-	it("holds the inline slot until released, degrading contenders to a hideable overlay", () => {
-		const first = resolvePresentation();
-		expect(first).toMatchObject({ overlay: false, rowBudget: inlineRowBudget });
-		const second = resolvePresentation();
-		expect(second).toMatchObject({ overlay: true, rowBudget: fullRowBudget });
-		expect(second.release).toBeUndefined();
-
-		first.release?.();
-		// Idempotent: a double release must not free a slot someone else now holds.
-		const third = resolvePresentation();
-		first.release?.();
-		expect(resolvePresentation().overlay).toBe(true);
-		third.release?.();
 	});
 });
 

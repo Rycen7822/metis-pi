@@ -64,6 +64,7 @@ test("package exposes extensions, themes and portable skills with their referenc
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);
   // The copy-provenance lexer must see the same token stream as the host.
   assert.equal(pkg.dependencies.marked, load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked);
+  assert.equal(pkg.dependencies["marked-cjk-friendly"], load("node_modules/@earendil-works/pi-tui/package.json").dependencies["marked-cjk-friendly"]);
   assert.deepEqual(pkg.pi.skills, ["./skills"]);
   assert.equal(pkg.pi.prompts, undefined);
 });

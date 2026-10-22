@@ -121,7 +121,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   const outcome = new InteractionOutcomeTracker();
   let outputTiming: OutputTimingObserver | undefined;
   const outputSpeed = new OutputSpeedTracker(message => outputTiming?.read(message));
-  let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
+  const config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
 
   // Chrome install state + lifecycle (src/appearance/chrome/install.ts). `chrome.state`
   // is read by diagnostics and events; every chrome mutation goes through it.

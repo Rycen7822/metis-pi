@@ -1,24 +1,8 @@
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { documentKey } from "./files.ts";
 import type { LspDiagnostic, LspServerAdapter } from "./types.ts";
 
 const PUBLISHED_DIAGNOSTICS_SETTLE_MS = 800;
 type Publication = { version: number; diagnostics: LspDiagnostic[] };
-
-// Key diagnostics by a canonical path: a server may answer using a different but
-// equivalent encoding of the URI the client sent. marksman, like VS Code, sends
-// `file:///c%3A/dir/a.md` where pathToFileURL produces `file:///C:/dir/a.md`.
-// normalize() also collapses the doubled separators a URI may carry.
-// Non-file URIs such as untitled: and jdt: keep their original text.
-function documentKey(uri: string) {
-  try {
-    const filePath = path.normalize(fileURLToPath(uri));
-    return process.platform === "win32" ? filePath.toLowerCase() : filePath;
-  } catch {
-    return uri;
-  }
-}
 
 /** Owns publication versions, waiters and grace/settle timers, independent of JSON-RPC requests. */
 export class PublishedDiagnostics {

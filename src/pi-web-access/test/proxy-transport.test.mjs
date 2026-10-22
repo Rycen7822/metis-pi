@@ -35,6 +35,7 @@ async function withFakeCurl(t, routes, fn) {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-test-"));
 	const logPath = join(dir, "curl-args.jsonl");
 	const curlPath = join(dir, "curl");
+	await writeFile(join(dir, "package.json"), '{"type":"commonjs"}');
 	await writeFile(curlPath, `#!/usr/bin/env node
 const fs = require("node:fs");
 const routes = JSON.parse(process.env.PI_PROXY_TEST_ROUTES);

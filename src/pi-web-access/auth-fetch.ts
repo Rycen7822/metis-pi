@@ -1,4 +1,5 @@
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { normalizeHostname } from "./hostname.ts";
 
 const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
 const AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -122,10 +123,6 @@ function parseChromeProfile(value: unknown, label: string): string | undefined {
 		throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} must be a profile directory name, not a path`);
 	}
 	return normalized;
-}
-
-function normalizeHostname(hostname: string): string {
-	return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
 }
 
 function hostMatches(hostname: string, allowedHost: string): boolean {

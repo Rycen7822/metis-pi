@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   defaultMetisConfig, isMetisConfigTable, MetisConfigError, metisConfigPath,
   parseMetisConfig, readMetisConfigText, readOptionalConfigFile, updateMetisConfig, type MetisConfig,
@@ -10,10 +11,18 @@ type ReadFile = (path: string) => string | undefined;
 
 export const WEB_CREDENTIALS_FILE = "web-search.json";
 
+/** Match Pi path inputs without requiring Pi in the standalone MCP process. */
 export function webAccessAgentDir(): string {
-  const configured = process.env["PI_CODING_AGENT_DIR"];
+  let configured = process.env["PI_CODING_AGENT_DIR"];
   if (!configured) return join(homedir(), ".pi", "agent");
-  return configured.replace(/^~(?=$|[\\/])/, () => homedir());
+  if (process.platform === "win32" && !configured.includes("\\")) {
+    const drive = configured.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+    if (drive) configured = `${drive[1]!.toUpperCase()}:\\${drive[2]?.replaceAll("/", "\\") ?? ""}`;
+  }
+  if (configured === "~") return homedir();
+  if (configured.startsWith("~/") || (process.platform === "win32" && configured.startsWith("~\\")))
+    return join(homedir(), configured.slice(2));
+  return configured.startsWith("file://") ? fileURLToPath(configured) : configured;
 }
 
 /** The agent-dir JSON is a credential channel, never a preference source. */

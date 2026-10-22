@@ -55,10 +55,10 @@ export function installUserTimestamps(prototype: object, enabled: () => boolean)
   return {
     dispose() {
       active = false;
-      if (Object.getOwnPropertyDescriptor(prototype, "addMessageToChat")?.value === wrapper) {
-        Object.defineProperty(prototype, "addMessageToChat", descriptor);
-      }
-      if (Reflect.get(prototype, OWNER) === owner) Reflect.deleteProperty(prototype, OWNER);
+      const current = Object.getOwnPropertyDescriptor(prototype, "addMessageToChat");
+      if (current?.value === wrapper)
+        Reflect.defineProperty(prototype, "addMessageToChat", { ...current, value: original });
+      if (Object.getOwnPropertyDescriptor(prototype, OWNER)?.value === owner) Reflect.deleteProperty(prototype, OWNER);
     },
   };
 }

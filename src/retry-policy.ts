@@ -10,7 +10,7 @@ interface Hook {
   owners: Map<object, Set<object>>;
 }
 
-/** Pi 1.3 has no retry-classifier event. Lease its host method for this session
+/** Pi 1.4 has no retry-classifier event. Lease its host method for this session
  * only; Pi still owns overflow/quota exclusions, budget, backoff and aborts. */
 export function installGatewayRetry(sessionClass: unknown, owner: object): () => void {
   const target = (sessionClass as { prototype?: object } | undefined)?.prototype;

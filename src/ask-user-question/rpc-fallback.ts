@@ -18,6 +18,7 @@
  * option numbers, custom text, or both separated by a semicolon.
  */
 
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { displayLabel, t } from "./state/i18n-bridge.ts";
 import type { QuestionAnswer, QuestionData, QuestionnaireResult, QuestionParams } from "./tool/types.ts";
 
@@ -35,22 +36,7 @@ const MULTI_SELECT_PLACEHOLDER = "1,3; custom answer";
 /** Longest preview slice folded into a select title before truncation. */
 const MAX_PREVIEW_CHARS = 600;
 
-/**
- * The dialog-primitive slice of `ExtensionUIContext` this walker needs.
- * Structural on purpose: the pinned pi 0.74 peer types predate `ctx.mode`,
- * and jiti transpiles without type-checking — `hasDialogUI` is the runtime
- * gate that makes the shape trustworthy.
- */
-export type DialogUI = {
-	select: (title: string, options: string[], opts?: { signal?: AbortSignal }) => Promise<string | undefined>;
-	input: (title: string, placeholder?: string, opts?: { signal?: AbortSignal }) => Promise<string | undefined>;
-};
-
-/** True when the host implements the select/input dialog primitives. */
-export function hasDialogUI(ui: unknown): ui is DialogUI {
-	const u = ui as Partial<Record<"select" | "input", unknown>> | null | undefined;
-	return typeof u?.select === "function" && typeof u?.input === "function";
-}
+export type DialogUI = Pick<ExtensionUIContext, "select" | "input">;
 
 type Option = QuestionData["options"][number];
 

@@ -164,9 +164,7 @@ export function createExecCommandTool(sessions: ExecSessionManager, options: Exe
     promptSnippet: "Run command",
     parameters: EXEC_COMMAND_PARAMETERS,
     outputSchema: EXEC_OUTPUT_SCHEMA,
-    ...(process.env["PI_EXPERIMENTAL"] === "1"
-      ? { constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const } }
-      : {}),
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
     prepareArguments: prepareExecCommandArguments,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       if (signal?.aborted) throw new Error("exec_command aborted");

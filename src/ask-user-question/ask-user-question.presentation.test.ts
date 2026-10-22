@@ -3,7 +3,7 @@ import { getKeybindings } from "@earendil-works/pi-tui";
 import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
-import { HOST_ALLOCATED_ROWS, resolvePresentation } from "./presentation.ts";
+import { HOST_ALLOCATED_ROWS } from "./presentation.ts";
 import type { QuestionnaireSessionComponent } from "./state/questionnaire-session.ts";
 import type { QuestionParams, QuestionnaireResult } from "./tool/types.ts";
 import { HINT_PART_CANCEL } from "./view/dialog-builder.ts";
@@ -48,26 +48,22 @@ const theme = {
 	bold: (text: string) => text,
 };
 
-/** Occupy the inline slot as a concurrent questionnaire would, so the next one falls back to the overlay. */
-async function withInlineSlotHeld(body: () => Promise<void>): Promise<void> {
-	const holder = resolvePresentation();
-	try {
-		await body();
-	} finally {
-		holder.release?.();
-	}
-}
-
 function mount(factory: Factory, rows = 24, done: (r: QuestionnaireResult) => void = () => {}) {
 	return factory({ requestRender() {}, terminal: { columns: 100, rows } }, theme, getKeybindings(), done);
 }
 
-function setup(custom: (factory: Factory, options?: CustomOptions) => Promise<unknown>) {
+function setup(custom: (factory: Factory, options?: CustomOptions) => Promise<unknown>, overlayShowing = false) {
 	const { pi, captured } = createMockPi();
 	registerAskUserQuestionTool(pi);
 	const removeListener = vi.fn();
 	const onTerminalInput = vi.fn(() => removeListener);
-	const ctx = createMockCtx({ hasUI: true, ui: { custom: vi.fn(custom), onTerminalInput } as never });
+	const ctx = createMockCtx({ hasUI: true, ui: { custom: vi.fn((factory: Factory, options?: CustomOptions) => {
+		if (overlayShowing && !options?.overlay) {
+			return new Promise(resolve => factory({ requestRender() {}, terminal: { columns: 100, rows: 24 },
+				hasOverlay: () => true }, theme, getKeybindings(), resolve));
+		}
+		return custom(factory, options);
+	}), onTerminalInput } as never });
 	const run = (params: object) =>
 		captured.tools.get("ask_user_question")!.execute("tc", params as never, undefined, undefined, ctx as never);
 	return { run, ctx, onTerminalInput, removeListener };
@@ -185,33 +181,8 @@ describe("inline presentation", () => {
 			expect(lines.length).toBeGreaterThan(16);
 			expect(lines.length).toBeLessThanOrEqual(24);
 			return { answers: [], cancelled: true };
-		});
-		await withInlineSlotHeld(() => run(fourDescribedOptions).then(() => {}));
-	});
-
-	it("degrades a concurrent questionnaire to the overlay instead of replacing the mounted one", async () => {
-		const modes: Array<boolean | undefined> = [];
-		const pending: Array<() => void> = [];
-		const { run } = setup(
-			(_factory, options) =>
-				new Promise((resolve) => {
-					modes.push(options?.overlay);
-					pending.push(() => resolve({ answers: [], cancelled: true }));
-				}),
-		);
-		const first = run(twoOptions);
-		const second = run(twoOptions);
-		await vi.waitFor(() => expect(modes).toHaveLength(2));
-		expect(modes).toEqual([false, true]);
-		for (const settle of pending) settle();
-		await Promise.all([first, second]);
-
-		// The slot is free again once both settle.
-		const third = run(twoOptions);
-		await vi.waitFor(() => expect(modes).toHaveLength(3));
-		expect(modes[2]).toBe(false);
-		pending[2]!();
-		await third;
+		}, true);
+		await run(fourDescribedOptions);
 	});
 
 	it("stacks as an overlay instead when another overlay (e.g. /btw) is already on screen", async () => {
@@ -242,25 +213,13 @@ describe("inline presentation", () => {
 		expect(onTerminalInput).toHaveBeenCalledTimes(1);
 		expect(result.details).toMatchObject({ cancelled: false, answers: [{ kind: "option", answer: "Inline" }] });
 
-		// The inline slot was handed back: with nothing on screen the next question goes inline.
+		// With no overlay on screen, the next question stays inline.
 		overlayShowing = false;
 		await run(twoOptions);
 		expect(calls[2]?.overlay).toBe(false);
 	});
 
-	it("releases the slot when the questionnaire throws", async () => {
-		const modes: Array<boolean | undefined> = [];
-		let fail = true;
-		const { run } = setup(async (_factory, options) => {
-			modes.push(options?.overlay);
-			if (fail) throw new Error("mount failed");
-			return { answers: [], cancelled: true };
-		});
-		await expect(run(twoOptions)).rejects.toThrow("mount failed");
-		fail = false;
-		await run(twoOptions);
-		expect(modes).toEqual([false, false]);
-	});
+
 });
 
 describe("overlay fallback", () => {
@@ -273,9 +232,9 @@ describe("overlay fallback", () => {
 			expect(component.render(100)).toHaveLength(1);
 			component.handleInput(COLLAPSE);
 			component.handleInput(ENTER);
-		}));
-		await withInlineSlotHeld(() => run(twoOptions).then(() => {}));
-		expect(vi.mocked(ctx.ui.custom).mock.calls[0]?.[1]).toMatchObject({
+		}), true);
+		await run(twoOptions);
+		expect(vi.mocked(ctx.ui.custom).mock.calls[1]?.[1]).toMatchObject({
 			overlay: true,
 			overlayOptions: { anchor: "bottom-center", maxHeight: "100%" },
 		});

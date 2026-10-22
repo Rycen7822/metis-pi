@@ -78,7 +78,7 @@ function normalizeStatus(value: unknown): GoalStatus {
     case "budget_limited":
       return "budgetLimited";
     default:
-      return "active";
+      return "paused";
   }
 }
 
@@ -92,9 +92,12 @@ function normalizeGoal(value: unknown): Goal | null {
   const raw = value as Partial<Goal> & Record<string, unknown>;
   const objective = typeof raw.objective === "string" ? raw.objective : "";
   if (!objective.trim()) return null;
-  const tokenBudget = typeof raw.tokenBudget === "number" && Number.isFinite(raw.tokenBudget) && raw.tokenBudget > 0
-    ? Math.floor(raw.tokenBudget)
-    : undefined;
+  let tokenBudget: number | undefined;
+  try {
+    tokenBudget = validateTokenBudget(raw.tokenBudget);
+  } catch {
+    return null;
+  }
   const ts = nowSeconds();
   return {
     id: typeof raw.id === "string" && raw.id ? raw.id : randomUUID(),

@@ -74,12 +74,13 @@ describe("resolveCollapseKey", () => {
 		expect(resolveCollapseKey({ collapseKey: "ctrl+ctrl+]" })).toBe(DEFAULT_COLLAPSE_KEY);
 	});
 
-	it("accepts named special keys and bare base keys", () => {
+	it("accepts function keys and modified printable keys", () => {
 		expect(resolveCollapseKey({ collapseKey: "ctrl+pageup" })).toBe("ctrl+pageup");
 		expect(resolveCollapseKey({ collapseKey: "Ctrl+PageUp" })).toBe("ctrl+pageup");
 		expect(resolveCollapseKey({ collapseKey: "f5" })).toBe("f5");
 		expect(resolveCollapseKey({ collapseKey: "alt+escape" })).toBe("alt+escape");
-		for (const collapseKey of ["+", "ctrl++", "alt+shift++"]) {
+		expect(resolveCollapseKey({ collapseKey: "+" })).toBe(DEFAULT_COLLAPSE_KEY);
+		for (const collapseKey of ["ctrl++", "alt+shift++"]) {
 			expect(resolveCollapseKey({ collapseKey })).toBe(collapseKey);
 		}
 	});

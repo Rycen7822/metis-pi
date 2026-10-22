@@ -7,7 +7,7 @@
 // extra names exist in the component's data but never reach the label.
 //
 // The entry is a host component (SkillInvocationMessageComponent), so this is
-// the same prototype patch skill-fold uses — and it works for the same reason:
+// a host prototype patch — and it works for the same reason:
 // the extension loader aliases `@earendil-works/pi-coding-agent` onto the host's
 // own module instance (verified live), so the patched class IS the one the
 // session instantiates. We wrap the host's own updateDisplay and rewrite what it

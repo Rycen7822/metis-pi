@@ -196,18 +196,14 @@ describe("ask_user_question.execute — terminal attention", () => {
 	});
 });
 
-describe("ask_user_question.execute — undefined result from ctx.ui.custom (RPC/ACP hosts)", () => {
-	// A TUI questionnaire always resolves a result object (cancel included), so
-	// custom() resolving undefined means "host cannot render" (issue #78). With
-	// select/input available the dialog walker takes over (see
-	// rpc-fallback.test.ts); this error is the last resort for hosts with no
-	// usable primitive at all — and it must never read as a user decline.
-	it("returns error: no_custom_ui (not a decline) when custom resolves undefined and no dialog primitives exist", async () => {
+describe("ask_user_question.execute — missing TUI custom result", () => {
+	it("reports no_custom_ui without reopening dialogs or pretending the user declined", async () => {
 		const tool = register();
 		const custom = vi.fn(async () => undefined) as unknown as CustomFn;
+		const select = vi.fn(), input = vi.fn();
 		const ctx = createMockCtx({
-			hasUI: true,
-			ui: { custom, select: undefined, input: undefined } as never,
+			hasUI: true, mode: "tui",
+			ui: { custom, select, input } as never,
 		});
 		const params = {
 			questions: [{ question: "Q?", header: "H", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }],
@@ -216,6 +212,8 @@ describe("ask_user_question.execute — undefined result from ctx.ui.custom (RPC
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "no_custom_ui" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("cannot render the questionnaire") });
 		expect(r?.content[0]).toMatchObject({ text: expect.not.stringContaining("declined") });
+		expect(select).not.toHaveBeenCalled();
+		expect(input).not.toHaveBeenCalled();
 	});
 });
 

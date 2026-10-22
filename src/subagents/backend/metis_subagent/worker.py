@@ -24,6 +24,9 @@ RESULT_CAP = 1024 * 1024
 # built-in restriction that was never applied.
 SURFACE_TIMEOUT_SECONDS = 10.0
 SURFACE_PREFIX = 'metis-subagent-surface '
+# Maintenance gets one finite window, at least the shipped 30-minute idle
+# budget. Retries share that deadline rather than extending it.
+MAINTENANCE_MIN_SECONDS = 1800.0
 
 def message_text(message):
     content = message.get('content',[])
@@ -45,25 +48,63 @@ class RunProjection:
     last_progress: float = field(default_factory=time.monotonic)
     cancelled: bool = False
     idle_timeout_seconds: int = 0
+    # Summarization retry can be nested inside compaction; both share one window.
+    maintenance_phases: set[str] = field(default_factory=set)
+    maintenance_deadline: float = 0.0
 
     @property
     def current_tool(self):
         return next(iter(self.active_tools.values()), None)
 
+    @property
+    def maintenance(self):
+        """The maintenance phase to report, or None when no window is open."""
+        if "compaction" in self.maintenance_phases:
+            return "compaction"
+        return next(iter(self.maintenance_phases), None)
+
+    def maintenance_window(self):
+        return max(self.idle_timeout_seconds, MAINTENANCE_MIN_SECONDS)
+
+    def observe_maintenance(self, phase, opening):
+        """One deadline per window; only the last matching end restarts silence."""
+        if opening:
+            if not self.maintenance_phases:
+                self.maintenance_deadline = time.monotonic() + self.maintenance_window()
+            self.maintenance_phases.add(phase)
+        elif phase in self.maintenance_phases:
+            self.maintenance_phases.remove(phase)
+            if not self.maintenance_phases:
+                self.maintenance_deadline = 0.0
+                self.last_progress = time.monotonic()
+
     def idle_seconds(self):
-        # Tool execution and parent input are owned waits, not model silence.
-        if not self.id or self.active_tools or self.ui:
+        # Tool execution, parent input and own maintenance work are owned waits,
+        # not model silence. Maintenance has its own bounded watchdog.
+        if not self.id or self.active_tools or self.ui or self.maintenance_phases:
             return None
         return max(0, time.monotonic() - self.last_progress)
 
+    def watchdog(self):
+        """The expired budget, or None; idle_seconds handles tool/UI exemptions."""
+        if self.maintenance_phases:
+            return "maintenance" if time.monotonic() >= self.maintenance_deadline else None
+        idle = self.idle_seconds()
+        if idle is not None and idle >= self.idle_timeout_seconds:
+            return "silence"
+        return None
+
     def finish(self):
         # Keep the settled task's output/usage for idle diagnostics, while no
-        # question, active tool or cancellation flag can carry into new work.
+        # question, active tool, cancellation flag or maintenance window can
+        # carry into new work.
         self.id = None
         self.ui.clear()
         self.active_tools.clear()
         self.thinking = False
         self.cancelled = False
+        self.maintenance_phases.clear()
+        self.maintenance_deadline = 0.0
 
 
 class Worker:
@@ -238,7 +279,10 @@ def check_surface(report):
 def managed_command(argv, sdk_path=None):
     """Locate the SDK beside the chosen Pi executable; never edit that install.
 
-    Admit stable SDK releases only, matching the npm peer range.
+    Admit exactly the supported stable SDK release (1.4.0), matching the exact npm
+    peer range: older releases lack the event and hook contracts this build uses,
+    prereleases are not supported, and future majors are not admitted implicitly.
+    Build metadata is tolerated because it does not change the release.
     Explicit non-Pi commands are protocol implementations (principally the offline
     fake in tests). Boot verifies the plugin protocol before accepting either.
     """
@@ -247,9 +291,9 @@ def managed_command(argv, sdk_path=None):
         try: package=json.loads((sdk.parent.parent/'package.json').read_text())
         except (OSError,ValueError): raise AgentError('sdk_unavailable','The parent Pi SDK is unavailable') from None
         version=package.get('version','') if isinstance(package,dict) else None
-        match=re.fullmatch(r'([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.-]+)?',version) if isinstance(version,str) else None
-        if not match or package.get('name')!='@earendil-works/pi-coding-agent' or tuple(map(int,match.groups()))<(1,3,0):
-            raise AgentError('unsupported_pi_version','Native Pi subagents require the host SDK >=1.3.0')
+        supported=isinstance(version,str) and re.fullmatch(r'1\.4\.0(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?',version)
+        if not supported or package.get('name')!='@earendil-works/pi-coding-agent':
+            raise AgentError('unsupported_pi_version','Native Pi subagents require exactly the host SDK 1.4.0')
         if not sdk.is_file() or not Path(argv[0]).is_file() or not os.access(argv[0],os.X_OK):
             raise AgentError('sdk_unavailable','Parent SDK and Node executable must still exist')
         return [argv[0],str(WORKER_DIR/'pi-sdk.mjs'),str(sdk),*argv[2:]]

@@ -19,14 +19,14 @@ import {
 	mustYieldInlineSlot,
 	OVERLAY_PRESENTATION,
 	type Presentation,
-	resolvePresentation,
+	INLINE_PRESENTATION,
 	rowBudgetForHost,
 	YIELD_TO_OVERLAY,
 } from "./presentation.ts";
-import { type DialogUI, hasDialogUI, runRpcQuestionnaire } from "./rpc-fallback.ts";
+import { type DialogUI, runRpcQuestionnaire } from "./rpc-fallback.ts";
 import { displayLabel, t } from "./state/i18n-bridge.ts";
 import { sentinelsToAppend } from "./state/row-intent.ts";
-import { normalizeQuestionParams, prepareQuestionArguments } from "./tool/normalize-params.ts";
+import { prepareQuestionArguments } from "./tool/normalize-params.ts";
 import { buildQuestionnaireResponse, buildToolResult } from "./tool/response-envelope.ts";
 import {
 	MAX_OPTIONS,
@@ -366,19 +366,6 @@ async function mountQuestionnaire(config: {
 }
 
 /**
- * A TUI questionnaire ALWAYS resolves a QuestionnaireResult (cancel included), so
- * `undefined` uniquely means "host cannot render", never "user declined". RPC builds
- * that predate ctx.mode land here: run the dialog walker when the host has the
- * primitives; otherwise tell the model the user never saw the questions.
- */
-async function resolveUndefinedResult(ctx: ExtensionContext, typed: QuestionParams, signal?: AbortSignal) {
-	if (hasDialogUI(ctx.ui)) {
-		return buildQuestionnaireResponse(await runRpcQuestionnaire(ctx.ui, typed, signal), typed);
-	}
-	return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
-}
-
-/**
  * Pre-warm the lazy session graph once startup settles (#107). A graph
  * evaluated while the paths Pi resolved at boot still exist stays in memory
  * for the process lifetime, so later on-disk dependency churn (e.g. `pnpm
@@ -457,7 +444,7 @@ export function registerAskUserQuestionTool(
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			signal?.throwIfAborted();
 			// Direct execute calls can bypass the SDK's prepareArguments hook.
-			const typed = normalizeQuestionParams(params as unknown as QuestionParams);
+			const typed = prepareQuestionArguments(params);
 			if (!ctx.hasUI) return rejectWithoutUi();
 
 			const validation = validateQuestionnaire(typed);
@@ -472,13 +459,8 @@ export function registerAskUserQuestionTool(
 			// Emit event for external listeners (e.g., notification plugins)
 			emitAskUserPromptEvent(pi, typed);
 
-			// RPC hosts (VSCode pendant, ACP clients like Zed/Paseo — issue #78):
-			// ui.custom() cannot render there, but the select/input dialog
-			// sub-protocol works. Hosts that advertise ctx.mode (pi ≥0.79) route to
-			// the sequential dialog walker up front, skipping the TUI render-graph
-			// import entirely; RPC builds that predate ctx.mode are caught by the
-			// custom()-resolved-undefined backstop below. See ./rpc-fallback.ts.
-			if ((ctx as { mode?: string }).mode === "rpc" && hasDialogUI(ctx.ui)) {
+			// Pi's RPC UI supports native select/input, not custom TUI components.
+			if (ctx.mode === "rpc") {
 				return runRpcPath(pi, ctx.ui, typed, signal);
 			}
 
@@ -496,30 +478,25 @@ export function registerAskUserQuestionTool(
 			// via the `collapseKey` config field. `resolveCollapseKey` also accepts the
 			// sentinel value `"off"` to disable the shortcut entirely.
 			const collapseKey = resolveCollapseKey(loadConfig());
-			// Pi's editor slot (#253); the overlay only while another questionnaire holds the slot,
-			// or stacked when another overlay is already on screen (see below).
-			let presentation = resolvePresentation();
-			const mount = (p: Presentation) =>
-				mountQuestionnaire({ ctx, typed, itemsByTab, collapseKey, presentation: p, Session: QuestionnaireSession, signal });
+			const mount = (presentation: Presentation) =>
+				mountQuestionnaire({ ctx, typed, itemsByTab, collapseKey, presentation, Session: QuestionnaireSession, signal });
 
 			emitAskUserBlockedEvent(pi, true);
 			try {
 				emitTerminalAttention();
-				let result = await mount(presentation);
+				let result = await mount(INLINE_PRESENTATION);
 				if (result === YIELD_TO_OVERLAY) {
-					// Another overlay was on screen: stack on top of it instead (see mustYieldInlineSlot).
-					presentation.release?.();
-					presentation = OVERLAY_PRESENTATION;
-					result = await mount(presentation);
+					// Stay visible above another overlay (see mustYieldInlineSlot).
+					result = await mount(OVERLAY_PRESENTATION);
 				}
 
+				// No rendered UI is not a user decline; do not open another dialog.
 				if (result === undefined) {
-					return await resolveUndefinedResult(ctx, typed, signal);
+					return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
 				}
 
 				return buildQuestionnaireResponse(result, typed);
 			} finally {
-				presentation.release?.();
 				emitAskUserBlockedEvent(pi, false);
 			}
 		},

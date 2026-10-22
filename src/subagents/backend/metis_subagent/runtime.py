@@ -33,6 +33,15 @@ def delegated_text(value: str, envelope: str) -> str:
 # never awaited forever. Eviction itself still goes through verified interrupt.
 EVICT_LOCK_TIMEOUT=0.5
 
+# Native maintenance is owned work, even without ordinary model deltas.
+MAINTENANCE_PHASES = {
+    'compaction_start': ('compaction', True),
+    'compaction_end': ('compaction', False),
+    'summarization_retry_scheduled': ('summarization', True),
+    'summarization_retry_attempt_start': ('summarization', True),
+    'summarization_retry_finished': ('summarization', False),
+}
+
 class LockPool(WeakValueDictionary):
     """Holders and waiters keep a lock alive; idle keys need no daemon cache."""
     def __getitem__(self, key):
@@ -499,10 +508,14 @@ class Runtime:
                     w.run.error = crop(str(e["error"]), 2000)
                 self.spawn_task(self.settle(w, w.run.id))
             return
-        if kind in {"auto_retry_start", "auto_retry_end", "auto_compaction_start", "auto_compaction_end"}:
+        if kind in {"auto_retry_start", "auto_retry_end"}:
             # A host-scheduled retry delay is not a stalled provider request.
             delay = e.get("delayMs", 0) if kind == "auto_retry_start" else 0
             w.run.last_progress = time.monotonic() + max(0, float(delay)) / 1000
+            self.event(w, kind, e)
+            return
+        if kind in MAINTENANCE_PHASES:
+            w.run.observe_maintenance(*MAINTENANCE_PHASES[kind])
             self.event(w, kind, e)
 
     def dismiss_ui(self, w, ui_id):
@@ -1224,26 +1237,30 @@ class Runtime:
         await self.park_expired()
         for w in list(self.workers.values()):
             rid = w.run.id
-            idle = w.run.idle_seconds()
-            if idle is None or idle < w.run.idle_timeout_seconds:
+            expired = w.run.watchdog()
+            if expired is None:
                 continue
             async with self.agent_locks[w.agent["id"]]:
                 # Recheck after waiting: progress, a tool, completion or a new
                 # worker/run must never be stopped by an obsolete observation.
                 if self.workers.get(w.agent["id"]) is not w or w.run.id != rid or w.stopping or w.closed:
                     continue
-                idle = w.run.idle_seconds()
-                if idle is None or idle < w.run.idle_timeout_seconds:
+                expired = w.run.watchdog()
+                if expired is None:
                     continue
+                if expired == "maintenance":
+                    reason = (f"Pi stayed in {w.run.maintenance} for more than "
+                              f"{int(w.run.maintenance_window())}s without finishing; "
+                              "the summarization call is presumed hung")
+                else:
+                    reason = (f"No model output or thinking progress for {w.run.idle_timeout_seconds}"
+                              "s outside tool execution/parent input")
+                reason += "; filesystem effects may be partial"
                 try:
                     await self.interrupt(
                         self.store.agent(w.agent["scope"], w.agent["id"]),
                         terminal="timed_out",
-                        reason=(
-                            "No model output or thinking progress for "
-                            f"{w.run.idle_timeout_seconds}"
-                            "s outside tool execution/parent input; filesystem effects may be partial"
-                        ),
+                        reason=reason,
                     )
                 except AgentError as exc:
                     print("idle timeout: " + str(exc), file=sys.stderr)

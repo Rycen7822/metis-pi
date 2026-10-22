@@ -23,7 +23,7 @@ export interface ContextUsageSnapshot {
   /** Estimated context tokens, or null when the host reports unknown. */
   tokens: number | null;
   contextWindow: number;
-  /** 0..100, or null when tokens is unknown. */
+  /** Nonnegative percentage; can exceed 100 before compaction, or be unknown. */
   percent: number | null;
 }
 
@@ -84,12 +84,9 @@ export function toContextUsageSnapshot(raw: unknown): ContextUsageSnapshot | und
   const record = raw as Record<string, unknown>;
   const contextWindow = finiteNumber(record.contextWindow);
   if (contextWindow === undefined || contextWindow <= 0) return undefined;
-  const tokensRaw = record.tokens;
-  const tokens = tokensRaw === null || tokensRaw === undefined ? null : finiteNumber(tokensRaw);
-  const percentRaw = record.percent;
-  let percent = percentRaw === null || percentRaw === undefined ? null : finiteNumber(percentRaw);
-  if (percent !== undefined && percent !== null && (percent < 0 || percent > 100)) percent = null;
-  return { tokens: tokens ?? null, contextWindow, percent: percent ?? null };
+  const tokens = finiteNumber(record.tokens);
+  const percent = finiteNumber(record.percent);
+  return { tokens: tokens ?? null, contextWindow, percent: percent !== undefined && percent >= 0 ? percent : null };
 }
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -118,7 +115,7 @@ export class HostData {
     this.#contextUsage = undefined;
   }
 
-  /** Native 1.3 getContextUsage() projects the persisted branch, not the
+  /** Native 1.4 getContextUsage() projects the persisted branch, not the
    * in-flight agent message. Revisit reuse if that host contract changes.
    * Without a known branch/model and a valid sample, keep retrying as before. */
   bumpDisplay(): void {

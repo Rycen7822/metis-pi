@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { normalizeLineTerminators, normalizeQuestionParams, prepareQuestionArguments } from "./normalize-params.ts";
+import { normalizeLineTerminators, prepareQuestionArguments } from "./normalize-params.ts";
 import { MAX_HEADER_LENGTH, MAX_LABEL_LENGTH, type QuestionParams, QuestionParamsSchema } from "./types.ts";
 
 describe("normalizeLineTerminators", () => {
@@ -24,7 +24,7 @@ describe("normalizeLineTerminators", () => {
 	});
 });
 
-describe("normalizeQuestionParams", () => {
+describe("prepareQuestionArguments — display text normalization", () => {
 	const dirty: QuestionParams = {
 		questions: [
 			{
@@ -40,7 +40,7 @@ describe("normalizeQuestionParams", () => {
 	};
 
 	it("normalizes question, header, label, description, and preview", () => {
-		expect(normalizeQuestionParams(dirty)).toEqual({
+		expect(prepareQuestionArguments(dirty)).toEqual({
 			questions: [
 				{
 					question: "Which option is best?",
@@ -57,12 +57,12 @@ describe("normalizeQuestionParams", () => {
 
 	it("does not mutate the input", () => {
 		const snapshot = JSON.stringify(dirty);
-		normalizeQuestionParams(dirty);
+		prepareQuestionArguments(dirty);
 		expect(JSON.stringify(dirty)).toBe(snapshot);
 	});
 
 	it("keeps omitted optional fields omitted", () => {
-		const out = normalizeQuestionParams({
+		const out = prepareQuestionArguments({
 			questions: [{ question: "Q?", header: "H", options: [{ label: "A", description: "a" }] }],
 		});
 		expect("multiSelect" in out.questions[0]).toBe(false);
@@ -73,7 +73,7 @@ describe("normalizeQuestionParams", () => {
 		const malformed = {
 			questions: [{ question: "Q?", options: [{ label: "A" }, { label: "B" }] }],
 		} as unknown as QuestionParams;
-		expect(normalizeQuestionParams(malformed)).toEqual(malformed);
+		expect(prepareQuestionArguments(malformed)).toEqual(malformed);
 	});
 });
 

@@ -165,9 +165,9 @@ test("client cancellation aborts the signal passed to the core", { timeout: 5_00
 	assert.equal(await abortedPromise, true);
 });
 
-// The built bin runs from a directory whose node_modules mirrors the repo's
-// without typebox or @earendil-works/*, proving the bundle carries typebox and
-// needs no Pi packages. Metadata APIs are stubbed; page/image content uses real local HTTP.
+// The bin runs inside node_modules, as npm installs it, without typebox or Pi
+// packages. Metadata APIs are stubbed; page/image content uses real local HTTP.
+const packagedRoot = dir => join(dir, "node_modules", "@rycen7822", "metis-pi");
 const articleHtml = "<html><head><title>MCP Article</title></head><body><article><h1>MCP Article</h1>"
 	+ "<p>" + "The MCP server fetched this readable paragraph without the Pi runtime. ".repeat(12) + "</p></article></body></html>";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -190,19 +190,19 @@ async function builtBinDir() {
 	const build = spawnSync("npm", ["run", "build:plugins"], { cwd: join(repoRoot, "..", ".."), encoding: "utf8", shell: process.platform === "win32" });
 	assert.equal(build.status, 0, `${build.stdout}${build.stderr}`);
 	const dir = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-bin-"));
-	await writeFile(join(dir, "package.json"), JSON.stringify({ type: "module" }));
-	const cliDir = join(dir, "src", "pi-web-access", "dist");
+	const root = packagedRoot(dir), cliDir = join(root, "src", "pi-web-access", "dist");
 	await mkdir(cliDir, { recursive: true });
+	await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
 	await copyFile(join(repoRoot, "dist", "mcp-cli.js"), join(cliDir, "mcp-cli.js"));
-	await mkdir(join(dir, "src", "configuration"), { recursive: true });
+	await mkdir(join(root, "src", "configuration"), { recursive: true });
 	for (const name of ["store.ts", "web-access.ts"]) {
-		await copyFile(join(repoRoot, "..", "configuration", name), join(dir, "src", "configuration", name));
+		await copyFile(join(repoRoot, "..", "configuration", name), join(root, "src", "configuration", name));
 	}
 	for (const name of ["metis-pi.toml", "metis-pi-config.md"]) {
-		await copyFile(join(repoRoot, "..", "..", name), join(dir, name));
+		await copyFile(join(repoRoot, "..", "..", name), join(root, name));
 	}
 	await writeFile(join(dir, "mock-fetch.mjs"), fetchMock);
-	const modules = join(dir, "node_modules");
+	const modules = join(packagedRoot(dir), "node_modules");
 	await mkdir(modules);
 	const dependencies = join(repoRoot, "..", "..", "node_modules");
 	for (const entry of await readdir(dependencies)) {
@@ -240,7 +240,7 @@ async function startBin(t, config) {
 	const imageUrl = `http://127.0.0.1:${origin.address().port}/pixel.png`;
 	const transport = new StdioClientTransport({
 		command: process.execPath,
-		args: ["--import", join(dir, "mock-fetch.mjs"), join(dir, "src", "pi-web-access", "dist", "mcp-cli.js")],
+		args: ["--import", join(dir, "mock-fetch.mjs"), join(packagedRoot(dir), "src", "pi-web-access", "dist", "mcp-cli.js")],
 		cwd: dir,
 		env: {
 			HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key",
@@ -255,7 +255,8 @@ async function startBin(t, config) {
 	const client = new Client({ name: "mcp-e2e", version: "0.0.0" });
 	client.onerror = (error) => transportErrors.push(error);
 	t.after(async () => { await client.close(); await rm(home, { recursive: true, force: true }); });
-	await client.connect(transport);
+	try { await client.connect(transport); }
+	catch (error) { throw new Error(`${error.message}\n${stderr}`, { cause: error }); }
 	return {
 		client,
 		articleUrl,

@@ -106,7 +106,7 @@ test("resolveGeminiFetch keeps explicit web transport when undici is not resolva
 	try {
 		// Copy just the module graph (no node_modules) so the dynamic undici
 		// import fails and the fallback path is exercised.
-		for (const f of ["gemini-web.ts", "chrome-cookies.ts", "gemini-web-config.ts", "utils.ts", "proxy-transport.ts"]) {
+		for (const f of ["gemini-web.ts", "chrome-cookies.ts", "gemini-web-config.ts", "utils.ts", "hostname.ts", "proxy-transport.ts"]) {
 			copyFileSync(join(import.meta.dirname, "..", f), join(dir, f));
 		}
 		for (const file of ["utils.ts", "proxy-transport.ts"]) {

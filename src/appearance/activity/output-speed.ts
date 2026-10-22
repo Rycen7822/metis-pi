@@ -143,9 +143,11 @@ export function observeOutputTiming(prototype: object = Object.getPrototypeOf(cr
       return end.value.call(this, message);
     };
     installation = { users: 0, completed, release() {
-      if (Reflect.get(prototype, "push") === wrapper) Object.defineProperty(prototype, "push", push);
-      if (Reflect.get(prototype, "end") === endWrapper) Object.defineProperty(prototype, "end", end);
-      if (Reflect.get(prototype, OWNER) === installation) Reflect.deleteProperty(prototype, OWNER);
+      const currentPush = Object.getOwnPropertyDescriptor(prototype, "push");
+      const currentEnd = Object.getOwnPropertyDescriptor(prototype, "end");
+      if (currentPush?.value === wrapper) Reflect.defineProperty(prototype, "push", { ...currentPush, value: push.value });
+      if (currentEnd?.value === endWrapper) Reflect.defineProperty(prototype, "end", { ...currentEnd, value: end.value });
+      if (Object.getOwnPropertyDescriptor(prototype, OWNER)?.value === installation) Reflect.deleteProperty(prototype, OWNER);
     } };
     Object.defineProperty(prototype, "push", { ...push, value: wrapper });
     Object.defineProperty(prototype, "end", { ...end, value: endWrapper });

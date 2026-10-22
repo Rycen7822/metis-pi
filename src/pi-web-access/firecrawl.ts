@@ -1,4 +1,5 @@
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
+import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { isLoopbackHostname } from "./hostname.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";

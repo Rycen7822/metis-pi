@@ -195,7 +195,10 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
 			waitForStartup,
 			write: async (chars) => {
 				await startup;
-				await bridge.request({ op: "write", process_id: processId, chunk: Array.from(Buffer.from(chars, "utf8")) });
+				const { status } = await bridge.request<{ status: string }>({
+					op: "write", process_id: processId, chunk: Array.from(Buffer.from(chars, "utf8")),
+				});
+				if (status !== "accepted") throw new Error(`Process stdin write not accepted: ${status}`);
 			},
 			terminate: async () => {
 				terminating = true;

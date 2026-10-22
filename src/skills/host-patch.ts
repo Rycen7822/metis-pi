@@ -1,4 +1,4 @@
-// Leases for the two host skill decorations. Metadata lives on the wrapper,
+// Leases for host skill decorations. Metadata lives on the wrapper,
 // so fresh module copies share ownership without a process-wide registry.
 export type SkillPatchState = "patched" | "already" | "missing";
 export interface SkillPatch { readonly state: SkillPatchState; release(): void }

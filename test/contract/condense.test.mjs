@@ -233,7 +233,8 @@ test("Pi native discovery activates deferred recovery for direct calls and provi
   await capture.registration
     .streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools: activeTools() }, { apiKey: FAKE_API_KEY })
     .result();
-  assert.ok(!(capture.bodies[0].tools ?? []).some(tool => tool.name === "context_tree_query"),
+  assert.ok(!capture.bodies[0].input.filter(item => item.type === "additional_tools").flatMap(item => item.tools)
+    .some(tool => tool.name === "context_tree_query"),
     "the initial request must not advertise the deferred schema");
 
   const search = h.session.agent.state.tools.find(tool => tool.name === "tool_search");
@@ -250,7 +251,8 @@ test("Pi native discovery activates deferred recovery for direct calls and provi
     .streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools: activeTools() }, { apiKey: FAKE_API_KEY })
     .result();
   const body = capture.bodies.at(-1);
-  const recallSchema = body.tools.find((tool) => tool.name === "context_tree_query");
+  const recallSchema = body.input.filter(item => item.type === "additional_tools").flatMap(item => item.tools)
+    .find(tool => tool.name === "context_tree_query");
   assert.ok(recallSchema?.parameters.properties.cursor, "the final request must advertise pagination");
   const wireCall = body.input.find((item) => item.type === "function_call");
   const wireResult = body.input.find((item) => item.type === "function_call_output");

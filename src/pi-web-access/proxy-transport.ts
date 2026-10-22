@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readWebAccessConfig, webAccessAgentDir } from "../configuration/web-access.ts";
 import type { Dispatcher } from "undici";
+import { isLoopbackHostname, normalizeHostname } from "./hostname.ts";
 
 const proxyStorage = new AsyncLocalStorage<string | null>();
 
@@ -82,7 +83,7 @@ function noProxyEntryMatches(hostname: string, port: string, entry: string): boo
 		}
 	}
 	if (entryPort !== undefined && entryPort !== port) return false;
-	host = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	host = normalizeHostname(host);
 	if (!host) return false;
 	if (hostname === host) return true;
 	const suffix = host.startsWith("*.") ? host.slice(1) : host.startsWith(".") ? host : `.${host}`;
@@ -91,8 +92,8 @@ function noProxyEntryMatches(hostname: string, port: string, entry: string): boo
 
 /** One routing policy for the transport and the SSRF proxy-trust preflight. */
 export function isProxyBypassedUrl(url: URL): boolean {
-	const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-	if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1" || hostname === "::1") return true;
+	const hostname = normalizeHostname(url.hostname);
+	if (isLoopbackHostname(hostname) || hostname.endsWith(".localhost")) return true;
 	const port = url.port || (url.protocol === "https:" ? "443" : "80");
 	const noProxy = process.env.NO_PROXY || process.env.no_proxy;
 	return Boolean(noProxy && noProxy.split(",").some(entry => noProxyEntryMatches(hostname, port, entry)));

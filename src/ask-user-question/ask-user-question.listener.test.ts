@@ -2,11 +2,9 @@ import type { QuestionParams } from "./tool/types.ts";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMockPi } from "@juicesharp/rpiv-test-utils";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
 import type { QuestionnaireSessionConfig } from "./state/questionnaire-session.ts";
-
-import { type Presentation, resolvePresentation } from "./presentation.ts";
 
 /**
  * Integration tests for the raw `ctx.ui.onTerminalInput` collapse listener.
@@ -78,6 +76,7 @@ function driveWithListener(
 	keybindings: QuestionnaireSessionConfig["keybindings"] = { matches: () => false },
 	tui = { requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } },
 ) {
+	const overlayTui = Object.assign(tui, { hasOverlay: () => true });
 	const notify = vi.fn();
 	const removeListener = vi.fn();
 	const listenerRef: { current: RawListener | undefined } = { current: undefined };
@@ -94,16 +93,13 @@ function driveWithListener(
 				kb: QuestionnaireSessionConfig["keybindings"],
 				done: (v: unknown) => void,
 			) => unknown,
-			options?: { onHandle?: (handle: FakeHandle) => void },
+			options?: { overlay?: boolean; onHandle?: (handle: FakeHandle) => void },
 		) => {
 			return new Promise((resolve) => {
-				componentRef.current = factory(
-					tui,
-					identityTheme,
-					keybindings,
-					resolve,
-				) as SessionComponent;
-				options?.onHandle?.(handle);
+				const component = factory(overlayTui, identityTheme, keybindings, resolve) as SessionComponent;
+				if (!options?.overlay) return; // The inline factory yielded above the existing overlay.
+				componentRef.current = component;
+				options.onHandle?.(handle);
 				script(resolve);
 			});
 		},
@@ -120,15 +116,7 @@ function writeCollapseKeyConfig(collapseKey: string): void {
 	writeFileSync(configPath, `[askUserQuestion]\ncollapseKey = ${JSON.stringify(collapseKey)}\n`);
 }
 
-// The raw listener belongs to the overlay, which a questionnaire uses only as a fallback.
-// Holding the inline slot (as a concurrent questionnaire would) routes each case here to it.
-let slotHolder: Presentation | undefined;
-beforeEach(() => {
-	slotHolder = resolvePresentation();
-});
-
 afterEach(() => {
-	slotHolder?.release?.();
 	if (existsSync(configPath)) rmSync(configPath);
 });
 
@@ -274,21 +262,23 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 		const custom = vi.fn(
 			(
 				factory: (
-					tui: { requestRender: () => void; terminal: { columns: number; rows: number } },
+					tui: { requestRender: () => void; terminal: { columns: number; rows: number }; hasOverlay?: () => boolean },
 					theme: typeof identityTheme,
 					kb: QuestionnaireSessionConfig["keybindings"],
 					done: (v: unknown) => void,
 				) => unknown,
-				options?: { onHandle?: (handle: FakeHandle) => void },
+				options?: { overlay?: boolean; onHandle?: (handle: FakeHandle) => void },
 			) => {
 				return new Promise((resolve) => {
-					componentRef.current = factory(
-						{ requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } },
+					const component = factory(
+						{ requestRender: vi.fn(), terminal: { columns: 120, rows: 24 }, hasOverlay: () => true },
 						identityTheme,
 						{ matches: () => false },
 						resolve,
 					) as SessionComponent;
-					options?.onHandle?.(handle);
+					if (!options?.overlay) return;
+					componentRef.current = component;
+					options.onHandle?.(handle);
 					componentRef.current.handleInput(CTRL_RBRACKET);
 					expect(handle.isHidden()).toBe(false);
 					const collapsed = componentRef.current.render(120);

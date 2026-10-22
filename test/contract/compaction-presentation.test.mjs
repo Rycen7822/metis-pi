@@ -74,7 +74,7 @@ function click(component, button = "left") {
 }
 
 // This mirrors the native receiver's collaborators, not its compaction/rendering
-// code: handleEvent and addMessageToChat below are the actual Pi 1.3 methods.
+// code: handleEvent and addMessageToChat below are the actual Pi 1.4 methods.
 async function liveCard(manager, entry) {
   const mode = {
     isInitialized: true, sessionManager: manager, chatContainer: new Tui.Container(), outputPad: 1,

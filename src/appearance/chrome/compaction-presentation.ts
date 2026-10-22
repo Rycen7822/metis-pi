@@ -89,10 +89,10 @@ function install(prototype: object | undefined, host: Host, paint: () => ReturnT
   }
   return { dispose() {
     active = false; // An outer foreign wrapper may still retain this function.
-    if (Object.getOwnPropertyDescriptor(prototype, "updateDisplay")?.value === wrapper) {
-      Object.defineProperty(prototype, "updateDisplay", descriptor);
-    }
-    if (Reflect.get(prototype, OWNER) === wrapper) Reflect.deleteProperty(prototype, OWNER);
+    const current = Object.getOwnPropertyDescriptor(prototype, "updateDisplay");
+    if (current?.value === wrapper)
+      Reflect.defineProperty(prototype, "updateDisplay", { ...current, value: descriptor.value });
+    if (Object.getOwnPropertyDescriptor(prototype, OWNER)?.value === wrapper) Reflect.deleteProperty(prototype, OWNER);
   } };
 }
 
@@ -127,7 +127,7 @@ export function registerCompactionPresentation(pi: Pick<ExtensionAPI, "on">, opt
     const matches = entries.filter(e => e.summary === message.summary && e.tokensBefore === message.tokensBefore);
     const exact = matches.filter(e => e.timestamp === message.timestamp);
     if (exact.length) return exact.length === 1 ? exact[0]!.input : undefined;
-    // Pi 1.3 compaction_end builds the live UI message with a FRESH timestamp.
+    // Pi 1.4 compaction_end builds the live UI message with a FRESH timestamp.
     // Only a freshly observed, unique latest branch entry authorizes this fallback.
     return live && matches.length === 1 && matches[0] === live && message.timestamp >= live.timestamp
       ? live.input : undefined;

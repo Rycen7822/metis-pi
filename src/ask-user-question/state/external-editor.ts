@@ -66,7 +66,7 @@ export async function editWithExternalEditor(
 		tuiStopped = true;
 		process.stdout.write(`Launching external editor: ${command}\nPi will resume when the editor exits.\n`);
 		await runEditor(command, tempFile, signal);
-		return readFileSync(tempFile, "utf8").replace(/\r?\n$/, "");
+		return readFileSync(tempFile, "utf8").replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
 	} finally {
 		try {
 			rmSync(tempDir, { recursive: true, force: true });

@@ -277,8 +277,9 @@ ${goalSummary(goal)}
 
 ${
   "The active thread goal has reached its token budget. No new automatic " +
-  "continuation will be queued. Summarize progress or use /goal edit, /goal clear, " +
-  "or /goal resume when you want to continue."
+  "continuation will be queued. Editing or resuming this goal does not increase " +
+  "its budget. To allocate a new budget, use /goal clear and explicitly create " +
+  "another goal with the desired budget."
 }`;
 }
 

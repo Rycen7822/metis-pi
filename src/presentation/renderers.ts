@@ -2,7 +2,7 @@
 // call region = title/command; result region = output/diff body.
 // Never modifies tool data.
 
-import { formatReadLineRange } from "@earendil-works/pi-coding-agent";
+import { formatReadLineRange, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { renderCodexDiffComponent } from "./diff-component.ts";
 import {
   renderExplorationHeader,
@@ -13,7 +13,7 @@ import {
   type ExplorationRow,
 } from "./explore.ts";
 import { summarizeShellCommand } from "../execution/shell/summary.ts";
-import { asRecord, languageForPath, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
+import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
 import { safeText } from "./terminal-text.ts";
 import type {
   Palette, ViewContext, ViewOptions, TextFactory, Highlight, Renderers,
@@ -162,12 +162,6 @@ export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff |
     return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target} ${theme.fg("muted", "(unchanged)")}`;
   }
   return `${bullet} ${theme.fg("toolTitle", theme.bold("Failed"))} ${target}`;
-}
-
-export function diffStats(value: unknown): DiffStats | undefined {
-  const diff = asRecord(asRecord(value).details).diff;
-  if (typeof diff !== "string") return undefined;
-  return diffStatsFromRows(parseDisplayDiff(diff));
 }
 
 /** Shell call text for non-component hosts (title + command, never output). */
@@ -339,7 +333,7 @@ export function makeRenderers(
       }
       const rendered = renderDiffLines({
         rows: change.rows, width: 100, layout, colorLevel: colorFor(ctx),
-        language: languageForPath(filePath), paint,
+        language: getLanguageFromPath(filePath), paint,
       });
       return component(rendered.join("\n"), ctx);
     }
@@ -399,12 +393,7 @@ export function makeRenderers(
             // never a replacement.
             const hasResult = merged.isPartial === false;
             const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
-            const stage = resolveWriteStage({
-              argsComplete: merged.argsComplete === true,
-              executionStarted: merged.executionStarted === true,
-              isError: merged.isError === true,
-              hasResult: merged.isPartial === false,
-            });
+            const stage = resolveWriteStage(merged.argsComplete === true, merged.executionStarted === true);
             if (makeWriteCall && !hasResult) {
               const input: WritePreviewInput & { headerText: string } = {
                 name,

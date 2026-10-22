@@ -1,4 +1,5 @@
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { normalizeHostname } from "./hostname.ts";
 import { resolveWebProxy, webFetch, type ProxiedRequestInit } from "./proxy-transport.ts";
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
@@ -255,10 +256,6 @@ export async function fetchRemoteUrl(
 	}
 
 	throw new Error(`Too many redirects fetching ${resolved.url.toString()}`);
-}
-
-function normalizeHostname(hostname: string): string {
-	return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
 }
 
 function assertDomainPolicy(hostname: string, policy?: DomainPolicy): void {

@@ -21,7 +21,9 @@ export interface McpPolicy { enabled: boolean; idleTimeoutSeconds: number; keepA
 export interface McpConfiguration { servers: McpServerEntry[]; errors: string[]; autoEnableCodemode: boolean; policy: McpPolicy }
 function readObject(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
-  const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+  // Match Pi's leading-BOM handling without rewriting the user's file.
+  const text = readFileSync(path, "utf8");
+  const value: unknown = JSON.parse(text.startsWith("\uFEFF") ? text.slice(1) : text);
   if (!isRecord(value)) throw new Error(`${path}: expected an object`);
   return value;
 }

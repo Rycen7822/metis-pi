@@ -30,11 +30,27 @@ const configModules = {
     }));
   },
 };
+// Native Node cannot load TS from node_modules. Bundle shared config into the
+// CLI, retaining its source origin for packaged TOML/guide resource URLs.
+const standaloneConfig = {
+  name: "metis-standalone-config",
+  setup(build) {
+    const source = fileURLToPath(new URL("../src/configuration/store.ts", import.meta.url));
+    build.onLoad({ filter: /store\.ts$/ }, ({ path }) => {
+      if (path !== source) return;
+      return {
+        contents: readFileSync(path, "utf8").replaceAll("import.meta.url",
+          'new URL("../../configuration/store.ts", import.meta.url).href'),
+        loader: "ts", resolveDir: fileURLToPath(new URL("../src/configuration/", import.meta.url)),
+      };
+    });
+  },
+};
 const options = {
   bundle: true, format: "esm", platform: "node", target: "node22.19",
   absWorkingDir: root, outdir: "src/pi-web-access/dist", outbase: "src/pi-web-access",
   logLevel: "info", plugins: [configModules],
 };
 await build({ ...options, entryPoints: ["src/pi-web-access/index.ts"], external: externals });
-await build({ ...options, entryPoints: ["src/pi-web-access/mcp-cli.ts"], external: externals.filter((name) => name !== "typebox") });
+await build({ ...options, plugins: [standaloneConfig], entryPoints: ["src/pi-web-access/mcp-cli.ts"], external: externals.filter((name) => name !== "typebox") });
 chmodSync(new URL("../src/pi-web-access/dist/mcp-cli.js", import.meta.url), 0o755);

@@ -9,6 +9,7 @@ import type { Palette } from "../src/presentation/contracts.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/presentation/palette.ts";
 import { makeSurfaceOps } from "../src/appearance/chrome/surface.ts";
 import { loadConfig } from "../src/appearance/config.ts";
+import { readOptionalConfigFile } from "../src/configuration/store.ts";
 import { thoughtSummaryText } from "../src/presentation/thinking-summary.ts";
 import {
   CodexSeparatorComponent, CodexWriteCallComponent, ThinkingRailComponent,
@@ -18,7 +19,7 @@ import {
 function layoutOps(): LayoutOps {
   return {
     wrap: (text: string, columns: number) => wrapPlainOutput(text, columns, Tui.wrapTextWithAnsi),
-    visibleWidth: (text: string) => Tui.visibleWidth(text),
+    visibleWidth: Tui.visibleWidth,
   };
 }
 
@@ -30,7 +31,7 @@ function layoutOps(): LayoutOps {
  */
 let cachedColorLevel: ReturnType<typeof resolveColorContext> | undefined;
 function colorLevelOnce(): ReturnType<typeof resolveColorContext> {
-  return (cachedColorLevel ??= resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true }));
+  return (cachedColorLevel ??= resolveColorContext({ terminalTrueColor: Tui.getCapabilities().trueColor === true }));
 }
 
 function appearanceVersion(): string {
@@ -44,20 +45,9 @@ function appearanceVersion(): string {
 }
 
 export default function codexAppearance(pi: AppearanceAPI): void {
-  const prototype = Pi.ToolExecutionComponent?.prototype;
-  const assistantComponent = Pi.AssistantMessageComponent as unknown as { prototype: object } | undefined;
-  if (!prototype || typeof Tui.Text !== "function" || typeof Pi.keyHint !== "function"
-      || typeof Tui.wrapTextWithAnsi !== "function" || typeof Tui.visibleWidth !== "function") {
-    pi.on("session_start", (_event, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify("metis-pi: unsupported Pi UI exports; compact transcript was not installed.", "warning");
-    });
-    return;
-  }
+  const prototype = Pi.ToolExecutionComponent.prototype;
   const colorLevel = colorLevelOnce();
-  const highlight = (text: string, language: string): string => {
-    const lines = Pi.highlightCode(text, language);
-    return Array.isArray(lines) ? lines.join("\n") : String(lines);
-  };
+  const highlight = (text: string, language: string): string => Pi.highlightCode(text, language).join("\n");
   const diffPainter = createDiffPainter(highlight);
   // Do not capture factory input/context: lastComponent would chain old bodies.
   const paintDiff = (theme: Palette) => (text: string, language: string) => diffPainter.paint(text, language, theme);
@@ -70,19 +60,12 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     (text) => `\x1b[2m${text}\x1b[22m`,
   );
   // Every module uses Pi's agent dir (PI_CODING_AGENT_DIR); no appearance-only override.
-  const getAgentDir = (): string => Pi.getAgentDir();
-  const readFile = (path: string): string | undefined => {
-    try {
-      return readFileSync(path, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
-  };
+  const getAgentDir = Pi.getAgentDir;
+  const readFile = readOptionalConfigFile;
   const bootConfig = loadConfig(getAgentDir(), readFile).config;
   const bootWritePreview = bootConfig.writePreview;
   registerCompactionPresentation(pi, {
-    prototype: Pi.CompactionSummaryMessageComponent?.prototype,
+    prototype: Pi.CompactionSummaryMessageComponent.prototype,
     enabled: bootConfig.enabled,
     host: { Text: Tui.Text, Markdown: Tui.Markdown, Spacer: Tui.Spacer,
       Container: Tui.Container, MouseRegion: Tui.MouseRegion,
@@ -104,8 +87,8 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     highlight,
     colorLevel,
     layoutOps: layoutOps(),
-    assistantPrototype: assistantComponent?.prototype,
-    interactivePrototype: Pi.InteractiveMode?.prototype,
+    assistantPrototype: Pi.AssistantMessageComponent.prototype,
+    interactivePrototype: Pi.InteractiveMode.prototype,
     makeSeparator: () => new CodexSeparatorComponent(colorLevel),
     makeSpacer: () => new Tui.Spacer(1),
     makeRail: (child) => new ThinkingRailComponent(child as Tui.Component, colorLevel),
@@ -137,17 +120,17 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       const maxRows = bootWritePreview.enabled ? bootWritePreview.rows : 0;
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
-    editorHost: { CustomEditor: Pi.CustomEditor as unknown },
+    editorHost: { CustomEditor: Pi.CustomEditor },
     fullscreenHost: {
-      HStack: typeof Tui.HStack === "function" ? Tui.HStack : undefined,
-      VStack: typeof Tui.VStack === "function" ? Tui.VStack : undefined,
+      HStack: Tui.HStack,
+      VStack: Tui.VStack,
       UserMessageComponent: Pi.UserMessageComponent,
       SkillInvocationMessageComponent: Pi.SkillInvocationMessageComponent,
       promptRow: (summary, width) => {
         const row = Tui.truncateToWidth(`↑ ${summary}`, width);
         return row + " ".repeat(Math.max(0, width - Tui.visibleWidth(row)));
       },
-      Spacer: typeof Tui.Spacer === "function" ? Tui.Spacer : undefined,
+      Spacer: Tui.Spacer,
       Container: Tui.Container, ScrollView: Tui.ScrollView, matchesKey: Tui.matchesKey,
     },
     selectionCopyHost: {
@@ -156,7 +139,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
         Markdown: Tui.Markdown.prototype,
         Box: Tui.Box.prototype,
         Container: Tui.Container.prototype,
-        MouseRegion: Tui.MouseRegion?.prototype,
+        MouseRegion: Tui.MouseRegion.prototype,
       },
       fns: {
         visibleWidth: Tui.visibleWidth,
@@ -169,8 +152,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     surface,
     api: pi,
     appearanceVersion: appearanceVersion(),
-    piVersion: typeof (Pi as unknown as { VERSION?: unknown }).VERSION === "string"
-      ? (Pi as unknown as { VERSION: string }).VERSION
-      : "unknown",
+    piVersion: Pi.VERSION,
   });
 }

@@ -14,6 +14,51 @@ const theme = {
   strikethrough: (t) => `\x1b[9m${t}\x1b[29m`,
 };
 
+test("collected host tokens and a throttled stream rebuild exact fallback provenance", t => {
+  const cases = [
+    ["cjk", "**这是测试。**后面还有中文需要折行", "这是测试。后面还有中文需要折行", 16],
+    ["ascii flanking", "**end.**Then next", "**end.**Then next", 40],
+    ["strict del", "Use ~not struck~ and ~~struck~~", "Use ~not struck~ and struck", 40],
+    ["pending math table", "Intro\n\n$$\nx = 1\n\n| A |\n:---:\n| 1 |\n\nAfter", undefined, 40],
+    ["closed math", "$$\na + b\n$$", "a + b", 40],
+    ["bracket table", "Intro\n\n\\[\nx^2\n\n| A |\n| --- |\n| 1 |\n\nAfter", undefined, 40],
+  ];
+  // Warm native rows before the process-owned wrappers exist. Dropping the
+  // optional WeakRef simulates collected tokens without nondeterministic GC.
+  const warmed = cases.map(([name, text, expected, width]) => {
+    const component = new Tui.Markdown(text, 0, 0, theme);
+    component.render(width);
+    component.cachedTokens = undefined;
+    return { name, component, expected, width };
+  });
+  const sys = installCopyPrototypes(t);
+  for (const { name, component, expected, width } of warmed) {
+    const copied = select(copyFrame(component, width));
+    assert.equal(component.cachedTokens, undefined, `${name}: host reused rows; mirror had to lex`);
+    assert.equal(sys.diagnostics().mirrors.markdownDegraded, 0, `${name}: ${sys.diagnostics().mirrors.lastDegradedReason}`);
+    if (expected !== undefined) { assert.equal(copied.text, expected, name); assert.equal(copied.nativeRows, 0, name); }
+    else {
+      assert.match(copied.text, /Intro/); assert.match(copied.text, /After/);
+      assert.match(copied.text, /│ A │/); assert.match(copied.text, /│ 1 │/);
+    }
+  }
+  let now = 10000;
+  t.mock.method(Date, "now", () => now);
+  const stream = new Tui.Markdown("initial", 0, 0, theme);
+  copyFrame(stream, 16);
+  now += 10;
+  const throttled = sys.diagnostics().mirrors.markdownThrottled;
+  stream.setText("**新的中文。**后面还有中文");
+  stream.render(16);
+  assert.equal(sys.diagnostics().mirrors.markdownThrottled, throttled + 1);
+  stream.cachedTokens = undefined;
+  now += 10;
+  const rebuilt = select(copyFrame(stream, 16));
+  assert.equal(rebuilt.text, "新的中文。后面还有中文");
+  assert.equal(rebuilt.nativeRows, 0);
+  assert.equal(sys.diagnostics().mirrors.markdownDegraded, 0);
+});
+
 test("real Markdown copies prose, formatted blocks and hard breaks without mirror degradation", (t) => {
   const sys = installCopyPrototypes(t);
   // Code fences, table fallback and partial list selection have exact oracles in copy-text.
@@ -62,6 +107,21 @@ test("stack copy uses the displayed render pass without rerendering dynamic chil
     assert.equal(renders, 2);
     assert.equal(select(first).text, "frame 1\nfollowing block", "a committed earlier frame retains its own provenance");
   }
+});
+
+test("flat-rows keeps later rows aligned after a container child", (t) => {
+  installCopyPrototypes(t, ["Text", "Markdown", "Container", "Box", "MouseRegion"]);
+  // Fusion stacks a mutation result, a shell call and a shell result; any of them
+  // may be a Box/Container, whose product is a placement chain with no flat rows.
+  const boxed = new Tui.Box(1, 0);
+  boxed.addChild(new Tui.Text("BOX-A", 0, 0));
+  boxed.addChild(new Tui.Text("BOX-B", 0, 0));
+  const stack = stackComponents([boxed, new Tui.Text("TAIL", 0, 0)], "flat-rows");
+  const frame = copyFrame(stack, 20);
+  const displayed = frame.root.lines.map((line) => Tui.stripTerminalSequences(line).trimEnd());
+  assert.deepEqual(displayed, [" BOX-A", " BOX-B", "TAIL"]);
+  assert.equal(select(frame, 0, 0).text, " BOX-A", "the first row is the container child, not a later sibling");
+  assert.equal(select(frame, 2, 2).text, "TAIL", "the last row is the last displayed line");
 });
 
 test("exact card copy omits background and bypasses a foreign serializer wrapper", (t) => {

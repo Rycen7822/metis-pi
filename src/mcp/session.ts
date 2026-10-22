@@ -6,7 +6,7 @@ import { McpClient, StdioTransport, StreamableHttpTransport, McpSessionExpiredEr
   type McpRequestOptions, type Tool, type McpTransport } from "@earendil-works/pi-mcp";
 import { McpOAuthAuthorizationRequiredError } from "@earendil-works/pi-mcp/oauth";
 import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
-import type { ExtensionContext, McpServerEntry } from "@earendil-works/pi-coding-agent";
+import { VERSION, type ExtensionContext, type McpServerEntry } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { CatalogCache, emptyCatalog, type Catalog } from "./catalog.ts";
 import { McpCredentials, createAuth } from "./auth.ts";
@@ -15,7 +15,7 @@ import { canonical, expandHome, resolveValues, serverCwd, type McpPolicy } from 
 export class McpServerSession {
   catalog: Catalog = emptyCatalog();
   cached = false;
-  closed = false;
+  get closed() { return this.lifetime.signal.aborted; }
   scope = "";
   state = "disconnected";
   error?: string;
@@ -57,7 +57,7 @@ export class McpServerSession {
     }
   }
   private assertCurrent() {
-    if (this.closed || this.lifetime.signal.aborted || this.context().cwd !== this.cwd ||
+    if (this.closed || this.context().cwd !== this.cwd ||
       (this.entry.scope === "project" && !this.context().isProjectTrusted())) throw new Error("MCP server is no longer active in this session");
   }
   private async identity(provider = true) {
@@ -133,7 +133,7 @@ export class McpServerSession {
   }
   private async open(): Promise<McpClient> {
     const config = this.entry.config;
-    const client = new McpClient({ name: "pi", version: "1.3.0", requestTimeoutMs: (config.timeout ?? 60) * 1000,
+    const client = new McpClient({ name: "pi", version: VERSION, requestTimeoutMs: (config.timeout ?? 60) * 1000,
       roots: [{ uri: pathToFileURL(this.cwd).href, name: basename(this.cwd) }] });
     this.connecting = client; this.state = "connecting";
     const abort = () => { void this.closeClient(client).catch(() => {}); };
@@ -380,7 +380,6 @@ export class McpServerSession {
     return (this.shutdownTask ??= this.closeSession());
   }
   private async closeSession(): Promise<void> {
-    this.closed = true;
     clearTimeout(this.timer);
     this.lifetime.abort();
     const pending = this.opening;

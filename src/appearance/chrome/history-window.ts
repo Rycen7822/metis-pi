@@ -82,24 +82,28 @@ function releaseBlock(root: Component): void {
   }
 }
 
+// Only undo our value. Foreign constraints may require retaining an inert wrapper.
+function restoreMethod(target: object, key: PropertyKey, wrapper: unknown, descriptor?: PropertyDescriptor): void {
+  const current = Object.getOwnPropertyDescriptor(target, key);
+  if (!current || current.value !== wrapper) return;
+  if (descriptor) Reflect.defineProperty(target, key, { ...current, value: descriptor.value });
+  else if (current.configurable && current.writable && !current.enumerable) Reflect.deleteProperty(target, key);
+}
+
 function observe(component: object, methods: readonly string[], changed: () => void): () => void {
   const restores: (() => void)[] = [];
   for (const name of methods) {
     const original: unknown = Reflect.get(component, name);
     if (typeof original !== "function" || !Object.isExtensible(component)) continue;
     const descriptor = Object.getOwnPropertyDescriptor(component, name);
-    if (descriptor && (!descriptor.configurable || descriptor.writable === false)) continue;
+    if (descriptor && (!descriptor.configurable || !descriptor.writable)) continue;
     const wrapped = function (this: object, ...args: unknown[]) {
       try { return original.apply(this, args); } finally { changed(); }
     };
     Object.defineProperty(component, name, { value: wrapped, writable: true, configurable: true });
-    restores.push(() => {
-      if (Reflect.get(component, name) !== wrapped) return;
-      if (descriptor) Object.defineProperty(component, name, descriptor);
-      else Reflect.deleteProperty(component, name);
-    });
+    restores.push(() => restoreMethod(component, name, wrapped, descriptor));
   }
-  return () => restores.forEach((restore) => restore());
+  return () => { changed = () => {}; restores.forEach(restore => restore()); };
 }
 
 /** A bounded display window, not a second session store. Source components
@@ -514,8 +518,6 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
         source: Component;
         scrollbarFollow: { installed: boolean; reason: string };
         window: HistoryWindow;
-        wheel: Scroll["scrollBy"];
-        wrapper: Scroll["scrollBy"];
         restoreNavigation: () => void;
         removeInput?: () => void;
       }
@@ -523,14 +525,13 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
   let reason = "not installed";
   function unmount() {
     if (!installed) return;
-    const { scroll, source, window, wheel, wrapper, restoreNavigation, removeInput } = installed;
+    const { scroll, source, window, restoreNavigation, removeInput } = installed;
     removeInput?.();
     restoreNavigation();
     if (scroll.child === (window as unknown)) {
       scroll.child = source;
       scroll.children = [source];
     }
-    if (scroll.scrollBy === wrapper) scroll.scrollBy = wheel;
     window.dispose();
     installed = undefined;
     reason = "not installed";
@@ -562,11 +563,17 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       reason = "unsupported transcript root";
       return;
     }
+    const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
+    const wheelDescriptor = Object.getOwnPropertyDescriptor(scroll, "scrollBy");
+    if ([layoutDescriptor, wheelDescriptor].some(descriptor => descriptor && (!descriptor.configurable || !descriptor.writable))) {
+      reason = "native scroll methods are locked";
+      return;
+    }
     const selected = () => (tui.getSelectionBounds ? !!tui.getSelectionBounds() : tui.hasActiveSelection?.() === true);
     const nativeNode = Reflect.get(scroll, LAYOUT_NODE);
     const promptDescriptor = Object.getOwnPropertyDescriptor(scroll, LAYOUT_NODE);
     const promptHost = typeof host.VStack === "function" && typeof nativeNode === "function"
-      && Object.isExtensible(scroll) && promptDescriptor?.configurable !== false ? host : undefined;
+      && Object.isExtensible(scroll) && (!promptDescriptor || promptDescriptor.configurable && promptDescriptor.writable) ? host : undefined;
     const window = new HistoryWindow(source, scroll, host.Container, selected, promptHost);
     let restorePrompt = () => {};
     if (window.promptHost) {
@@ -585,10 +592,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       Object.defineProperty(scroll, LAYOUT_NODE, { value: node, writable: true, configurable: true });
       restorePrompt = () => {
         active = false;
-        if (Reflect.get(scroll, LAYOUT_NODE) === node) {
-          if (descriptor) Object.defineProperty(scroll, LAYOUT_NODE, descriptor);
-          else Reflect.deleteProperty(scroll, LAYOUT_NODE);
-        }
+        restoreMethod(scroll, LAYOUT_NODE, node, descriptor);
       };
     }
     let navigationActive = true;
@@ -598,7 +602,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     const restoreEnd = observe(scroll, ["scrollToEnd"], () => {
       if (navigationActive && scroll.child === window && window.jump("newer")) tui.requestRender?.();
     });
-    // Pi 1.3's private pointer helper supplies actual scrollbar provenance.
+    // Pi 1.4's private pointer helper supplies actual scrollbar provenance.
     // Generic scrollTo also serves prompt/search navigation and stays native.
     // An absent/locked helper disables only this optional enhancement.
     const pointerName = "scrollScrollbarToPointer";
@@ -609,7 +613,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       const pointer: unknown = Reflect.get(tui, pointerName);
       if (typeof pointer === "function") scrollbarFollow.reason = "native scrollbar helper not writable";
       if (typeof pointer === "function" && Object.isExtensible(tui)
-        && (!descriptor || descriptor.configurable && descriptor.writable !== false)) {
+        && (!descriptor || descriptor.configurable && descriptor.writable)) {
         const pointerWrapper = function (this: object, ...args: unknown[]) {
           const result = pointer.apply(this, args);
           if (navigationActive && args[0] === scroll
@@ -622,19 +626,16 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
         scrollbarFollow.installed = true;
         scrollbarFollow.reason = "installed";
         restorePointer = () => {
-          if (Reflect.get(tui, pointerName) !== pointerWrapper) return;
-          if (descriptor) Object.defineProperty(tui, pointerName, descriptor);
-          else Reflect.deleteProperty(tui, pointerName);
+          restoreMethod(tui, pointerName, pointerWrapper, descriptor);
         };
       }
     } catch { scrollbarFollow.reason = "native scrollbar bridge unavailable"; }
-    const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
     const updateLayout = scroll.updateLayout;
     const commitLayout: Scroll["updateLayout"] = function (this: Scroll, ...args) {
       updateLayout.apply(this, args);
-      window.commitScroll();
+      if (navigationActive) window.commitScroll();
     };
-    scroll.updateLayout = commitLayout;
+    Object.defineProperty(scroll, "updateLayout", { ...layoutDescriptor, value: commitLayout, writable: true, configurable: true });
     const removeInput = tui.addInputListener?.((data) => {
       if (host.matchesKey?.(data, "enter") && selected()) {
         tui.clearTextSelection?.(); tui.requestRender?.();
@@ -642,20 +643,19 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     });
     const wheel = scroll.scrollBy;
     const wrapper = function (this: Scroll, delta: number): number {
-      if (!selected()) {
+      if (navigationActive && !selected()) {
         if (delta < 0 && this.scrollTop === 0 && window.page("older")) { tui.requestRender?.(); return 0; }
         if (delta > 0 && this.scrollTop >= this.contentHeight - this.viewportHeight && window.page("newer")) { tui.requestRender?.(); return 0; }
       }
       return wheel.call(this, delta);
     };
-    scroll.child = window as unknown as Component; scroll.children = [scroll.child]; scroll.scrollBy = wrapper;
-    installed = { tui, scroll, source, window, scrollbarFollow, wheel, wrapper, restoreNavigation: () => {
+    scroll.child = window as unknown as Component; scroll.children = [scroll.child];
+    Object.defineProperty(scroll, "scrollBy", { ...wheelDescriptor, value: wrapper, writable: true, configurable: true });
+    installed = { tui, scroll, source, window, scrollbarFollow, restoreNavigation: () => {
       navigationActive = false;
       restorePointer(); restorePrompt(); restoreStart(); restoreEnd();
-      if (scroll.updateLayout === commitLayout) {
-        if (layoutDescriptor) Object.defineProperty(scroll, "updateLayout", layoutDescriptor);
-        else Reflect.deleteProperty(scroll, "updateLayout");
-      }
+      restoreMethod(scroll, "updateLayout", commitLayout, layoutDescriptor);
+      restoreMethod(scroll, "scrollBy", wrapper, wheelDescriptor);
     }, removeInput }; reason = "installed";
   }
   return {

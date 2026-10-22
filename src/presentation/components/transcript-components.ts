@@ -113,8 +113,10 @@ export class CodexWriteCallComponent implements Component {
     const header = this.#input.headerText;
     const out: string[] = [header];
     const copyOut: CopyRow[] = [{ spans: [{ colStart: 0, colEnd: width, kind: "decoration" }], breakBefore: "hard" }];
-    // Live body: bounded tail; the body renderer owns its own physical-row
-    // budget, header width is independent.
+    // Live body: bounded tail. writePreview.rows bounds the WHOLE block, so the
+    // header rendered above deducts from the body budget (0 still shows the
+    // header and stage line only).
+    const maxRows = this.#input.maxRows;
     const body = renderWritePreview(this.#input.contentPrefix, {
       width: Math.max(1, Math.floor(width)),
       stage: this.#input.stage,
@@ -123,8 +125,7 @@ export class CodexWriteCallComponent implements Component {
       colorLevel: this.#input.colorLevel,
       layout: this.#input.layout,
       gutter: "  │ ",
-      headerRows: 1, // the header line above is ours; body budget is separate
-      maxRows: this.#input.maxRows, // config.writePreview.rows (0 = body off)
+      maxRows: maxRows === undefined ? undefined : Math.max(0, maxRows - 1), // config.writePreview.rows (0 = body off)
       copyOut,
     });
     for (const line of body) out.push(line);

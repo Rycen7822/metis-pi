@@ -57,9 +57,13 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
       history.dispose();
     } finally {
       if (previous) {
-        if (Reflect.get(previous.proto, "setLayoutRoot") === previous.wrapper) {
-          if (previous.descriptor) Object.defineProperty(previous.proto, "setLayoutRoot", previous.descriptor);
-          else Reflect.deleteProperty(previous.proto, "setLayoutRoot");
+        const current = Object.getOwnPropertyDescriptor(previous.proto, "setLayoutRoot");
+        if (current?.value === previous.wrapper) {
+          if (previous.descriptor)
+            Reflect.defineProperty(previous.proto, "setLayoutRoot", { ...current, value: previous.descriptor.value });
+          else if (current.configurable && current.writable && !current.enumerable)
+            Reflect.deleteProperty(previous.proto, "setLayoutRoot");
+          // A constrained inherited override stays inert rather than losing that constraint.
         }
         const root = innerRoot(previous.tui.layoutRoot);
         if (root) {
@@ -79,9 +83,10 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
       const proto = Object.getPrototypeOf(target);
       if (lease && lease.proto !== proto) dispose();
       if (!lease) {
+        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, "setLayoutRoot") : undefined;
+        if (descriptor && !descriptor.writable) { reason = "setLayoutRoot is not writable"; return false; }
         const original: unknown = proto?.setLayoutRoot;
         if (typeof original !== "function") { reason = "setLayoutRoot unavailable"; return false; }
-        const descriptor = Object.getOwnPropertyDescriptor(proto, "setLayoutRoot");
         const wrapper: Setter = function (component) {
           // Use the lease identity, not a shared boolean: reinstalling cannot
           // reactivate an older hook captured by a third-party wrapper.

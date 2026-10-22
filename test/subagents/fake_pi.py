@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic managed SDK transport simulator. No models, credentials, network or repository edits.
 
-It also stands in for Pi's own skill loader (get_commands returns the registry
-built by skill_registry() from PI_TEST_AMBIENT_SKILL_DIRS plus --skill paths) and
-for the shipped managed-surface extension: with PI_AGENTS_CHILD_BUILTINS set it
+It also stands in for the shipped managed-surface extension: with PI_AGENTS_CHILD_BUILTINS set it
 writes the same `metis-subagent-surface applied ...` stderr report the daemon gates
 a restricted launch on. PI_TEST_SURFACE='missing'|'mismatch'|'malformed' breaks
 that report so the daemon-side verification can be tested without real Pi."""
@@ -14,7 +12,6 @@ import contextlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -99,52 +96,6 @@ def read_bootstrap():
     return payload
 
 read_bootstrap()
-
-def skill_entry(skill_md: Path):
-    """Pi's rule (dist/core/skills.js): frontmatter `name`, else the parent dir
-    name; a skill without a non-empty description is not loaded at all."""
-    try: head=skill_md.read_text(encoding='utf-8',errors='replace')[:4096]
-    except OSError: return None
-    m=re.match(r'\ufeff?---\s*\n(.*?)\n---',head,re.DOTALL)
-    front=m.group(1) if m else ''
-    desc=re.search(r'^description:\s*(.+?)\s*$',front,re.MULTILINE)
-    if not desc or not desc.group(1).strip().strip('"\''): return None
-    hit=re.search(r'^name:\s*["\']?([^"\'\n]+?)["\']?\s*$',front,re.MULTILINE)
-    return hit.group(1).strip() if hit else skill_md.parent.name
-
-def skill_registry():
-    """Pi's loader order, verified against Pi 0.85.1: skills discovered from the
-    user's own Pi configuration register BEFORE CLI --skill paths, and a name
-    collision keeps the first registration. A Codex skill that duplicates a Pi
-    skill is therefore dropped by Pi itself.
-    PI_TEST_AMBIENT_SKILL_DIRS (os.pathsep separated) stands in for Pi's own
-    discovery: it is empty by default, so tests never read a real ~/.pi tree."""
-    registry = {}
-
-    def add(skill_md: Path):
-        if not skill_md.is_file():
-            return
-        name = skill_entry(skill_md)
-        if name:
-            registry.setdefault(name, str(skill_md.resolve()))
-
-    for root in (os.environ.get("PI_TEST_AMBIENT_SKILL_DIRS", "") or "").split(os.pathsep):
-        if not root:
-            continue
-        try:
-            entries = sorted(Path(root).iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            add(entry / "SKILL.md" if entry.is_dir() else entry)
-    for raw in a.skill or []:
-        entry = Path(raw)
-        add(entry / "SKILL.md" if entry.is_dir() else entry)
-    return registry
-
-
-SKILLS = skill_registry()
-
 
 def emit(e):
     print(json.dumps(e, ensure_ascii=False), flush=True)
@@ -325,8 +276,8 @@ async def run(raw_task, rid):
             "assistant", "", content=content, stopReason="length", usage={"output": 8, "reasoning": 8, "totalTokens": 8}
         )
     elif compact:
-        # Pi compacts by itself: overflow ends the run with willRetry, the
-        # transcript is replaced, then the retried run continues.
+        # SDK compaction boundaries are nonterminal; the managed task completes
+        # only after the retried run and its post-run work finish.
         msg(
             "assistant",
             "Context overflow; compacting before retry",
@@ -334,8 +285,9 @@ async def run(raw_task, rid):
             errorMessage="context_length_exceeded",
         )
         emit({"type": "agent_end", "messages": [], "willRetry": True})
-        emit({"type": "auto_compaction_start", "reason": "overflow"})
-        emit({"type": "auto_compaction_end", "aborted": False})
+        emit({"type": "compaction_start", "reason": "overflow"})
+        emit({"type": "compaction_end", "reason": "overflow", "aborted": False, "willRetry": True,
+              "result": {"summary": "Compacted context", "firstKeptEntryId": "fake-kept", "tokensBefore": 1000}})
         emit({"type": "agent_start"})
         msg("assistant", output, stopReason="stop", usage={"input": 100, "output": 10, "totalTokens": 110})
     elif retry:
@@ -418,7 +370,6 @@ async def main():
                 "sessionFile": str(path),
                 "sessionId": "fake-session",
                 "isStreaming": bool(current and not current.done()),
-                "pendingMessageCount": len(queue),
                 "model": {"id": "fake", "provider": "test"},
                 "env_probe": {
                     **{k: v for k, v in sorted(os.environ.items()) if k.startswith("PI_TEST_") and len(v) <= 256},
@@ -476,16 +427,6 @@ async def main():
             ui.clear()
             emit({"type": "managed_task_end", "runId": r.get("runId"), "cancelled": True})
             response(r, data={"runId": r.get("runId"), "taskExited": True})
-        elif kind == "get_commands":
-            response(
-                r,
-                data={
-                    "commands": [
-                        {"name": "skill:" + n, "source": "skill", "sourceInfo": {"path": p}}
-                        for n, p in sorted(SKILLS.items())
-                    ]
-                },
-            )
         elif kind == "extension_ui_response":
             f = ui.get(r["id"])
             if f and not f.done():

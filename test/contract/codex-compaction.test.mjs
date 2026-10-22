@@ -1494,8 +1494,9 @@ test("system deltas retain the original prompt and the effective tool loadout", 
   await h.session.compact();
   const body = h.bodies.at(-1);
   assert.match(body.instructions, /COMPACTION TEST/);
-  assert.ok(body.tools.some(tool => tool.name === "read"));
-  assert.equal(body.tools.some(tool => tool.name === "write"), false);
+  const tools = body.input.filter(item => item.type === "additional_tools").flatMap(item => item.tools);
+  assert.ok(tools.some(tool => tool.name === "read"));
+  assert.equal(tools.some(tool => tool.name === "write"), false);
 });
 
 for (const routeModel of [model, responsesModel]) test(`${routeModel.api}: a late covered edit cancels until explicit repair`, async t => {

@@ -3,13 +3,13 @@ import {
   calculateContextTokens,
   compact,
   estimateTokens,
-  getAgentDir,
   SettingsManager,
   type ExtensionAPI,
   type ExtensionContext,
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
+import { createCompactionOutputLimiter } from "./output-limit.ts";
 import { hasUnavailableNestedEvidence, isProtected } from "./protected.ts";
 import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
@@ -69,6 +69,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   let sessionId: string | undefined;
   let boundaryTokens: number | undefined;
   let compactionSignal: AbortSignal | undefined;
+  let outputLimiter: ReturnType<typeof createCompactionOutputLimiter> | undefined;
   let requestTokens: number | undefined;
   let localTokensSaved = 0;
   const enabled = () => config.value.enabled && config.value.opportunisticCompaction;
@@ -91,19 +92,17 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   ]);
   const chars = (ctx: ExtensionContext) => JSON.stringify(visible(ctx).messages).length;
   const estimatedTokens = (messages: any[]) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-  const summaryLimit = (reserveTokens: number, modelMaxTokens: number) => Math.max(0, Math.min(
-    Math.floor(0.8 * reserveTokens), modelMaxTokens > 0 ? modelMaxTokens : Infinity,
-    config.value.compactionSummaryMaxTokens > 0 ? config.value.compactionSummaryMaxTokens : Infinity));
+  const summaryLimit = (modelMaxTokens: number) => Math.min(
+    modelMaxTokens > 0 ? modelMaxTokens : Infinity,
+    config.value.compactionSummaryMaxTokens > 0 ? config.value.compactionSummaryMaxTokens : Infinity);
   function capacity(ctx: ExtensionContext, settings?: { enabled: boolean; reserveTokens: number }) {
     const window = ctx.model?.contextWindow;
     if (!window || !Number.isFinite(window) || window <= 0) return undefined;
     try {
       if (!settings) {
-        // The extension API exposes no live SettingsManager. Use Pi's own
-        // read-only resolver, including project trust and per-model overrides.
-        const manager = SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted?.() ?? false });
-        if (manager.drainErrors().length) return undefined;
-        settings = manager.getCompactionSettings(ctx.model);
+        // Resolve Pi's live effective settings with its own defaults/model overrides,
+        // without reopening global/project files or discarding in-memory overrides.
+        settings = SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(ctx.model);
       }
       const limit = window - settings.reserveTokens;
       return settings.enabled && limit > 0 ? { limit, buffer: Math.max(1024, limit * 0.05) } : undefined;
@@ -297,7 +296,12 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const before = JSON.stringify(request.messages).length;
       // Protect old summaries verbatim; never ask the model to summarize a summary again.
       const modelMessages = request.messages.filter((m) => !isDerived(m));
-      const summaryOutput = summaryLimit(p.settings.reserveTokens, ctx.model.maxTokens);
+      const summaryOutput = summaryLimit(ctx.model.maxTokens);
+      if (!Number.isFinite(summaryOutput)) {
+        try { ctx.ui.notify("OCC kept original context: model output limit is unknown; set an explicit summary token limit.", "warning"); }
+        catch { /* Diagnostics cannot authorize an unprotected fallback. */ }
+        return reject("unknown-output-limit");
+      }
       const upperAfter = protection.length + 4 * summaryOutput;
       metrics = {
         ...metrics,
@@ -399,6 +403,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   }
 
   function restore(ctx: ExtensionContext) {
+    outputLimiter?.release(); outputLimiter = undefined;
     lifecycle++;
     sessionId = ctx.sessionManager.getSessionId();
     const last = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === STATE).at(-1);
@@ -488,14 +493,16 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       return { cancel: true };
     }
     const limit = config.value.compactionSummaryMaxTokens;
-    if (limit > 0 && limit < Math.floor(0.8 * event.preparation.settings.reserveTokens)) {
-      // Pi has already selected the cut using its real reserve. Only generation
-      // reads this prepared copy now; leave persisted settings and native
-      // routing/auth/retry/split-turn handling with Pi. Its history cap is 80%
-      // of this reserve, and its turn-prefix cap is smaller (50%).
-      let reserveTokens = Math.ceil(limit / 0.8);
-      if (Math.floor(0.8 * reserveTokens) > limit) reserveTokens--;
-      event.preparation.settings = { ...event.preparation.settings, reserveTokens };
+    if (limit > 0) {
+      try {
+        outputLimiter ??= createCompactionOutputLimiter();
+        outputLimiter.limit(event.signal, limit);
+      }
+      catch (error) {
+        try { ctx.ui.notify(`Compaction kept original context: ${error instanceof Error ? error.message : String(error)}`, "warning"); }
+        catch { /* A closing UI must not make the runner fall through to an unlimited request. */ }
+        return { cancel: true };
+      }
     }
     return undefined;
   });
@@ -555,7 +562,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   ];
   return {
     restore,
-    shutdown(ctx: ExtensionContext) { lifecycle++; showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined; },
+    shutdown(ctx: ExtensionContext) {
+      outputLimiter?.release(); outputLimiter = undefined;
+      lifecycle++; showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined;
+    },
     enabled, deferLocal: decide, isRunning: () => running,
     nativeCapacity: (ctx: ExtensionContext) => capacity(ctx)?.limit,
     isCapacityWaiting: () => enabled() && !!state.capacityWaiting,

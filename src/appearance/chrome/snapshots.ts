@@ -2,8 +2,7 @@
 // render, assembled from the data bridge (hostData), the session ledger, the
 // interaction metrics, the output-speed tracker and the git-changes tracker.
 // Owned here so activate() stays wiring-only; every builder
-// is a pure read of the deps below (config via getConfig: it is reassigned on
-// config reload).
+// is a pure read of the deps below.
 
 import type { AppearanceConfig } from "../config.ts";
 import type { GitChangesTracker } from "../git-changes.ts";

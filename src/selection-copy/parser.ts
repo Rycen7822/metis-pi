@@ -1,13 +1,11 @@
-// Markdown lexer configured EXACTLY like pi-tui's markdown.js (host 0.85.1):
-// marked 18.0.5 + strict strikethrough tokenizer + the two latex extensions.
-// Narrow adaptation from @earendil-works/pi-tui dist/components/markdown.js
-// (MIT): StrictStrikethroughTokenizer, tokenizeInlineLatex, tokenizeBlockLatex
-// and trimPartialClosingFences are reproduced so the copy provenance adapter
-// sees the same token stream the host renderer lexes. The adapter's output is
-// diffed against the host's real render rows, so any host drift here degrades
-// provenance instead of corrupting copies.
+// Fallback lexer aligned with Pi 1.4.0: marked 18.0.11 +
+// marked-cjk-friendly 0.1.2 emStrong, strict strikethrough and latex extensions.
+// Narrow adaptation of pi-tui src/components/markdown.ts (MIT). Keep native
+// tokens authoritative; fallback rows are checked against the actual render so
+// drift degrades provenance instead of corrupting copies.
 
 import { Marked, Tokenizer } from "marked";
+import markedCjkFriendly from "marked-cjk-friendly";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -104,21 +102,41 @@ interface LatexBlockToken {
   pending?: boolean;
 }
 
+const TABLE_DELIMITER_ROW_REGEX = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+
+// A GFM table starts with a header row followed by a delimiter row such as "|---|---|" or "| --- |".
+// The header needs a "|" only when the delimiter has none: a pipe-free delimiter without a pipe in the
+// header is a thematic break, not a table.
+function containsTableStart(source: string): boolean {
+  const lines = source.split("\n");
+  for (let index = 0; index < lines.length - 1; index++) {
+    const delimiterRow = lines[index + 1];
+    if ((delimiterRow.includes("|") || lines[index].includes("|")) && TABLE_DELIMITER_ROW_REGEX.test(delimiterRow)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function tokenizeBlockLatex(source: string): LatexBlockToken | undefined {
+  // Display math never spans a table. Without this check, an unclosed "$$" or "\[" pairs with a later
+  // opener or stays pending, swallowing the table. See https://github.com/earendil-works/pi/issues/11159.
   const dollarMatch = /^ {0,3}\$\$[ \t]*(?:\n)?([\s\S]*?)\$\$[ \t]*(?:\n|$)/.exec(source);
-  if (dollarMatch?.[1]) {
+  if (dollarMatch?.[1] && !containsTableStart(dollarMatch[1])) {
     return { type: "latexBlock", raw: dollarMatch[0], text: dollarMatch[1].trim() };
   }
+
   const bracketMatch = /^ {0,3}\\\[[ \t]*(?:\n)?([\s\S]*?)\\\][ \t]*(?:\n|$)/.exec(source);
-  if (bracketMatch?.[1]) {
+  if (bracketMatch?.[1] && !containsTableStart(bracketMatch[1])) {
     return { type: "latexBlock", raw: bracketMatch[0], text: bracketMatch[1].trim() };
   }
+
   const pendingBracket = /^ {0,3}\\\[[ \t]*(?:\n)?([\s\S]*)$/.exec(source);
-  if (pendingBracket) {
+  if (pendingBracket?.[1] && !containsTableStart(pendingBracket[1])) {
     return { type: "latexBlock", raw: pendingBracket[0], text: pendingBracket[1], pending: true };
   }
   const pendingDollar = /^ {0,3}\$\$[ \t]*(?:\n)?([\s\S]*)$/.exec(source);
-  if (pendingDollar?.[1] && looksLikePendingDollarMath(pendingDollar[1])) {
+  if (pendingDollar?.[1] && looksLikePendingDollarMath(pendingDollar[1]) && !containsTableStart(pendingDollar[1])) {
     return { type: "latexBlock", raw: pendingDollar[0], text: pendingDollar[1], pending: true };
   }
   return undefined;
@@ -138,7 +156,7 @@ const LATEX_MARKDOWN_EXTENSIONS = [
     name: "latex",
     level: "inline" as const,
     start(source: string): number | undefined {
-      const indices = [source.indexOf("$"), source.indexOf("\\("), source.indexOf("\\]")].filter((index) => index >= 0);
+      const indices = [source.indexOf("$"), source.indexOf("\\("), source.indexOf("\\[")].filter((index) => index >= 0);
       return indices.length > 0 ? Math.min(...indices) : undefined;
     },
     tokenizer: tokenizeInlineLatex,
@@ -193,7 +211,10 @@ export interface CopyLexer {
 export function createCopyLexer(): CopyLexer {
   const parser = new Marked();
   parser.setOptions({ tokenizer: new StrictStrikethroughTokenizer() as never });
-  parser.use({ extensions: [...LATEX_MARKDOWN_EXTENSIONS] as never });
+  parser.use({
+    tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
+    extensions: [...LATEX_MARKDOWN_EXTENSIONS] as never,
+  });
   return {
     lexer(text: string): MarkdownToken[] {
       const tokens = parser.lexer(text) as unknown as MarkdownToken[];

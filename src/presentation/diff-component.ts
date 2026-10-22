@@ -3,7 +3,7 @@
 import { renderDiffLines } from "./diff.ts";
 import type { DiffRow } from "../file-changes/diff.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
-import { languageForPath } from "./tool-names.ts";
+import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import type { DiffLayoutOps } from "./contracts.ts";
 import type { ColorLevel } from "./palette.ts";
 
@@ -25,7 +25,7 @@ export function renderCodexDiffComponent(
     width,
     layout,
     colorLevel: input.colorLevel,
-    language: languageForPath(input.filePath),
+    language: getLanguageFromPath(input.filePath),
     paint: input.paint,
     copyOut,
   });

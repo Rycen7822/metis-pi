@@ -14,16 +14,6 @@ export interface Segment {
 
 export const SEG_SEP: Segment = { text: " · ", tone: "dim" };
 
-export function joined(parts: Array<Segment | undefined>): Segment[] {
-  const list = parts.filter((p): p is Segment => p !== undefined && p.text.length > 0);
-  const out: Segment[] = [];
-  list.forEach((part, i) => {
-    if (i > 0) out.push(SEG_SEP);
-    out.push(part);
-  });
-  return out;
-}
-
 export function rowWidth(row: Segment[]): number {
   let w = 0;
   for (const seg of row) w += cellWidth(seg.text);

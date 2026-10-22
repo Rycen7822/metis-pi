@@ -103,7 +103,8 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
         if (!childRows) childRows = childRowsOf(child.component, contentWidth);
         if (!childRows || childRows.length !== child.height) return rows;
         const product = productFor(childRows);
-        childProducts[c] = product;
+        // A shared component may have published another occurrence at a different width.
+        childProducts[c] = product?.width === contentWidth ? product : undefined;
         if (product) anyProduct = true;
       }
       if (!anyProduct) return rows;

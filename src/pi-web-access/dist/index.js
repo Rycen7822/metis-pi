@@ -55,6 +55,20 @@ var init_media_errors = __esm({
   }
 });
 
+// src/pi-web-access/hostname.ts
+import { isIP } from "node:net";
+function normalizeHostname(hostname2) {
+  return hostname2.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+}
+function isLoopbackHostname(hostname2) {
+  const normalized = normalizeHostname(hostname2);
+  return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
+}
+var init_hostname = __esm({
+  "src/pi-web-access/hostname.ts"() {
+  }
+});
+
 // src/pi-web-access/proxy-transport.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
@@ -122,15 +136,15 @@ function noProxyEntryMatches(hostname2, port, entry) {
     }
   }
   if (entryPort !== void 0 && entryPort !== port) return false;
-  host = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  host = normalizeHostname(host);
   if (!host) return false;
   if (hostname2 === host) return true;
   const suffix = host.startsWith("*.") ? host.slice(1) : host.startsWith(".") ? host : `.${host}`;
   return hostname2.endsWith(suffix);
 }
 function isProxyBypassedUrl(url) {
-  const hostname2 = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (hostname2 === "localhost" || hostname2.endsWith(".localhost") || hostname2 === "127.0.0.1" || hostname2 === "::1") return true;
+  const hostname2 = normalizeHostname(url.hostname);
+  if (isLoopbackHostname(hostname2) || hostname2.endsWith(".localhost")) return true;
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   const noProxy = process.env.NO_PROXY || process.env.no_proxy;
   return Boolean(noProxy && noProxy.split(",").some((entry) => noProxyEntryMatches(hostname2, port, entry)));
@@ -391,6 +405,7 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
 var proxyStorage, CurlTransportError;
 var init_proxy_transport = __esm({
   "src/pi-web-access/proxy-transport.ts"() {
+    init_hostname();
     proxyStorage = new AsyncLocalStorage();
     CurlTransportError = class extends Error {
     };
@@ -398,7 +413,6 @@ var init_proxy_transport = __esm({
 });
 
 // src/pi-web-access/utils.ts
-import { isIP } from "node:net";
 import { join as join2 } from "node:path";
 import { metisConfigPath } from "../../configuration/store.ts";
 import { readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../configuration/web-access.ts";
@@ -453,10 +467,6 @@ function normalizeSearchHeaders(value) {
     headers[name] = headerValue.trim();
   }
   return headers;
-}
-function isLoopbackHostname(hostnameValue) {
-  const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
 }
 function resolveApiBaseUrl(options) {
   const fromEnvironment = options.environmentValue !== void 0;
@@ -521,6 +531,7 @@ var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, GOOGLE_R
 var init_utils = __esm({
   "src/pi-web-access/utils.ts"() {
     init_proxy_transport();
+    init_hostname();
     API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
     MAX_API_REDIRECTS = 5;
@@ -4878,9 +4889,6 @@ async function fetchRemoteUrl(url, init = {}, options = {}) {
   }
   throw new Error(`Too many redirects fetching ${resolved.url.toString()}`);
 }
-function normalizeHostname(hostname2) {
-  return hostname2.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-}
 function assertDomainPolicy(hostname2, policy) {
   if (!policy) return;
   if (policy.deny.some((entry) => domainMatches(hostname2, entry))) {
@@ -5046,6 +5054,7 @@ var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, WEB_SEARCH_
 var init_ssrf_protection = __esm({
   "src/pi-web-access/ssrf-protection.ts"() {
     init_utils();
+    init_hostname();
     init_proxy_transport();
     DEFAULT_MAX_REDIRECTS = 5;
     REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
@@ -5348,6 +5357,7 @@ var CONFIG_PATH14, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10,
 var init_firecrawl = __esm({
   "src/pi-web-access/firecrawl.ts"() {
     init_utils();
+    init_hostname();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
@@ -5814,7 +5824,7 @@ function assertAuthFetchUrl(profile, rawUrl) {
     throw new Error(`Authenticated fetch requires an HTTPS URL: ${message}`);
   }
   if (url.protocol !== "https:") throw new Error("Authenticated fetch requires an HTTPS URL");
-  const hostname2 = normalizeHostname2(url.hostname);
+  const hostname2 = normalizeHostname(url.hostname);
   if (!profile.hosts.some((host) => hostMatches(hostname2, host))) {
     throw new Error(`URL host ${hostname2} is not allowed by authFetch profile ${profile.name}`);
   }
@@ -5873,7 +5883,7 @@ function parseHosts(value, label) {
   return [...new Set(hosts)];
 }
 function parseHost(value, label) {
-  const host = normalizeHostname2(value.trim());
+  const host = normalizeHostname(value.trim());
   if (!host || host.startsWith(".") || host.endsWith(".") || /\s|[\\/?:#@*]/.test(host)) {
     throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} contains an invalid hostname: ${JSON.stringify(value)}`);
   }
@@ -5891,9 +5901,6 @@ function parseChromeProfile(value, label) {
   }
   return normalized;
 }
-function normalizeHostname2(hostname2) {
-  return hostname2.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-}
 function hostMatches(hostname2, allowedHost) {
   return hostname2 === allowedHost || hostname2.endsWith(`.${allowedHost}`);
 }
@@ -5901,6 +5908,7 @@ var WEB_SEARCH_CONFIG_PATH2, AUTH_PROFILE_NAME_PATTERN;
 var init_auth_fetch = __esm({
   "src/pi-web-access/auth-fetch.ts"() {
     init_utils();
+    init_hostname();
     WEB_SEARCH_CONFIG_PATH2 = getWebAccessConfigPath();
     AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
   }
@@ -8529,6 +8537,7 @@ var CONFIG_PATH33, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
   "src/pi-web-access/crawl4ai.ts"() {
     init_utils();
+    init_hostname();
     init_activity();
     init_credential_source();
     init_ssrf_protection();

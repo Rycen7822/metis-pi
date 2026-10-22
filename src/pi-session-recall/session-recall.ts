@@ -35,7 +35,7 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
 import { createRecallRequest } from "./context.ts";
@@ -62,9 +62,13 @@ function resolveQueryModel(ctx: ExtensionContext): Model<Api> | undefined {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Get the sessions root directory */
-function getSessionsDir(): string {
-	return join(getAgentDir(), "sessions");
+const encodeProjectPath = (path: string) => path.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
+
+/** Preserve the native default tree; a custom session store is authoritative. */
+function getSessionsDir(ctx: ExtensionContext): string {
+	const root = resolve(getAgentDir(), "sessions"), current = ctx.sessionManager.getSessionDir();
+	const defaultDir = join(root, `--${encodeProjectPath(resolve(ctx.sessionManager.getCwd()))}--`);
+	return current && current !== defaultDir ? current : root;
 }
 
 /**
@@ -79,16 +83,14 @@ function getSessionsDir(): string {
 function projectFromPath(sessionPath: string): string {
 	// Match the encoded directory name — handle both / and \ separators
 	const match = sessionPath.match(/sessions[/\\](--.*?--)[/\\]/);
-	if (!match || !match[1]) return "~";
+	if (!match || !match[1]) return "unknown project";
 
 	// Decode: strip leading/trailing --, replace internal - with /
 	let encoded = match[1].slice(2, -2); // remove -- from both ends
 
 	// Encode homedir with the same scheme session-manager uses,
 	// so it works on both Unix (/home/can) and Windows (C:\Users\Pc)
-	const homeEncoded = homedir()
-		.replace(/^[/\\]/, "")
-		.replace(/[/\\:]/g, "-");
+	const homeEncoded = encodeProjectPath(homedir());
 
 	if (encoded.startsWith(homeEncoded + "-")) {
 		encoded = encoded.slice(homeEncoded.length + 1);
@@ -162,23 +164,27 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			"Good examples: `libc++abi`, `Cannot find module '@sinclair/typebox'`, `Blender VAT bake`. " +
 			"Bad example: `build ci c lib dependency ghostty` because that searches for one exact phrase, not separate keywords. " +
 			"Do not combine independent keywords into one search string. If you need multiple unrelated terms, call session_search multiple times. " +
+			`Returns up to ${MAX_SEARCH_RESULTS} readable results and discloses omitted matches; refine the query if limited. ` +
 			`After finding a likely session, use ${queryName} for semantic questions.`,
 		renderResult: (result, options, theme) => {
 			const container = new Container();
 			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
-			const details = result.details as { matchCount?: number; query?: string; error?: boolean } | undefined;
+			const details = result.details as { matchCount?: number; totalMatches?: number; query?: string; error?: boolean } | undefined;
 
 			if (details?.error || !details?.matchCount) {
 				container.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
 				return container;
 			}
 
-			const summary = `${details.matchCount} session${details.matchCount > 1 ? "s" : ""} matching "${details.query}"`;
+			const total = details.totalMatches ?? details.matchCount;
+			const count = total > details.matchCount ? `Showing ${details.matchCount} of ${total} sessions` :
+				`${details.matchCount} session${details.matchCount > 1 ? "s" : ""}`;
+			const summary = `${count} matching "${details.query}"`;
 			container.addChild(new Text(theme.fg("toolOutput", summary), 0, 0));
 
 			if (options.expanded) {
 				container.addChild(new Spacer(1));
-				const body = text.replace(/^Found \d+ sessions? matching "[^"]*":\n\n/, "");
+				const body = text.replace(/^[^\n]*\n\n/, "");
 				container.addChild(
 					new Markdown(body, 0, 0, getMarkdownTheme(), {
 						color: (text: string) => theme.fg("toolOutput", text),
@@ -196,9 +202,9 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			}),
 		}),
 
-		async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const { query } = params;
-			const sessionsDir = getSessionsDir();
+			const sessionsDir = getSessionsDir(ctx);
 
 			const errorResult = (text: string) => ({
 				content: [{ type: "text" as const, text }],
@@ -223,7 +229,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 									"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
 							},
 						],
-						details: { matchCount: 0 },
+						details: { matchCount: 0, totalMatches: 0, truncated: false, query },
 					};
 				}
 
@@ -259,27 +265,30 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 					);
 				}
 
+				const details = { matchCount: results.length, totalMatches: allMatches.length,
+					truncated: allMatches.length > fileMatches.length, query };
 				if (results.length === 0) {
 					return {
 						content: [
 							{
 								type: "text" as const,
 								text:
-									`No readable matches found for "${query}".\n\n` +
+									`No readable matches in the first ${fileMatches.length} of ${allMatches.length} matching session files for "${query}".\n\n` +
 									"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
 							},
 						],
-						details: { matchCount: 0 },
+						details,
 					};
 				}
 
-				const output =
-					`Found ${results.length} session${results.length > 1 ? "s" : ""} matching "${query}":\n\n` +
+				const count = results.length < allMatches.length ? `Showing ${results.length} of ${allMatches.length} sessions` :
+					`Found ${results.length} session${results.length > 1 ? "s" : ""}`;
+				const output = `${count} matching "${query}"${details.truncated ? " (limited; refine the query)" : ""}:\n\n` +
 					results.join("\n\n---\n\n");
 
 				return {
 					content: [{ type: "text" as const, text: output }],
-					details: { matchCount: results.length, query },
+					details,
 				};
 			} catch (error) {
 				if (signal?.aborted) return { content: [{ type: "text" as const, text: "Search was cancelled." }], details: { cancelled: true } };
