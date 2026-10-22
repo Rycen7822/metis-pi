@@ -71,6 +71,38 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("conversation status shows each agent's resolved model and thinking before its cwd", async t => {
+  const settings = {
+    reader: {
+      resolved_model: { provider: "opendesign", id: "deepseek-v4.1-flash" },
+      thinking: "max", cwd: "/home/xu/project/harness/metis-pi",
+    },
+    writer: {
+      resolved_model: { provider: "openai", id: "gpt-4.1" },
+      thinking: "off", cwd: "/tmp/writer",
+    },
+    tester: {
+      resolved_model: { provider: "opendesign", id: "deepseek-v4.1-flash" },
+      cwd: "/tmp/tester",
+    },
+  };
+  const { viewer, rows } = popup(t, {
+    inspect: async agentId => inspection(agentId, [], {
+      agent: { name: agentId, state: "running", ...settings[agentId] },
+    }),
+  });
+  const expected = [
+    "opendesign/deepseek-v4.1-flash max · /home/xu/project/harness/metis-pi",
+    "openai/gpt-4.1 off · /tmp/writer",
+    "opendesign/deepseek-v4.1-flash · /tmp/tester",
+  ];
+  for (const [index, status] of expected.entries()) {
+    if (index) viewer.handleInput("\u001b[C");
+    await nextTurn();
+    assert.ok(rows(120).some(row => row.includes(status)), status);
+  }
+});
+
 test("conversation popup keeps native click folds through refresh and scrolling", async t => {
   const messages = [
     {

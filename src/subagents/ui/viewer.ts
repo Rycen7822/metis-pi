@@ -18,6 +18,7 @@ export interface AgentInspection {
     state: string;
     cwd?: string;
     resolved_model?: { provider: string; id: string };
+    thinking?: string;
     active_tools?: string[];
   };
   messages: Array<{ id: string; message: ViewerMessage }>;
@@ -370,7 +371,8 @@ export class SubagentViewer implements Component {
     if (width <= 0 || !this.syncAgents()) { this.scrollbarGrab = undefined; return []; }
     const view = this.view;
     const agent = view.snapshot?.agent, model = agent?.resolved_model;
-    const content = [this.theme.fg("muted", clean(`${model ? `${model.provider}/${model.id} · ` : ""}${agent?.cwd ?? ""}`))];
+    const modelPrefix = model ? `${model.provider}/${model.id}${agent?.thinking ? ` ${agent.thinking}` : ""} · ` : "";
+    const content = [this.theme.fg("muted", clean(`${modelPrefix}${agent?.cwd ?? ""}`))];
     const notice = view.error || clean(view.snapshot?.run?.error ?? "") || (view.truncated ? "Some history omitted" : "");
     if (notice) content.push(this.theme.fg(view.error || view.snapshot?.run?.error ? "error" : "dim", notice));
     const bodyStart = content.length, frameRows = width < 5 ? 1 : 2;
