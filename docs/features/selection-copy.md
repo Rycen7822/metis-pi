@@ -1,6 +1,6 @@
 # 逻辑选区复制
 
-fullscreen 选区按 Ctrl+C 复制对应逻辑文本：合并软折行，保留真实换行、缩进和选中的语义前缀。开关见 [配置](../configuration.md)。
+fullscreen 选区按 Ctrl+C 复制对应逻辑文本：合并软折行，保留真实换行、缩进和选中的语义前缀。`selectionCopy.enabled` 控制此能力，`selectionCopy.ctrlC` 控制按键接管，见 [配置](../configuration.md)。
 
 | 情况 | 行为 |
 | --- | --- |
@@ -23,21 +23,18 @@ fullscreen 选区按 Ctrl+C 复制对应逻辑文本：合并软折行，保留�
 
 映射按渲染数组身份保存在 WeakMap，绑定已提交帧；工具外壳读取实际渲染文字，不额外 render。resize 无法安全重投影时保守回退。
 
-Markdown 镜像在可核对时复用本帧宿主 token 和已高亮的代码逻辑行，避免再次解析、高亮；
-不修改主题或 highlighter，仍逐行核对宿主显示并保留流式节流与失败回退。
-观察数据使用弱引用，不额外保留旧 token 或整块历史渲染数组。
+Markdown 镜像在可核对时复用本帧宿主 token 和已高亮的代码逻辑行，避免再次解析、高亮；不修改主题或 highlighter，仍逐行核对宿主显示并保留流式节流与失败回退。观察数据使用弱引用，不额外保留旧 token 或整块历史渲染数组。
 
-宿主同步检查选区并执行复制时，同一已提交帧、源行及完整选区端点只序列化一次；诊断中的调用次数仍记录每次查询。
-复用在当前同步调用结束后的微任务阶段清除；选区、帧或取列函数变化立即重新计算，失败不缓存，不跨后续输入或排队复制保留旧文本。
+宿主同步检查选区并执行复制时，同一已提交帧、源行及完整选区端点只序列化一次；诊断中的调用次数仍记录每次查询。复用在当前同步调用结束后的微任务阶段清除；选区、帧或取列函数变化立即重新计算，失败不缓存。
 
 `/codex-ui` 报告 `exact` / `mixed` / `native-fallback`、镜像降级与最近失败。serializer 安装在当前 TuiAltScreen 实例，覆盖 pi-copy-soft-wrap 的原型启发式包装；后装实例包装仍可能冲突，`other-wrapper` 报告已检测来源。
 
 ## 剪贴板
 
-本地 WSL 缺少 Linux 剪贴板工具时预热一个 Windows 写入进程，经管道传输，收到写入确认才报成功。Ctrl+C 与宿主鼠标复制共用该路径，保留 Unicode、缩进、LF/CRLF 和字面 BOM，不依赖 OSC 52 或 clip.exe。
+本地 WSL（非 Windows Terminal、非 SSH/MOSH 远程）默认预热一个 Windows 写入进程，经管道传输，收到写入确认才报成功。Ctrl+C 与宿主鼠标复制共用该路径，保留 Unicode、缩进、LF/CRLF 和字面 BOM，不依赖 OSC 52 或 clip.exe。
 
-Windows Terminal 快速通道、远程和非 WSL 环境沿用宿主路径。启动失败、退出或超时可回退；首次复制仍可能等待预热。关闭、重载和卸载取消请求、结束进程，不启动迟到回退。
+Windows Terminal、远程和非 WSL 环境沿用宿主路径。启动失败、退出或超时可回退；首次复制仍可能等待预热。关闭、重载和卸载取消请求、结束进程，不启动迟到回退。
 
-设置 `PI_CLIPBOARD_OSC52=1` 时交给 Pi 原生复制路径处理，跳过 WSL 快速写入，以遵循宿主的强制 OSC52 设置。
+设置 `PI_CLIPBOARD_OSC52=1` 时交给 Pi 原生复制路径处理，跳过 WSL 快速写入。
 
 `src/selection-copy/` 持有映射、提取、传输与清理。严格 PTY 验证实际复制回读，`scripts/copy-perf.mjs` 仅测渲染/提取成本。

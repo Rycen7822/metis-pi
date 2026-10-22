@@ -2,69 +2,57 @@
 
 ## 环境与常用命令
 
-Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 1.4.0。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
-子代理开发与验证还需要 Python 3.11+；测试依赖（schema 校验、pytest 和 pytest-xdist）使用 `python3 -m pip install -r test/subagents/requirements.txt` 安装，运行核心只使用 Python 标准库。
+开发依赖与锁文件固定 Pi 1.4.0；Node 和原生资产要求见[兼容性](compatibility.md)。使用完整 checkout 与根工具链，不在 `src/` 内另装依赖。
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
 npm run prepare:subagents
 ```
 
-根目录 `tsconfig.json` 保留为编辑器和扩展入口检查的默认配置；共享规则与 core、execution、condense、test 检查配置集中在 `config/typescript/`，结构化提问的 Vitest 配置位于 `config/vitest/ask.config.ts`。Web/Recall 的类型配置仍在各自模块目录，继承同一份基础规则。
-
-依赖、工具链和锁文件只由根项目维护，不在 `src` 子目录安装依赖。`scripts/build-web-access.mjs` 从根 manifest 读取外部依赖并构建 Web 的两个 bundle；Web 内的私有 `package.json` 仅保留 MCP 身份、来源版本和 ESM 模式，不承载另一套开发依赖。
+Python 子代理运行核心使用标准库；测试另需 [requirements.txt](https://github.com/Rycen7822/metis-pi/blob/main/test/subagents/requirements.txt) 中的 pytest 9、xdist 和 schema 校验依赖。
 
 | 命令 | 范围 |
 | --- | --- |
-| `npm run check` | core、execution、condense、Web/Recall 及全部扩展入口类型检查，不生成 JS；各配置的增量缓存位于 `.work/tsc/`。 |
-| `npm run check:test` / `npm run check:condense` | 测试 TS / condense 类型。 |
-| `npm test` / `npm run test:fast` | 全部 Node 测试 / core 规则与渲染原语。 |
-| `npm run test:host` / `test:protocol` | 真实宿主接线及包内容 / 请求、回放、压缩和历史编辑。 |
-| `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
-| `npm run test:lsp` / `test:ask-user-question` | LSP 会话与工具接线 / 结构化提问集成。 |
-| `npm run test:chrome` | 跨层界面、布局和复制测试。 |
-| `npm run build:plugins` / `test:plugins` | 从根工具链构建 Web 扩展与 MCP CLI / 运行共置的 Web 测试，保留模块 cwd 和隔离预载。 |
-| `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为；4 个进程按文件分配测试。 |
-| `npm run verify` | 项目与测试类型 + 全部测试，包含实际 pack 文件清单校验。 |
+| `npm run check` / `check:test` | 项目 / 测试 TS 类型，增量缓存位于 `.work/tsc/`。 |
+| `npm test` / `test:fast` | `test/` 下 Node 测试及 Ask Vitest / core 规则与渲染原语。 |
+| `npm run test:host` / `test:protocol` | 宿主接线与包内容 / 请求、回放、压缩和历史编辑。 |
+| `npm run test:io` / `test:resource` | 文件、Git、归档 / 进程、锁、计时器、缓存和传输。 |
+| `npm run test:lsp` / `test:ask-user-question` / `test:chrome` | LSP / 结构化提问 / 跨层界面、布局和复制。 |
+| `npm run build:plugins` / `test:plugins` | Web bundle 与 MCP CLI / Web 共置测试。 |
+| `npm run test:subagents` | Python Runtime、IPC、账本与继承；4 个 worker 按文件分配。 |
+| `npm run verify` | 项目与测试类型、全部测试和实际 pack 文件清单。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
-| `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`docs/transcript.ansi`、`docs/transcript.txt`，均不进 Git。 |
-| `node scripts/copy-perf.mjs` | 测量渲染/提取成本，不测系统剪贴板延迟。 |
+| `npm run preview` | 生产渲染器生成 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，不进 Git。 |
+| `node scripts/copy-perf.mjs` | 渲染与文本提取成本，不测系统剪贴板延迟。 |
 
-先运行改动附近的已有测试；跨模块变更运行 verify，终端显示/交互变更再运行严格 PTY。文档变更核对事实、链接和实际包内容；验证结果随当次任务或提交报告，并明确未覆盖边界。
+先跑改动附近的已有检查；跨模块变化运行 verify，终端交互变化增加 PTY。文档核对当前事实、链接和交付内容，不因文档改写补跑实现全套。
 
-子代理测试需要 pytest 9 的原生 `unittest.subTest` 支持。排查顺序相关问题时，用 `npm run test:subagents -- -n 0` 串行执行同一测试集合。
+## 检查与 CI
 
-## 测试边界
-
-core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接线与恢复；protocol 核对最终请求和来源；IO 验证持久化与损坏恢复；resource 观察真实回调和释放；PTY 验证可见帧、输入、手势和复制。
-
-复用现有测试，新增断言须对应具体失败。夹具只准备输入，不能复制业务算法或从结果反推 expected。使用者清理 timer、临时目录、进程和原型包装，网络钩子显式恢复。禁止在正式测试中扫描源码证明旧功能删除；一次性清理核查放 `.work/`。并行重构按明确文件与职责分工，保留配置、协议、持久化及资源清理语义；单次委派说明和验收记录不常驻仓库根目录。
-
-严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
-
-CI 在 Pi 1.4.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿主包及运行时 `pi-mcp` 的版本一致；另一个 job 从自有源码重建 Rust 搜索引擎、校验提交的二进制一致并运行继承的单元检查。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
-
-PR、main/tag push 和手动运行保留完整验证；功能分支只有在查到同仓库、同分支、同 SHA 的开放且可合并 PR 时才省去重复 push 全测，状态未知或查询失败仍全跑。同一 PR 的新提交取消旧运行，主干、tag 和手动运行使用独立并发组。
-
-CI 的 verify 在单个 job 内使用 Node 编译缓存，测试的进程和配置隔离保持不变。包内容由始终执行的 `test/package.test.mjs` 实际调用 `npm pack --dry-run --json --ignore-scripts` 核对，verify 末尾不再重复打包。
+- core 核对规则与渲染原语，contract 使用真实 Pi API，protocol 检查最终请求与历史，IO/resource 检查持久化、损坏恢复和资源释放。
+- 夹具只准备输入，预期来自独立合同；及时清理临时目录、进程、计时器、网络钩子和包装。一次性诊断和验收放 `.work/`。
+- pytest 使用原生 `unittest.subTest` 支持；`npm run test:subagents -- -n 0` 可串行排查顺序依赖。
+- 严格 PTY 需要 Pi、tmux，E1 还需 Git；journey 使用隔离目录、离线 provider 和剪贴板 sink。`-- --journey=E3` 可单跑，缺依赖或未完成操作算失败。
 
 | Journey | 验证 |
 | --- | --- |
-| E1 / E2 | Git footer / bash 执行及后续 provider 请求。 |
-| E3 / E4 | 思考手势 / 精确复制、草稿和实际提交。 |
-| E6 | 多 skill 补全、输入 payload 和折叠。 |
+| E1 / E2 | Git footer / bash 执行和后续请求。 |
+| E3 / E4 | 思考手势 / 复制、草稿和实际提交。 |
+| E6 | 多 skill 补全、payload 和折叠。 |
 
-可用 `npm run test:pty:strict -- --journey=E3` 单跑。缺依赖、跳过滚轮、帧超时或意外 provider 请求均失败；不以旧 scrollback 证明当前显示成功。
+CI 在 Pi 1.4.0 基线运行 verify 与 PTY；独立 job 重建自有 Rust 搜索引擎、核对二进制并运行单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
 
-## 源码与发布
+CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由 `test/package.test.mjs` 调用 `npm pack --dry-run --json --ignore-scripts`，不把未实际运行的安装当验证。
 
-`src/appearance/` 拥有主会话显示装配、状态和生命周期；`presentation/` 提供主转录与子代理共用的呈现能力，`file-changes/` 提供执行与显示共用的文件证据。Skills、Goal、Dynamic Agents 和 Remote Compaction 各自形成完整功能模块；`src/skills/` 是实现，根目录 `skills/` 才是 Pi 公共技能交付。`configuration/store.ts` 只管全局存储，Web 与 Condense 保留各自字段政策。跨扩展协议与入口身份不承载功能权限策略。
+## 源码与交付
 
-运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。condense 由根项目统一维护与检查；来源归属见 [NOTICE](../NOTICE)，许可见 [condense LICENSE](provenance/condense/LICENSE) 与 [执行来源](provenance/execution/README.md)。
+模块所有权见[架构](architecture.md)。运行和测试消费同一 TS 模块，导入显式写 `.ts`；共享类型配置位于 `config/typescript/`，Ask 配置位于 `config/vitest/`，Web/Recall 保留各自类型入口并继承共享规则。
 
-发布包携带运行时 TS、Web 预构建 bundle、子代理 Python/JS 核心、shell WASM、Linux x64 PTY helper 与 Neural Search 共享库、主题和许可/文档。共置测试、构建脚本、验收证据、代理开发指令、类型配置及 Rust 引擎源码只保留在 Git，不随 npm 包发布；发布排除规则和必要资源统一由 `test/package.test.mjs` 核对。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。
+根 manifest 管理构建依赖。`scripts/build-web-access.mjs` 构建两个 Web bundle；子代理 `prepack` 从 Python schema 生成工具目录载荷。
 
-原生 helper 测试与 Linux x64 发布构建使用：
+发布包含运行时 TS、Web bundle、Python/JS 子代理核心、shell WASM、Linux x64 PTY helper、搜索共享库、主题、skills 和许可。测试、构建工具及 Rust 源码保留在 Git。发布范围变化时，实际打包、解包核对入口、动态资源、二进制与执行权限；安装使用随包资产，不在用户目录构建。
+
+PTY helper 的测试与构建：
 
 ```bash
 cargo test --manifest-path native/tools/Cargo.toml --locked --workspace
@@ -72,10 +60,6 @@ node native/tools/build-linux-x64.mjs build
 node native/tools/build-linux-x64.mjs verify
 ```
 
-构建需要 Linux x64、Rust 的 `x86_64-unknown-linux-musl` target、`musl-gcc`、`readelf` 和已缓存的锁文件依赖。脚本以 release/locked/offline 模式构建静态 PTY helper `exec_bridge`，检查 ELF 没有动态解释器、共享库或 GLIBC 版本依赖后替换资产。`assets/native-tools/linux-x64-manifest.json` 记录源码输入、工具链和二进制 SHA256；`verify` 核对当前 checkout 源码、包内字节与静态 ABI。安装包不携带 Rust 源码，不能仅凭已安装 manifest 证明源码匹配。
+构建需要 Linux x64、Rust musl target、`musl-gcc`、`readelf` 与已缓存锁定依赖；脚本以 release/locked/offline 构建，校验静态 ABI 后更新 helper 和 manifest。安装包中的 manifest 本身不证明源码匹配。来源和许可见 [执行来源](provenance/execution/README.md)、[condense LICENSE](provenance/condense/LICENSE)及根 [NOTICE](../NOTICE)。
 
-`test/package.test.mjs` 核对实际 pack 文件集合。交付范围改变时还要真实打包、解包检查入口、动态资源、二进制字节和执行权限；本地安装、Git 初装/更新分别在隔离 profile 验证，不链接共享 node_modules。
-
-本地安装为 `pi install .`，更新为 `pi update --extensions`。安装验证不能只直接导入源码；开发测试不等同于生产安装证明。
-
-默认值、用法和模块职责分别更新配置页、功能页与架构页。改写原段落，避免追加重复说明；版本过程留在 Git。推送、发布和修改个人安装需按当次授权执行。
+本地安装用 `pi install .`，更新用 `pi update --extensions`；用隔离 profile 验证实际发现和执行，不以直接导入源码替代安装验收。推送、发布和修改个人安装按当次授权执行。
