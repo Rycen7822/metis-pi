@@ -1,7 +1,7 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,33 +25,7 @@ const EMPTY_HOME = mkdtempSync(
 );
 
 function runChild(script, env = {}) {
-	const childEnv = {
-		...process.env,
-		HOME: EMPTY_HOME,
-		USERPROFILE: EMPTY_HOME,
-	};
-	for (const key of [
-		"PI_CODING_AGENT_DIR",
-		"XDG_CONFIG_HOME",
-		"BRIGHTDATA_API_KEY",
-		"KAGI_API_KEY",
-		"OLLAMA_API_KEY",
-		"BRIGHTDATA_UNLOCKER_ZONE",
-		"BRIGHTDATA_SERP_ZONE",
-		"FIRECRAWL_BASE_URL",
-		"FIRECRAWL_API_KEY",
-		"PARALLEL_API_KEY",
-		"TINYFISH_API_KEY",
-		"GEMINI_API_KEY",
-	])
-		delete childEnv[key];
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
+	return runProviderChild(script, { HOME: EMPTY_HOME, USERPROFILE: EMPTY_HOME, ...env });
 }
 
 const PUBLIC_LOOKUP = `async () => [{ address: "93.184.216.34", family: 4 }]`;

@@ -1,6 +1,6 @@
+import { runChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,30 +10,7 @@ const geminiApiModuleUrl = new URL("../gemini-api.ts", import.meta.url).href;
 const geminiAdcModuleUrl = new URL("../gemini-adc.ts", import.meta.url).href;
 const geminiSearchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR",
-		"XDG_CONFIG_HOME",
-		"GEMINI_API_KEY",
-		"GOOGLE_GEMINI_BASE_URL",
-		"CLOUDFLARE_API_KEY",
-		"GOOGLE_APPLICATION_CREDENTIALS",
-		"GOOGLE_CLOUD_PROJECT",
-		"GOOGLE_CLOUD_LOCATION",
-		"GCLOUD_PROJECT",
-	]) {
-		delete childEnv[key];
-	}
-	// macOS homedir() ignores HOME, so pin the ADC file explicitly so tests are hermetic.
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
+
 
 function writeAdc(root, extra = {}) {
 	return writeFile(

@@ -1,5 +1,5 @@
+import { runChild } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,32 +7,7 @@ import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
 
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR",
-		"XDG_CONFIG_HOME",
-		"XCRAWL_API_KEY",
-		"OPENAI_API_KEY",
-		"BRAVE_API_KEY",
-		"PARALLEL_API_KEY",
-		"TINYFISH_API_KEY",
-		"TAVILY_API_KEY",
-		"JINA_API_KEY",
-		"EXA_API_KEY",
-		"PERPLEXITY_API_KEY",
-		"GEMINI_API_KEY",
-	]) {
-		delete childEnv[key];
-	}
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
+
 
 async function setupHome() {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-317-"));

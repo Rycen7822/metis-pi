@@ -1,7 +1,6 @@
+import { createHome as createProviderHome, runChild as runProviderChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,31 +22,10 @@ const activityModuleUrl = new URL("../activity.ts", import.meta.url).href;
 const EMPTY_HOME = mkdtempSync(join(tmpdir(), "pi-web-access-brightdata-empty-"));
 
 function runChild(script, env = {}) {
-	const childEnv = { ...process.env, HOME: EMPTY_HOME, USERPROFILE: EMPTY_HOME };
-	for (const key of [
-		"PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "BRIGHTDATA_API_KEY", "BRIGHTDATA_SERP_ZONE",
-		"OPENAI_API_KEY", "BRAVE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "TAVILY_API_KEY",
-		"JINA_API_KEY", "SERPDIVE_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "SERPBASE_API_KEY", "ANYSEARCH_API_KEY", "SEARXNG_BASE_URL", "EXA_API_KEY", "PERPLEXITY_API_KEY",
-		"GEMINI_API_KEY",
-	]) {
-		delete childEnv[key];
-	}
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
+	return runProviderChild(script, { HOME: EMPTY_HOME, USERPROFILE: EMPTY_HOME, ...env });
 }
 
-async function createHome(config) {
-	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brightdata-"));
-	const { preferences, credentials } = splitWebAccessConfig(config);
-	await writeFile(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }), "utf8");
-	await writeFile(join(home, "web-search.json"), JSON.stringify(credentials), "utf8");
-	return home;
-}
+const createHome = (config) => createProviderHome("pi-web-access-brightdata-", config);
 
 // A config file that is not valid JSON cannot be produced by createHome().
 async function createRawHome(text) {

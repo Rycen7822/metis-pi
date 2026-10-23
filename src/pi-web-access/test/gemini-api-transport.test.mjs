@@ -1,26 +1,12 @@
+import { runChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 const videoModuleUrl = new URL("../video-extract.ts", import.meta.url).href;
-
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	for (const key of ["PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL", "CLOUDFLARE_API_KEY"]) {
-		delete childEnv[key];
-	}
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
 
 test("Gemini generate, upload, status, and delete use only shared header auth", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-transport-"));

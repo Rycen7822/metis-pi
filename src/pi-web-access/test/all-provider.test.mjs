@@ -1,49 +1,15 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
-function runChild(script, env = {}) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR",
-		"XDG_CONFIG_HOME",
-		"OPENAI_API_KEY",
-		"BRAVE_API_KEY",
-		"PARALLEL_API_KEY",
-		"TINYFISH_API_KEY",
-		"SEARCH1API_KEY",
-		"SEARCHINFINITY_API_KEY",
-		"QUERIT_API_KEY",
-		"TAVILY_API_KEY",
-		"FIRECRAWL_BASE_URL",
-		"FIRECRAWL_API_KEY",
-		"JINA_API_KEY",
-		"SERPDIVE_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "SERPBASE_API_KEY",
-		"ANYSEARCH_API_KEY",
-		"SEARXNG_BASE_URL",
-		"EXA_API_KEY",
-		"PERPLEXITY_API_KEY",
-		"GEMINI_API_KEY",
-		"CLOUDFLARE_API_KEY",
-	]) {
-		delete childEnv[key];
-	}
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-		timeout: 10_000,
-	});
-}
+const runChild = (script, env = {}) => runProviderChild(script, env, { timeout: 10_000 });
 
 test('provider "all" starts every eligible provider together, excludes AnySearch, and deduplicates sources', async () => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-all-"));

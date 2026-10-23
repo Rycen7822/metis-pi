@@ -1,7 +1,7 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,15 +26,7 @@ async function withHome(config, run) {
 }
 
 function runChild(script, env = {}) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "CERAMIC_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "PARALLEL_API_KEY",
-		"TINYFISH_API_KEY", "SEARCH1API_KEY", "SEARCHINFINITY_API_KEY", "QUERIT_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY",
-		"JINA_API_KEY", "SERPDIVE_API_KEY", "KAGI_API_KEY", "BOCHA_API_KEY", "OLLAMA_API_KEY", "SEARXNG_BASE_URL",
-		"EXA_API_KEY", "PERPLEXITY_API_KEY", "GEMINI_API_KEY",
-	]) delete childEnv[key];
-	Object.assign(childEnv, env);
-	const child = spawnSync(process.execPath, ["--input-type=module"], { input: script, encoding: "utf8", env: childEnv, maxBuffer: 2 * 1024 * 1024 });
+	const child = runProviderChild(script, env);
 	assert.equal(child.status, 0, child.stderr);
 	return JSON.parse(child.stdout.trim());
 }

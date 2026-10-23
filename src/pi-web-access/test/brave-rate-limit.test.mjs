@@ -1,25 +1,12 @@
+import { runChild } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 const limiterModuleUrl = new URL("../brave-rate-limit.ts", import.meta.url).href;
 const braveModuleUrl = new URL("../brave.ts", import.meta.url).href;
-
-function runChild(script, env = {}) {
-	const childEnv = { ...process.env };
-	for (const key of ["PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "BRAVE_API_KEY", "BRAVE_BASE_URL",
-		"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]) delete childEnv[key];
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
 
 test("parses Brave's parallel rate-limit buckets", async () => {
 	const { parseBraveRateLimitHeaders } = await import(limiterModuleUrl);

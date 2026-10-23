@@ -1,6 +1,6 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,32 +21,8 @@ function runChild(script) {
 			"\n",
 		"utf8",
 	);
-	const childEnv = {
-		...process.env,
-		HOME: home,
-		USERPROFILE: home,
-		PI_CODING_AGENT_DIR: home,
-	};
-	for (const key of [
-		"GEMINI_API_KEY",
-		"GOOGLE_GEMINI_API_KEY",
-		"GOOGLE_API_KEY",
-		"GOOGLE_GEMINI_BASE_URL",
-		"CLOUDFLARE_API_KEY",
-		"PARALLEL_API_KEY",
-		"TINYFISH_API_KEY",
-		"FIRECRAWL_BASE_URL",
-		"FIRECRAWL_API_KEY",
-		"PI_ALLOW_BROWSER_COOKIES",
-	])
-		delete childEnv[key];
 	try {
-		return spawnSync(process.execPath, ["--input-type=module"], {
-			input: script,
-			encoding: "utf8",
-			env: childEnv,
-			maxBuffer: 2 * 1024 * 1024,
-		});
+		return runProviderChild(script, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}

@@ -1,5 +1,5 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { stringify } from "smol-toml";
 import { tmpdir } from "node:os";
@@ -8,25 +8,7 @@ import { test } from "node:test";
 
 const geminiApiUrl = new URL("../gemini-api.ts", import.meta.url).href;
 
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	delete childEnv.PERPLEXITY_API_KEY;
-	delete childEnv.GEMINI_API_KEY;
-	delete childEnv.GOOGLE_GEMINI_BASE_URL;
-	delete childEnv.CLOUDFLARE_API_KEY;
-	for (const [key, value] of Object.entries(env)) {
-		if (value === undefined) {
-			delete childEnv[key];
-		} else {
-			childEnv[key] = value;
-		}
-	}
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-	});
-}
+const runChild = (script, env) => runProviderChild(script, env, { maxBuffer: 1024 * 1024 });
 
 test("Gemini base URL and Cloudflare auth use env before config", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-base-url-"));

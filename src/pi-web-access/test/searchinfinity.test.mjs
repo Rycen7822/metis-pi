@@ -1,9 +1,7 @@
-import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../configuration/web-access.ts";
+import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -11,52 +9,9 @@ const searchinfinityModuleUrl = new URL("../searchinfinity.ts", import.meta.url)
 const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
-const PROVIDER_ENV_KEYS = [
-	"OPENAI_API_KEY",
-	"BRAVE_API_KEY",
-	"PARALLEL_API_KEY",
-	"TINYFISH_API_KEY",
-	"SEARCH1API_KEY",
-	"SEARCHINFINITY_API_KEY",
-	"TAVILY_API_KEY",
-	"JINA_API_KEY",
-	"SERPDIVE_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "SERPBASE_API_KEY",
-	"ANYSEARCH_API_KEY",
-	"SEARXNG_BASE_URL",
-	"EXA_API_KEY",
-	"PERPLEXITY_API_KEY",
-	"GEMINI_API_KEY",
-	"GOOGLE_GEMINI_API_KEY",
-	"GOOGLE_API_KEY",
-	"CLOUDFLARE_API_KEY",
-	"FIRECRAWL_BASE_URL",
-	"FIRECRAWL_API_KEY",
-];
 
-async function createHome(config = {}) {
-	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searchinfinity-"));
-	await mkdir(join(home, ".pi", "agent"), { recursive: true });
-	{
-		const { preferences, credentials } = splitWebAccessConfig(config);
-		await writeFile(join(home, ".pi", "agent", "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
-		await writeFile(join(home, ".pi", "agent", "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
-	}
-	return home;
-}
 
-function runChild(script, env = {}) {
-	const childEnv = { ...process.env };
-	delete childEnv.PI_CODING_AGENT_DIR;
-	delete childEnv.XDG_CONFIG_HOME;
-	for (const key of PROVIDER_ENV_KEYS) delete childEnv[key];
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
+const createHome = (config = {}) => createProviderHome("pi-web-access-searchinfinity-", config, ".pi/agent");
 
 test("Searchinfinity availability reads environment and config credentials", async () => {
 	const emptyHome = await createHome();

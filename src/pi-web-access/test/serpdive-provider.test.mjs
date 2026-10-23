@@ -1,5 +1,5 @@
+import { runChild } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,19 +7,7 @@ import { test } from "node:test";
 
 const serpdiveModuleUrl = new URL("../serpdive.ts", import.meta.url).href;
 
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	for (const key of ["PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "SERPDIVE_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "SERPBASE_API_KEY", "SERPDIVE_MODEL"]) {
-		delete childEnv[key];
-	}
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
+
 
 // Renvoie le corps de la requête envoyée à l'API, plus le résultat mappé.
 function probe(extra = "") {

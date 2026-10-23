@@ -1,8 +1,7 @@
-import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../configuration/web-access.ts";
+import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -16,43 +15,8 @@ const perplexityModuleUrl = new URL("../perplexity.ts", import.meta.url).href;
 const tavilyModuleUrl = new URL("../tavily.ts", import.meta.url).href;
 
 async function createHome(config) {
-	const home = await mkdtemp(join(tmpdir(), "pi-web-access-credential-source-"));
-	const agentDir = join(home, "agent");
-	await mkdir(agentDir, { recursive: true });
-	{
-		const { preferences, credentials } = splitWebAccessConfig(config);
-		await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
-		await writeFile(join(agentDir, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
-	}
-	return { home, agentDir };
-}
-
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR",
-		"XDG_CONFIG_HOME",
-		"BRAVE_API_KEY",
-		"CLOUDFLARE_API_KEY",
-		"GEMINI_API_KEY",
-		"GOOGLE_GEMINI_BASE_URL",
-		"OPENAI_API_KEY",
-		"PARALLEL_API_KEY",
-		"TINYFISH_API_KEY",
-		"SEARCH1API_KEY",
-		"SEARCHINFINITY_API_KEY",
-		"QUERIT_API_KEY",
-		"PERPLEXITY_API_KEY",
-		"TAVILY_API_KEY",
-		"JINA_API_KEY",
-	]) delete childEnv[key];
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
+	const home = await createProviderHome("pi-web-access-credential-source-", config, "agent");
+	return { home, agentDir: join(home, "agent") };
 }
 
 test("previously unsupported providers resolve explicit env and command sources lazily", async () => {

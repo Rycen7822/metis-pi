@@ -1,48 +1,15 @@
-import { stringify } from "smol-toml";
-import { splitWebAccessConfig } from "../../configuration/web-access.ts";
+import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+
+
 import { test } from "node:test";
 
 const parallelModuleUrl = new URL("../parallel.ts", import.meta.url).href;
 const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 
-async function createHome(config = {}) {
-	const home = await mkdtemp(join(tmpdir(), "pi-web-access-parallel-"));
-	await mkdir(join(home, ".pi", "agent"), { recursive: true });
-	{
-		const { preferences, credentials } = splitWebAccessConfig(config);
-		await writeFile(
-		join(home, ".pi", "agent", "metis-pi.toml"),
-		stringify({ webAccess: preferences }) + "\n",
-		"utf8",
-	);
-		await writeFile(
-		join(home, ".pi", "agent", "web-search.json"),
-		JSON.stringify(credentials) + "\n",
-		"utf8",
-	);
-	}
-	return home;
-}
-
-function runChild(script, env = {}) {
-	const childEnv = { ...process.env };
-	delete childEnv.PI_CODING_AGENT_DIR;
-	delete childEnv.XDG_CONFIG_HOME;
-	delete childEnv.TINYFISH_API_KEY;
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
+const createHome = (config = {}) => createProviderHome("pi-web-access-parallel-", config, ".pi/agent");
 
 test("Parallel availability reads env and config keys while rejecting placeholders", async () => {
 	const home = await createHome({ parallelApiKey: "your-key" });
@@ -222,7 +189,6 @@ test("fetch_content continues to Gemini when Parallel extract fails", async () =
 	assert.equal(output.result.error, null);
 	assert.match(output.result.content, /Gemini fallback/);
 });
-
 
 test("Parallel invalid JSON does not expose credential prefixes", async () => {
 	const home = await createHome(), token = "abcdef12-3456-7890-abcd-ef1234567890";

@@ -1,6 +1,6 @@
+import { runChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,41 +14,6 @@ const tavilyModuleUrl = new URL("../tavily.ts", import.meta.url).href;
 const searxngModuleUrl = new URL("../searxng.ts", import.meta.url).href;
 const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const indexModuleUrl = new URL("../index.ts", import.meta.url).href;
-
-function runChild(script, env) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR",
-		"XDG_CONFIG_HOME",
-		"OPENAI_API_KEY",
-		"BRAVE_API_KEY",
-		"BRAVE_BASE_URL",
-		"PARALLEL_API_KEY",
-		"TINYFISH_API_KEY",
-		"SEARCH1API_KEY",
-		"SEARCHINFINITY_API_KEY",
-		"QUERIT_API_KEY",
-		"TAVILY_API_KEY",
-		"TAVILY_BASE_URL",
-		"FIRECRAWL_BASE_URL",
-		"FIRECRAWL_API_KEY",
-		"JINA_API_KEY",
-		"SEARXNG_BASE_URL",
-		"EXA_API_KEY",
-		"EXA_BASE_URL",
-		"PERPLEXITY_API_KEY",
-		"GEMINI_API_KEY",
-	]) {
-		delete childEnv[key];
-	}
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
 
 test("Brave search applies domain filters in the query and returned results", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brave-"));

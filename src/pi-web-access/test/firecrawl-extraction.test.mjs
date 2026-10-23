@@ -1,7 +1,7 @@
+import { runChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,21 +11,7 @@ const firecrawlModuleUrl = new URL("../firecrawl.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
-function runChild(script, env = {}) {
-	const childEnv = { ...process.env };
-	for (const key of [
-		"PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY",
-		"FIRECRAWL_API_VERSION", "FIRECRAWL_FRESH_SCRAPE", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "GEMINI_API_KEY",
-		"BRIGHTDATA_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "BRIGHTDATA_UNLOCKER_ZONE",
-	]) delete childEnv[key];
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
-}
+
 
 const PUBLIC_LOOKUP = `async () => [{ address: "93.184.216.34", family: 4 }]`;
 

@@ -1,7 +1,7 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,20 +19,7 @@ function runChild(script, env = {}, config = null) {
 		writeFileSync(join(home, "metis-pi.toml"), stringify({ webAccess: preferences }) + "\n", "utf8");
 		writeFileSync(join(home, "web-search.json"), JSON.stringify(credentials) + "\n", "utf8");
 	}
-	const childEnv = { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home };
-	for (const key of [
-		"XDG_CONFIG_HOME", "CRAWL4AI_BASE_URL", "CRAWL4AI_API_TOKEN",
-		"FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY", "FIRECRAWL_API_VERSION", "FIRECRAWL_FRESH_SCRAPE",
-		"PARALLEL_API_KEY", "TINYFISH_API_KEY", "GEMINI_API_KEY",
-		"BRIGHTDATA_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "BRIGHTDATA_UNLOCKER_ZONE",
-	]) delete childEnv[key];
-	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-		maxBuffer: 2 * 1024 * 1024,
-	});
+	return runProviderChild(script, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, ...env });
 }
 
 const PUBLIC_LOOKUP = `async () => [{ address: "93.184.216.34", family: 4 }]`;

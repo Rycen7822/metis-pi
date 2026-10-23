@@ -1,5 +1,5 @@
+import { runChild as runProviderChild } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 const isolateEnvUrl = new URL("./isolate-env.mjs", import.meta.url).href;
@@ -8,11 +8,7 @@ const perplexityUrl = new URL("../perplexity.ts", import.meta.url).href;
 const ollamaUrl = new URL("../ollama.ts", import.meta.url).href;
 
 function runChild(script) {
-	const child = spawnSync(process.execPath, ["--import", isolateEnvUrl, "--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		maxBuffer: 1024 * 1024,
-	});
+	const child = runProviderChild(script, {}, { execArgv: ["--import", isolateEnvUrl], maxBuffer: 1024 * 1024 });
 	assert.equal(child.status, 0, child.stderr);
 	return JSON.parse(child.stdout.trim());
 }
