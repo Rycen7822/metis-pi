@@ -1,69 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isDaemonIdle, RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
-import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
-import { SubagentSession } from "../../src/subagents/host/session.ts";
-import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
-import { subagentAdmin } from "../helpers/subagent-admin.mjs";
-
-const root = fileURLToPath(new URL("../../", import.meta.url));
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-function status(runtime, state) {
-  try {
-    return subagentAdmin(runtime, state, "ping");
-  } catch (error) {
-    assert.equal(error.code, "daemon_unavailable");
-    return undefined;
-  }
-}
-async function fixture(t) {
-  mkdirSync(join(root, ".work"), { recursive: true });
-  const dir = mkdtempSync(join(root, ".work/metis-subagent-parking-")),
-    state = join(dir, "metis", "subagent"),
-    runtime = runtimePackage();
-  mkdirSync(state, { recursive: true });
-  writeFileSync(
-    join(dir, "settings.json"),
-    JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }),
-  );
-  writeFileSync(
-    join(dir, "metis-pi.toml"),
-    '[subagents.profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="30"\n',
-  );
-  const ctx = {
-    cwd: dir,
-    model: { provider: "pi-mock-offline", id: "mock" },
-    sessionManager: SessionManager.create(dir, dir),
-    isProjectTrusted: () => true,
-  };
-  const client = new SubagentClient(runtime, ctx, dir, undefined, () => {}),
-    clients = [client];
-  t.after(async () => {
-    try {
-      for (const client of clients) await client.close();
-      if (status(runtime, state))
-        subagentAdmin(runtime, state, "shutdown", { force: true });
-      if (clients.some((client) => client.scope))
-        execFileSync(
-          "python3",
-          [
-            "-c",
-            "import fcntl,sys; f=open(sys.argv[1],'rb'); fcntl.flock(f,fcntl.LOCK_EX)",
-            join(state, "daemon.lock"),
-          ],
-          { timeout: 20000 },
-        );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-  return { dir, state, runtime, client, clients, ctx };
-}
+import { fixture, sleep, status } from "../helpers/subagent-parking.mjs";
 
 test(
   "native SDK follow-up wakes an idle daemon through the same bridge and keeps the durable child session",
@@ -237,30 +175,4 @@ test("closing during parking cannot restart a helper for waiting foreground work
   const waiting = assert.rejects(client.call("subagents_list_agents", {}), /frontend closed/);
   release(); await Promise.all([parking, closed, waiting]);
   assert.equal(client.bridge, undefined, "a logical close cannot create a replacement");
-});
-
-test("native session parks its helper silently and automatic boundaries do not restart an empty daemon", { timeout: 60000 }, async t => {
-  const f = await fixture(t), warnings = [];
-  const ctx = { ...f.ctx, mode: "rpc", isIdle: () => false, hasPendingMessages: () => false,
-    ui: { notify: text => warnings.push(text), setStatus() {}, setWidget() {} } };
-  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, f.runtime, ctx, f.dir,
-    () => DEFAULT_CONFIG);
-  try {
-    assert.equal((await owner.execute("subagents_list_agents", {}, "list-before-idle", ctx)).isError, false);
-    const deadline = Date.now() + 45000;
-    while ((owner.syncState !== "parked" || owner.watching || status(f.runtime, f.state)) && Date.now() < deadline) {
-      await owner.boundary({ type: "turn_end", outcome: "completed", entries: [] }, ctx);
-      await owner.settled(ctx);
-      await sleep(50);
-    }
-    assert.equal(owner.syncState, "parked"); assert.equal(owner.watching, undefined);
-    assert.equal(owner.client.bridge, undefined, "the frontend-owned IPC process also exited");
-    assert.equal(status(f.runtime, f.state), undefined); assert.deepEqual(warnings, []);
-    for (const type of ["turn_end", "agent_before_settle"]) await owner.boundary({ type, outcome: "completed", entries: [] }, ctx);
-    await owner.settled(ctx, true);
-    assert.equal(status(f.runtime, f.state), undefined, "automatic parent events did not create a restart loop");
-    assert.equal((await owner.execute("subagents_list_agents", {}, "list-after-idle", ctx)).isError, false);
-    assert.ok(status(f.runtime, f.state).pid, "an explicit request wakes and reauthenticates the daemon");
-    assert.deepEqual(warnings, []);
-  } finally { await owner.close(); }
 });

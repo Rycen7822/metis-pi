@@ -6,5 +6,8 @@ export default defineConfig({
     include: ["src/ask-user-question/**/*.test.ts"],
     setupFiles: ["test/helpers/ask-user-question/setup.ts"],
     maxWorkers: 4,
+    pool: "forks",
+    isolate: true,
+    fsModuleCache: true,
   },
 });

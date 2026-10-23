@@ -44,28 +44,28 @@
     "build:neural-engine": "node src/neural-search/engine/build-linux-x64.mjs",
     "verify:neural-engine": "node src/neural-search/engine/build-linux-x64.mjs verify",
     "prepack": "npm run verify:neural-engine && npm run build:plugins && npm run prepare:subagents",
-    "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q test/subagents -n 4 --dist=loadfile",
+    "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q test/subagents -n 4 --dist=worksteal",
     "build:plugins": "node scripts/build-web-access.mjs",
     "test:plugins": "node scripts/test.mjs plugins",
     "check:plugins": "tsc -p src/pi-web-access/tsconfig.json && tsc -p src/pi-session-recall/tsconfig.json"
   },
   "dependencies": {
     "@earendil-works/pi-mcp": "1.4.0",
-    "marked": "18.0.11",
-    "marked-cjk-friendly": "0.1.2",
-    "proper-lockfile": "4.1.2",
-    "smol-toml": "^1.9.0",
-    "tiktoken": "1.0.22",
-    "undici": "8.11.2",
-    "web-tree-sitter": "^0.27.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "0.19.3",
     "linkedom": "^0.16.0",
+    "marked": "18.0.11",
+    "marked-cjk-friendly": "0.1.2",
     "p-limit": "^6.1.0",
     "promise.try": "^2.0.1",
+    "proper-lockfile": "4.1.2",
+    "smol-toml": "^1.9.0",
+    "tiktoken": "1.0.22",
     "turndown": "^7.2.0",
-    "unpdf": "^1.6.2"
+    "undici": "8.11.2",
+    "unpdf": "^1.6.2",
+    "web-tree-sitter": "^0.27.0"
   },
   "optionalDependencies": {
     "ffi-rs": "1.3.7"
@@ -77,10 +77,10 @@
     "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^22.20.2",
     "@types/proper-lockfile": "4.1.4",
+    "esbuild": "0.28.2",
     "typebox": "1.3.27",
     "typescript": "5.9.3",
-    "esbuild": "0.28.2",
-    "vitest": "4.1.10"
+    "vitest": "5.0.5"
   },
   "files": [
     "metis-pi.toml",

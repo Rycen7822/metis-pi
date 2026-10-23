@@ -27,9 +27,10 @@ function fixture() {
   const push = { ...run, id: 100, event: "push", created_at: "2026-10-16T07:03:24Z" };
   const pull = { number: 7, state: "open", mergeable: true, merge_commit_sha: mergeRef,
     head: { repo, ref: "feature", sha: head }, base: { repo, ref: "main" } };
-  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head, name: "Pi 1.4.0", status: "in_progress", runner_id: 3 });
-  const sourceJobs = [validation(200)];
-  const pushJobs = [validation(100), { run_id: 100, run_attempt: 1, head_sha: head,
+  const validation = id => ["Node tests", "Web plugin tests", "Python subagent tests"].map(name =>
+    ({ run_id: id, run_attempt: 1, head_sha: head, name, status: "in_progress", runner_id: 3 }));
+  const sourceJobs = validation(200);
+  const pushJobs = [...validation(100), { run_id: 100, run_attempt: 1, head_sha: head,
     name: "Check duplicate feature push", status: "completed", conclusion: "success" }];
   const contents = { [trustedRef]: policy, [head]: policy, [mergeRef]: policy };
   const calls = [], sleeps = [], logs = [];
@@ -60,7 +61,9 @@ function fixture() {
 
 test("PR validation retires only the exact older internal feature push", async () => {
   const f = fixture();
-  assert.equal(await f.run(), true);
+  for (const jobs of [f.sourceJobs, f.pushJobs])
+    Object.assign(jobs[0], { status: "completed", conclusion: "success" });
+  assert.equal(await f.run(), true, "successful completed lanes can accompany the remaining active validation");
   assert.deepEqual(f.writes(), [{ method: "POST", path: `${pushPath}/cancel`, query: undefined }]);
   assert.deepEqual(f.sleeps, []);
   assert.equal(f.calls.find(c => c.path.endsWith("/runs")).query.head_sha, head);
@@ -99,8 +102,15 @@ test("workflow CLI binds its PR event, merge snapshot and token at the HTTP boun
   assert.match(stdout, /Requested cancellation of duplicate feature push 100/);
 });
 
-test("source scope, PR state and all three CI policies must authorize cleanup", async t => {
+test("source scope, PR state, CI policy and every validation lane must authorize cleanup", async t => {
   const cases = {
+    "missing lane": f => { f.sourceJobs.pop(); },
+    "unallocated lane": f => { f.sourceJobs[2].runner_id = 0; },
+    "queued lane": f => { f.sourceJobs[2].status = "queued"; },
+    "failed lane": f => { Object.assign(f.sourceJobs[2], { status: "completed", conclusion: "failure" }); },
+    "skipped lane": f => { Object.assign(f.sourceJobs[2], { status: "completed", conclusion: "skipped" }); },
+    "cancelled lane": f => { Object.assign(f.sourceJobs[2], { status: "completed", conclusion: "cancelled" }); },
+    "foreign attempt": f => { f.sourceJobs[2].run_attempt = 2; },
     "fork source": f => { f.source.head_repository = f.pull.head.repo = { id: 9, full_name: "fork/metis-pi" }; },
     "source manual rerun": f => { f.source.run_attempt = 2; },
     "dispatch source": f => { f.source.event = "workflow_dispatch"; },
@@ -129,9 +139,9 @@ test("target needs matching branch/head, first attempt, older creation and branc
     "manual rerun": f => { f.push.run_attempt = 2; },
     "PR target": f => { f.push.event = "pull_request"; },
     "foreign repository": f => { f.push.head_repository = { id: 9, full_name: "fork/metis-pi" }; },
-    "tag with matching name and SHA": f => { f.pushJobs[1].conclusion = "skipped"; },
-    "admission-only execution": f => { f.pushJobs.splice(0, 1); },
-    "finished validation": f => { f.pushJobs[0].status = "completed"; },
+    "tag with matching name and SHA": f => { f.pushJobs[3].conclusion = "skipped"; },
+    "admission-only execution": f => { f.pushJobs.splice(0, 3); },
+    "finished validation": f => { f.pushJobs.slice(0, 3).forEach(job => Object.assign(job, { status: "completed", conclusion: "success" })); },
   };
   for (const [name, change] of Object.entries(cases)) await t.test(name, async () => {
     const f = fixture(); change(f);
@@ -153,7 +163,9 @@ test("bounded readiness waits for an allocated validation job, not the controlle
   assert.equal(await f.run(), true);
   assert.deepEqual(f.sleeps, [2000, 2000]);
   const unavailable = fixture();
-  unavailable.sourceJobs[0].name = "Retire duplicate feature push";
+  unavailable.sourceJobs.splice(0, 3,
+    { ...unavailable.sourceJobs[0], name: "Pi 1.4.0" },
+    { ...unavailable.sourceJobs[0], name: "Retire duplicate feature push" });
   assert.equal(await unavailable.run(), false);
   assert.deepEqual(unavailable.sleeps, [2000, 2000]);
   assert.deepEqual(unavailable.writes(), []);
@@ -167,7 +179,8 @@ test("live head, source cancellation and target rerun are rechecked before any m
       if (path === pullPath && ++pulls === 2 && scenario === "head changed") f.pull.head.sha = "e".repeat(40);
       if (path === sourcePath && ++sources === 2 && scenario === "source cancelled") f.source.status = "completed";
       if (path === pushPath && scenario === "target rerun") f.push.run_attempt = 2;
-      if (path === `${sourcePath}/jobs` && ++jobs === 2 && scenario === "source job finished") f.sourceJobs[0].status = "completed";
+      if (path === `${sourcePath}/jobs` && ++jobs === 2 && scenario === "source job finished")
+        f.sourceJobs.forEach(job => Object.assign(job, { status: "completed", conclusion: "success" }));
     };
     assert.equal(await f.run(), false);
     assert.deepEqual(f.writes(), []);

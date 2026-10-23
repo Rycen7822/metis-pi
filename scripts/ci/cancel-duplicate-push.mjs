@@ -6,7 +6,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const CI_PATH = ".github/workflows/ci.yml";
 const ADMISSION_JOB = "Check duplicate feature push";
-const VALIDATION_JOB = "Pi 1.4.0";
+// Keep these exact lane names synchronized with .github/workflows/ci.yml.
+const VALIDATION_JOBS = ["Node tests", "Web plugin tests", "Python subagent tests"];
 
 export async function cancelDuplicatePush({ repository, runId, pullNumber, trustedRef, mergeRef, request, sleep = delay, log = console.log }) {
   let cancellationAttempted = false;
@@ -42,8 +43,12 @@ export async function cancelDuplicatePush({ repository, runId, pullNumber, trust
     if (trusted.type !== "file" || proposed.type !== "file" || merged.type !== "file"
       || !/^[a-f0-9]{40}$/.test(trusted.sha) || trusted.sha !== proposed.sha || trusted.sha !== merged.sha) return false;
     const jobs = async id => (await request("GET", `${base}/actions/runs/${id}/jobs`, { filter: "latest", per_page: "100" })).jobs;
-    const hasActiveValidation = (values, id) => values.some(job => job.name === VALIDATION_JOB && job.run_id === id
-      && job.run_attempt === 1 && job.head_sha === head && job.status === "in_progress" && job.runner_id > 0);
+    const hasActiveValidation = (values, id) => {
+      const lanes = VALIDATION_JOBS.map(name => values.find(job => job.name === name && job.run_id === id
+        && job.run_attempt === 1 && job.head_sha === head && job.runner_id > 0));
+      return lanes.every(job => job && (job.status === "in_progress" || job.status === "completed" && job.conclusion === "success"))
+        && lanes.some(job => job?.status === "in_progress");
+    };
     let active = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt) await sleep(2000);

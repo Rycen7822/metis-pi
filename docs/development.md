@@ -19,7 +19,7 @@ Python 子代理运行核心使用标准库；测试另需 [requirements.txt](ht
 | `npm run test:io` / `test:resource` | 文件、Git、归档 / 进程、锁、计时器、缓存和传输。 |
 | `npm run test:lsp` / `test:ask-user-question` / `test:chrome` | LSP / 结构化提问 / 跨层界面、布局和复制。 |
 | `npm run build:plugins` / `test:plugins` | Web bundle 与 MCP CLI / Web 共置测试。 |
-| `npm run test:subagents` | Python Runtime、IPC、账本与继承；4 个 worker 按文件分配。 |
+| `npm run test:subagents` | Python Runtime、IPC、账本与继承；4 个 worker，work-stealing 动态分配独立用例。 |
 | `npm run verify` | 项目与测试类型、全部测试和实际 pack 文件清单。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
 | `npm run preview` | 生产渲染器生成 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，不进 Git。 |
@@ -31,7 +31,8 @@ Python 子代理运行核心使用标准库；测试另需 [requirements.txt](ht
 
 - core 核对规则与渲染原语，contract 使用真实 Pi API，protocol 检查最终请求与历史，IO/resource 检查持久化、损坏恢复和资源释放。
 - 夹具只准备输入，预期来自独立合同；及时清理临时目录、进程、计时器、网络钩子和包装。一次性诊断和验收放 `.work/`。
-- pytest 使用原生 `unittest.subTest` 支持；`npm run test:subagents -- -n 0` 可串行排查顺序依赖。
+- Node runner 保持逐文件进程隔离，优先启动真实 idle-grace 长测试，并输出文件数和阶段墙钟；`npm test -- --concurrency=4` 可限制 Node 文件并发，不改变 Ask 的 worker 设置。
+- pytest 使用原生 `unittest.subTest` 支持；每个测试独立准备和清理状态，`npm run test:subagents -- -n 0` 可串行排查顺序依赖。
 - 严格 PTY 需要 Pi、tmux，E1 还需 Git；journey 使用隔离目录、离线 provider 和剪贴板 sink。`-- --journey=E3` 可单跑，缺依赖或未完成操作算失败。
 
 | Journey | 验证 |
@@ -40,9 +41,9 @@ Python 子代理运行核心使用标准库；测试另需 [requirements.txt](ht
 | E3 / E4 | 思考手势 / 复制、草稿和实际提交。 |
 | E6 | 多 skill 补全、payload 和折叠。 |
 
-CI 在 Pi 1.4.0 基线运行 verify 与 PTY；独立 job 重建自有 Rust 搜索引擎、核对二进制并运行单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
+CI 的 Node、Web、Python 验证独立并行，`Pi 1.4.0` 汇总门禁要求三组全部成功；类型、构建、打包和 PTY 检查保留，Rust job 独立重建搜索引擎并核对二进制与单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；重复运行的取消还要求替代验证的三组任务已分配执行器、没有失败且仍有任务运行。状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
 
-CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由 `test/package.test.mjs` 调用 `npm pack --dry-run --json --ignore-scripts`，不把未实际运行的安装当验证。
+Node runner 默认在 `.work/test-cache/node/` 复用原生 bytecode；显式 `NODE_COMPILE_CACHE` 优先，覆盖率收集不自动启用缓存。CI 使用 runner 临时缓存，进程和配置隔离保留。Ask 使用 Vitest 5.0.5，固定 forks、隔离、4 workers，开启模块文件缓存并在测试前清除 mock 调用记录。包检查由 `test/package.test.mjs` 调用 `npm pack --dry-run --json --ignore-scripts`，不把未实际运行的安装当验证。
 
 ## 源码与交付
 

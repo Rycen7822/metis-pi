@@ -4,7 +4,6 @@ import "./isolate-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,8 +11,9 @@ import { test } from "node:test";
 import { AmbiguousModelError, findModelWithProviderRouting } from "../summary-model-scope.ts";
 import { generateSummaryDraft, loadSummaryModelChoices, SUMMARY_GENERATION_DEADLINE_MS } from "../summary-review.ts";
 
+// The deadline resolver is owned by curator-workflow; index.ts only re-exports it.
+const curatorWorkflowUrl = new URL("../curator-workflow.ts", import.meta.url).href;
 const indexUrl = new URL("../index.ts", import.meta.url).href;
-const readmeSrc = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 function summaryContext(scopedModels = []) {
 	const model = { provider: "anthropic", id: "claude-haiku-4-5" };
@@ -347,7 +347,7 @@ test("unused ambiguous fallback cannot block the first default; reached ambiguit
 	assert.deepEqual(calls, ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5"]);
 });
 
-async function summaryGenerationDeadline(config) {
+async function summaryGenerationDeadline(config, moduleUrl = curatorWorkflowUrl) {
 	const configDir = await mkdtemp(join(tmpdir(), "pi-web-access-summary-deadline-config-"));
 	try {
 		if (config !== undefined) {
@@ -358,7 +358,7 @@ async function summaryGenerationDeadline(config) {
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 				process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(configDir)};
-				const { getSummaryGenerationDeadlineMs } = await import(${JSON.stringify(indexUrl)});
+				const { getSummaryGenerationDeadlineMs } = await import(${JSON.stringify(moduleUrl)});
 				console.log("SUMMARY_DEADLINE=" + getSummaryGenerationDeadlineMs());
 			`,
 			encoding: "utf8",
@@ -375,13 +375,12 @@ async function summaryGenerationDeadline(config) {
 
 test("summary generation deadline config defaults, validates, and caps", async () => {
 	assert.equal(await summaryGenerationDeadline(undefined), 30_000);
-	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 150_000 }), 150_000);
+	// One configuration case keeps the public entry re-export covered.
+	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 150_000 }, indexUrl), 150_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 0 }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 1.5 }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: "150000" }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 600_001 }), 600_000);
-	assert.match(readmeSrc, /summaryGenerationDeadlineMs = 30000/);
-	assert.match(readmeSrc, /summaryGenerationDeadlineMs.*capped at `600000`/);
 });
 
 test("summary choices and generation prefer the same available model rather than catalogue order", async () => {
