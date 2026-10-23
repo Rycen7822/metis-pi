@@ -1,3 +1,4 @@
+import { errorMessage, redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
@@ -45,10 +46,6 @@ function mapDomainFilter(domainFilter: string[] | undefined): { include_domains?
 		...(include_domains.length > 0 ? { include_domains } : {}),
 		...(exclude_domains.length > 0 ? { exclude_domains } : {}),
 	};
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function parseWebResults(value: unknown): unknown[] {
@@ -99,19 +96,10 @@ export async function searchWithYou(query: string, options: SearchOptions = {}):
 			activityMonitor.logComplete(activityId, 0);
 			throw new Error("Aborted");
 		}
-		const message = errorMessage(err);
 		const providerTimeout = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError");
 		const outgoing = providerTimeout
 			? new Error(`You.com request timed out after ${Math.round(SEARCH_TIMEOUT_MS / 1000)}s`)
-			: (() => {
-				const redactedMessage = redactCredential(message, apiKey);
-				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = err instanceof SearchHttpError
-					? new SearchHttpError(err.status, redactedMessage)
-					: new Error(redactedMessage);
-				if (err instanceof Error) redactedError.name = err.name;
-				return redactedError;
-			})();
+			: redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
 		activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
 		throw outgoing;
 	}

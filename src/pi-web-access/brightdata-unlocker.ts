@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -103,10 +104,6 @@ async function getApiKey(signal?: AbortSignal): Promise<string> {
 function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(timeoutMs);
 	return signal ? AbortSignal.any([timeout, signal]) : timeout;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function isAbortError(err: unknown): boolean {

@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
@@ -77,10 +78,6 @@ function requestSignal(signal?: AbortSignal): { signal: AbortSignal; timeout: Ab
 		timeout,
 		signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 	};
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function parseItems(value: unknown): JinaSearchItem[] {

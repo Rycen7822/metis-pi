@@ -27,6 +27,10 @@ export function extractAnswer(output: unknown[]): string {
 	return parts.join("\n").trim();
 }
 
+export function normalizeSearchText(value: unknown): string {
+	return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
 export function formatSearchResultsAsAnswer(results: readonly AnswerResult[]): string {
 	return results.map((result) => result.snippet
 		? `${result.snippet}\nSource: ${result.title} (${result.url})`

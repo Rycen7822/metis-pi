@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CredentialResolutionError } from "./credential-source.ts";
@@ -235,10 +236,6 @@ export interface FullSearchOptions extends SearchOptions {
 	extensionContext?: ExtensionContext;
 	/** Forwarded to providers that understand it (currently Exa); ignored elsewhere. */
 	category?: string;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function isAbortError(err: unknown): boolean {

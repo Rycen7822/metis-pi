@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
@@ -93,10 +94,6 @@ export function isTinyFishAvailable(): boolean {
 		configuredValue: loadConfig().tinyfishApiKey,
 		environmentValue: process.env.TINYFISH_API_KEY,
 	});
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {

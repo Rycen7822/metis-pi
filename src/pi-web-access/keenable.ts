@@ -1,9 +1,10 @@
+import { errorMessage, redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
-import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
+import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -59,14 +60,6 @@ function buildQuery(query: string, filters: DomainFilters, site: string | undefi
 
 function publishedAfter(recency: NonNullable<SearchOptions["recencyFilter"]>): string {
 	return new Date(Date.now() - RECENCY_DAYS[recency] * 86_400_000).toISOString().slice(0, 10);
-}
-
-function text(value: unknown): string {
-	return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function invalidResponse(message: string): Error {
@@ -136,19 +129,10 @@ export async function searchWithKeenable(query: string, options: SearchOptions =
 			activityMonitor.logComplete(activityId, 0);
 			throw new Error("Aborted");
 		}
-		const message = errorMessage(err);
 		const providerTimeout = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError");
 		const outgoing = providerTimeout
 			? new Error(`Keenable request timed out after ${Math.round(SEARCH_TIMEOUT_MS / 1000)}s`)
-			: (() => {
-				const redactedMessage = redactCredential(message, apiKey);
-				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = err instanceof SearchHttpError
-					? new SearchHttpError(err.status, redactedMessage)
-					: new Error(redactedMessage);
-				if (err instanceof Error) redactedError.name = err.name;
-				return redactedError;
-			})();
+			: redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
 		activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
 		throw outgoing;
 	}
@@ -169,9 +153,9 @@ export async function searchWithKeenable(query: string, options: SearchOptions =
 		if (seen.has(resultUrl.href)) continue;
 		seen.add(resultUrl.href);
 		// The page text lives in `snippet`; `description` is usually empty and only a fallback.
-		const snippet = text(entry.snippet) || text(entry.description);
+		const snippet = normalizeSearchText(entry.snippet) || normalizeSearchText(entry.description);
 		results.push({
-			title: text(entry.title) || `Source ${results.length + 1}`,
+			title: normalizeSearchText(entry.title) || `Source ${results.length + 1}`,
 			url: resultUrl.href,
 			snippet: snippet.slice(0, MAX_SNIPPET_CHARS),
 		});

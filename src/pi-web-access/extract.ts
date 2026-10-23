@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { extractHeadingTitle, type ExtractedContent, type ExtractOptions, type RegisteredToolNames } from "./content.ts";
 import { webFetch as fetch, type ProxiedRequestInit } from "./proxy-transport.ts";
 import { extractMediaFrames } from "./media-frames.ts";
@@ -110,10 +111,6 @@ export { loadSsrfConfig } from "./ssrf-protection.ts";
 
 export function loadSsrfAllowRanges(): string[] {
 	return loadSsrfConfig().allowRanges;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function isConfigParseError(err: unknown): boolean {

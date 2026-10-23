@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
@@ -75,10 +76,6 @@ function buildSearchPrompt(query: string, options: SearchOptions, numResults: nu
 	if (filters.include.length > 0) lines.push(`Only use sources from: ${filters.include.slice(0, 100).join(", ")}.`);
 	if (filters.exclude.length > 0) lines.push(`Do not use sources from: ${filters.exclude.slice(0, 100).join(", ")}.`);
 	return lines.length > 0 ? `${lines.join(" ")}\n\n${query}` : query;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function invalidResponse(message: string): Error {

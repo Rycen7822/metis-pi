@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath, resolveApiBaseUrl } from "./utils.ts";
@@ -94,10 +95,6 @@ function mapDomainFilter(domainFilter: string[] | undefined): { include_domains?
 function requestSignal(signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function mapResults(results: TavilyResult[] | undefined, numResults: number): SearchResponse["results"] {

@@ -39,8 +39,8 @@ function isTimeoutError(err) {
   const message = err.message ?? "";
   return name === "AbortError" || code === "ETIMEDOUT" || message.toLowerCase().includes("timed out");
 }
-function trimErrorText(text4) {
-  return text4.replace(/\s+/g, " ").trim().slice(0, 200);
+function trimErrorText(text) {
+  return text.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 function mapFfmpegError(err) {
   const { code, stderr, message } = readExecError(err);
@@ -968,10 +968,10 @@ function writeCloneRuntimeOwner(runtimePath) {
     mode: 384
   });
 }
-function parseCloneRuntimeOwner(text4) {
+function parseCloneRuntimeOwner(text) {
   let parsed;
   try {
-    parsed = JSON.parse(text4);
+    parsed = JSON.parse(text);
   } catch {
     return null;
   }
@@ -1695,8 +1695,8 @@ var init_github_extract = __esm({
 // src/pi-web-access/credential-source.ts
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-function redactCredential(text4, credential) {
-  return credential ? text4.split(credential).join("[redacted]") : text4;
+function redactCredential(text, credential) {
+  return credential ? text.split(credential).join("[redacted]") : text;
 }
 function normalize(value) {
   if (typeof value !== "string") return null;
@@ -1835,6 +1835,46 @@ var init_credential_source = __esm({
   }
 });
 
+// src/pi-web-access/search-types.ts
+var SearchUnsupportedFilterError, SearchHttpError;
+var init_search_types = __esm({
+  "src/pi-web-access/search-types.ts"() {
+    SearchUnsupportedFilterError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "SearchUnsupportedFilterError";
+      }
+    };
+    SearchHttpError = class extends Error {
+      status;
+      constructor(status, message) {
+        super(message);
+        this.name = "SearchHttpError";
+        this.status = status;
+      }
+    };
+  }
+});
+
+// src/pi-web-access/search-error-redaction.ts
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function redactSearchFailure(error, credential) {
+  const message = errorMessage(error);
+  const redacted = redactCredential(message, credential);
+  if (redacted === message) return { message, error };
+  const safeError = error instanceof SearchHttpError ? new SearchHttpError(error.status, redacted) : new Error(redacted);
+  if (error instanceof Error) safeError.name = error.name;
+  return { message: redacted, error: safeError };
+}
+var init_search_error_redaction = __esm({
+  "src/pi-web-access/search-error-redaction.ts"() {
+    init_credential_source();
+    init_search_types();
+  }
+});
+
 // src/pi-web-access/gemini-adc.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
 import { createSign } from "node:crypto";
@@ -1903,10 +1943,10 @@ function parseAdcFile(raw) {
   }
   return { type };
 }
-function parseTokenExchangeResponse(text4, context) {
+function parseTokenExchangeResponse(text, context) {
   let raw;
   try {
-    raw = JSON.parse(text4);
+    raw = JSON.parse(text);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`${context} returned invalid JSON: ${message}`);
@@ -1954,11 +1994,11 @@ async function exchangeRefreshToken(cfg, signal) {
     body,
     signal
   });
-  const text4 = await res.text();
+  const text = await res.text();
   if (!res.ok) {
-    throwOnTokenExchangeFailure(text4, res.status);
+    throwOnTokenExchangeFailure(text, res.status);
   }
-  return parseTokenExchangeResponse(text4, "Gemini ADC token exchange");
+  return parseTokenExchangeResponse(text, "Gemini ADC token exchange");
 }
 async function exchangeServiceAccountJwt(cfg, signal) {
   if (!cfg.client_email || !cfg.private_key) {
@@ -1991,11 +2031,11 @@ async function exchangeServiceAccountJwt(cfg, signal) {
     body,
     signal
   });
-  const text4 = await res.text();
+  const text = await res.text();
   if (!res.ok) {
-    throwOnTokenExchangeFailure(text4, res.status);
+    throwOnTokenExchangeFailure(text, res.status);
   }
-  return parseTokenExchangeResponse(text4, "Gemini ADC service account token exchange");
+  return parseTokenExchangeResponse(text, "Gemini ADC service account token exchange");
 }
 async function getAdcAccessToken(signal) {
   if (cachedToken && cachedToken.expiresAt > Date.now()) {
@@ -2113,14 +2153,14 @@ function buildAuthHeaders(apiKey = null, cloudflareApiKey = getLegacyCloudflareA
   if (!isCloudflareGateway()) return apiKey ? { "x-goog-api-key": apiKey } : {};
   return cloudflareApiKey ? { "cf-aig-authorization": `Bearer ${cloudflareApiKey}` } : {};
 }
-function redactGeminiCredentials(text4, apiKey, cloudflareApiKey, adcToken) {
-  let out = redactCredential(redactCredential(text4, apiKey), cloudflareApiKey);
+function redactGeminiCredentials(text, apiKey, cloudflareApiKey, adcToken) {
+  let out = redactCredential(redactCredential(text, apiKey), cloudflareApiKey);
   if (adcToken) out = redactCredential(out, adcToken);
   return out;
 }
-function redactGeminiApiResponse(response, text4, apiKey, adcToken) {
+function redactGeminiApiResponse(response, text, apiKey, adcToken) {
   const credentials = responseCredentials.get(response);
-  return redactGeminiCredentials(text4, credentials?.apiKey ?? apiKey, credentials?.cloudflareApiKey, credentials?.adcToken ?? adcToken);
+  return redactGeminiCredentials(text, credentials?.apiKey ?? apiKey, credentials?.cloudflareApiKey, credentials?.adcToken ?? adcToken);
 }
 async function fetchGeminiApi(url, init = {}, apiKey) {
   const parsedUrl = new URL(url);
@@ -2220,9 +2260,9 @@ async function queryGeminiApiWithInlineData(prompt, data, mimeType, options = {}
   }
   const response = await res.json();
   const candidate = response.candidates?.[0];
-  const text4 = candidate?.content?.parts?.map((part) => part.text).filter((part) => typeof part === "string" && part.length > 0).join("\n") ?? "";
+  const text = candidate?.content?.parts?.map((part) => part.text).filter((part) => typeof part === "string" && part.length > 0).join("\n") ?? "";
   return {
-    text: text4,
+    text,
     ...candidate?.finishReason ? { finishReason: candidate.finishReason } : {},
     ...response.promptFeedback?.blockReason ? { blockReason: response.promptFeedback.blockReason } : {}
   };
@@ -2263,9 +2303,9 @@ async function queryGeminiApiWithVideo(prompt, videoUri, options = {}) {
     throw new Error(`Gemini API error ${res.status}: ${errorText.slice(0, 300)}`);
   }
   const data = await res.json();
-  const text4 = data.candidates?.[0]?.content?.parts?.map((p) => p.text).filter(Boolean).join("\n");
-  if (!text4) throw new Error("Gemini API returned empty response");
-  return text4;
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).filter(Boolean).join("\n");
+  if (!text) throw new Error("Gemini API returned empty response");
+  return text;
 }
 var DEFAULT_API_HOST, API_VERSION, API_BASE, CONFIG_PATH, DEFAULT_MODEL, cachedConfig3, responseCredentials;
 var init_gemini_api = __esm({
@@ -3129,8 +3169,8 @@ function extractEmailFromGeminiHtml(html) {
   }
   return findFirstEmail(html);
 }
-function extractEmailFromListAccounts(text4) {
-  const trimmed = text4.replace(/^\)\]\}'\s*/, "");
+function extractEmailFromListAccounts(text) {
+  const trimmed = text.replace(/^\)\]\}'\s*/, "");
   try {
     return findEmailInValue(JSON.parse(trimmed)) ?? findFirstEmail(trimmed);
   } catch {
@@ -3154,8 +3194,8 @@ function findEmailInValue(value) {
   }
   return null;
 }
-function findFirstEmail(text4) {
-  const normalized = decodeEmailEscapes(text4);
+function findFirstEmail(text) {
+  const normalized = decodeEmailEscapes(text);
   const match = normalized.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
   return match?.[0] ?? null;
 }
@@ -3197,8 +3237,8 @@ Content-Type: ${file.mimeType}\r
     signal
   });
   if (!res.ok) {
-    const text4 = await res.text();
-    throw new Error(`File upload failed: ${res.status} (${text4.slice(0, 200)})`);
+    const text = await res.text();
+    throw new Error(`File upload failed: ${res.status} (${text.slice(0, 200)})`);
   }
   return { id: await res.text(), name: fileName };
 }
@@ -3223,22 +3263,22 @@ function getNestedValue(value, pathParts) {
   }
   return current;
 }
-function trimJsonEnvelope(text4) {
-  const start = text4.indexOf("[");
-  const end = text4.lastIndexOf("]");
+function trimJsonEnvelope(text) {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
   if (start === -1 || end === -1 || end <= start) {
     throw new Error("Gemini response did not contain a JSON payload.");
   }
-  return text4.slice(start, end + 1);
+  return text.slice(start, end + 1);
 }
 function extractCandidateText(candidate) {
   const textRaw = getNestedValue(candidate, [1, 0]);
-  let text4 = typeof textRaw === "string" ? textRaw : "";
-  if (/^http:\/\/googleusercontent\.com\/card_content\/\d+/.test(text4)) {
+  let text = typeof textRaw === "string" ? textRaw : "";
+  if (/^http:\/\/googleusercontent\.com\/card_content\/\d+/.test(text)) {
     const alt = getNestedValue(candidate, [22, 0]);
-    if (typeof alt === "string" && alt.length > 0) text4 = alt;
+    if (typeof alt === "string" && alt.length > 0) text = alt;
   }
-  return text4;
+  return text;
 }
 function parseStreamGenerateResponse(rawText) {
   const responseJson = JSON.parse(trimJsonEnvelope(rawText));
@@ -3252,8 +3292,8 @@ function parseStreamGenerateResponse(rawText) {
       const candidateList = getNestedValue(parsed, [4]);
       if (!Array.isArray(candidateList) || candidateList.length === 0) continue;
       const firstCandidate = candidateList[0];
-      const text4 = extractCandidateText(firstCandidate);
-      if (text4.length > 0) latestNonEmptyText = text4;
+      const text = extractCandidateText(firstCandidate);
+      if (text.length > 0) latestNonEmptyText = text;
     } catch {
     }
   }
@@ -3282,27 +3322,6 @@ var init_gemini_web = __esm({
     geminiFetchImpl = null;
     geminiFetchOverride = null;
     GEMINI_MAX_HEADER_SIZE = 4 * 1024 * 1024;
-  }
-});
-
-// src/pi-web-access/search-types.ts
-var SearchUnsupportedFilterError, SearchHttpError;
-var init_search_types = __esm({
-  "src/pi-web-access/search-types.ts"() {
-    SearchUnsupportedFilterError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "SearchUnsupportedFilterError";
-      }
-    };
-    SearchHttpError = class extends Error {
-      status;
-      constructor(status, message) {
-        super(message);
-        this.name = "SearchHttpError";
-        this.status = status;
-      }
-    };
   }
 });
 
@@ -3356,11 +3375,11 @@ var init_domain_filter_normalization = __esm({
 });
 
 // src/pi-web-access/search-answer-formatting.ts
-function extractSnippetAround(text4, start, end) {
-  if (typeof start !== "number" || typeof end !== "number" || !text4) return "";
+function extractSnippetAround(text, start, end) {
+  if (typeof start !== "number" || typeof end !== "number" || !text) return "";
   const before = Math.max(0, start - 100);
-  const after = Math.min(text4.length, end + 100);
-  const snippet = text4.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+  const after = Math.min(text.length, end + 100);
+  const snippet = text.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
   return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
 }
 function extractAnswer(output) {
@@ -3371,11 +3390,14 @@ function extractAnswer(output) {
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
-      const text4 = part.text;
-      if (typeof text4 === "string" && text4.trim().length > 0) parts.push(text4);
+      const text = part.text;
+      if (typeof text === "string" && text.trim().length > 0) parts.push(text);
     }
   }
   return parts.join("\n").trim();
+}
+function normalizeSearchText(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 function formatSearchResultsAsAnswer(results) {
   return results.map((result) => result.snippet ? `${result.snippet}
@@ -3550,22 +3572,6 @@ var init_perplexity = __esm({
   }
 });
 
-// src/pi-web-access/search-error-redaction.ts
-function redactSearchFailure(error, credential) {
-  const message = error instanceof Error ? error.message : String(error);
-  const redacted = redactCredential(message, credential);
-  if (redacted === message) return { message, error };
-  const safeError = error instanceof SearchHttpError ? new SearchHttpError(error.status, redacted) : new Error(redacted);
-  if (error instanceof Error) safeError.name = error.name;
-  return { message: redacted, error: safeError };
-}
-var init_search_error_redaction = __esm({
-  "src/pi-web-access/search-error-redaction.ts"() {
-    init_credential_source();
-    init_search_types();
-  }
-});
-
 // src/pi-web-access/parallel.ts
 function loadConfig8() {
   return cachedConfig9 ??= loadWebAccessConfig();
@@ -3628,9 +3634,6 @@ function isParallelAvailable() {
 function requestSignal2(signal) {
   const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS3);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-function errorMessage2(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function activityContext(url, body) {
   if (typeof body.objective === "string" && body.objective.trim().length > 0) {
@@ -3772,7 +3775,7 @@ async function parallelFetch(url, body, signal) {
       signal: requestSignal2(signal)
     }, ["x-api-key"]);
   } catch (err) {
-    const message = errorMessage2(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -3799,6 +3802,7 @@ async function parallelFetch(url, body, signal) {
 var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH6, MIN_PARALLEL_API_KEY_LENGTH, MIN_USEFUL_CONTENT, SEARCH_TIMEOUT_MS3, PLACEHOLDER_API_KEY_DENYLIST, cachedConfig9;
 var init_parallel = __esm({
   "src/pi-web-access/parallel.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -3832,9 +3836,6 @@ var init_parallel = __esm({
 function requestSignal3(signal) {
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS2);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-function errorMessage3(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function filterResults(results, domainFilter) {
   if (!domainFilter?.length) return results;
@@ -3871,8 +3872,8 @@ async function callParallelMcp(toolName, args, signal) {
       signal: requestSignal3(signal)
     });
   } catch (err) {
-    const message = apiKey ? redactCredential(errorMessage3(err), apiKey) : errorMessage3(err);
-    if (message === errorMessage3(err)) throw err;
+    const message = apiKey ? redactCredential(errorMessage(err), apiKey) : errorMessage(err);
+    if (message === errorMessage(err)) throw err;
     throw new Error(message);
   }
   const body = await response.text();
@@ -3902,20 +3903,20 @@ async function callParallelMcp(toolName, args, signal) {
     throw new Error(`Parallel MCP error${code}: ${message}`);
   }
   if (parsed.result?.isError) {
-    const text5 = parsed.result.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text?.trim() || "Parallel MCP returned an error";
-    throw new Error(apiKey ? redactCredential(text5, apiKey) : text5);
+    const text2 = parsed.result.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text?.trim() || "Parallel MCP returned an error";
+    throw new Error(apiKey ? redactCredential(text2, apiKey) : text2);
   }
   if (parsed.result?.structuredContent && typeof parsed.result.structuredContent === "object") return parsed.result.structuredContent;
-  const text4 = parsed.result?.content?.find((item) => item.type === "text" && typeof item.text === "string" && item.text.trim())?.text;
-  if (!text4) throw new Error("Parallel MCP returned empty content");
+  const text = parsed.result?.content?.find((item) => item.type === "text" && typeof item.text === "string" && item.text.trim())?.text;
+  if (!text) throw new Error("Parallel MCP returned empty content");
   try {
-    return JSON.parse(text4);
+    return JSON.parse(text);
   } catch {
-    return text4;
+    return text;
   }
 }
-function parseTextResults(text4) {
-  return text4.split(/(?=^Title: )/m).flatMap((block) => {
+function parseTextResults(text) {
+  return text.split(/(?=^Title: )/m).flatMap((block) => {
     const url = block.match(/^URL: (.+)/m)?.[1]?.trim();
     if (!url) return [];
     const title = block.match(/^Title: (.+)/m)?.[1]?.trim() ?? "";
@@ -3970,7 +3971,7 @@ Source: ${title} (${result.url})`);
     response.answer = parts.join("\n\n");
     return response;
   } catch (err) {
-    const message = errorMessage3(err);
+    const message = errorMessage(err);
     if (message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, message);
     throw err;
@@ -3996,7 +3997,7 @@ async function extractWithParallelMcp(url, signal, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return content ? { url: result.url, title: result.title || "", content, error: null } : null;
   } catch (err) {
-    const message = errorMessage3(err);
+    const message = errorMessage(err);
     if (message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, message);
     throw err;
@@ -4005,6 +4006,7 @@ async function extractWithParallelMcp(url, signal, options = {}) {
 var PARALLEL_MCP_URL, CONFIG_PATH7, REQUEST_TIMEOUT_MS2;
 var init_parallel_mcp = __esm({
   "src/pi-web-access/parallel-mcp.ts"() {
+    init_search_error_redaction();
     init_activity();
     init_proxy_transport();
     init_credential_source();
@@ -4046,9 +4048,6 @@ function isTinyFishAvailable() {
     environmentValue: process.env.TINYFISH_API_KEY
   });
 }
-function errorMessage4(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function requestSignal4(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -4086,7 +4085,7 @@ async function tinyFishJsonRequest(label, url, apiKey, init, timeoutMs, signal) 
       signal: requestSignal4(signal, timeoutMs)
     }, ["X-API-Key", "Authorization", "Cookie"]);
   } catch (err) {
-    const message = errorMessage4(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage === message) throw err;
     const redactedError = new Error(redactedMessage);
@@ -4215,7 +4214,7 @@ async function searchWithTinyFish(query, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return response;
   } catch (err) {
-    const message = errorMessage4(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -4247,7 +4246,7 @@ async function extractWithTinyFish(url, signal, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return null;
   } catch (err) {
-    const message = errorMessage4(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -4260,6 +4259,7 @@ async function extractWithTinyFish(url, signal, options = {}) {
 var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH8, SEARCH_TIMEOUT_MS4, FETCH_TIMEOUT_MS, MAX_FETCH_URLS, MAX_FETCH_PER_URL_TIMEOUT_MS, cachedConfig10;
 var init_tinyfish = __esm({
   "src/pi-web-access/tinyfish.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -4485,9 +4485,6 @@ function isQueritAvailable() {
     environmentValue: process.env.QUERIT_API_KEY
   });
 }
-function errorMessage5(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function requestSignal7(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -4546,7 +4543,7 @@ async function queritJsonRequest(label, url, apiKey, body, timeoutMs, signal) {
       signal: requestSignal7(signal, timeoutMs)
     });
   } catch (err) {
-    const message = errorMessage5(err);
+    const message = errorMessage(err);
     const isRequestAbort = err instanceof Error ? err.name === "AbortError" || err.name === "TimeoutError" || /abort|timeout/i.test(message) : /abort|timeout/i.test(message);
     if (!signal?.aborted && isRequestAbort) {
       const timeoutError = new Error(`Querit ${label} API request timed out after ${Math.ceil(timeoutMs / 1e3)} seconds`);
@@ -4664,7 +4661,7 @@ async function searchWithQuerit(query, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return response;
   } catch (err) {
-    const message = errorMessage5(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (options.signal?.aborted) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -4691,7 +4688,7 @@ async function extractWithQuerit(url, signal, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return null;
   } catch (err) {
-    const message = errorMessage5(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (signal?.aborted) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -4704,6 +4701,7 @@ async function extractWithQuerit(url, signal, options = {}) {
 var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH11, SEARCH_TIMEOUT_MS7, CONTENTS_TIMEOUT_MS, MAX_CONTENT_URLS, cachedConfig13;
 var init_querit = __esm({
   "src/pi-web-access/querit.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_proxy_transport();
     init_activity();
@@ -5161,11 +5159,8 @@ function requestSignal9(timeoutMs, signal) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
-function errorMessage8(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isAbortError2(err) {
-  return errorMessage8(err).toLowerCase().includes("abort");
+  return errorMessage(err).toLowerCase().includes("abort");
 }
 function ssrfOptions(options) {
   const config = loadSsrfConfig();
@@ -5278,8 +5273,8 @@ async function firecrawlFetch(endpoint, body, signal, options, label = endpoint,
       signal: requestSignal9(options?.timeoutMs ?? EXTRACT_TIMEOUT_MS, signal)
     }, options);
     if (!response.ok) {
-      const text4 = await response.text().catch(() => "");
-      throw new SearchHttpError(response.status, `Firecrawl ${label} error ${response.status}: ${redactCredential(text4, apiKey).slice(0, 300)}`);
+      const text = await response.text().catch(() => "");
+      throw new SearchHttpError(response.status, `Firecrawl ${label} error ${response.status}: ${redactCredential(text, apiKey).slice(0, 300)}`);
     }
     let data;
     try {
@@ -5302,7 +5297,7 @@ async function firecrawlFetch(endpoint, body, signal, options, label = endpoint,
     activityMonitor.logComplete(activityId, response.status);
     return envelope;
   } catch (err) {
-    const message = errorMessage8(err), redactedMessage = redactCredential(message, apiKey);
+    const message = errorMessage(err), redactedMessage = redactCredential(message, apiKey);
     if (isAbortError2(err)) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
     if (redactedMessage === message) throw err;
@@ -5356,6 +5351,7 @@ async function extractWithFirecrawl(url, signal, options) {
 var CONFIG_PATH14, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, SUPPORTED_API_VERSIONS, cachedConfig16;
 var init_firecrawl = __esm({
   "src/pi-web-access/firecrawl.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_hostname();
     init_activity();
@@ -5397,9 +5393,6 @@ Create a key at https://kagi.com/settings?p=api`
     );
   }
   return apiKey;
-}
-function errorMessage10(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse(message) {
   return new Error(`Kagi API returned invalid response: ${message}`);
@@ -5524,7 +5517,7 @@ async function searchWithKagi(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage10(err);
+    const message = errorMessage(err);
     const safeMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "Kagi request timed out after 60s" : redactCredential(message, apiKey);
     const outgoing = safeMessage === message && err instanceof Error ? err : err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage) : err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
     if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
@@ -5579,7 +5572,7 @@ async function extractWithKagi(url, signal, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage10(err);
+    const message = errorMessage(err);
     const safeMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "Kagi extract request timed out" : redactCredential(message, apiKey);
     const outgoing = safeMessage === message && err instanceof Error ? err : err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage) : err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
     if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
@@ -5590,6 +5583,7 @@ async function extractWithKagi(url, signal, options = {}) {
 var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH17, SEARCH_TIMEOUT_MS13, cachedConfig19;
 var init_kagi = __esm({
   "src/pi-web-access/kagi.ts"() {
+    init_search_error_redaction();
     init_search_types();
     init_proxy_transport();
     init_utils();
@@ -5630,9 +5624,6 @@ Create a key at https://ollama.com/settings/keys`
     );
   }
   return apiKey;
-}
-function errorMessage11(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse3(message) {
   return new Error(`Ollama API returned invalid response: ${message}`);
@@ -5678,7 +5669,7 @@ async function searchWithOllama(query, options = {}) {
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS15), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS15)
     });
   } catch (err) {
-    const message = errorMessage11(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -5697,13 +5688,13 @@ async function searchWithOllama(query, options = {}) {
     rawData = await response.json();
   } catch (err) {
     activityMonitor.logComplete(activityId, response.status);
-    throw new Error(`Ollama API returned invalid JSON: ${errorMessage11(err)}`);
+    throw new Error(`Ollama API returned invalid JSON: ${errorMessage(err)}`);
   }
   let data;
   try {
     data = parseSearchResponse3(rawData);
   } catch (err) {
-    activityMonitor.logError(activityId, errorMessage11(err));
+    activityMonitor.logError(activityId, errorMessage(err));
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -5745,7 +5736,7 @@ async function extractWithOllama(url, signal, options = {}) {
       ...options.lookup ? { lookup: options.lookup } : {}
     });
   } catch (err) {
-    const message = errorMessage11(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -5764,13 +5755,13 @@ async function extractWithOllama(url, signal, options = {}) {
     rawData = await response.json();
   } catch (err) {
     activityMonitor.logComplete(activityId, response.status);
-    throw new Error(`Ollama Web Fetch returned invalid JSON: ${errorMessage11(err)}`);
+    throw new Error(`Ollama Web Fetch returned invalid JSON: ${errorMessage(err)}`);
   }
   let data;
   try {
     data = parseFetchResponse(rawData);
   } catch (err) {
-    activityMonitor.logError(activityId, errorMessage11(err));
+    activityMonitor.logError(activityId, errorMessage(err));
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -5781,6 +5772,7 @@ async function extractWithOllama(url, signal, options = {}) {
 var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH19, SEARCH_TIMEOUT_MS15, cachedConfig21;
 var init_ollama = __esm({
   "src/pi-web-access/ollama.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_proxy_transport();
     init_activity();
@@ -5915,8 +5907,8 @@ var init_auth_fetch = __esm({
 });
 
 // src/pi-web-access/content.ts
-function extractHeadingTitle(text4) {
-  const match = text4.match(/^#{1,2}\s+(.+)/m);
+function extractHeadingTitle(text) {
+  const match = text.match(/^#{1,2}\s+(.+)/m);
   if (!match) return null;
   const cleaned = match[1].replace(/\*+/g, "").trim();
   return cleaned || null;
@@ -6111,7 +6103,7 @@ async function tryVideoGeminiWeb(info, prompt, model, signal) {
     const cookies = await isGeminiWebAvailable();
     if (!cookies) return null;
     if (signal?.aborted) return null;
-    const text4 = await queryWithCookies(prompt, cookies, {
+    const text = await queryWithCookies(prompt, cookies, {
       files: [{ path: info.absolutePath, mimeType: info.mimeType }],
       ...model !== "gemini-3.6-flash" ? { model } : {},
       signal,
@@ -6119,8 +6111,8 @@ async function tryVideoGeminiWeb(info, prompt, model, signal) {
     });
     return {
       url: info.absolutePath,
-      title: extractVideoTitle(text4, info.absolutePath),
-      content: text4,
+      title: extractVideoTitle(text, info.absolutePath),
+      content: text,
       error: null
     };
   } catch (err) {
@@ -6137,7 +6129,7 @@ async function tryVideoGeminiApi(info, prompt, model, signal) {
     const uploaded = await uploadToFilesApi(info, apiKey, signal);
     fileName = uploaded.name;
     await pollFileState(fileName, apiKey, signal, 12e4);
-    const text4 = await queryGeminiApiWithVideo(prompt, uploaded.uri, {
+    const text = await queryGeminiApiWithVideo(prompt, uploaded.uri, {
       apiKey,
       model,
       mimeType: info.mimeType,
@@ -6146,8 +6138,8 @@ async function tryVideoGeminiApi(info, prompt, model, signal) {
     });
     return {
       url: info.absolutePath,
-      title: extractVideoTitle(text4, info.absolutePath),
-      content: text4,
+      title: extractVideoTitle(text, info.absolutePath),
+      content: text,
       error: null
     };
   } catch (err) {
@@ -6172,8 +6164,8 @@ async function uploadToFilesApi(info, apiKey, signal) {
     signal
   }, apiKey);
   if (!initRes.ok) {
-    const text4 = redactGeminiApiResponse(initRes, await initRes.text(), apiKey);
-    throw new Error(`File upload init failed: ${initRes.status} (${text4.slice(0, 200)})`);
+    const text = redactGeminiApiResponse(initRes, await initRes.text(), apiKey);
+    throw new Error(`File upload init failed: ${initRes.status} (${text.slice(0, 200)})`);
   }
   const uploadUrl = initRes.headers.get("x-goog-upload-url");
   if (!uploadUrl) throw new Error("No upload URL in response headers");
@@ -6189,8 +6181,8 @@ async function uploadToFilesApi(info, apiKey, signal) {
     signal
   }, apiKey);
   if (!uploadRes.ok) {
-    const text4 = redactGeminiApiResponse(uploadRes, await uploadRes.text(), apiKey);
-    throw new Error(`File upload failed: ${uploadRes.status} (${text4.slice(0, 200)})`);
+    const text = redactGeminiApiResponse(uploadRes, await uploadRes.text(), apiKey);
+    throw new Error(`File upload failed: ${uploadRes.status} (${text.slice(0, 200)})`);
   }
   const result = await uploadRes.json();
   return result.file;
@@ -6214,8 +6206,8 @@ function deleteGeminiFile(fileName, apiKey) {
     console.error(`Failed to delete Gemini file ${fileName}: ${message}`);
   });
 }
-function extractVideoTitle(text4, filePath) {
-  return extractHeadingTitle(text4) ?? basename3(filePath, extname2(filePath));
+function extractVideoTitle(text, filePath) {
+  return extractHeadingTitle(text) ?? basename3(filePath, extname2(filePath));
 }
 var execFileAsync, DEFAULT_VIDEO_PROMPT, VIDEO_EXTENSIONS, VIDEO_CONFIG_DEFAULTS, cachedVideoConfig;
 var init_video_extract = __esm({
@@ -6259,14 +6251,11 @@ Format as markdown.`;
 // src/pi-web-access/youtube-extract.ts
 import { execFile as execFile5 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-function errorMessage22(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function shouldRethrow2(err) {
-  return errorMessage22(err).startsWith("Failed to parse ");
+  return errorMessage(err).startsWith("Failed to parse ");
 }
 function addAttemptError(errors, label, err) {
-  const message = errorMessage22(err).replace(/\s+/g, " ").trim();
+  const message = errorMessage(err).replace(/\s+/g, " ").trim();
   if (message) errors.push(`${label}: ${message}`);
 }
 function normalizePreferredModel2(value, fallback) {
@@ -6416,7 +6405,7 @@ async function tryGeminiWeb(url, prompt, model, signal, attemptErrors) {
     const cookies = await isGeminiWebAvailable();
     if (!cookies) return null;
     if (signal?.aborted) return null;
-    const text4 = await queryWithCookies(prompt, cookies, {
+    const text = await queryWithCookies(prompt, cookies, {
       youtubeUrl: url,
       ...model !== "gemini-3.6-flash" ? { model } : {},
       signal,
@@ -6424,8 +6413,8 @@ async function tryGeminiWeb(url, prompt, model, signal, attemptErrors) {
     });
     return {
       url,
-      title: extractHeadingTitle(text4) ?? "YouTube Video",
-      content: text4,
+      title: extractHeadingTitle(text) ?? "YouTube Video",
+      content: text,
       error: null
     };
   } catch (err) {
@@ -6438,15 +6427,15 @@ async function tryGeminiApi(url, prompt, model, signal, attemptErrors) {
   try {
     if (!isGeminiApiAvailableWithVideo()) return null;
     if (signal?.aborted) return null;
-    const text4 = await queryGeminiApiWithVideo(prompt, url, {
+    const text = await queryGeminiApiWithVideo(prompt, url, {
       model,
       signal,
       timeoutMs: 12e4
     });
     return {
       url,
-      title: extractHeadingTitle(text4) ?? "YouTube Video",
-      content: text4,
+      title: extractHeadingTitle(text) ?? "YouTube Video",
+      content: text,
       error: null
     };
   } catch (err) {
@@ -6481,6 +6470,7 @@ ${answer}
 var execFileAsync2, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig36;
 var init_youtube_extract = __esm({
   "src/pi-web-access/youtube-extract.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_proxy_transport();
     init_media_errors();
@@ -6875,8 +6865,8 @@ function extractRSCContent(html) {
       if (!Array.isArray(node)) return;
       if (node[0] === "$" && (node[1] === "td" || node[1] === "th")) {
         const cellProps = node[3] || {};
-        const text4 = extractNode(cellProps.children, { inTable: true, inCode: false }).trim().replace(/\n/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
-        cells.push(text4);
+        const text = extractNode(cellProps.children, { inTable: true, inCode: false }).trim().replace(/\n/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+        cells.push(text);
       } else if (node[0] === "$" && typeof node[1] === "string" && node[1].startsWith("$L")) {
         const refId = node[1].slice(2);
         if (!visitedRefs.has(refId)) {
@@ -6916,9 +6906,9 @@ function extractRSCContent(html) {
     const parsed = getParsedChunk(id);
     if (!parsed) continue;
     visitedRefs.clear();
-    const text4 = extractNode(parsed);
-    if (text4.trim().length > 50 && !text4.includes("page was not found") && !text4.includes("404")) {
-      contentParts.push({ order: parseInt(id, 16), text: text4.trim() });
+    const text = extractNode(parsed);
+    if (text.trim().length > 50 && !text.includes("page was not found") && !text.includes("404")) {
+      contentParts.push({ order: parseInt(id, 16), text: text.trim() });
     }
   }
   if (contentParts.length === 0) return null;
@@ -7235,18 +7225,18 @@ async function fetchDatalab(url, init, apiKey) {
   }
 }
 async function readJsonResponse(response, apiKey) {
-  const text4 = await readResponseText(response);
+  const text = await readResponseText(response);
   if (!response.ok) {
-    const detail = redactCredential(text4.trim(), apiKey).slice(0, MAX_ERROR_BODY_BYTES);
+    const detail = redactCredential(text.trim(), apiKey).slice(0, MAX_ERROR_BODY_BYTES);
     const message = detail ? `Datalab PDF conversion failed: HTTP ${response.status} ${response.statusText}: ${detail}` : `Datalab PDF conversion failed: HTTP ${response.status} ${response.statusText}`;
     throw new Error(redactCredential(message, apiKey));
   }
-  return parseJsonRecord(text4);
+  return parseJsonRecord(text);
 }
-function parseJsonRecord(text4) {
+function parseJsonRecord(text) {
   let parsed;
   try {
-    parsed = JSON.parse(text4);
+    parsed = JSON.parse(text);
   } catch {
     throw new Error("Datalab PDF conversion returned invalid JSON");
   }
@@ -7657,11 +7647,8 @@ function validOwner(owner) {
 function validRepo(repo) {
   return /^[A-Za-z0-9._-]{1,100}$/.test(repo) && repo !== "." && repo !== "..";
 }
-function errorMessage23(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isAbortError4(err) {
-  return errorMessage23(err).toLowerCase().includes("abort");
+  return errorMessage(err).toLowerCase().includes("abort");
 }
 function parseGitHubIssuePrUrl(url) {
   let parsed;
@@ -7897,7 +7884,7 @@ async function restFallback(url, info, options, signal) {
     return { data: { url, owner: info.owner, repo: info.repo, kind: info.kind, number: info.number, anchor: info.anchor, view, reviewThreads, fallbackNotes: notes } };
   } catch (err) {
     if (signal?.aborted || isAbortError4(err)) return { url, title: "", content: "", error: "Aborted" };
-    const message = errorMessage23(err);
+    const message = errorMessage(err);
     return { url, title: `${info.owner}/${info.repo}#${info.number}`, content: message, error: `GitHub REST fallback failed: ${message}` };
   }
 }
@@ -7955,12 +7942,12 @@ function milestoneTitle(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "none";
   return stringValue(value.title) || "none";
 }
-function truncateText(text4, limit, label, appendix) {
-  if (text4.length <= limit) return text4;
+function truncateText(text, limit, label, appendix) {
+  if (text.length <= limit) return text;
   appendix.push(`## Full ${label}
 
-${text4}`);
-  return `${text4.slice(0, limit)}
+${text}`);
+  return `${text.slice(0, limit)}
 
 [${label} truncated; use get_search_content findText or offset for the full text]`;
 }
@@ -8216,6 +8203,7 @@ async function extractGitHubIssuePr(url, signal, options) {
 var GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMENT_INLINE_CHARS, MAX_INLINE_COMMENTS, MAX_INLINE_REVIEWS, MAX_INLINE_CHECKS, MAX_INLINE_FILES, MAX_INLINE_COMMITS, MAX_INLINE_REVIEW_THREADS, REST_HEADERS, PR_SUBPATHS, PR_FIELDS, PR_CORE_FIELDS, ISSUE_FIELDS, ISSUE_CORE_FIELDS, cachedConfig38;
 var init_github_issue_pr = __esm({
   "src/pi-web-access/github-issue-pr.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_github_api();
     init_ssrf_protection();
@@ -8361,14 +8349,14 @@ async function extractWithGeminiWeb(url, signal) {
   if (!cookies) return null;
   const activityId = activityMonitor.logStart({ type: "api", query: `gemini_web: ${url}` });
   try {
-    const text4 = await queryWithCookies(EXTRACTION_PROMPT + url, cookies, {
+    const text = await queryWithCookies(EXTRACTION_PROMPT + url, cookies, {
       signal,
       timeoutMs: 6e4
     });
     activityMonitor.logComplete(activityId, 200);
-    if (!text4 || text4.length < 50) return null;
-    const title = extractTitleFromContent(text4, url);
-    return { url, title, content: text4, error: null };
+    if (!text || text.length < 50) return null;
+    const title = extractTitleFromContent(text, url);
+    return { url, title, content: text, error: null };
   } catch (err) {
     if (shouldRethrow3(err)) throw err;
     const message = err instanceof Error ? err.message : String(err);
@@ -8380,8 +8368,8 @@ async function extractWithGeminiWeb(url, signal) {
     return null;
   }
 }
-function extractTitleFromContent(text4, url) {
-  return extractHeadingTitle(text4) ?? (new URL(url).pathname.split("/").pop() || url);
+function extractTitleFromContent(text, url) {
+  return extractHeadingTitle(text) ?? (new URL(url).pathname.split("/").pop() || url);
 }
 var EXTRACTION_PROMPT;
 var init_gemini_url_context = __esm({
@@ -8451,9 +8439,6 @@ function requestSignal13(timeoutMs, signal) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
-function errorMessage24(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isAbortException(err) {
   return err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError");
 }
@@ -8500,8 +8485,8 @@ async function extractWithCrawl4ai(url, signal, options) {
       }
     });
     if (!response.ok) {
-      const text4 = await response.text().catch(() => "");
-      throw new Error(`Crawl4AI md error ${response.status}: ${redactCredential(text4, token).slice(0, 300)}`);
+      const text = await response.text().catch(() => "");
+      throw new Error(`Crawl4AI md error ${response.status}: ${redactCredential(text, token).slice(0, 300)}`);
     }
     let data;
     try {
@@ -8529,13 +8514,14 @@ async function extractWithCrawl4ai(url, signal, options) {
     return { url, title: firstHeadingTitle(content), content, error: null };
   } catch (err) {
     if (signal?.aborted || isAbortException(err)) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, errorMessage24(err));
+    else activityMonitor.logError(activityId, errorMessage(err));
     throw err;
   }
 }
 var CONFIG_PATH33, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
   "src/pi-web-access/crawl4ai.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_hostname();
     init_activity();
@@ -8608,11 +8594,8 @@ function requestSignal14(timeoutMs, signal) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
-function errorMessage25(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isAbortError5(err) {
-  return errorMessage25(err).toLowerCase().includes("abort");
+  return errorMessage(err).toLowerCase().includes("abort");
 }
 function ssrfOptions3(options) {
   return {
@@ -8660,11 +8643,11 @@ async function brightDataRequest(url, zone, signal, options) {
       const errorText = await response.text().catch(() => "");
       throw new Error(`Bright Data Web Unlocker error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);
     }
-    const text4 = await response.text();
+    const text = await response.text();
     activityMonitor.logComplete(activityId, response.status);
-    return text4;
+    return text;
   } catch (err) {
-    const message = errorMessage25(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (isAbortError5(err)) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -8674,8 +8657,8 @@ async function brightDataRequest(url, zone, signal, options) {
     throw redactedError;
   }
 }
-function headingTitle(text4) {
-  const match = text4.match(/^#{1,2}\s+(.+)/m);
+function headingTitle(text) {
+  const match = text.match(/^#{1,2}\s+(.+)/m);
   if (!match) return "";
   return match[1].replace(/\*+/g, "").trim();
 }
@@ -8698,6 +8681,7 @@ async function extractWithBrightDataUnlocker(url, signal, options) {
 var CONFIG_PATH34, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, ZONE_PATTERN2, cachedConfig40;
 var init_brightdata_unlocker = __esm({
   "src/pi-web-access/brightdata-unlocker.ts"() {
+    init_search_error_redaction();
     init_utils();
     init_activity();
     init_credential_source();
@@ -8865,33 +8849,33 @@ function sha256Bytes(value) {
 function asciiLowerCode(code) {
   return code >= 65 && code <= 90 ? code + 32 : code;
 }
-function matchesDataScheme(text4, index) {
-  return index + 5 <= text4.length && asciiLowerCode(text4.charCodeAt(index)) === 100 && asciiLowerCode(text4.charCodeAt(index + 1)) === 97 && asciiLowerCode(text4.charCodeAt(index + 2)) === 116 && asciiLowerCode(text4.charCodeAt(index + 3)) === 97 && text4.charCodeAt(index + 4) === 58;
+function matchesDataScheme(text, index) {
+  return index + 5 <= text.length && asciiLowerCode(text.charCodeAt(index)) === 100 && asciiLowerCode(text.charCodeAt(index + 1)) === 97 && asciiLowerCode(text.charCodeAt(index + 2)) === 116 && asciiLowerCode(text.charCodeAt(index + 3)) === 97 && text.charCodeAt(index + 4) === 58;
 }
-function isSchemeBoundary(text4, index) {
+function isSchemeBoundary(text, index) {
   if (index === 0) return true;
-  const code = text4.charCodeAt(index - 1);
+  const code = text.charCodeAt(index - 1);
   const alphaNumeric = code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122;
   return !alphaNumeric && code !== 43 && code !== 45 && code !== 46;
 }
-function findNextDataScheme(text4, from) {
-  for (let i = from; i + 5 <= text4.length; i++) {
-    if (matchesDataScheme(text4, i) && isSchemeBoundary(text4, i)) return i;
+function findNextDataScheme(text, from) {
+  for (let i = from; i + 5 <= text.length; i++) {
+    if (matchesDataScheme(text, i) && isSchemeBoundary(text, i)) return i;
   }
   return -1;
 }
-function dataUriEnclosure(text4, start) {
+function dataUriEnclosure(text, start) {
   if (start === 0) return null;
   const immediateIndex = start - 1;
-  const immediate = text4[immediateIndex];
+  const immediate = text[immediateIndex];
   if (immediate === '"' || immediate === "'" || immediate === "`") {
-    const beforeQuote = immediateIndex > 0 ? text4[immediateIndex - 1] : "";
+    const beforeQuote = immediateIndex > 0 ? text[immediateIndex - 1] : "";
     const likelyOpeningQuote = immediateIndex === 0 || beforeQuote === "=" || beforeQuote === "(" || beforeQuote === "[" || beforeQuote === "{" || beforeQuote === ":" || beforeQuote === "," || /\s/.test(beforeQuote);
     if (likelyOpeningQuote) return { kind: "quote", close: immediate };
   }
   let openerIndex = immediateIndex;
-  while (openerIndex >= 0 && (text4[openerIndex] === " " || text4[openerIndex] === "	")) openerIndex--;
-  const opener = text4[openerIndex];
+  while (openerIndex >= 0 && (text[openerIndex] === " " || text[openerIndex] === "	")) openerIndex--;
+  const opener = text[openerIndex];
   if (opener === "(") return { kind: "parentheses" };
   if (opener === "<") return { kind: "angle" };
   return null;
@@ -8900,13 +8884,13 @@ function isBareDataUriTerminator(ch) {
   const code = ch.charCodeAt(0);
   return code <= 32 || code === 127 || ch === '"' || ch === "`" || ch === "<" || ch === ">";
 }
-function scanDataUriCandidate(text4, start) {
-  const enclosure = dataUriEnclosure(text4, start);
+function scanDataUriCandidate(text, start) {
+  const enclosure = dataUriEnclosure(text, start);
   let comma = -1;
   let depth = enclosure?.kind === "parentheses" ? 1 : 0;
   let index = start + 5;
-  for (; index < text4.length; index++) {
-    const ch = text4[index];
+  for (; index < text.length; index++) {
+    const ch = text[index];
     if (enclosure?.kind === "quote") {
       if (ch === enclosure.close) break;
     } else if (enclosure?.kind === "parentheses") {
@@ -8925,16 +8909,16 @@ function scanDataUriCandidate(text4, start) {
   }
   return { end: index, comma, enclosure };
 }
-function headerEndsWithBase64(text4, headerStart, comma) {
+function headerEndsWithBase64(text, headerStart, comma) {
   let end = comma;
-  while (end > headerStart && (text4[end - 1] === " " || text4[end - 1] === "	")) end--;
+  while (end > headerStart && (text[end - 1] === " " || text[end - 1] === "	")) end--;
   const token = "base64";
   if (end - headerStart < token.length + 1) return false;
   const tokenStart = end - token.length;
   for (let i = 0; i < token.length; i++) {
-    if (asciiLowerCode(text4.charCodeAt(tokenStart + i)) !== token.charCodeAt(i)) return false;
+    if (asciiLowerCode(text.charCodeAt(tokenStart + i)) !== token.charCodeAt(i)) return false;
   }
-  return tokenStart > headerStart && text4[tokenStart - 1] === ";";
+  return tokenStart > headerStart && text[tokenStart - 1] === ";";
 }
 function isMimeTokenChar(code) {
   if (code < 33 || code > 126) return false;
@@ -8973,14 +8957,14 @@ function isMimeTokenChar(code) {
       return true;
   }
 }
-function normalizeMimeType(text4, headerStart, comma) {
+function normalizeMimeType(text, headerStart, comma) {
   let end = headerStart;
-  while (end < comma && text4[end] !== ";") end++;
+  while (end < comma && text[end] !== ";") end++;
   if (end === headerStart) return "text/plain";
   if (end - headerStart > MAX_MIME_CHARS) return "application/octet-stream";
   let slashCount = 0;
   for (let i = headerStart; i < end; i++) {
-    const code = text4.charCodeAt(i);
+    const code = text.charCodeAt(i);
     if (code === 47) {
       slashCount++;
       if (i === headerStart || i === end - 1) return "application/octet-stream";
@@ -8989,7 +8973,7 @@ function normalizeMimeType(text4, headerStart, comma) {
     if (!isMimeTokenChar(code)) return "application/octet-stream";
   }
   if (slashCount !== 1) return "application/octet-stream";
-  return text4.slice(headerStart, end).toLowerCase();
+  return text.slice(headerStart, end).toLowerCase();
 }
 function hexValue(code) {
   if (code >= 48 && code <= 57) return code - 48;
@@ -9063,14 +9047,14 @@ function buildDataUriMarker(omission) {
   const decodeError = omission.decodeError ? `; decodeError=${omission.decodeError}` : "";
   return `[pi-web-access inline data URI omitted; ordinal=${omission.ordinal}; source=${omission.sourcePath}; mime=${omission.mimeType}; encoding=${omission.encoding}; encodedBytes=${omission.encodedBytes}; decodedBytes=${decoded}${decodeError}; sha256=${omission.sha256}; digestBasis=${omission.digestBasis}; retrieval=not-retained]`;
 }
-function sanitizeTextInternal(text4, sourcePath, state) {
+function sanitizeTextInternal(text, sourcePath, state) {
   let scanFrom = 0;
   let retainedFrom = 0;
   const pieces = [];
-  while (scanFrom < text4.length) {
-    const start = findNextDataScheme(text4, scanFrom);
+  while (scanFrom < text.length) {
+    const start = findNextDataScheme(text, scanFrom);
     if (start < 0) break;
-    const candidate = scanDataUriCandidate(text4, start);
+    const candidate = scanDataUriCandidate(text, start);
     const end = candidate.end;
     const headerStart = start + 5;
     const missingComma = candidate.comma < 0;
@@ -9080,9 +9064,9 @@ function sanitizeTextInternal(text4, sourcePath, state) {
     }
     const headerEnd = missingComma ? end : candidate.comma;
     const headerLength = headerEnd - headerStart;
-    const encoding = headerEndsWithBase64(text4, headerStart, headerEnd) ? "base64" : "percent-encoded";
-    const mimeType = normalizeMimeType(text4, headerStart, headerEnd);
-    const payload = missingComma ? text4.slice(headerStart, end) : text4.slice(candidate.comma + 1, end);
+    const encoding = headerEndsWithBase64(text, headerStart, headerEnd) ? "base64" : "percent-encoded";
+    const mimeType = normalizeMimeType(text, headerStart, headerEnd);
+    const payload = missingComma ? text.slice(headerStart, end) : text.slice(candidate.comma + 1, end);
     const encodedBytes = Buffer3.byteLength(payload, "utf8");
     let decodedBytes = null;
     let decodeError;
@@ -9118,19 +9102,19 @@ function sanitizeTextInternal(text4, sourcePath, state) {
       retrieval: "not-retained"
     };
     const marker = buildDataUriMarker(omission);
-    const prefix = text4.slice(retainedFrom, start);
+    const prefix = text.slice(retainedFrom, start);
     pieces.push(prefix, marker);
     state.omissions.push(omission);
     retainedFrom = end;
     scanFrom = end;
   }
-  if (state.omissions.length === 0 && retainedFrom === 0) return text4;
-  pieces.push(text4.slice(retainedFrom));
+  if (state.omissions.length === 0 && retainedFrom === 0) return text;
+  pieces.push(text.slice(retainedFrom));
   return pieces.join("");
 }
-function sanitizeInlineDataUris(text4, sourcePath) {
+function sanitizeInlineDataUris(text, sourcePath) {
   const state = { omissions: [] };
-  const sanitized = sanitizeTextInternal(text4, sourcePath, state);
+  const sanitized = sanitizeTextInternal(text, sourcePath, state);
   return {
     text: sanitized,
     omissions: state.omissions
@@ -9178,10 +9162,10 @@ function isDefuddleConsoleError(args) {
   const prefix = args[0];
   return prefix === "Defuddle" || typeof prefix === "string" && /^Defuddle(?:\s|:)/.test(prefix);
 }
-async function extractWithDefuddle(text4, url) {
+async function extractWithDefuddle(text, url) {
   const { Defuddle } = await import("defuddle/node");
   const { parseHTML } = await import("linkedom");
-  const { document } = parseHTML(text4);
+  const { document } = parseHTML(text);
   Object.defineProperty(document, "location", {
     value: new URL(url),
     configurable: true
@@ -9205,21 +9189,18 @@ async function extractWithDefuddle(text4, url) {
   }
   const result = await resultPromise;
   if (processingError !== void 0) {
-    throw new Error(`Defuddle failed to process document: ${errorMessage26(processingError)}`);
+    throw new Error(`Defuddle failed to process document: ${errorMessage(processingError)}`);
   }
   return typeof result.content === "string" ? { title: result.title, content: result.content } : null;
 }
 function loadSsrfAllowRanges() {
   return loadSsrfConfig().allowRanges;
 }
-function errorMessage26(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isConfigParseError(err) {
-  return errorMessage26(err).startsWith("Failed to parse ");
+  return errorMessage(err).startsWith("Failed to parse ");
 }
 function isAbortError6(err) {
-  return errorMessage26(err).toLowerCase().includes("abort");
+  return errorMessage(err).toLowerCase().includes("abort");
 }
 function isAbortException2(err) {
   return err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError");
@@ -9234,7 +9215,7 @@ function imageGateError() {
   try {
     return isImageEnabled() ? null : "Image fetching is disabled by image.enabled";
   } catch (err) {
-    return errorMessage26(err);
+    return errorMessage(err);
   }
 }
 async function resolveAuthCookieHeader(url, profile) {
@@ -9393,7 +9374,7 @@ function safeVideoInfo(url) {
     const info = isVideoFile(url);
     return info ? { status: "video", info } : { status: "not-video" };
   } catch (err) {
-    return { status: "invalid", error: errorMessage26(err) };
+    return { status: "invalid", error: errorMessage(err) };
   }
 }
 async function extractContent(url, signal, options) {
@@ -9418,7 +9399,7 @@ async function extractContent(url, signal, options) {
         ...options?.lookup ? { lookup: options.lookup } : {}
       });
     } catch (err) {
-      return { url, title: "", content: "", error: errorMessage26(err) };
+      return { url, title: "", content: "", error: errorMessage(err) };
     }
   }
   if (options?.authFetchProfile || options?.mode === "raw") {
@@ -9426,7 +9407,7 @@ async function extractContent(url, signal, options) {
       const { failure: _failure, declaredLinks: _links, ...result } = await extractViaHttp(url, resolveFetchTimeoutMs(options), signal, options);
       return result;
     } catch (err) {
-      return { url, title: "", content: "", error: errorMessage26(err) };
+      return { url, title: "", content: "", error: errorMessage(err) };
     }
   }
   if (options?.frames || options?.timestamp) {
@@ -9454,20 +9435,20 @@ async function extractContent(url, signal, options) {
       };
     } catch (err) {
       if (isAbortError6(err)) return abortedResult(url);
-      return { url, title: "", content: "", error: errorMessage26(err) };
+      return { url, title: "", content: "", error: errorMessage(err) };
     }
   }
   try {
     if (!remoteUrl) new URL(url);
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage26(err) };
+    return { url, title: "", content: "", error: errorMessage(err) };
   }
   try {
     const ghIssuePrResult = await extractGitHubIssuePr(url, signal, options);
     if (ghIssuePrResult) return ghIssuePrResult;
     if (signal?.aborted) return abortedResult(url);
   } catch (err) {
-    const message = errorMessage26(err);
+    const message = errorMessage(err);
     if (isAbortError6(err)) return abortedResult(url);
     if (isConfigParseError(err)) {
       return { url, title: "", content: "", error: message };
@@ -9478,7 +9459,7 @@ async function extractContent(url, signal, options) {
     if (ghResult) return ghResult;
     if (signal?.aborted) return abortedResult(url);
   } catch (err) {
-    const message = errorMessage26(err);
+    const message = errorMessage(err);
     if (isAbortError6(err)) return abortedResult(url);
     if (isConfigParseError(err)) {
       return { url, title: "", content: "", error: message };
@@ -9489,7 +9470,7 @@ async function extractContent(url, signal, options) {
   try {
     youtubeEnabled = isYouTubeEnabled();
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage26(err) };
+    return { url, title: "", content: "", error: errorMessage(err) };
   }
   if (ytInfo.isYouTube && youtubeEnabled) {
     try {
@@ -9497,7 +9478,7 @@ async function extractContent(url, signal, options) {
       if (ytResult) return ytResult;
       if (signal?.aborted) return abortedResult(url);
     } catch (err) {
-      const message = errorMessage26(err);
+      const message = errorMessage(err);
       if (isAbortError6(err)) return abortedResult(url);
       return { url, title: "", content: "", error: message };
     }
@@ -9513,13 +9494,13 @@ async function extractContent(url, signal, options) {
   try {
     fetchTimeoutMs = resolveFetchTimeoutMs(options);
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage26(err) };
+    return { url, title: "", content: "", error: errorMessage(err) };
   }
   let fetchRouting;
   try {
     fetchRouting = loadFetchRouting();
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage26(err) };
+    return { url, title: "", content: "", error: errorMessage(err) };
   }
   const providerOrder = remoteUrl && !fetchRouting.allowRemoteHostedProviders ? fetchRouting.providers.filter((provider) => !REMOTE_HOSTED_FETCH_PROVIDERS.has(provider)) : fetchRouting.providers;
   if (providerOrder.length === 0) {
@@ -9588,7 +9569,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        firecrawlError = errorMessage26(err);
+        firecrawlError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(firecrawlError);
       }
       continue;
@@ -9607,7 +9588,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (signal?.aborted || isAbortException2(err)) return abortedResult(url);
-        crawl4aiError = errorMessage26(err);
+        crawl4aiError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(crawl4aiError);
       }
       continue;
@@ -9625,7 +9606,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        tinyfishError = errorMessage26(err);
+        tinyfishError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(tinyfishError);
       }
       continue;
@@ -9638,7 +9619,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        search1apiError = errorMessage26(err);
+        search1apiError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(search1apiError);
       }
       continue;
@@ -9651,7 +9632,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        queritError = errorMessage26(err);
+        queritError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(queritError);
       }
       continue;
@@ -9670,7 +9651,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        kagiError = errorMessage26(err);
+        kagiError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(kagiError);
       }
       continue;
@@ -9689,7 +9670,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        ollamaError = errorMessage26(err);
+        ollamaError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(ollamaError);
       }
       continue;
@@ -9702,7 +9683,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        parallelError = errorMessage26(err);
+        parallelError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(parallelError);
       }
       continue;
@@ -9713,7 +9694,7 @@ async function extractContent(url, signal, options) {
         if (parallelMcpResult) return withDeclaredLinks(parallelMcpResult);
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        parallelMcpError = errorMessage26(err);
+        parallelMcpError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(parallelMcpError);
       }
       continue;
@@ -9732,7 +9713,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        brightdataError = errorMessage26(err);
+        brightdataError = errorMessage(err);
         if (isConfigParseError(err)) return parseErrorResult(brightdataError);
       }
       continue;
@@ -9744,7 +9725,7 @@ async function extractContent(url, signal, options) {
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
         if (err instanceof CredentialResolutionError || isConfigParseError(err)) {
-          return parseErrorResult(errorMessage26(err));
+          return parseErrorResult(errorMessage(err));
         }
       }
       if (geminiResult) return withDeclaredLinks(geminiResult);
@@ -9788,10 +9769,10 @@ async function extractContent(url, signal, options) {
   ].join("\n");
   return { ...finalHttpResult ?? { url, title: "", content: "", error: null }, error: guidance };
 }
-function isCloudflareChallenge(response, text4, isHTML) {
+function isCloudflareChallenge(response, text, isHTML) {
   if (response.status !== 200) return false;
   if (response.headers.get("cf-mitigated") === "challenge") return true;
-  return isHTML && /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(text4) && text4.includes("window._cf_chl_opt") && text4.includes("/cdn-cgi/challenge-platform/");
+  return isHTML && /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(text) && text.includes("window._cf_chl_opt") && text.includes("/cdn-cgi/challenge-platform/");
 }
 function isLikelyJSRendered(html) {
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
@@ -9929,9 +9910,9 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
         activityMonitor.logComplete(activityId, response.status);
         return { url, title: "", content: "", error: `Unsupported content type in raw mode: ${mimeType || "missing"}`, mimeType, status: response.status };
       }
-      const text5 = await readTextResponseWithLimit(response, maxResponseSize);
+      const text2 = await readTextResponseWithLimit(response, maxResponseSize);
       activityMonitor.logComplete(activityId, response.status);
-      return { url, title: extractTextTitle(text5, url), content: text5, error: null, mimeType, status: response.status };
+      return { url, title: extractTextTitle(text2, url), content: text2, error: null, mimeType, status: response.status };
     }
     if (SUPPORTED_IMAGE_TYPES.has(mimeType)) {
       const disabled = imageGateError();
@@ -9960,7 +9941,7 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
           status: response.status
         };
       } catch (err) {
-        const message = errorMessage26(err);
+        const message = errorMessage(err);
         activityMonitor.logError(activityId, message);
         return { url, title: "", content: "", error: message, mimeType, status: response.status };
       }
@@ -10001,19 +9982,19 @@ Characters: ${result.chars}`,
         error: `Unsupported content type: ${contentType.split(";")[0]}`
       };
     }
-    const text4 = await readTextResponseWithLimit(response, maxResponseSize);
+    const text = await readTextResponseWithLimit(response, maxResponseSize);
     const isHTML = contentType.includes("text/html") || contentType.includes("application/xhtml+xml");
-    if (isCloudflareChallenge(response, text4, isHTML)) {
+    if (isCloudflareChallenge(response, text, isHTML)) {
       activityMonitor.logComplete(activityId, response.status);
       return { url, title: "", content: "", error: `HTTP ${response.status}: Blocked by Cloudflare challenge page`, status: response.status };
     }
     if (!isHTML) {
       activityMonitor.logComplete(activityId, response.status);
-      const title = extractTextTitle(text4, url);
-      if (mimeType !== "text/markdown" && mimeType !== "text/x-markdown") return { url, title, content: text4, error: null };
+      const title = extractTextTitle(text, url);
+      if (mimeType !== "text/markdown" && mimeType !== "text/x-markdown") return { url, title, content: text, error: null };
       const declaredLinks2 = discoverDeclaredWebLinks(null, response.headers.get("link"), response.url || url);
-      const markdown2 = { url, title, content: appendDeclaredWebLinks(text4, declaredLinks2), error: null, declaredLinks: declaredLinks2 };
-      if (!preferMarkdown || text4.trim().length >= MIN_USEFUL_CONTENT2) return markdown2;
+      const markdown2 = { url, title, content: appendDeclaredWebLinks(text, declaredLinks2), error: null, declaredLinks: declaredLinks2 };
+      if (!preferMarkdown || text.trim().length >= MIN_USEFUL_CONTENT2) return markdown2;
       const normal = await extractViaHttp(url, Math.max(1, timeoutMs - (Date.now() - startedAt)), signal, options, false);
       if (signal?.aborted || isNonRecoverableHttpError(normal.error) || normal.status === 404 || normal.status === 410 || isAbortError6(normal.error)) return normal;
       const normalHasBody = normal.content.trim() !== appendDeclaredWebLinks("", normal.declaredLinks ?? []).trim();
@@ -10026,7 +10007,7 @@ Browser retry failed: ${normal.error}` : "")
       };
     }
     const { parseHTML } = await import("linkedom");
-    const { document } = parseHTML(text4);
+    const { document } = parseHTML(text);
     const documentTitle = document.title?.trim() ?? "";
     const declaredLinks = discoverDeclaredWebLinks(
       document,
@@ -10051,7 +10032,7 @@ Browser retry failed: ${normal.error}` : "")
         };
       }
     }
-    const rscResult = extractRSCContent(text4);
+    const rscResult = extractRSCContent(text);
     if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT2) {
       if (!article) activityMonitor.logComplete(activityId, response.status);
       return {
@@ -10063,7 +10044,7 @@ Browser retry failed: ${normal.error}` : "")
       };
     }
     controller.signal.throwIfAborted();
-    const defuddleResult = await extractWithDefuddle(text4, response.url || url);
+    const defuddleResult = await extractWithDefuddle(text, response.url || url);
     controller.signal.throwIfAborted();
     if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT2) {
       if (!article) activityMonitor.logComplete(activityId, response.status);
@@ -10080,7 +10061,7 @@ Browser retry failed: ${normal.error}` : "")
       url,
       title: article?.title || documentTitle,
       content: appendDeclaredWebLinks(markdown, declaredLinks),
-      error: isLikelyJSRendered(text4) ? "Page appears to be JavaScript-rendered (content loads dynamically)" : article ? "Extracted content appears incomplete" : "Could not extract readable content from HTML structure",
+      error: isLikelyJSRendered(text) ? "Page appears to be JavaScript-rendered (content loads dynamically)" : article ? "Extracted content appears incomplete" : "Could not extract readable content from HTML structure",
       declaredLinks
     };
   } catch (err) {
@@ -10100,8 +10081,8 @@ Browser retry failed: ${normal.error}` : "")
     }
   }
 }
-function extractTextTitle(text4, url) {
-  return extractHeadingTitle(text4) ?? (new URL(url).pathname.split("/").pop() || url);
+function extractTextTitle(text, url) {
+  return extractHeadingTitle(text) ?? (new URL(url).pathname.split("/").pop() || url);
 }
 async function fetchAllContent(urls, signal, options) {
   const results = await Promise.all(urls.map((url) => fetchLimit(() => extractContent(url, signal, options))));
@@ -10115,6 +10096,7 @@ async function fetchAllContent(urls, signal, options) {
 var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_SEARCH_CONFIG_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, turndownInstance, fetchLimit, PDFSizeLimitError, JINA_READER_BASE, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
 var init_extract = __esm({
   "src/pi-web-access/extract.ts"() {
+    init_search_error_redaction();
     init_content();
     init_proxy_transport();
     init_media_frames();
@@ -10357,12 +10339,12 @@ async function answerFromPage(input, ctx, signal) {
   }, { sessionId, cacheRetention: "none", signal, maxTokens: OUTPUT_TOKENS });
   if (response.stopReason === "aborted") throw new Error("Aborted");
   if (response.stopReason === "error") throw new Error(response.errorMessage || "Page answer model failed");
-  const text4 = response.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
-  if (!text4) throw new Error("Page answer model returned an empty response");
+  const text = response.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
+  if (!text) throw new Error("Page answer model returned an empty response");
   return {
-    text: truncated ? `${text4}
+    text: truncated ? `${text}
 
-Note: The source page was truncated to ${pageText.length} of ${input.pageText.length} characters for model context.` : text4,
+Note: The source page was truncated to ${pageText.length} of ${input.pageText.length} characters for model context.` : text,
     model: `${model.provider}/${model.id}`,
     inputChars: pageText.length,
     originalInputChars: input.pageText.length,
@@ -10407,9 +10389,9 @@ Query: ${query}` }],
   if (signal.aborted || response.stopReason === "aborted") throw new Error("Aborted");
   if (response.stopReason === "error") throw new Error(response.errorMessage || "Query rewrite failed");
   const contentParts = Array.isArray(response.content) ? response.content : [];
-  const text4 = contentParts.map((part) => part && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? part.text : "").join("").trim();
-  if (!text4) throw new Error("Rewrite returned empty response");
-  return text4;
+  const text = contentParts.map((part) => part && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? part.text : "").join("").trim();
+  if (!text) throw new Error("Rewrite returned empty response");
+  return text;
 }
 
 // src/pi-web-access/index.ts
@@ -10465,11 +10447,13 @@ function providerLabel(provider) {
 }
 
 // src/pi-web-access/search-router.ts
+init_search_error_redaction();
 init_utils();
 init_credential_source();
 init_gemini_api();
 
 // src/pi-web-access/gemini-search.ts
+init_search_error_redaction();
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -10497,9 +10481,6 @@ function filterSearchResponseByDomain(response, domainFilter) {
 }
 
 // src/pi-web-access/gemini-search.ts
-function errorMessage(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isAbortError(err) {
   return errorMessage(err).toLowerCase().includes("abort");
 }
@@ -10592,13 +10573,13 @@ async function searchWithGeminiWeb(query, options = {}) {
   const prompt = buildSearchPrompt(query, options);
   const activityId = activityMonitor.logStart({ type: "api", query });
   try {
-    const text4 = await queryWithCookies(prompt, cookies, {
+    const text = await queryWithCookies(prompt, cookies, {
       signal: options.signal,
       timeoutMs: 12e4
     });
     activityMonitor.logComplete(activityId, 200);
-    const results = extractSourceUrls(text4);
-    return filterSearchResponseByDomain({ answer: text4, results }, options.domainFilter);
+    const results = extractSourceUrls(text);
+    return filterSearchResponseByDomain({ answer: text, results }, options.domainFilter);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes("abort")) {
@@ -10874,14 +10855,14 @@ async function callExaMcp(toolName, args, signal) {
     const message = parsed.result.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text?.trim();
     throw new Error(message || "Exa MCP returned an error");
   }
-  const text4 = parsed.result?.content?.find((item) => item.type === "text" && typeof item.text === "string" && item.text.trim().length > 0)?.text;
-  if (!text4) {
+  const text = parsed.result?.content?.find((item) => item.type === "text" && typeof item.text === "string" && item.text.trim().length > 0)?.text;
+  if (!text) {
     throw new Error("Exa MCP returned empty content");
   }
-  return text4;
+  return text;
 }
-function parseMcpResults(text4) {
-  const blocks = text4.split(/(?=^Title: )/m).filter((block) => block.trim().length > 0);
+function parseMcpResults(text) {
+  const blocks = text.split(/(?=^Title: )/m).filter((block) => block.trim().length > 0);
   const parsed = blocks.map((block) => {
     const title = block.match(/^Title: (.+)/m)?.[1]?.trim() ?? "";
     const url = block.match(/^URL: (.+)/m)?.[1]?.trim() ?? "";
@@ -10946,17 +10927,17 @@ function buildMcpQuery(query, options) {
 function isAbortMessage(message) {
   return message.toLowerCase().includes("abort");
 }
-function parseJsonMcpResults(text4) {
+function parseJsonMcpResults(text) {
   try {
-    const results = JSON.parse(text4).results;
+    const results = JSON.parse(text).results;
     return Array.isArray(results) && results.length > 0 ? results : null;
   } catch {
     return null;
   }
 }
 async function searchWithExaMcpTool(tool, args, options) {
-  const text4 = await callExaMcp(tool, args, options.signal);
-  const jsonResults = parseJsonMcpResults(text4);
+  const text = await callExaMcp(tool, args, options.signal);
+  const jsonResults = parseJsonMcpResults(text);
   if (jsonResults) {
     return toSearchResponse(
       buildAnswerFromSearchResults(jsonResults),
@@ -10964,7 +10945,7 @@ async function searchWithExaMcpTool(tool, args, options) {
       options.includeContent ? mapInlineContent(jsonResults) : null
     );
   }
-  const textResults = parseMcpResults(text4);
+  const textResults = parseMcpResults(text);
   if (!textResults) return null;
   return toSearchResponse(
     buildAnswerFromMcpResults(textResults),
@@ -11679,8 +11660,8 @@ function isWebSearchCall(item) {
   return !!item && typeof item === "object" && item.type === "web_search_call";
 }
 async function parseOpenAIResponse(response) {
-  const text4 = await response.text();
-  const trimmed = text4.trim();
+  const text = await response.text();
+  const trimmed = text.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       const parsed = JSON.parse(trimmed);
@@ -11696,7 +11677,7 @@ async function parseOpenAIResponse(response) {
   let completedResponse = null;
   let webSearchCallSeen = false;
   let streamError = null;
-  for (const line of text4.split("\n")) {
+  for (const line of text.split("\n")) {
     if (!line.startsWith("data: ")) continue;
     const data = line.slice(6).trim();
     if (!data || data === "[DONE]") continue;
@@ -11770,7 +11751,7 @@ function extractSearchResults(output, numResults, domainFilter) {
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
-      const text4 = typeof part.text === "string" ? part.text : "";
+      const text = typeof part.text === "string" ? part.text : "";
       const annotations = part.annotations;
       if (!Array.isArray(annotations)) continue;
       for (const annotation of annotations) {
@@ -11780,7 +11761,7 @@ function extractSearchResults(output, numResults, domainFilter) {
           seenUrls,
           annotation.url,
           annotation.title,
-          hasDomains ? "" : extractSnippetAround(text4, annotation.start_index, annotation.end_index)
+          hasDomains ? "" : extractSnippetAround(text, annotation.start_index, annotation.end_index)
         );
       }
     }
@@ -11852,10 +11833,10 @@ function buildAlphaSearchHeaders(headers, apiKey) {
   return result;
 }
 async function parseAlphaSearchResponse(response, numResults = 5) {
-  const text4 = await response.text();
+  const text = await response.text();
   let payload;
   try {
-    payload = JSON.parse(text4);
+    payload = JSON.parse(text);
   } catch {
     throw new Error("OpenAI alpha/search returned invalid JSON");
   }
@@ -12135,6 +12116,7 @@ async function searchWithSearchinfinity(query, options = {}) {
 init_querit();
 
 // src/pi-web-access/tavily.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -12199,9 +12181,6 @@ function requestSignal8(signal) {
   const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS8);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function errorMessage6(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function mapResults2(results, numResults) {
   if (!Array.isArray(results)) return [];
   const mapped = [];
@@ -12257,7 +12236,7 @@ async function searchWithTavily(query, options = {}) {
     else {
       const status = tavilyErrorStatus(err);
       if (status > 0) activityMonitor.logComplete(activityId, status);
-      else activityMonitor.logError(activityId, errorMessage6(err));
+      else activityMonitor.logError(activityId, errorMessage(err));
     }
     throw err;
   }
@@ -12306,7 +12285,7 @@ async function tavilyRequest(apiUrl, apiKey, body, signal) {
       signal
     }, ["Authorization"]);
   } catch (err) {
-    const message = errorMessage6(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage === message) throw err;
     const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
@@ -12326,6 +12305,7 @@ async function tavilyRequest(apiUrl, apiKey, body, signal) {
 }
 
 // src/pi-web-access/you.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -12363,9 +12343,6 @@ function mapDomainFilter4(domainFilter) {
     ...include_domains.length > 0 ? { include_domains } : {},
     ...exclude_domains.length > 0 ? { exclude_domains } : {}
   };
-}
-function errorMessage7(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function parseWebResults(value) {
   const results = value && typeof value === "object" ? value.results : void 0;
@@ -12413,16 +12390,9 @@ async function searchWithYou(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage7(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
-    const outgoing = providerTimeout ? new Error(`You.com request timed out after ${Math.round(SEARCH_TIMEOUT_MS9 / 1e3)}s`) : (() => {
-      const redactedMessage = redactCredential(message, apiKey);
-      if (redactedMessage === message && err instanceof Error) return err;
-      const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-      if (err instanceof Error) redactedError.name = err.name;
-      return redactedError;
-    })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage7(outgoing), apiKey));
+    const outgoing = providerTimeout ? new Error(`You.com request timed out after ${Math.round(SEARCH_TIMEOUT_MS9 / 1e3)}s`) : redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
+    activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -12453,6 +12423,7 @@ async function searchWithYou(query, options = {}) {
 init_firecrawl();
 
 // src/pi-web-access/jina-search.ts
+init_search_error_redaction();
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -12505,9 +12476,6 @@ function requestSignal10(signal) {
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   };
 }
-function errorMessage9(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function parseItems(value) {
   if (Array.isArray(value)) return value;
   if (!value || typeof value !== "object") {
@@ -12545,7 +12513,7 @@ function rethrowRequestError(err, apiKey, activityId, request, callerSignal) {
     activityMonitor.logComplete(activityId, 408);
     throw new SearchHttpError(408, "Jina Search API error 408: request timed out");
   }
-  const message = errorMessage9(err);
+  const message = errorMessage(err);
   const redactedMessage = redactCredential(message, apiKey);
   if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
   else activityMonitor.logError(activityId, redactedMessage);
@@ -12606,7 +12574,7 @@ async function searchWithJina(query, options = {}) {
   try {
     mapped = mapItems(parseItems(raw), numResults, filters, options.includeContent);
   } catch (err) {
-    const message = errorMessage9(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     activityMonitor.logError(activityId, redactedMessage);
     if (redactedMessage === message) throw err;
@@ -12980,7 +12948,7 @@ async function searchWithSearXNG(query, options = {}) {
   const configuredHeaders = getConfiguredHeaders();
   const headers = mergeDefaultHeaders(configuredHeaders);
   const secrets = Object.values(configuredHeaders);
-  const redact = (text4) => secrets.reduce((message, secret) => redactCredential(message, secret), text4);
+  const redact = (text) => secrets.reduce((message, secret) => redactCredential(message, secret), text);
   const activityId = activityMonitor.logStart({ type: "api", query: searchQuery });
   try {
     const response = await fetchRemoteUrl(url, {
@@ -13031,6 +12999,7 @@ Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.ur
 }
 
 // src/pi-web-access/degoog.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -13087,9 +13056,6 @@ function requireBaseUrl3() {
 function resultText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
-function errorMessage12(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function invalidResponse4(message) {
   return new Error(`degoog returned invalid response: ${message}`);
 }
@@ -13099,8 +13065,8 @@ function parseResponse(value) {
   if (!Array.isArray(envelope.results)) throw invalidResponse4("expected a results array");
   return envelope.results;
 }
-function redactSecrets(text4, secrets) {
-  let redacted = text4;
+function redactSecrets(text, secrets) {
+  let redacted = text;
   for (const secret of secrets) redacted = redactCredential(redacted, secret);
   return redacted;
 }
@@ -13167,7 +13133,7 @@ async function searchWithDegoog(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage12(err);
+    const message = errorMessage(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`degoog request timed out after ${Math.round(SEARCH_TIMEOUT_MS17 / 1e3)}s`) : (() => {
       const redactedMessage = redactSecrets(message, secrets);
@@ -13176,7 +13142,7 @@ async function searchWithDegoog(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactSecrets(errorMessage12(outgoing), secrets));
+    activityMonitor.logError(activityId, redactSecrets(errorMessage(outgoing), secrets));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -13402,6 +13368,7 @@ async function searchWithAnySearch(query, options = {}) {
 }
 
 // src/pi-web-access/xcrawl.ts
+init_search_error_redaction();
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
@@ -13427,9 +13394,6 @@ async function getApiKey18(signal) {
 }
 function isXcrawlAvailable() {
   return hasCredentialSource({ provider: "XCrawl", configuredValue: loadConfig24().xcrawlApiKey, environmentValue: process.env.XCRAWL_API_KEY });
-}
-function errorMessage13(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse6(message) {
   return new Error(`XCrawl API returned invalid response: ${message}`);
@@ -13503,7 +13467,7 @@ async function searchWithXCrawl(query, options = {}) {
       signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal
     });
   } catch (err) {
-    const message = errorMessage13(err);
+    const message = errorMessage(err);
     if (options.signal?.aborted) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
@@ -13517,7 +13481,7 @@ async function searchWithXCrawl(query, options = {}) {
       outgoing = redactedMessage === message && err instanceof Error ? err : new Error(redactedMessage);
       if (err instanceof Error && outgoing.name === "Error") outgoing.name = err.name;
     }
-    activityMonitor.logError(activityId, redactCredential(errorMessage13(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
     throw outgoing;
   }
   if (!response.ok) {
@@ -13721,7 +13685,7 @@ function extractSearchResults2(output, citations, numResults, domainFilter) {
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
-      const text4 = typeof part.text === "string" ? part.text : "";
+      const text = typeof part.text === "string" ? part.text : "";
       const annotations = part.annotations;
       if (!Array.isArray(annotations)) continue;
       for (const annotation of annotations) {
@@ -13732,7 +13696,7 @@ function extractSearchResults2(output, citations, numResults, domainFilter) {
           seenUrls,
           annotation.url,
           annotation.title,
-          hasDomains ? "" : extractSnippetAround(text4, annotation.start_index, annotation.end_index)
+          hasDomains ? "" : extractSnippetAround(text, annotation.start_index, annotation.end_index)
         );
       }
     }
@@ -13815,6 +13779,7 @@ async function searchWithXai(query, options = {}, ctx) {
 }
 
 // src/pi-web-access/brightdata.ts
+init_search_error_redaction();
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -13903,13 +13868,10 @@ function requestSignal12(signal) {
   const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS22);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function errorMessage14(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 var STATUS_SHAPED_PATTERN = /\b(?:error|status|http)[\s:=-]{1,4}(\d{3})\b/gi;
 var QUOTA_SHAPED_PATTERN = /rate limit|quota|too many requests/gi;
-function untrustedText(text4, limit = 300) {
-  return text4.replace(/\s+/g, " ").trim().slice(0, limit).replace(STATUS_SHAPED_PATTERN, "upstream $1").replace(QUOTA_SHAPED_PATTERN, "upstream rate-limit notice");
+function untrustedText(text, limit = 300) {
+  return text.replace(/\s+/g, " ").trim().slice(0, limit).replace(STATUS_SHAPED_PATTERN, "upstream $1").replace(QUOTA_SHAPED_PATTERN, "upstream rate-limit notice");
 }
 function invalidResponse7(zone, message) {
   return new Error(`Bright Data API returned invalid response for zone ${zone}: ${message}`);
@@ -14007,7 +13969,7 @@ async function searchWithBrightData(query, options = {}) {
       signal: requestSignal12(options.signal)
     });
   } catch (err) {
-    const message = errorMessage14(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -14047,6 +14009,7 @@ async function searchWithBrightData(query, options = {}) {
 }
 
 // src/pi-web-access/serpbase.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
@@ -14080,9 +14043,6 @@ Get a key at https://serpbase.dev`
     );
   }
   return apiKey;
-}
-function errorMessage15(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse8(message) {
   return new Error(`SerpBase API returned invalid response: ${message}`);
@@ -14148,7 +14108,7 @@ async function searchWithSerpBase(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage15(err);
+    const message = errorMessage(err);
     const safeMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "SerpBase request timed out after 60s" : redactCredential(message, apiKey);
     const outgoing = safeMessage === message && err instanceof Error ? err : err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage) : err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
     if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
@@ -14158,6 +14118,7 @@ async function searchWithSerpBase(query, options = {}) {
 }
 
 // src/pi-web-access/serpapi.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -14191,9 +14152,6 @@ Get a key at https://serpapi.com/manage-api-key`
     );
   }
   return apiKey;
-}
-function errorMessage16(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse9(message) {
   return new Error(`SerpApi returned invalid response: ${message}`);
@@ -14245,16 +14203,9 @@ async function searchWithSerpApi(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage16(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
-    const outgoing = providerTimeout ? new Error(`SerpApi request timed out after ${Math.round(SEARCH_TIMEOUT_MS24 / 1e3)}s`) : (() => {
-      const redactedMessage = redactCredential(message, apiKey);
-      if (redactedMessage === message && err instanceof Error) return err;
-      const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-      if (err instanceof Error) redactedError.name = err.name;
-      return redactedError;
-    })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage16(outgoing), apiKey));
+    const outgoing = providerTimeout ? new Error(`SerpApi request timed out after ${Math.round(SEARCH_TIMEOUT_MS24 / 1e3)}s`) : redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
+    activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -14382,6 +14333,7 @@ async function searchWithSerper(query, options = {}) {
 }
 
 // src/pi-web-access/serply.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -14415,9 +14367,6 @@ Get a key at https://serply.io`
     );
   }
   return apiKey;
-}
-function errorMessage17(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse11(message) {
   return new Error(`Serply returned invalid response: ${message}`);
@@ -14467,16 +14416,9 @@ async function searchWithSerply(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage17(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
-    const outgoing = providerTimeout ? new Error(`Serply request timed out after ${Math.round(SEARCH_TIMEOUT_MS26 / 1e3)}s`) : (() => {
-      const redactedMessage = redactCredential(message, apiKey);
-      if (redactedMessage === message && err instanceof Error) return err;
-      const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-      if (err instanceof Error) redactedError.name = err.name;
-      return redactedError;
-    })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage17(outgoing), apiKey));
+    const outgoing = providerTimeout ? new Error(`Serply request timed out after ${Math.round(SEARCH_TIMEOUT_MS26 / 1e3)}s`) : redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
+    activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -14652,8 +14594,8 @@ function searchArguments2(query, options) {
     ...domain ? { search_domain_filter: domain } : {}
   };
 }
-function parseResults(text4, limit, domain) {
-  let value = JSON.parse(text4);
+function parseResults(text, limit, domain) {
+  let value = JSON.parse(text);
   if (typeof value === "string") value = JSON.parse(value);
   if (!Array.isArray(value)) throw new Error("Z.ai returned invalid response: expected a result list");
   const results = [];
@@ -14718,9 +14660,9 @@ async function searchWithZai(query, options = {}) {
     if (!toolName) throw new Error("Z.ai returned invalid response: web search tool not listed");
     const result = await client.callTool({ name: toolName, arguments: args }, void 0, { signal, timeout: SEARCH_TIMEOUT_MS28 });
     if (result.isError) throw new Error("Z.ai search tool returned an error");
-    const text4 = (Array.isArray(result.content) ? result.content : []).find((item) => item.type === "text" && typeof item.text === "string");
-    if (!text4) throw new Error("Z.ai returned invalid response: no search text");
-    const results = parseResults(text4.text, limit, args.search_domain_filter);
+    const text = (Array.isArray(result.content) ? result.content : []).find((item) => item.type === "text" && typeof item.text === "string");
+    if (!text) throw new Error("Z.ai returned invalid response: no search text");
+    const results = parseResults(text.text, limit, args.search_domain_filter);
     activityMonitor.logComplete(activityId, 200);
     return { answer: formatSearchResultsAsAnswer(results), results };
   } catch (err) {
@@ -14795,9 +14737,6 @@ function recencyToStartDate2(filter) {
   const days = { day: 1, week: 7, month: 30, year: 365 }[filter];
   return days ? new Date(Date.now() - days * 864e5).toISOString().slice(0, 10) : void 0;
 }
-function text(value, limit) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
-}
 function invalidResponse12(message) {
   return new Error(`Valyu API returned invalid response: ${message}`);
 }
@@ -14856,11 +14795,11 @@ async function searchWithValyu(query, options = {}) {
   const inlineContent = [];
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
-    const url = text(entry.url, Number.MAX_SAFE_INTEGER);
+    const url = normalizeSearchText(entry.url);
     if (!url || !matchesDomainFilter(url, domains)) continue;
-    const title = text(entry.title, Number.MAX_SAFE_INTEGER) || `Source ${results.length + 1}`;
-    const content = text(entry.content, MAX_CONTENT_CHARS);
-    const description = text(entry.description, MAX_SNIPPET_CHARS);
+    const title = normalizeSearchText(entry.title) || `Source ${results.length + 1}`;
+    const content = normalizeSearchText(entry.content).slice(0, MAX_CONTENT_CHARS);
+    const description = normalizeSearchText(entry.description).slice(0, MAX_SNIPPET_CHARS);
     results.push({ title, url, snippet: (content || description).slice(0, MAX_SNIPPET_CHARS) });
     if (options.includeContent && content) inlineContent.push({ url, title, content, error: null });
     if (results.length >= numResults) break;
@@ -14869,6 +14808,7 @@ async function searchWithValyu(query, options = {}) {
 }
 
 // src/pi-web-access/keenable.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -14908,12 +14848,6 @@ function buildQuery(query, filters, site) {
 }
 function publishedAfter(recency) {
   return new Date(Date.now() - RECENCY_DAYS[recency] * 864e5).toISOString().slice(0, 10);
-}
-function text2(value) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-function errorMessage18(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse13(message) {
   return new Error(`Keenable returned invalid response: ${message}`);
@@ -14975,16 +14909,9 @@ async function searchWithKeenable(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage18(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
-    const outgoing = providerTimeout ? new Error(`Keenable request timed out after ${Math.round(SEARCH_TIMEOUT_MS30 / 1e3)}s`) : (() => {
-      const redactedMessage = redactCredential(message, apiKey);
-      if (redactedMessage === message && err instanceof Error) return err;
-      const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-      if (err instanceof Error) redactedError.name = err.name;
-      return redactedError;
-    })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage18(outgoing), apiKey));
+    const outgoing = providerTimeout ? new Error(`Keenable request timed out after ${Math.round(SEARCH_TIMEOUT_MS30 / 1e3)}s`) : redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
+    activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -15003,9 +14930,9 @@ async function searchWithKeenable(query, options = {}) {
     if (!matchesDomainFilter(resultUrl, filters)) continue;
     if (seen.has(resultUrl.href)) continue;
     seen.add(resultUrl.href);
-    const snippet = text2(entry.snippet) || text2(entry.description);
+    const snippet = normalizeSearchText(entry.snippet) || normalizeSearchText(entry.description);
     results.push({
-      title: text2(entry.title) || `Source ${results.length + 1}`,
+      title: normalizeSearchText(entry.title) || `Source ${results.length + 1}`,
       url: resultUrl.href,
       snippet: snippet.slice(0, MAX_SNIPPET_CHARS2)
     });
@@ -15015,6 +14942,7 @@ async function searchWithKeenable(query, options = {}) {
 }
 
 // src/pi-web-access/ceramic.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -15054,12 +14982,6 @@ function buildQuery2(query, filters) {
   const sites = filters.include.map((domain) => `site:${domain}`);
   return `${query} ${sites.length === 1 ? sites[0] : `(${sites.join(" OR ")})`}`;
 }
-function text3(value) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-function errorMessage19(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function invalidResponse14(message) {
   return new Error(`Ceramic returned invalid response: ${message}`);
 }
@@ -15074,7 +14996,7 @@ function parseResponse10(value) {
 function describeError(body) {
   try {
     const parsed = JSON.parse(body);
-    const parts = [text3(parsed.title), text3(parsed.detail)].filter(Boolean);
+    const parts = [normalizeSearchText(parsed.title), normalizeSearchText(parsed.detail)].filter(Boolean);
     if (parts.length > 0) return parts.join(": ");
   } catch {
   }
@@ -15126,16 +15048,9 @@ async function searchWithCeramic(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage19(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
-    const outgoing = providerTimeout ? new Error(`Ceramic request timed out after ${Math.round(SEARCH_TIMEOUT_MS31 / 1e3)}s`) : (() => {
-      const redactedMessage = redactCredential(message, apiKey);
-      if (redactedMessage === message && err instanceof Error) return err;
-      const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-      if (err instanceof Error) redactedError.name = err.name;
-      return redactedError;
-    })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage19(outgoing), apiKey));
+    const outgoing = providerTimeout ? new Error(`Ceramic request timed out after ${Math.round(SEARCH_TIMEOUT_MS31 / 1e3)}s`) : redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
+    activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -15155,9 +15070,9 @@ async function searchWithCeramic(query, options = {}) {
     if (seen.has(resultUrl.href)) continue;
     seen.add(resultUrl.href);
     results.push({
-      title: text3(entry.title) || `Source ${results.length + 1}`,
+      title: normalizeSearchText(entry.title) || `Source ${results.length + 1}`,
       url: resultUrl.href,
-      snippet: text3(entry.description).slice(0, MAX_SNIPPET_CHARS3)
+      snippet: normalizeSearchText(entry.description).slice(0, MAX_SNIPPET_CHARS3)
     });
     if (results.length >= numResults) break;
   }
@@ -15312,6 +15227,7 @@ async function searchWithKimi(query, options = {}, ctx) {
 }
 
 // src/pi-web-access/mistral-search.ts
+init_search_error_redaction();
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -15374,9 +15290,6 @@ function buildSearchPrompt2(query, options, numResults) {
   return lines.length > 0 ? `${lines.join(" ")}
 
 ${query}` : query;
-}
-function errorMessage20(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse15(message) {
   return new Error(`Mistral API returned invalid response: ${message}`);
@@ -15483,13 +15396,13 @@ async function searchWithMistral(query, options = {}) {
     try {
       parsed = await response.json();
     } catch (err) {
-      throw new Error(`Mistral API returned invalid JSON: ${errorMessage20(err)}`);
+      throw new Error(`Mistral API returned invalid JSON: ${errorMessage(err)}`);
     }
     const result = parseConversationResponse(parsed, options, numResults);
     activityMonitor.logComplete(activityId, response.status);
     return result;
   } catch (err) {
-    const message = errorMessage20(err);
+    const message = errorMessage(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) {
       activityMonitor.logComplete(activityId, 0);
@@ -15616,11 +15529,8 @@ function normalizeSearchProviderSelection(value, label = "provider") {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return SEARCH_PROVIDERS.includes(normalized) ? normalized : "auto";
 }
-function errorMessage21(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function isAbortError3(err) {
-  return errorMessage21(err).toLowerCase().includes("abort");
+  return errorMessage(err).toLowerCase().includes("abort");
 }
 function stopsAutomaticFallback(err) {
   return err instanceof SearchUnsupportedFilterError || isAbortError3(err);
@@ -15633,7 +15543,7 @@ async function tryOpenAIInAuto(query, options, fallbackErrors) {
     }
   } catch (err) {
     if (stopsAutomaticFallback(err)) throw err;
-    fallbackErrors.push(`OpenAI: ${errorMessage21(err)}`);
+    fallbackErrors.push(`OpenAI: ${errorMessage(err)}`);
   }
   return null;
 }
@@ -15644,11 +15554,11 @@ function providerErrorStatus(message) {
 }
 function classifyProviderError(provider, err) {
   if (err instanceof SearchProviderError) return err;
-  const message = errorMessage21(err);
+  const message = errorMessage(err);
   const lower = message.toLowerCase();
   const status = err instanceof SearchHttpError || err instanceof OpenAIAlphaSearchUnsupportedError ? err.status : providerErrorStatus(message);
   const openAIStreamError = provider === "openai" && lower.includes("openai api stream error");
-  const text4 = openAIStreamError ? lower.replace(/_/g, " ") : lower;
+  const text = openAIStreamError ? lower.replace(/_/g, " ") : lower;
   let kind = "unknown";
   const mentionsUnsupportedWebSearch = /(?:web[_ -]?search|web[_ -]?search_preview|(?:the )?tool)\b.*\b(?:unsupported|not supported|does not support|doesn't support|unknown|unrecognized|unavailable|not found)|\b(?:unsupported|not supported|does not support|doesn't support|unknown|unrecognized|unavailable|not found)\b.*\b(?:web[_ -]?search|web[_ -]?search_preview|(?:the )?tool)/i.test(lower);
   if (err instanceof SearchUnsupportedFilterError) {
@@ -15671,19 +15581,19 @@ function classifyProviderError(provider, err) {
     kind = "quota";
   } else if (status !== void 0 && (status === 408 || status === 425 || status >= 500)) {
     kind = "transient";
-  } else if (/rate limit|quota|too many requests/.test(text4) || openAIStreamError && /usage limit/.test(text4)) {
+  } else if (/rate limit|quota|too many requests/.test(text) || openAIStreamError && /usage limit/.test(text)) {
     kind = "quota";
-  } else if (/unauthorized|forbidden|permission denied/.test(text4) || openAIStreamError && /authentication error|permission error|invalid api key/.test(text4)) {
+  } else if (/unauthorized|forbidden|permission denied/.test(text) || openAIStreamError && /authentication error|permission error|invalid api key/.test(text)) {
     kind = "auth";
-  } else if (/bad request|invalid request/.test(text4)) {
+  } else if (/bad request|invalid request/.test(text)) {
     kind = "invalid-request";
-  } else if (/invalid json|no parseable response|no parseable results|invalid response|returned empty response|no web_search_call/.test(text4)) {
+  } else if (/invalid json|no parseable response|no parseable results|invalid response|returned empty response|no web_search_call/.test(text)) {
     kind = "invalid-response";
-  } else if (/temporar|service unavailable|server error/.test(text4) || openAIStreamError && /internal error|\bapi error|overloaded/.test(text4)) {
+  } else if (/temporar|service unavailable|server error/.test(text) || openAIStreamError && /internal error|\bapi error|overloaded/.test(text)) {
     kind = "transient";
-  } else if (err instanceof TypeError || /fetch failed|network|econnreset|econnrefused|enotfound|etimedout|timed out|socket/.test(text4)) {
+  } else if (err instanceof TypeError || /fetch failed|network|econnreset|econnrefused|enotfound|etimedout|timed out|socket/.test(text)) {
     kind = "network";
-  } else if (/invalid or missing|invalid config|failed to parse|must be an? |configuration/.test(text4)) {
+  } else if (/invalid or missing|invalid config|failed to parse|must be an? |configuration/.test(text)) {
     kind = "config";
   } else if (openAIStreamError) {
     kind = "invalid-response";
@@ -15826,7 +15736,7 @@ async function searchWithProviders(query, options, selectedProviders) {
       const response = outcome.value;
       successes.push(response.provider === "baizhi" && response.results.length === 0 ? response : { ...response, ...filterSearchResponseByDomain(response, options.domainFilter) });
     } else {
-      failures.push({ provider: providers[index], error: errorMessage21(outcome.reason) });
+      failures.push({ provider: providers[index], error: errorMessage(outcome.reason) });
     }
   }
   if (successes.length === 0) {
@@ -15883,7 +15793,7 @@ async function searchWithConfiguredRouting(query, options, routing) {
       return await searchWithResolvedProvider(provider, query, options, useCurrentModel);
     } catch (err) {
       const classified = classifyProviderError(provider, err);
-      diagnostics.push(`${provider} [${classified.kind}]: ${errorMessage21(err)}`);
+      diagnostics.push(`${provider} [${classified.kind}]: ${errorMessage(err)}`);
       if (!routing.fallbackOn.includes(classified.kind)) {
         throw classified;
       }
@@ -15912,7 +15822,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "searxng" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`SearXNG: ${errorMessage21(err)}`);
+      fallbackErrors.push(`SearXNG: ${errorMessage(err)}`);
     }
   }
   let triedOpenAI = false;
@@ -15927,7 +15837,7 @@ async function searchWithoutDomainProjection(query, options) {
       if (result) return { ...result, provider: "exa" };
     } catch (err) {
       if (err instanceof CredentialResolutionError || stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Exa: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Exa: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("openai") && !triedOpenAI) {
@@ -15940,7 +15850,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "brave" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Brave: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Brave: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("parallel") && isParallelAvailable()) {
@@ -15949,7 +15859,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "parallel" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Parallel: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Parallel: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("tinyfish") && isTinyFishAvailable()) {
@@ -15958,7 +15868,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "tinyfish" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`TinyFish: ${errorMessage21(err)}`);
+      fallbackErrors.push(`TinyFish: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("search1api") && isSearch1APIAvailable()) {
@@ -15967,7 +15877,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "search1api" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Search1API: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Search1API: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("searchinfinity") && isSearchinfinityAvailable()) {
@@ -15976,7 +15886,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "searchinfinity" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Searchinfinity: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Searchinfinity: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("querit") && isQueritAvailable()) {
@@ -15985,7 +15895,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "querit" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Querit: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Querit: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("tavily") && isTavilyAvailable()) {
@@ -15994,7 +15904,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "tavily" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Tavily: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Tavily: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("firecrawl") && isFirecrawlAvailable()) {
@@ -16003,7 +15913,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "firecrawl" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Firecrawl: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Firecrawl: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("jina") && isJinaSearchAvailable()) {
@@ -16012,7 +15922,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "jina" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Jina: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Jina: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("serpdive") && isSerpdiveAvailable()) {
@@ -16021,7 +15931,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "serpdive" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`SERPdive: ${errorMessage21(err)}`);
+      fallbackErrors.push(`SERPdive: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("kagi") && isKagiAvailable()) {
@@ -16030,7 +15940,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "kagi" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Kagi: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Kagi: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("bocha") && isBochaAvailable()) {
@@ -16039,7 +15949,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "bocha" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Bocha: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Bocha: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("ollama") && isOllamaAvailable()) {
@@ -16048,7 +15958,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "ollama" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Ollama: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Ollama: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("perplexity") && isPerplexityAvailable()) {
@@ -16057,7 +15967,7 @@ async function searchWithoutDomainProjection(query, options) {
       return { ...result, provider: "perplexity" };
     } catch (err) {
       if (stopsAutomaticFallback(err)) throw err;
-      fallbackErrors.push(`Perplexity: ${errorMessage21(err)}`);
+      fallbackErrors.push(`Perplexity: ${errorMessage(err)}`);
     }
   }
   if (allowed.has("gemini")) try {
@@ -16065,7 +15975,7 @@ async function searchWithoutDomainProjection(query, options) {
     if (geminiResult) return { ...geminiResult, provider: "gemini" };
   } catch (err) {
     if (stopsAutomaticFallback(err)) throw err;
-    fallbackErrors.push(`Gemini: ${errorMessage21(err)}`);
+    fallbackErrors.push(`Gemini: ${errorMessage(err)}`);
   }
   if (fallbackErrors.length > 0) {
     throw new Error(`Auto provider search failed:
@@ -20680,8 +20590,8 @@ var PREFERRED_SUMMARY_MODELS = [
   { provider: "deepseek", id: "deepseek-v4-flash" }
 ];
 var SUMMARY_GENERATION_DEADLINE_MS = 3e4;
-function estimateTokens(text4) {
-  const trimmed = text4.trim();
+function estimateTokens(text) {
+  const trimmed = text.trim();
   if (trimmed.length === 0) return 0;
   return Math.max(1, Math.ceil(trimmed.length / 4));
 }
@@ -20742,12 +20652,12 @@ function buildSummaryPrompt(results, feedback, instructions) {
   return sections.join("\n");
 }
 function buildDeterministicAnswerPreview(answer) {
-  let text4 = answer.replace(/\s+/g, " ").trim();
-  if (text4.length === 0) return "";
-  const sourceMarker = text4.search(/\bSources?\s*:/i);
-  if (sourceMarker >= 0) text4 = text4.slice(0, sourceMarker).trim();
-  if (text4.length === 0) return "";
-  return text4.length > 240 ? `${text4.slice(0, 237)}...` : text4;
+  let text = answer.replace(/\s+/g, " ").trim();
+  if (text.length === 0) return "";
+  const sourceMarker = text.search(/\bSources?\s*:/i);
+  if (sourceMarker >= 0) text = text.slice(0, sourceMarker).trim();
+  if (text.length === 0) return "";
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
 }
 function buildDeterministicSummaryLines(results) {
   if (results.length === 0) {
@@ -21014,7 +20924,7 @@ async function generateSummaryDraft(results, ctx, signal, modelOverride, feedbac
           const response = await raceSummaryOperation(Promise.resolve(completion));
           if (response.stopReason === "aborted") throw new DOMException("Aborted", "AbortError");
           if (response.stopReason === "error") throw new Error(response.errorMessage || "Summary model failed");
-          const summary = response.content.filter((part) => part.type === "text").map((part) => part.text).filter((text4) => text4.trim().length > 0).join("\n").trim();
+          const summary = response.content.filter((part) => part.type === "text").map((part) => part.text).filter((text) => text.trim().length > 0).join("\n").trim();
           if (summary.length === 0) {
             lastFailure = "empty";
             continue;
@@ -21085,8 +20995,8 @@ function parseStringifiedArrays(args, keys) {
 }
 
 // src/pi-web-access/render-search-error.ts
-function truncate(text4, max) {
-  return text4.length > max ? text4.slice(0, max - 1) + "\u2026" : text4;
+function truncate(text, max) {
+  return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
 }
 function buildSearchErrorPlan(details) {
   if (!details || !details.error && !details.cancelled) {
@@ -21385,16 +21295,16 @@ async function generateCuratorSummary(indices, results, context, signal, model, 
   return generateSummaryDraft(selected, context, signal, model, feedback, void 0, getSummaryGenerationDeadlineMs(), getSummaryInstructions());
 }
 function approvedSummary(payload, results) {
-  const text4 = typeof payload.summary === "string" ? payload.summary.trim() : "";
-  if (!text4) {
+  const text = typeof payload.summary === "string" ? payload.summary.trim() : "";
+  if (!text) {
     const deterministic = buildDeterministicSummary(results);
     return { approvedSummary: deterministic.summary, summaryMeta: deterministic.meta };
   }
   const meta = payload.summaryMeta;
-  return { approvedSummary: text4, summaryMeta: {
+  return { approvedSummary: text, summaryMeta: {
     model: meta?.model ?? null,
     durationMs: meta && Number.isFinite(meta.durationMs) && meta.durationMs >= 0 ? meta.durationMs : 0,
-    tokenEstimate: meta && Number.isFinite(meta.tokenEstimate) && meta.tokenEstimate >= 0 ? meta.tokenEstimate : Math.max(1, Math.ceil(text4.length / 4)),
+    tokenEstimate: meta && Number.isFinite(meta.tokenEstimate) && meta.tokenEstimate >= 0 ? meta.tokenEstimate : Math.max(1, Math.ceil(text.length / 4)),
     fallbackUsed: meta?.fallbackUsed === true,
     fallbackReason: meta?.fallbackReason,
     phase: meta?.phase,
@@ -21596,8 +21506,8 @@ function editDistanceWithin(left, right, maximum) {
   }
   return previous[right.length] <= maximum;
 }
-function literalMatches(text4, query, caseInsensitive) {
-  const haystack = caseInsensitive ? text4.toLocaleLowerCase() : text4;
+function literalMatches(text, query, caseInsensitive) {
+  const haystack = caseInsensitive ? text.toLocaleLowerCase() : text;
   const needle = caseInsensitive ? query.toLocaleLowerCase() : query;
   const matches = [];
   for (let start = haystack.indexOf(needle); start >= 0; start = haystack.indexOf(needle, start + Math.max(needle.length, 1))) {
@@ -21605,12 +21515,12 @@ function literalMatches(text4, query, caseInsensitive) {
   }
   return matches;
 }
-function fuzzyMatches(text4, query) {
+function fuzzyMatches(text, query) {
   const queryTokens = [...normalize2(query).match(/[\p{L}\p{N}]+/gu) ?? []];
   if (queryTokens.length === 0) return [];
   const matches = [];
   const paragraphs = /[^\n]+(?:\n(?!\n)[^\n]+)*/g;
-  for (const paragraph of text4.matchAll(paragraphs)) {
+  for (const paragraph of text.matchAll(paragraphs)) {
     const paragraphText = paragraph[0];
     if (paragraphText.trim().length === 0 || paragraph.index === void 0) continue;
     const tokens = [...paragraphText.matchAll(/[\p{L}\p{N}]+/gu)];
@@ -21671,10 +21581,10 @@ function upperBound(values, target) {
   }
   return low;
 }
-function findContent(text4, queries, mode) {
+function findContent(text, queries, mode) {
   const normalizedQueries = [...new Set(queries.map((query) => query.trim()).filter(Boolean))];
   const occurrences = normalizedQueries.map((query) => {
-    const matches2 = mode === "fuzzy" ? fuzzyMatches(text4, query) : literalMatches(text4, query, mode === "case-insensitive");
+    const matches2 = mode === "fuzzy" ? fuzzyMatches(text, query) : literalMatches(text, query, mode === "case-insensitive");
     return { query, matches: matches2, starts: matches2.map((match) => match.start), ends: matches2.map((match) => match.end) };
   });
   const matches = occurrences.flatMap((result) => result.matches);
@@ -21686,7 +21596,7 @@ function findContent(text4, queries, mode) {
     id: `Q${index + 1}`,
     order: index
   }));
-  const whitespaceRuns = [...text4.matchAll(/\s+/g)].map((run) => ({ start: run.index, end: run.index + run[0].length }));
+  const whitespaceRuns = [...text.matchAll(/\s+/g)].map((run) => ({ start: run.index, end: run.index + run[0].length }));
   const whitespaceStarts = whitespaceRuns.map((run) => run.start);
   const whitespaceEnds = whitespaceRuns.map((run) => run.end);
   const whitespaceSavings = [0];
@@ -21719,7 +21629,7 @@ function findContent(text4, queries, mode) {
       const counts = rangeCounts(range);
       if (counts.length === 0) continue;
       const labelsLength = counts.reduce((total, result) => total + (overflow ? result.id.length : result.query.length + 2) + 2 + String(result.count).length, 2 * (counts.length - 1));
-      const snippetLength = normalizedLength(range.start, range.end) + (range.start > 0 ? 1 : 0) + (range.end < text4.length ? 1 : 0);
+      const snippetLength = normalizedLength(range.start, range.end) + (range.start > 0 ? 1 : 0) + (range.end < text.length ? 1 : 0);
       length += 2 + String(index + 1).length + 2 + labelsLength + 1 + snippetLength;
       returnedMatches += counts.reduce((total, result) => total + result.count, 0);
     }
@@ -21736,8 +21646,8 @@ function findContent(text4, queries, mode) {
       const contained = rangeCounts(range);
       if (contained.length === 0) continue;
       const prefix = range.start > 0 ? "\u2026" : "";
-      const suffix = range.end < text4.length ? "\u2026" : "";
-      const snippet = `${prefix}${text4.slice(range.start, range.end).replace(/\s+/g, " ").trim()}${suffix}`;
+      const suffix = range.end < text.length ? "\u2026" : "";
+      const snippet = `${prefix}${text.slice(range.start, range.end).replace(/\s+/g, " ").trim()}${suffix}`;
       const counts = contained.map((result) => `${overflow ? result.id : `"${result.query}"`} \xD7${result.count}`).join(", ");
       sections.push(`${index + 1}. ${counts}
 ${snippet}`);
@@ -21748,18 +21658,18 @@ ${snippet}`);
     if (returnedMatches < matches.length) sections.push(`Showing ${returnedMatches} of ${matches.length} matches.`);
     return { text: sections.join("\n\n"), matchCount: matches.length, returnedMatches, queryResults };
   }
-  const fullRanges = contextRanges(text4.length, matches);
+  const fullRanges = contextRanges(text.length, matches);
   const full = measure(fullRanges);
   if (full.returnedMatches === matches.length && full.length <= MAX_OUTPUT_CHARS) return formatRanges(fullRanges);
   let ranges = [];
   let omitted = matchingQueries.map((result) => result.id);
   if (measure(ranges, true, omitted).length > MAX_OUTPUT_CHARS) {
-    const text5 = `${heading}
+    const text2 = `${heading}
 
 Unable to format bounded excerpts: query metadata exceeds ${MAX_OUTPUT_CHARS} characters.
 
 Showing 0 of ${matches.length} matches.`;
-    return { text: text5, matchCount: matches.length, returnedMatches: 0, queryResults };
+    return { text: text2, matchCount: matches.length, returnedMatches: 0, queryResults };
   }
   const witnesses = [];
   for (const { id, matches: queryMatches } of matchingQueries) {
@@ -21785,7 +21695,7 @@ Showing 0 of ${matches.length} matches.`;
   for (const witness of witnesses) {
     const proposed = mergeRanges([...ranges, {
       start: Math.max(0, witness.start - CONTEXT_CHARS),
-      end: Math.min(text4.length, witness.end + CONTEXT_CHARS)
+      end: Math.min(text.length, witness.end + CONTEXT_CHARS)
     }]);
     if (measure(proposed, true, omitted).length <= MAX_OUTPUT_CHARS) ranges = proposed;
   }
@@ -21824,8 +21734,8 @@ function classifySource(url) {
   if (BLOG_HOSTS.test(host) || BLOG_PATHS.test(path)) return "blog";
   return "unknown";
 }
-function hashContent(text4) {
-  return `sha256:${createHash2("sha256").update(text4, "utf8").digest("hex")}`;
+function hashContent(text) {
+  return `sha256:${createHash2("sha256").update(text, "utf8").digest("hex")}`;
 }
 function tokenize(value) {
   return [...new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 3))];
@@ -21835,10 +21745,10 @@ function extractRelevantSpans(content, hint) {
   const sentencePattern = /[^.!?]+(?:[.!?]+(?=\s|$)|$)/g;
   for (const match of content.matchAll(sentencePattern)) {
     const raw = match[0];
-    const text4 = raw.trim();
-    if (text4.length > 0 && text4.length <= 400) {
-      const start = (match.index ?? 0) + raw.indexOf(text4);
-      sentences.push({ text: text4, start, end: start + text4.length });
+    const text = raw.trim();
+    if (text.length > 0 && text.length <= 400) {
+      const start = (match.index ?? 0) + raw.indexOf(text);
+      sentences.push({ text, start, end: start + text.length });
     }
   }
   const terms = tokenize(hint);
@@ -22099,14 +22009,14 @@ function initialContentSlice(content, maxChars) {
     const lineBreak = content.lastIndexOf("\n", endOffset);
     if (lineBreak >= Math.floor(maxChars * 0.8)) endOffset = lineBreak + 1;
   }
-  const text4 = content.slice(0, endOffset);
+  const text = content.slice(0, endOffset);
   return {
-    text: text4,
+    text,
     endOffset,
     totalBytes: Buffer.byteLength(content),
     totalLines: content.length === 0 ? 0 : content.split("\n").length,
-    shownBytes: Buffer.byteLength(text4),
-    shownLines: text4.length === 0 ? 0 : text4.split("\n").length
+    shownBytes: Buffer.byteLength(text),
+    shownLines: text.length === 0 ? 0 : text.split("\n").length
   };
 }
 function normalizeFindQueries(value) {
@@ -22225,23 +22135,23 @@ ${r.snippet}` : ""}
   }
   return output;
 }
-function boundSearchPresentation(text4, guidance, truncationGuidance, maxChars) {
-  const fullText = `${text4}${guidance}`;
+function boundSearchPresentation(text, guidance, truncationGuidance, maxChars) {
+  const fullText = `${text}${guidance}`;
   if (fullText.length <= maxChars) {
-    return { text: fullText, truncated: false, originalChars: text4.length, returnedChars: text4.length, omittedChars: 0 };
+    return { text: fullText, truncated: false, originalChars: text.length, returnedChars: text.length, omittedChars: 0 };
   }
   const marker = `
 
 ---
 [Output truncated.]${truncationGuidance}`;
   const prefixLength = maxChars - marker.length;
-  const bounded = `${text4.slice(0, prefixLength)}${marker}`;
+  const bounded = `${text.slice(0, prefixLength)}${marker}`;
   return {
     text: bounded,
     truncated: true,
-    originalChars: text4.length,
+    originalChars: text.length,
     returnedChars: prefixLength,
-    omittedChars: text4.length - prefixLength
+    omittedChars: text.length - prefixLength
   };
 }
 function registeredFetchToolNames(settings) {
@@ -22770,9 +22680,9 @@ Use ${storedContentCall(`responseId: "${responseId}", urlIndex: 0`)} to retrieve
       if (params.findText !== void 0) {
         try {
           const found = findContent(serialized, normalizeFindQueries(params.findText), params.findMode ?? "case-insensitive");
-          const { text: text5, ...findDetails } = found;
+          const { text: text2, ...findDetails } = found;
           return {
-            content: [{ type: "text", text: text5 }],
+            content: [{ type: "text", text: text2 }],
             details: { responseId: artifact.id, type: "research", contentLength: serialized.length, findMode: params.findMode ?? "case-insensitive", ...findDetails }
           };
         } catch (err) {
@@ -22803,13 +22713,13 @@ Use ${storedContentCall(`responseId: "${responseId}", urlIndex: 0`)} to retrieve
           details: { error: "Offset out of range", offset, contentLength: serialized.length }
         };
       }
-      const { endOffset, text: text4 } = sliceWithContinuation(serialized, offset, limit, maxInlineContentChars, (end) => `
+      const { endOffset, text } = sliceWithContinuation(serialized, offset, limit, maxInlineContentChars, (end) => `
 
 ---
 Showing chars ${offset}-${end} of ${serialized.length}. Use ${storedContentCall(`responseId: "${artifact.id}", offset: ${end}, limit: ${limit}`)} for the next slice.`);
       const hasMore = endOffset < serialized.length;
       return {
-        content: [{ type: "text", text: text4 }],
+        content: [{ type: "text", text }],
         details: { responseId: artifact.id, type: "research", contentLength: serialized.length, offset, limit, returnedChars: endOffset - offset, nextOffset: hasMore ? endOffset : null, truncated: hasMore }
       };
     }
@@ -22850,9 +22760,9 @@ Showing chars ${offset}-${end} of ${serialized.length}. Use ${storedContentCall(
       if (params.findText !== void 0) {
         try {
           const found = findContent(fullResults, normalizeFindQueries(params.findText), params.findMode ?? "case-insensitive");
-          const { text: text5, ...findDetails } = found;
+          const { text: text2, ...findDetails } = found;
           return {
-            content: [{ type: "text", text: text5 }],
+            content: [{ type: "text", text: text2 }],
             details: { responseId: params.responseId, query: queryData.query, resultCount: queryData.results.length, contentLength: fullResults.length, findMode: params.findMode ?? "case-insensitive", ...findDetails }
           };
         } catch (err) {
@@ -22884,14 +22794,14 @@ Showing chars ${offset}-${end} of ${serialized.length}. Use ${storedContentCall(
         };
       }
       const queryIndex = data.queries.indexOf(queryData);
-      const { endOffset, text: text4 } = sliceWithContinuation(fullResults, offset, limit, maxInlineContentChars, (end) => `
+      const { endOffset, text } = sliceWithContinuation(fullResults, offset, limit, maxInlineContentChars, (end) => `
 
 ---
 Showing chars ${offset}-${end} of ${fullResults.length}. Use ${storedContentCall(`responseId: "${params.responseId}", queryIndex: ${queryIndex}, offset: ${end}, limit: ${limit}`)} for the next slice.`);
       const returnedChars = endOffset - offset;
       const hasMore = endOffset < fullResults.length;
       return {
-        content: [{ type: "text", text: text4 }],
+        content: [{ type: "text", text }],
         details: {
           responseId: params.responseId,
           query: queryData.query,
@@ -22952,11 +22862,11 @@ Use one of the available indexes.` }],
       if (params.findText !== void 0) {
         try {
           const found = findContent(urlData.content, normalizeFindQueries(params.findText), params.findMode ?? "case-insensitive");
-          const { text: text5, ...findDetails } = found;
+          const { text: text2, ...findDetails } = found;
           return {
             content: [{ type: "text", text: `# ${urlData.title || urlData.url}
 
-${text5}` }],
+${text2}` }],
             details: { url: urlData.url, title: urlData.title, contentLength: urlData.content.length, findMode: params.findMode ?? "case-insensitive", ...findDetails }
           };
         } catch (err) {
@@ -22990,20 +22900,20 @@ ${text5}` }],
       const endOffset = Math.min(offset + limit, urlData.content.length);
       const contentSlice = urlData.content.slice(offset, endOffset);
       const hasMore = endOffset < urlData.content.length;
-      let text4 = `# ${urlData.title || urlData.url}
+      let text = `# ${urlData.title || urlData.url}
 
 ${contentSlice}`;
       if (hasMore || offset > 0) {
-        text4 += `
+        text += `
 
 ---
 Showing chars ${offset}-${endOffset} of ${urlData.content.length}.`;
         if (hasMore) {
-          text4 += ` Use ${storedContentCall(`responseId: "${params.responseId}", urlIndex: ${selectedUrlIndex}, offset: ${endOffset}, limit: ${limit}`)} for the next slice.`;
+          text += ` Use ${storedContentCall(`responseId: "${params.responseId}", urlIndex: ${selectedUrlIndex}, offset: ${endOffset}, limit: ${limit}`)} for the next slice.`;
         }
       }
       return {
-        content: [{ type: "text", text: text4 }],
+        content: [{ type: "text", text }],
         details: {
           url: urlData.url,
           title: urlData.title,
@@ -23341,20 +23251,20 @@ function registerGoogleAccountCommand(pi) {
         const diagnostic = getGeminiWebAvailabilityDiagnostic(outcome);
         const diagnosticDetails = getGeminiWebAvailabilityDiagnosticDetails(outcome);
         const attempted = formatCookieAttempts(diagnosticDetails?.attempts ?? []);
-        const text5 = diagnostic ? `Gemini Web is unavailable: ${diagnostic}${attempted ? ` Attempted browser profiles: ${attempted}.` : ""}` : "Gemini Web is unavailable. Sign into gemini.google.com in a supported Chromium-based browser.";
+        const text2 = diagnostic ? `Gemini Web is unavailable: ${diagnostic}${attempted ? ` Attempted browser profiles: ${attempted}.` : ""}` : "Gemini Web is unavailable. Sign into gemini.google.com in a supported Chromium-based browser.";
         pi.sendMessage({
           customType: "google-account",
-          content: [{ type: "text", text: text5 }],
+          content: [{ type: "text", text: text2 }],
           display: true,
           details: { available: false, cookieAccessAllowed: true, diagnostic, cookieDiagnostic: diagnosticDetails }
         }, { triggerTurn: true, deliverAs: "followUp" });
         return;
       }
       const email = await getActiveGoogleEmail(cookies);
-      const text4 = email ? `Active Google account: ${email}` : "Gemini Web is available, but the active Google account could not be determined.";
+      const text = email ? `Active Google account: ${email}` : "Gemini Web is available, but the active Google account could not be determined.";
       pi.sendMessage({
         customType: "google-account",
-        content: [{ type: "text", text: text4 }],
+        content: [{ type: "text", text }],
         display: true,
         details: { available: true, email: email ?? null }
       }, { triggerTurn: true, deliverAs: "followUp" });

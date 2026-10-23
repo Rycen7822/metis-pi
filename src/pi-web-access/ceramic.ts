@@ -1,9 +1,10 @@
+import { errorMessage, redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError, SearchUnsupportedFilterError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
-import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
+import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -58,14 +59,6 @@ function buildQuery(query: string, filters: DomainFilters): string {
 	return `${query} ${sites.length === 1 ? sites[0] : `(${sites.join(" OR ")})`}`;
 }
 
-function text(value: unknown): string {
-	return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function invalidResponse(message: string): Error {
 	return new Error(`Ceramic returned invalid response: ${message}`);
 }
@@ -83,7 +76,7 @@ function parseResponse(value: unknown): CeramicResult[] {
 function describeError(body: string): string {
 	try {
 		const parsed = JSON.parse(body) as Record<string, unknown>;
-		const parts = [text(parsed.title), text(parsed.detail)].filter(Boolean);
+		const parts = [normalizeSearchText(parsed.title), normalizeSearchText(parsed.detail)].filter(Boolean);
 		if (parts.length > 0) return parts.join(": ");
 	} catch {}
 	return body;
@@ -138,19 +131,10 @@ export async function searchWithCeramic(query: string, options: SearchOptions = 
 			activityMonitor.logComplete(activityId, 0);
 			throw new Error("Aborted");
 		}
-		const message = errorMessage(err);
 		const providerTimeout = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError");
 		const outgoing = providerTimeout
 			? new Error(`Ceramic request timed out after ${Math.round(SEARCH_TIMEOUT_MS / 1000)}s`)
-			: (() => {
-				const redactedMessage = redactCredential(message, apiKey);
-				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = err instanceof SearchHttpError
-					? new SearchHttpError(err.status, redactedMessage)
-					: new Error(redactedMessage);
-				if (err instanceof Error) redactedError.name = err.name;
-				return redactedError;
-			})();
+			: redactSearchFailure(err instanceof Error ? err : new Error(errorMessage(err)), apiKey).error;
 		activityMonitor.logError(activityId, redactCredential(errorMessage(outgoing), apiKey));
 		throw outgoing;
 	}
@@ -171,9 +155,9 @@ export async function searchWithCeramic(query: string, options: SearchOptions = 
 		if (seen.has(resultUrl.href)) continue;
 		seen.add(resultUrl.href);
 		results.push({
-			title: text(entry.title) || `Source ${results.length + 1}`,
+			title: normalizeSearchText(entry.title) || `Source ${results.length + 1}`,
 			url: resultUrl.href,
-			snippet: text(entry.description).slice(0, MAX_SNIPPET_CHARS),
+			snippet: normalizeSearchText(entry.description).slice(0, MAX_SNIPPET_CHARS),
 		});
 		if (results.length >= numResults) break;
 	}

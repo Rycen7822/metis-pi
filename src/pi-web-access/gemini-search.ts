@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { loadWebAccessConfig } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
@@ -8,10 +9,6 @@ import { getGeminiWebAvailability, isGeminiWebAvailable, queryWithCookies } from
 import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { filterSearchResponseByDomain } from "./search-response-policy.ts";
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
 
 function isAbortError(err: unknown): boolean {
 	return errorMessage(err).toLowerCase().includes("abort");

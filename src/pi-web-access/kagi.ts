@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
@@ -53,10 +54,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 		);
 	}
 	return apiKey;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function invalidResponse(message: string): Error {

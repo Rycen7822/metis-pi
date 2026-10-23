@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
@@ -46,10 +47,6 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 
 export function isXcrawlAvailable(): boolean {
 	return hasCredentialSource({ provider: "XCrawl", configuredValue: loadConfig().xcrawlApiKey, environmentValue: process.env.XCRAWL_API_KEY });
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function invalidResponse(message: string): Error {

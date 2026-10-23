@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { isLoopbackHostname } from "./hostname.ts";
 import { activityMonitor } from "./activity.ts";
@@ -78,10 +79,6 @@ async function getApiToken(signal?: AbortSignal): Promise<string | null> {
 function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(timeoutMs);
 	return signal ? AbortSignal.any([timeout, signal]) : timeout;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function isAbortException(err: unknown): boolean {

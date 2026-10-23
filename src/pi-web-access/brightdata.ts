@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { GOOGLE_RECENCY_TBS, getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
@@ -156,10 +157,6 @@ function buildSerpUrl(searchQuery: string, numResults: number, recencyFilter: Se
 function requestSignal(signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 // Text that did not originate here — a proxied response body, a `JSON.parse`

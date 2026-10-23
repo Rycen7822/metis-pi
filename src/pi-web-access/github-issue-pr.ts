@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import { execFile } from "node:child_process";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
@@ -91,10 +92,6 @@ function validOwner(owner: string): boolean {
 
 function validRepo(repo: string): boolean {
 	return /^[A-Za-z0-9._-]{1,100}$/.test(repo) && repo !== "." && repo !== "..";
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function isAbortError(err: unknown): boolean {

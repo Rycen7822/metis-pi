@@ -5,7 +5,7 @@ import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirec
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
-import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
+import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -66,10 +66,6 @@ function recencyToStartDate(filter: SearchOptions["recencyFilter"]): string | un
 	if (!filter) return undefined;
 	const days = { day: 1, week: 7, month: 30, year: 365 }[filter];
 	return days ? new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10) : undefined;
-}
-
-function text(value: unknown, limit: number): string {
-	return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
 }
 
 function invalidResponse(message: string): Error {
@@ -133,11 +129,11 @@ export async function searchWithValyu(query: string, options: SearchOptions & { 
 	const inlineContent: ExtractedContent[] = [];
 	for (const entry of entries) {
 		if (!entry || typeof entry !== "object") continue;
-		const url = text(entry.url, Number.MAX_SAFE_INTEGER);
+		const url = normalizeSearchText(entry.url);
 		if (!url || !matchesDomainFilter(url, domains)) continue;
-		const title = text(entry.title, Number.MAX_SAFE_INTEGER) || `Source ${results.length + 1}`;
-		const content = text(entry.content, MAX_CONTENT_CHARS);
-		const description = text(entry.description, MAX_SNIPPET_CHARS);
+		const title = normalizeSearchText(entry.title) || `Source ${results.length + 1}`;
+		const content = normalizeSearchText(entry.content).slice(0, MAX_CONTENT_CHARS);
+		const description = normalizeSearchText(entry.description).slice(0, MAX_SNIPPET_CHARS);
 		results.push({ title, url, snippet: (content || description).slice(0, MAX_SNIPPET_CHARS) });
 		if (options.includeContent && content) inlineContent.push({ url, title, content, error: null });
 		if (results.length >= numResults) break;

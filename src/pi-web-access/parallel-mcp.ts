@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { activityMonitor } from "./activity.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { redactCredential } from "./credential-source.ts";
@@ -40,10 +41,6 @@ interface ParallelMcpSearchOptions extends SearchOptions {
 function requestSignal(signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function filterResults<T extends ParallelMcpSearchResult>(results: T[], domainFilter?: string[]): T[] {

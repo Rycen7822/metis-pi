@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath, getWebAccessConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
@@ -81,10 +82,6 @@ function requireBaseUrl(): string {
 
 function resultText(value: unknown): string {
 	return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function invalidResponse(message: string): Error {

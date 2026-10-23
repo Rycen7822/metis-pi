@@ -1,3 +1,4 @@
+import { errorMessage } from "./search-error-redaction.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
@@ -97,10 +98,6 @@ export function isQueritAvailable(): boolean {
 		configuredValue: loadConfig().queritApiKey,
 		environmentValue: process.env.QUERIT_API_KEY,
 	});
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
