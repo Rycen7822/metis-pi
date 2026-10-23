@@ -6,7 +6,8 @@ import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters as normalizeSharedDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { filterSearchResponseByDomain } from "./search-response-policy.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, toRequestHeaders } from "./credential-source.ts";
+import { forEachCitationAnnotation, forEachSearchCallSource } from "./responses-sources.ts";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -240,14 +241,6 @@ function resolveConfiguredSearchModel(value: unknown): string | undefined {
 		throw new Error(`openaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
 	}
 	return value.trim();
-}
-
-function toRequestHeaders(headers: ProviderHeaders): Record<string, string> {
-	const requestHeaders: Record<string, string> = {};
-	for (const [name, value] of Object.entries(headers)) {
-		if (value !== null) requestHeaders[name] = value;
-	}
-	return requestHeaders;
 }
 
 function applyOpenCodeDestinationHeaders(headers: HeadersInit, requestUrl: string, ctx?: Pick<ExtensionContext, "sessionManager">): Headers {
@@ -554,44 +547,15 @@ function extractSearchResults(output: unknown[], numResults: number | undefined,
 	const filters = normalizeSharedDomainFilters(domainFilter);
 	const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
 
-	for (const item of output) {
-		if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
-		const content = (item as { content?: unknown }).content;
-		if (!Array.isArray(content)) continue;
-		for (const part of content) {
-			if (!part || typeof part !== "object") continue;
-			const text = typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "";
-			const annotations = (part as { annotations?: unknown }).annotations;
-			if (!Array.isArray(annotations)) continue;
-			for (const annotation of annotations) {
-				if (!annotation || typeof annotation !== "object" || (annotation as { type?: unknown }).type !== "url_citation") continue;
-				addResult(
-					results,
-					seenUrls,
-					(annotation as { url?: unknown }).url,
-					(annotation as { title?: unknown }).title,
-					hasDomains ? "" : extractSnippetAround(text, (annotation as { start_index?: unknown }).start_index, (annotation as { end_index?: unknown }).end_index),
-				);
-			}
-		}
-	}
-
-	for (const item of output) {
-		if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "web_search_call") continue;
-		const value = item as { action?: unknown; sources?: unknown; results?: unknown };
-		const actionSources = value.action && typeof value.action === "object"
-			? (value.action as { sources?: unknown }).sources
-			: undefined;
-		const sourceGroups = [actionSources, value.sources, value.results];
-		for (const group of sourceGroups) {
-			if (!Array.isArray(group)) continue;
-			for (const source of group) {
-				if (!source || typeof source !== "object") continue;
-				const record = source as Record<string, unknown>;
-				addResult(results, seenUrls, record.url ?? record.source_website_url, record.title ?? record.caption);
-			}
-		}
-	}
+	forEachCitationAnnotation(output, (citation, text) => {
+		addResult(results, seenUrls, citation.url, citation.title,
+			hasDomains ? "" : extractSnippetAround(text, citation.start_index, citation.end_index));
+	});
+	forEachSearchCallSource(output, ["web_search_call"], source => {
+		if (!source || typeof source !== "object") return;
+		const record = source as Record<string, unknown>;
+		addResult(results, seenUrls, record.url ?? record.source_website_url, record.title ?? record.caption);
+	});
 
 	const filtered = hasDomains ? results.filter(result => matchesDomainFilter(result.url, filters)) : results;
 	if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {

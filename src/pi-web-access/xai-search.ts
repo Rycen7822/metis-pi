@@ -5,7 +5,8 @@ import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { filterSearchResponseByDomain } from "./search-response-policy.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, toRequestHeaders } from "./credential-source.ts";
+import { forEachCitationAnnotation, forEachSearchCallSource } from "./responses-sources.ts";
 
 // xAI's Agent Tools API: hosted `web_search` and opt-in `x_search` tools on an
 // OpenAI-compatible Responses endpoint. The search runs inside xAI's own inference, so — unlike
@@ -88,14 +89,6 @@ function resolveConfiguredSearchTools(value: unknown): XaiSearchTool[] {
 
 function modelCandidatesForTools(tools: readonly XaiSearchTool[]): readonly string[] {
 	return tools.includes("x_search") ? X_SEARCH_AUTH_MODEL_CANDIDATES : WEB_SEARCH_AUTH_MODEL_CANDIDATES;
-}
-
-function toRequestHeaders(headers: ProviderHeaders): Record<string, string> {
-	const requestHeaders: Record<string, string> = {};
-	for (const [name, value] of Object.entries(headers)) {
-		if (value !== null) requestHeaders[name] = value;
-	}
-	return requestHeaders;
 }
 
 /**
@@ -247,40 +240,11 @@ function extractSearchResults(output: unknown[], citations: unknown, numResults:
 	const filters = normalizeDomainFilters(domainFilter);
 	const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
 
-	for (const item of output) {
-		if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
-		const content = (item as { content?: unknown }).content;
-		if (!Array.isArray(content)) continue;
-		for (const part of content) {
-			if (!part || typeof part !== "object") continue;
-			const text = typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "";
-			const annotations = (part as { annotations?: unknown }).annotations;
-			if (!Array.isArray(annotations)) continue;
-			for (const annotation of annotations) {
-				if (!annotation || typeof annotation !== "object") continue;
-				if ((annotation as { type?: unknown }).type !== "url_citation") continue;
-				addResult(
-					results,
-					seenUrls,
-					(annotation as { url?: unknown }).url,
-					(annotation as { title?: unknown }).title,
-					hasDomains ? "" : extractSnippetAround(text, (annotation as { start_index?: unknown }).start_index, (annotation as { end_index?: unknown }).end_index),
-				);
-			}
-		}
-	}
-
-	for (const item of output) {
-		if (!item || typeof item !== "object") continue;
-		const type = (item as { type?: unknown }).type;
-		if (type !== "web_search_call" && type !== "x_search_call") continue;
-		const value = item as { action?: unknown; sources?: unknown; results?: unknown };
-		const actionSources = value.action && typeof value.action === "object"
-			? (value.action as { sources?: unknown }).sources
-			: undefined;
-		for (const group of [actionSources, value.sources, value.results]) addSources(results, seenUrls, group);
-	}
-
+	forEachCitationAnnotation(output, (citation, text) => {
+		addResult(results, seenUrls, citation.url, citation.title,
+			hasDomains ? "" : extractSnippetAround(text, citation.start_index, citation.end_index));
+	});
+	forEachSearchCallSource(output, ["web_search_call", "x_search_call"], source => addSource(results, seenUrls, source));
 	addSources(results, seenUrls, citations);
 
 	const filtered = hasDomains ? results.filter(result => matchesDomainFilter(result.url, filters)) : results;

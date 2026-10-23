@@ -142,6 +142,14 @@ function commandFailureCategory(error: unknown, signal?: AbortSignal): Credentia
 	return "command-failed";
 }
 
+export function toRequestHeaders(headers: Record<string, string | null>): Record<string, string> {
+	const requestHeaders: Record<string, string> = {};
+	for (const [name, value] of Object.entries(headers)) {
+		if (value !== null) requestHeaders[name] = value;
+	}
+	return requestHeaders;
+}
+
 export function requireProviderCredential(apiKey: string | null, setup: {
 	provider: string;
 	configPath: string;

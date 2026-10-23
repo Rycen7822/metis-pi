@@ -870,6 +870,13 @@ function commandFailureCategory(error, signal) {
   }
   return "command-failed";
 }
+function toRequestHeaders(headers) {
+  const requestHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value !== null) requestHeaders[name] = value;
+  }
+  return requestHeaders;
+}
 function requireProviderCredential(apiKey, setup) {
   if (!apiKey) throw new Error(
     `${setup.provider} API key not found. Either:
@@ -18867,6 +18874,39 @@ function filterSearchResponseByDomain(response, domainFilter) {
 // src/pi-web-access/openai-search.ts
 init_search_types();
 init_credential_source();
+
+// src/pi-web-access/responses-sources.ts
+function forEachCitationAnnotation(output, add) {
+  for (const item of output) {
+    if (!item || typeof item !== "object" || item.type !== "message") continue;
+    const content = item.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const text = typeof part.text === "string" ? part.text : "";
+      const annotations = part.annotations;
+      if (!Array.isArray(annotations)) continue;
+      for (const annotation of annotations) {
+        if (!annotation || typeof annotation !== "object" || annotation.type !== "url_citation") continue;
+        add(annotation, text);
+      }
+    }
+  }
+}
+function forEachSearchCallSource(output, callTypes, add) {
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const type = item.type;
+    if (typeof type !== "string" || !callTypes.includes(type)) continue;
+    const value = item;
+    const actionSources = value.action && typeof value.action === "object" ? value.action.sources : void 0;
+    for (const group of [actionSources, value.sources, value.results]) {
+      if (Array.isArray(group)) for (const source of group) add(source);
+    }
+  }
+}
+
+// src/pi-web-access/openai-search.ts
 var OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 var CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 var CONFIG_PATH = getWebSearchConfigPath();
@@ -19027,13 +19067,6 @@ function resolveConfiguredSearchModel(value) {
     throw new Error(`openaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
   }
   return value.trim();
-}
-function toRequestHeaders(headers) {
-  const requestHeaders = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (value !== null) requestHeaders[name] = value;
-  }
-  return requestHeaders;
 }
 function applyOpenCodeDestinationHeaders(headers, requestUrl, ctx) {
   const requestHeaders = new Headers(headers);
@@ -19290,41 +19323,20 @@ function extractSearchResults(output, numResults, domainFilter) {
   const seenUrls = /* @__PURE__ */ new Set();
   const filters = normalizeDomainFilters(domainFilter);
   const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
-  for (const item of output) {
-    if (!item || typeof item !== "object" || item.type !== "message") continue;
-    const content = item.content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text = typeof part.text === "string" ? part.text : "";
-      const annotations = part.annotations;
-      if (!Array.isArray(annotations)) continue;
-      for (const annotation of annotations) {
-        if (!annotation || typeof annotation !== "object" || annotation.type !== "url_citation") continue;
-        addResult(
-          results,
-          seenUrls,
-          annotation.url,
-          annotation.title,
-          hasDomains ? "" : extractSnippetAround(text, annotation.start_index, annotation.end_index)
-        );
-      }
-    }
-  }
-  for (const item of output) {
-    if (!item || typeof item !== "object" || item.type !== "web_search_call") continue;
-    const value = item;
-    const actionSources = value.action && typeof value.action === "object" ? value.action.sources : void 0;
-    const sourceGroups = [actionSources, value.sources, value.results];
-    for (const group of sourceGroups) {
-      if (!Array.isArray(group)) continue;
-      for (const source of group) {
-        if (!source || typeof source !== "object") continue;
-        const record = source;
-        addResult(results, seenUrls, record.url ?? record.source_website_url, record.title ?? record.caption);
-      }
-    }
-  }
+  forEachCitationAnnotation(output, (citation, text) => {
+    addResult(
+      results,
+      seenUrls,
+      citation.url,
+      citation.title,
+      hasDomains ? "" : extractSnippetAround(text, citation.start_index, citation.end_index)
+    );
+  });
+  forEachSearchCallSource(output, ["web_search_call"], (source) => {
+    if (!source || typeof source !== "object") return;
+    const record = source;
+    addResult(results, seenUrls, record.url ?? record.source_website_url, record.title ?? record.caption);
+  });
   const filtered = hasDomains ? results.filter((result) => matchesDomainFilter(result.url, filters)) : results;
   if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {
     return filtered.slice(0, Math.min(Math.floor(numResults), 20));
@@ -22468,13 +22480,6 @@ function resolveConfiguredSearchTools(value) {
 function modelCandidatesForTools(tools) {
   return tools.includes("x_search") ? X_SEARCH_AUTH_MODEL_CANDIDATES : WEB_SEARCH_AUTH_MODEL_CANDIDATES;
 }
-function toRequestHeaders2(headers) {
-  const requestHeaders = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (value !== null) requestHeaders[name] = value;
-  }
-  return requestHeaders;
-}
 async function resolvePiAuth2(ctx, modelOverride, tools) {
   const registeredOverride = modelOverride ? ctx.modelRegistry.find("xai", modelOverride) : void 0;
   const modelIds = registeredOverride ? [registeredOverride.id] : modelCandidatesForTools(tools);
@@ -22591,36 +22596,16 @@ function extractSearchResults2(output, citations, numResults, domainFilter) {
   const seenUrls = /* @__PURE__ */ new Set();
   const filters = normalizeDomainFilters(domainFilter);
   const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
-  for (const item of output) {
-    if (!item || typeof item !== "object" || item.type !== "message") continue;
-    const content = item.content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text = typeof part.text === "string" ? part.text : "";
-      const annotations = part.annotations;
-      if (!Array.isArray(annotations)) continue;
-      for (const annotation of annotations) {
-        if (!annotation || typeof annotation !== "object") continue;
-        if (annotation.type !== "url_citation") continue;
-        addResult2(
-          results,
-          seenUrls,
-          annotation.url,
-          annotation.title,
-          hasDomains ? "" : extractSnippetAround(text, annotation.start_index, annotation.end_index)
-        );
-      }
-    }
-  }
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    const type = item.type;
-    if (type !== "web_search_call" && type !== "x_search_call") continue;
-    const value = item;
-    const actionSources = value.action && typeof value.action === "object" ? value.action.sources : void 0;
-    for (const group of [actionSources, value.sources, value.results]) addSources(results, seenUrls, group);
-  }
+  forEachCitationAnnotation(output, (citation, text) => {
+    addResult2(
+      results,
+      seenUrls,
+      citation.url,
+      citation.title,
+      hasDomains ? "" : extractSnippetAround(text, citation.start_index, citation.end_index)
+    );
+  });
+  forEachSearchCallSource(output, ["web_search_call", "x_search_call"], (source) => addSource(results, seenUrls, source));
   addSources(results, seenUrls, citations);
   const filtered = hasDomains ? results.filter((result) => matchesDomainFilter(result.url, filters)) : results;
   if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {
@@ -22644,7 +22629,7 @@ async function searchWithXai(query, options = {}, ctx) {
     const response = await fetchWithCredentialRedirects(XAI_RESPONSES_URL, {
       method: "POST",
       headers: {
-        ...toRequestHeaders2(auth.headers),
+        ...toRequestHeaders(auth.headers),
         Authorization: `Bearer ${auth.apiKey}`,
         "Content-Type": "application/json"
       },
