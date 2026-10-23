@@ -3,11 +3,11 @@
   "target": "x86_64-unknown-linux-musl",
   "source": {
     "root": "native/tools",
-    "baseRevision": "87b13210fd1b90060f4e4a4812582a223e98a32b",
-    "baseRef": "v0.21.0-37-g87b1321",
+    "baseRevision": "73011973c86ea02b6c40a5461cc2e607148cb53e",
+    "baseRef": "v0.21.0-65-g7301197",
     "modified": true,
     "verification": "Requires a Git checkout containing native/tools; installed packages contain helper bytes only.",
-    "sha256": "2becdac9e2d91ee9b5558e8361795955875d7081b9190e8ebaaad680e5e28a63",
+    "sha256": "5749710e93ad2ab31004257716d4ad55974c769ecb4f017543ab9940f0d5d42d",
     "inputs": [
       {
         "path": "native/tools/Cargo.lock",
@@ -19,7 +19,7 @@
       },
       {
         "path": "native/tools/build-linux-x64.mjs",
-        "sha256": "30037eda46a77f1c42338f9503b67732ca47b7693e102c0b50934adaa22045e8"
+        "sha256": "f8a40031d6cf74abeee959690a7967e5c290e54fb085a613ba4f8ca8f7e8895e"
       },
       {
         "path": "native/tools/crates/codex-utils-pty/Cargo.toml",
@@ -104,6 +104,10 @@
       {
         "path": "native/tools/exec/protocol.rs",
         "sha256": "37fc86765b99eacf60fe781d357742eddb5a345fefba13948097cccf37646966"
+      },
+      {
+        "path": "scripts/lib/native-assets.mjs",
+        "sha256": "4b5cb7b87307db8314e509904f15e89c35e81d58c8460334669898e862f8dd1b"
       }
     ]
   },

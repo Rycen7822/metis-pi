@@ -12,8 +12,12 @@
       "src/neural-search/engine",
       "src/neural-search/native/binding"
     ],
-    "sha256": "3121c4866a05a84fa47b610424423044c4b6403a3a01d4eebffada3dddffa436",
+    "sha256": "b323e7d53fbd8b5c5de5e2962f18e2499abd18db286120a9fef6aeaa6bb553f0",
     "inputs": [
+      {
+        "path": "scripts/lib/native-assets.mjs",
+        "sha256": "4b5cb7b87307db8314e509904f15e89c35e81d58c8460334669898e862f8dd1b"
+      },
       {
         "path": "src/neural-search/engine/Cargo.lock",
         "sha256": "9df7f11f80b39f8593e6e11e0a40523e675186b524ad6c42876185e2a0307166"
@@ -28,7 +32,7 @@
       },
       {
         "path": "src/neural-search/engine/build-linux-x64.mjs",
-        "sha256": "1ff739c8c3715e8f3d77d280e51588efbc9131dbcad70bf2bc786bf647906c9b"
+        "sha256": "297ad90e1c2e559bc8d850fc31584b71bee9fda487e440bae4652756298280c2"
       },
       {
         "path": "src/neural-search/engine/crates/fff-c/Cargo.toml",

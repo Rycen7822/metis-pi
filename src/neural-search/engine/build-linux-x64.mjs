@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { copyFileSync, mkdirSync, readFileSync, renameSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { writeNotices } from "./notices.mjs";
+import { hash, fileHash, sourceInputs } from "../../../scripts/lib/native-assets.mjs";
 
 const source = dirname(fileURLToPath(import.meta.url));
 const root = resolve(source, "../../..");
@@ -15,24 +15,12 @@ const notices = ["src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural
 const mode = process.argv[2] ?? "build";
 if (process.argv.length > 3 || !["build", "verify"].includes(mode)) throw new Error("Usage: node src/neural-search/engine/build-linux-x64.mjs [build|verify]");
 if (process.platform !== "linux" || process.arch !== "x64") throw new Error("The owned search library targets Linux x64 glibc only.");
-const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-const fileHash = path => hash(readFileSync(path));
 const command = (name, args, options = {}) => execFileSync(name, args, { cwd: root, encoding: "utf8", ...options }).trim();
 
-function inputs(directory = source) {
-  const files = readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    if (entry.name === "target") return [];
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return inputs(path);
-    return entry.isFile() && (/(?:\.rs|\.toml|\.lock|\.h|\.mjs)$/.test(entry.name) || /^(?:LICENSE|COPYING|COPYRIGHT|NOTICE)(?:$|[-_.])/.test(entry.name))
-      ? [{ path: relative(root, path), sha256: fileHash(path) }] : [];
-  });
-  if (directory === source) for (const name of ["api.ts", "ffi.ts", "finder.ts"]) {
-    const path = `src/neural-search/native/binding/${name}`;
-    files.push({ path, sha256: fileHash(join(root, path)) });
-  }
-  return files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-}
+const bindingInputs = ["api.ts", "ffi.ts", "finder.ts"].map(name => `src/neural-search/native/binding/${name}`);
+const inputs = () => sourceInputs(root, source,
+  name => /(?:\.rs|\.toml|\.lock|\.h|\.mjs)$/.test(name) || /^(?:LICENSE|COPYING|COPYRIGHT|NOTICE)(?:$|[-_.])/.test(name),
+  [...bindingInputs, "scripts/lib/native-assets.mjs"]);
 
 function abi(path) {
   const header = command("readelf", ["-W", "-h", path]);

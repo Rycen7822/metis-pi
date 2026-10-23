@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hash, fileHash, sourceInputs as collectSourceInputs } from "../../scripts/lib/native-assets.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const sourceRoot = join(root, "native/tools");
@@ -15,22 +15,10 @@ const mode = process.argv[2] ?? "build";
 if (process.argv.length > 3 || !["build", "verify"].includes(mode)) throw new Error("Usage: node native/tools/build-linux-x64.mjs [build|verify]");
 if (process.platform !== "linux" || process.arch !== "x64") throw new Error("This builder verifies Linux x64 assets on Linux x64");
 
-const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-const fileHash = path => hash(readFileSync(path));
 const command = (name, args) => execFileSync(name, args, { cwd: root, encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }).trim();
 
-function sourceInputs(directory = sourceRoot) {
-  const inputs = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name === "target") continue;
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) inputs.push(...sourceInputs(path));
-    else if (entry.isFile() && (entry.name.endsWith(".rs") || ["Cargo.toml", "Cargo.lock", "build-linux-x64.mjs"].includes(entry.name))) {
-      inputs.push({ path: relative(root, path).split(sep).join("/"), sha256: fileHash(path) });
-    }
-  }
-  return inputs.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-}
+const sourceInputs = () => collectSourceInputs(root, sourceRoot,
+  name => name.endsWith(".rs") || ["Cargo.toml", "Cargo.lock", "build-linux-x64.mjs"].includes(name), ["scripts/lib/native-assets.mjs"]);
 
 function staticAbi(path) {
   const header = command("readelf", ["-W", "-h", path]);
