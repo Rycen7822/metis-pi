@@ -13,6 +13,7 @@ import {
   CUSTOM_TYPE_SUMMARY,
 } from "./types.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
+import { customEntries } from "./custom-entries.ts";
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,
@@ -67,9 +68,9 @@ export class ToolCallIndexer {
     const branch = ctx.sessionManager.getBranch();
     const dedupAliasEntries: DedupAliasEntryData[] = [];
 
-    for (const entry of branch) {
-      if (entry.type === "custom" && (entry as any).customType === CUSTOM_TYPE_INDEX) {
-        const data = (entry as any).data as IndexEntryData;
+    for (const entry of customEntries(branch)) {
+      if (entry.customType === CUSTOM_TYPE_INDEX) {
+        const data = entry.data as IndexEntryData;
         const backfilled = data.backfilled === true;
         if (data && Array.isArray(data.toolCalls)) {
           for (const toolCall of data.toolCalls) {
@@ -89,16 +90,16 @@ export class ToolCallIndexer {
         continue;
       }
 
-      if (entry.type === "custom" && (entry as any).customType === CUSTOM_TYPE_CHAIN) {
-        const data = (entry as any).data as ChainCompressionEntry;
+      if (entry.customType === CUSTOM_TYPE_CHAIN) {
+        const data = entry.data as ChainCompressionEntry;
         if (data?.blockId && (isSharedChain(data) ? Array.isArray(data.members) : typeof data.startUserTimestamp === "number")) {
           this.registerChain(data);
         }
         continue;
       }
 
-      if (entry.type === "custom" && (entry as any).customType === CUSTOM_TYPE_DEDUP_ALIAS) {
-        const data = (entry as any).data as DedupAliasEntryData;
+      if (entry.customType === CUSTOM_TYPE_DEDUP_ALIAS) {
+        const data = entry.data as DedupAliasEntryData;
         if (data?.newToolCallId && data?.originalToolCallId) {
           dedupAliasEntries.push(data);
         }

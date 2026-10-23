@@ -1,4 +1,5 @@
 import type { SummarizerStats, LiveReclaim } from "./types.ts";
+import { customEntries } from "./custom-entries.ts";
 import { CUSTOM_TYPE_STATS } from "./types.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -67,17 +68,9 @@ export class StatsAccumulator {
 
   reconstructFromSession(ctx: ExtensionContext): void {
     this.reset();
-    const branch = ctx.sessionManager.getBranch();
-    for (const entry of branch) {
-      if (
-        entry.type === "custom" &&
-        (entry as any).customType === CUSTOM_TYPE_STATS
-      ) {
-        const data = (entry as any).data as SummarizerStats;
-        if (data) {
-          this.fromJSON(data);
-        }
-      }
+    for (const entry of customEntries(ctx.sessionManager.getBranch(), CUSTOM_TYPE_STATS)) {
+      const data = entry.data as SummarizerStats;
+      if (data) this.fromJSON(data);
     }
     this.baselineTokens = this.stats.totalInputTokens + this.stats.totalOutputTokens;
   }
