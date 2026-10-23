@@ -25,6 +25,9 @@
 
 在全屏界面点击左下目标状态行，或输入 `/goal` 打开弹窗；RPC/非交互模式使用文本查看。
 
+- 弹窗与 Subagent 查看器采用相同的居中布局、90% 宽度、70% 高度和圆角外框；短目标也保持窗口大小。
+- **Pause / Resume / Ctrl+P** 在查看模式暂停或恢复，语义与 `/goal pause`、`/goal resume` 相同；暂停不强制中断当前模型回合。
+- 长目标显示右侧滚动条，支持滚轮、拖动，以及 ↑/↓、PageUp/PageDown、Home/End；编辑使用 Pi 原生编辑器。
 - **Edit / Ctrl+E** 开始编辑；**Save / Ctrl+S** 校验保存。
 - **Cancel / 编辑时 Esc** 放弃草稿，回到查看；查看时 **Esc / [X]** 关闭。
 - 查看和取消不触发续跑。保存保留 ID、计时、用量和预算；编辑 complete 或 budgetLimited 目标恢复 active。

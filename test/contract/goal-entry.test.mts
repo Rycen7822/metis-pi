@@ -1,6 +1,6 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createEventBus, initTheme, InteractiveMode } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Input, KeybindingsManager, TUI_KEYBINDINGS, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Input, KeybindingsManager, TUI_KEYBINDINGS, stripTerminalSequences, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import { sgr } from "../helpers.mjs";
@@ -118,6 +118,13 @@ test("goal popup keeps live usage, edits through native input and leaves Cancel 
   h.events.emit("metis:goal-open", {});
   assert.match(await ui.ready(), /Pursuing · Elapsed: 3s/);
   assert.equal(custom.mock.calls.length, 1, "repeated clicks keep one popup");
+  const box = ui.popup.render(90).map(stripTerminalSequences);
+  assert.equal(box.length, 28, "short goals keep the subagent viewer's 70% height");
+  assert.equal(box[0], `╭${"─".repeat(88)}╮`);
+  assert.equal(box.at(-1), `╰${"─".repeat(88)}╯`);
+  assert.ok(box.every(row => visibleWidth(row) === 90), "the full frame uses the subagent viewer's 90% width");
+  assert.equal(ui.frame()[6].slice(5), box[0], "the native overlay centers the full frame");
+  assert.equal(ui.frame()[33].slice(5), box.at(-1));
   ui.key("readonly text must not edit");
   ui.click("[Edit]");
   assert.match(ui.click("[Editing]"), /\[Cancel\].*\[Save\]/);
@@ -176,6 +183,73 @@ test("goal popup keeps live usage, edits through native input and leaves Cancel 
   ui.click("[X]");
   assert.equal(ui.composer.focused, true);
   assert.equal(ui.composer.getValue(), "keep the main input");
+});
+
+test("goal popup pauses and resumes with command accounting and continuation semantics", async t => {
+  const h = makeHost(t), ui = popupHost(h);
+  await h.tool("create", { objective: "pause from the popup", token_budget: 100 });
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 3);
+  h.events.emit("metis:goal-open", {});
+  await ui.ready();
+  const before = (await h.tool("get")).details.goal;
+  const continuations = () => h.sent.filter((message: any) => message.customType === "goal-continuation").length;
+  const queued = continuations();
+  assert.match(ui.click("[Pause]"), /Paused · Elapsed: 3s/);
+  assert.match(h.lastStatus()!, /Goal paused/);
+  tick(t, 5);
+  await h.fire("agent_end", { messages: [] }, h.ctx);
+  const paused = (await h.tool("get")).details.goal;
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.timeUsedSeconds, 3, "pausing stops the goal clock without resetting usage");
+  for (const field of ["threadId", "objective", "createdAt", "tokensUsed", "tokenBudget"]) assert.equal(paused[field], before[field]);
+  assert.equal(continuations(), queued, "a paused turn cannot queue a continuation");
+  assert.match(ui.click("[Resume]"), /Pursuing · Elapsed: 3s/);
+  assert.equal(continuations(), queued + 1, "explicit resume queues exactly one continuation");
+  tick(t, 2);
+  assert.match(ui.key("\u0010"), /Paused · Elapsed: 5s/, "Ctrl+P is the keyboard path to the pause control");
+  assert.equal((await h.tool("get")).details.goal.status, "paused");
+  assert.equal(h.entries.at(-1)?.data.action, "status");
+  ui.click("[X]");
+  assert.equal(ui.composer.focused, true);
+});
+
+test("long goals expose a right-edge scrollbar through native keys, wheel, drag and resize", async t => {
+  const h = makeHost(t), ui = popupHost(h);
+  await h.tool("create", { objective: Array.from({ length: 100 }, (_, i) => `目标 ${i} · 👩‍🔬`).join("\n") });
+  h.events.emit("metis:goal-open", {});
+  await ui.ready();
+  const rows = () => ui.popup.render(90).map(stripTerminalSequences);
+  const thumb = () => rows().flatMap((row, i) => row.endsWith("┃") ? [i] : []);
+  const initial = thumb();
+  assert.ok(initial.length > 0, "overflow paints a visible thumb on the right frame");
+  assert.match(ui.key("\u001b[F"), /目标 99/);
+  assert.equal(thumb().at(-1), rows().length - 3, "End puts the thumb at the bottom of the body");
+  assert.doesNotMatch(ui.key("\u001b[H"), /目标 99/);
+  assert.equal(thumb()[0], initial[0], "Home returns the thumb to the first body row");
+  const frame = ui.frame();
+  const top = frame.findIndex((row: string) => row.includes("╭"));
+  const left = frame[top].indexOf("╭");
+  const edge = left + 89, firstBody = top + initial[0], lastBody = top + rows().length - 3;
+  ui.tui.handleTerminalInput(sgr(65, left + 4, firstBody + 1));
+  assert.match(ui.frame()[firstBody], /目标 1 ·/, "native wheel events scroll the goal rather than the background");
+  ui.tui.handleTerminalInput(sgr(0, edge + 1, lastBody + 1));
+  ui.tui.handleTerminalInput(sgr(0, edge + 1, lastBody + 1, true));
+  assert.match(ui.frame().join("\n"), /目标 99/, "clicking the lower track reaches the tail");
+  ui.tui.handleTerminalInput(sgr(0, edge + 1, firstBody + 1));
+  ui.frame();
+  ui.tui.handleTerminalInput(sgr(32, 2, 40));
+  ui.tui.handleTerminalInput(sgr(0, 2, 40, true));
+  assert.match(ui.frame().join("\n"), /目标 99/, "captured scrollbar drags clamp outside the popup");
+  ui.terminal.rows = 60;
+  ui.frame();
+  assert.equal(rows().length, 42);
+  assert.equal(thumb().at(-1), rows().length - 3, "a larger viewport clamps the reading position to the new maximum");
+  h.ctx.ui.editor = async () => "short goal";
+  await h.command("edit");
+  assert.deepEqual(thumb(), [], "short text removes the scrollbar without shrinking the frame");
+  assert.equal(rows().length, 42);
+  ui.click("[X]");
 });
 
 test("goal popup retains invalid and conflicting drafts and closes across branch changes and shutdown", async t => {

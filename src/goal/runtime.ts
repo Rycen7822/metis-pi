@@ -353,6 +353,10 @@ export default function goalExtension(pi: ExtensionAPI) {
       await ctx.ui.custom<void>((tui, theme, _keys, done) => {
         popup = new GoalPopup(tui, theme, state.snapshot()!, {
           done: () => done(undefined), signal: controller.signal,
+          setStatus: status => {
+            if (controller.signal.aborted || state.current?.id !== goalId) throw new Error("The goal changed. Reopen the popup.");
+            setGoalStatus(status, ctx);
+          },
           save: (objective, original) => {
             if (controller.signal.aborted || state.current?.id !== goalId || state.current.objective !== original) {
               throw new Error("The goal changed while editing. Cancel and reopen Edit to load the current goal.");
@@ -367,6 +371,14 @@ export default function goalExtension(pi: ExtensionAPI) {
     } finally {
       if (viewAbort === controller) { popup = undefined; viewAbort = undefined; }
     }
+  }
+
+  function setGoalStatus(status: "active" | "paused", ctx: ExtensionContext): void {
+    state.transition(status);
+    persist("status");
+    showGoalMessage(`Goal ${status}\n\n${goalSummary(state.snapshot()!)}`);
+    updateStatus(ctx);
+    if (status === "active") queueContinuation(ctx);
   }
 
   function editGoal(objective: string, ctx: ExtensionContext): void {
@@ -682,11 +694,7 @@ export default function goalExtension(pi: ExtensionAPI) {
         case "resume": {
           const status = trimmed.toLowerCase() === "pause" ? "paused" : "active";
           try {
-            state.transition(status);
-            persist("status");
-            showGoalMessage(`Goal ${status}\n\n${goalSummary(state.snapshot()!)}`);
-            updateStatus(ctx);
-            if (status === "active") queueContinuation(ctx);
+            setGoalStatus(status, ctx);
           } catch (err) {
             showGoalMessage(`Failed to update thread goal: ${err instanceof Error ? err.message : String(err)}`);
           }
