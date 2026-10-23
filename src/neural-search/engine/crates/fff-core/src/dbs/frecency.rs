@@ -41,17 +41,8 @@ impl DbHealthChecker for FrecencyTracker {
     }
 
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>> {
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|source| Error::DbStartReadTxn {
-                db: Self::LABEL,
-                source,
-            })?;
-        let count = self.db.len(&rtxn).map_err(|source| Error::DbRead {
-            db: Self::LABEL,
-            source,
-        })?;
+        let rtxn = self.env.read_txn().map_err(Self::read_txn_error)?;
+        let count = self.db.len(&rtxn).map_err(Self::read_error)?;
 
         Ok(vec![("absolute_frecency_entries", count)])
     }
@@ -102,21 +93,12 @@ impl FrecencyTracker {
 
         let db: Database<Bytes, SerdeBincode<VecDeque<u64>>> = Self::open_database_safe(env, None)?;
 
-        let rtxn = env.read_txn().map_err(|source| Error::DbStartReadTxn {
-            db: Self::LABEL,
-            source,
-        })?;
+        let rtxn = env.read_txn().map_err(Self::read_txn_error)?;
         let mut stale_keys: Vec<Vec<u8>> = Vec::new();
 
-        let iter = db.iter(&rtxn).map_err(|source| Error::DbRead {
-            db: Self::LABEL,
-            source,
-        })?;
+        let iter = db.iter(&rtxn).map_err(Self::read_error)?;
         for result in iter {
-            let (key, accesses) = result.map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
+            let (key, accesses) = result.map_err(Self::read_error)?;
 
             // This snapshot selects candidates only, never replacement values.
             if accesses.front().is_none_or(|&ts| ts < cutoff_time) {
@@ -138,11 +120,7 @@ impl FrecencyTracker {
         for key in &stale_keys {
             // A watcher/other process may have committed an access after the
             // read snapshot. Re-decide under LMDB's single-writer transaction.
-            let Some(mut accesses) = db.get(&wtxn, key).map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?
-            else {
+            let Some(mut accesses) = db.get(&wtxn, key).map_err(Self::read_error)? else {
                 continue;
             };
             match accesses.iter().position(|&ts| ts >= cutoff_time) {
@@ -176,20 +154,8 @@ impl FrecencyTracker {
     fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>> {
         let key_hash = Self::path_to_hash_bytes(path)?;
 
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|source| Error::DbStartReadTxn {
-                db: Self::LABEL,
-                source,
-            })?;
-        let result = self
-            .db
-            .get(&rtxn, &key_hash)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
+        let rtxn = self.env.read_txn().map_err(Self::read_txn_error)?;
+        let result = self.db.get(&rtxn, &key_hash).map_err(Self::read_error)?;
         rtxn.commit().map_err(|source| Error::DbCommit {
             db: Self::LABEL,
             source,
@@ -242,10 +208,7 @@ impl FrecencyTracker {
         let mut accesses = self
             .db
             .get(&wtxn, &key_hash)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?
+            .map_err(Self::read_error)?
             .unwrap_or_default();
 
         let now = self.get_now();
@@ -309,23 +272,11 @@ impl FrecencyTracker {
                 db: Self::LABEL,
                 source,
             })?;
-        let source = self
-            .db
-            .get(&wtxn, &source_key)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
+        let source = self.db.get(&wtxn, &source_key).map_err(Self::read_error)?;
         let Some(source) = source.filter(|accesses| !accesses.is_empty()) else {
             return Ok(false);
         };
-        let target = self
-            .db
-            .get(&wtxn, &target_key)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
+        let target = self.db.get(&wtxn, &target_key).map_err(Self::read_error)?;
         if target.as_ref() == Some(&source) {
             return Ok(false);
         }

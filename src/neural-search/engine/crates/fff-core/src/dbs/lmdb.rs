@@ -126,6 +126,20 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     /// Borrow the pooled env handle shared by every tracker of this path.
     fn shared_env(&self) -> &SharedEnv;
 
+    fn read_txn_error(source: heed::Error) -> Error {
+        Error::DbStartReadTxn {
+            db: Self::LABEL,
+            source,
+        }
+    }
+
+    fn read_error(source: heed::Error) -> Error {
+        Error::DbRead {
+            db: Self::LABEL,
+            source,
+        }
+    }
+
     /// Override to purge stale rows, compact, etc. Default no-op. Runs on
     /// the GC thread while a read lock is held against the shared handle,
     /// so close/re-init naturally wait for it.
@@ -159,9 +173,7 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
         // mdb_dbi_open must not run from concurrent txns in this process.
         let _dbi_guard = env.lock_dbi_open();
 
-        let rtxn = env
-            .read_txn()
-            .map_err(|source| Error::DbStartReadTxn { db, source })?;
+        let rtxn = env.read_txn().map_err(Self::read_txn_error)?;
         let maybe_db: Option<Database<KC, DC>> = env
             .open_database(&rtxn, name)
             .map_err(|source| Error::DbOpen { db, source })?;

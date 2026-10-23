@@ -34,34 +34,13 @@ impl DbHealthChecker for QueryTracker {
         self.env.health().is_healthy()
     }
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|source| Error::DbStartReadTxn {
-                db: Self::LABEL,
-                source,
-            })?;
-        let count_queries = self
-            .query_file_db
+        let rtxn = self.env.read_txn().map_err(Self::read_txn_error)?;
+        let count_queries = self.query_file_db.len(&rtxn).map_err(Self::read_error)?;
+        let count_histories = self.query_history_db.len(&rtxn).map_err(Self::read_error)?;
+        let count_grep_histories = self
+            .grep_query_history_db
             .len(&rtxn)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
-        let count_histories = self
-            .query_history_db
-            .len(&rtxn)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
-        let count_grep_histories =
-            self.grep_query_history_db
-                .len(&rtxn)
-                .map_err(|source| Error::DbRead {
-                    db: Self::LABEL,
-                    source,
-                })?;
+            .map_err(Self::read_error)?;
         Ok(vec![
             ("query_file_entries", count_queries),
             ("query_history_entries", count_histories),
@@ -112,20 +91,11 @@ impl QueryTracker {
         min_combo_count: u32,
     ) -> Result<Option<QueryMatchEntry>, Error> {
         let query_key = Self::create_query_key(project_path, query)?;
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|source| Error::DbStartReadTxn {
-                db: Self::LABEL,
-                source,
-            })?;
+        let rtxn = self.env.read_txn().map_err(Self::read_txn_error)?;
         let last_match = self
             .query_file_db
             .get(&rtxn, &query_key)
-            .map_err(|source| Error::DbRead {
-                db: Self::LABEL,
-                source,
-            })?;
+            .map_err(Self::read_error)?;
         Ok(last_match.filter(|entry| entry.open_count >= min_combo_count))
     }
 }
