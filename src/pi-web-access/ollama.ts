@@ -7,7 +7,7 @@ import { SearchHttpError, SearchUnsupportedFilterError, type SearchOptions, type
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type SsrfConfig } from "./ssrf-protection.ts";
 
 const OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
@@ -58,16 +58,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Ollama API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "ollamaApiKey": "your-key" }\n` +
-			"  2. Set OLLAMA_API_KEY environment variable\n" +
-			"Create a key at https://ollama.com/settings/keys",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Ollama", configPath: CONFIG_PATH,
+		configKey: "ollamaApiKey", envVar: "OLLAMA_API_KEY",
+		keyInstructions: "Create a key at https://ollama.com/settings/keys",
+	});
 }
 
 function invalidResponse(message: string): Error {

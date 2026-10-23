@@ -6,7 +6,7 @@ import { GOOGLE_RECENCY_TBS, loadWebAccessConfig, getWebSearchConfigPath, fetchW
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const SERPBASE_API_URL = "https://api.serpbase.dev/google/search";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -50,16 +50,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"SerpBase API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "serpbaseApiKey": "your-key" }\n` +
-			"  2. Set SERPBASE_API_KEY environment variable\n" +
-			"Get a key at https://serpbase.dev",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "SerpBase", configPath: CONFIG_PATH,
+		configKey: "serpbaseApiKey", envVar: "SERPBASE_API_KEY",
+		keyInstructions: "Get a key at https://serpbase.dev",
+	});
 }
 
 function invalidResponse(message: string): Error {

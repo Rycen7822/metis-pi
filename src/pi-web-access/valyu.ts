@@ -7,7 +7,7 @@ import type { ExtractedContent } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const VALYU_SEARCH_URL = "https://api.valyu.ai/v1/search";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -42,16 +42,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Valyu API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "valyuApiKey": "your-key" }\n` +
-			"  2. Set VALYU_API_KEY environment variable\n" +
-			"Get a key at https://platform.valyu.ai",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Valyu", configPath: CONFIG_PATH,
+		configKey: "valyuApiKey", envVar: "VALYU_API_KEY",
+		keyInstructions: "Get a key at https://platform.valyu.ai",
+	});
 }
 
 function mapDomainFilter(domains: ReturnType<typeof normalizeDomainFilters>): { included_sources?: string[]; excluded_sources?: string[] } {

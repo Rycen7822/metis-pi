@@ -142,6 +142,22 @@ function commandFailureCategory(error: unknown, signal?: AbortSignal): Credentia
 	return "command-failed";
 }
 
+export function requireProviderCredential(apiKey: string | null, setup: {
+	provider: string;
+	configPath: string;
+	configKey: string;
+	envVar: string;
+	keyInstructions: string;
+}): string {
+	if (!apiKey) throw new Error(
+		`${setup.provider} API key not found. Either:\n` +
+		`  1. Create ${setup.configPath} with { "${setup.configKey}": "your-key" }\n` +
+		`  2. Set ${setup.envVar} environment variable\n` +
+		setup.keyInstructions,
+	);
+	return apiKey;
+}
+
 export function hasCredentialSource(options: CredentialOptions): boolean {
 	const source = configuredSource(options);
 	if (source?.startsWith("!")) return true;

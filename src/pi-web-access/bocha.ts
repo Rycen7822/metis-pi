@@ -7,7 +7,7 @@ import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const BOCHA_SEARCH_URL = "https://api.bochaai.com/v1/web-search";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -33,16 +33,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Bocha API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "bochaApiKey": "your-key" }\n` +
-			"  2. Set BOCHA_API_KEY environment variable\n" +
-			"Create a key at https://open.bochaai.com/",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Bocha", configPath: CONFIG_PATH,
+		configKey: "bochaApiKey", envVar: "BOCHA_API_KEY",
+		keyInstructions: "Create a key at https://open.bochaai.com/",
+	});
 }
 
 function mapFreshness(value: SearchOptions["recencyFilter"]): string {

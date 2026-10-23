@@ -6,7 +6,7 @@ import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const TAVILY_API_BASE_URL = "https://api.tavily.com";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -72,16 +72,11 @@ function getApiUrl(): string {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Tavily API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "tavilyApiKey": "your-key" }\n` +
-			"  2. Set TAVILY_API_KEY environment variable\n" +
-			"Get a key at https://app.tavily.com/",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Tavily", configPath: CONFIG_PATH,
+		configKey: "tavilyApiKey", envVar: "TAVILY_API_KEY",
+		keyInstructions: "Get a key at https://app.tavily.com/",
+	});
 }
 
 function mapDomainFilter(domainFilter: string[] | undefined): { include_domains?: string[]; exclude_domains?: string[] } {

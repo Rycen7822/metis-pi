@@ -6,7 +6,7 @@ import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const SERPER_SEARCH_URL = "https://google.serper.dev/search";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -39,16 +39,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Serper API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "serperApiKey": "your-key" }\n` +
-			"  2. Set SERPER_API_KEY environment variable\n" +
-			"Get a key at https://serper.dev",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Serper", configPath: CONFIG_PATH,
+		configKey: "serperApiKey", envVar: "SERPER_API_KEY",
+		keyInstructions: "Get a key at https://serper.dev",
+	});
 }
 
 function invalidResponse(message: string): Error {

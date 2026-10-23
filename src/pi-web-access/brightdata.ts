@@ -6,7 +6,7 @@ import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery, ty
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -59,16 +59,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Bright Data API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "brightdataApiKey": "your-key" }\n` +
-			"  2. Set BRIGHTDATA_API_KEY environment variable\n" +
-			"Get a key at https://brightdata.com/cp/setting/users",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Bright Data", configPath: CONFIG_PATH,
+		configKey: "brightdataApiKey", envVar: "BRIGHTDATA_API_KEY",
+		keyInstructions: "Get a key at https://brightdata.com/cp/setting/users",
+	});
 }
 
 // A zone name is an account-scoped identifier, not a URL. Validating the charset

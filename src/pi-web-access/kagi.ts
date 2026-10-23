@@ -8,7 +8,7 @@ import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type SsrfConfig } from "./ssrf-protection.ts";
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
@@ -44,16 +44,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Kagi API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "kagiApiKey": "your-key" }\n` +
-			"  2. Set KAGI_API_KEY environment variable\n" +
-			"Create a key at https://kagi.com/settings?p=api",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Kagi", configPath: CONFIG_PATH,
+		configKey: "kagiApiKey", envVar: "KAGI_API_KEY",
+		keyInstructions: "Create a key at https://kagi.com/settings?p=api",
+	});
 }
 
 function invalidResponse(message: string): Error {

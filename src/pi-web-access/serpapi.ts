@@ -6,7 +6,7 @@ import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const SERPAPI_SEARCH_URL = "https://serpapi.com/search.json";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -39,16 +39,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"SerpApi API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "serpapiApiKey": "your-key" }\n` +
-			"  2. Set SERPAPI_KEY environment variable\n" +
-			"Get a key at https://serpapi.com/manage-api-key",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "SerpApi", configPath: CONFIG_PATH,
+		configKey: "serpapiApiKey", envVar: "SERPAPI_KEY",
+		keyInstructions: "Get a key at https://serpapi.com/manage-api-key",
+	});
 }
 
 function invalidResponse(message: string): Error {

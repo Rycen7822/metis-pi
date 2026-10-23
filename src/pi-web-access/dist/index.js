@@ -1748,6 +1748,15 @@ function commandFailureCategory(error, signal) {
   }
   return "command-failed";
 }
+function requireProviderCredential(apiKey, setup) {
+  if (!apiKey) throw new Error(
+    `${setup.provider} API key not found. Either:
+  1. Create ${setup.configPath} with { "${setup.configKey}": "your-key" }
+  2. Set ${setup.envVar} environment variable
+` + setup.keyInstructions
+  );
+  return apiKey;
+}
 function hasCredentialSource(options) {
   const source = configuredSource(options);
   if (source?.startsWith("!")) return true;
@@ -5383,16 +5392,13 @@ async function getApiKey14(signal) {
   });
 }
 async function requireApiKey5(signal) {
-  const apiKey = await getApiKey14(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Kagi API key not found. Either:
-  1. Create ${CONFIG_PATH17} with { "kagiApiKey": "your-key" }
-  2. Set KAGI_API_KEY environment variable
-Create a key at https://kagi.com/settings?p=api`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey14(signal), {
+    provider: "Kagi",
+    configPath: CONFIG_PATH17,
+    configKey: "kagiApiKey",
+    envVar: "KAGI_API_KEY",
+    keyInstructions: "Create a key at https://kagi.com/settings?p=api"
+  });
 }
 function invalidResponse(message) {
   return new Error(`Kagi API returned invalid response: ${message}`);
@@ -5614,16 +5620,13 @@ async function getApiKey16(signal) {
   });
 }
 async function requireApiKey7(signal) {
-  const apiKey = await getApiKey16(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Ollama API key not found. Either:
-  1. Create ${CONFIG_PATH19} with { "ollamaApiKey": "your-key" }
-  2. Set OLLAMA_API_KEY environment variable
-Create a key at https://ollama.com/settings/keys`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey16(signal), {
+    provider: "Ollama",
+    configPath: CONFIG_PATH19,
+    configKey: "ollamaApiKey",
+    envVar: "OLLAMA_API_KEY",
+    keyInstructions: "Create a key at https://ollama.com/settings/keys"
+  });
 }
 function invalidResponse3(message) {
   return new Error(`Ollama API returned invalid response: ${message}`);
@@ -12159,16 +12162,13 @@ function getApiUrl2() {
   })}/search`;
 }
 async function requireApiKey(signal) {
-  const apiKey = await getApiKey10(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Tavily API key not found. Either:
-  1. Create ${CONFIG_PATH12} with { "tavilyApiKey": "your-key" }
-  2. Set TAVILY_API_KEY environment variable
-Get a key at https://app.tavily.com/`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey10(signal), {
+    provider: "Tavily",
+    configPath: CONFIG_PATH12,
+    configKey: "tavilyApiKey",
+    envVar: "TAVILY_API_KEY",
+    keyInstructions: "Get a key at https://app.tavily.com/"
+  });
 }
 function mapDomainFilter3(domainFilter) {
   const { include: include_domains, exclude: exclude_domains } = normalizeDomainFilters(domainFilter);
@@ -12321,21 +12321,18 @@ function loadConfig14() {
   return cachedConfig15 ??= loadWebAccessConfig();
 }
 async function requireApiKey2(signal) {
-  const apiKey = await resolveCredential({
+  return requireProviderCredential(await resolveCredential({
     provider: "You.com",
     configuredValue: loadConfig14().youApiKey,
     environmentValue: process.env.YDC_API_KEY,
     signal
+  }), {
+    provider: "You.com",
+    configPath: CONFIG_PATH13,
+    configKey: "youApiKey",
+    envVar: "YDC_API_KEY",
+    keyInstructions: "Get a key at https://you.com/platform/api-keys"
   });
-  if (!apiKey) {
-    throw new Error(
-      `You.com API key not found. Either:
-  1. Create ${CONFIG_PATH13} with { "youApiKey": "your-key" }
-  2. Set YDC_API_KEY environment variable
-Get a key at https://you.com/platform/api-keys`
-    );
-  }
-  return apiKey;
 }
 function mapDomainFilter4(domainFilter) {
   const { include: include_domains, exclude: exclude_domains } = normalizeDomainFilters(domainFilter);
@@ -12448,16 +12445,13 @@ async function getApiKey12(signal) {
   });
 }
 async function requireApiKey3(signal) {
-  const apiKey = await getApiKey12(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Jina Search API key not found. Either:
-  1. Create ${CONFIG_PATH15} with { "jinaApiKey": "your-key" }
-  2. Set JINA_API_KEY environment variable
-Get a key at https://jina.ai/api-dashboard`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey12(signal), {
+    provider: "Jina Search",
+    configPath: CONFIG_PATH15,
+    configKey: "jinaApiKey",
+    envVar: "JINA_API_KEY",
+    keyInstructions: "Get a key at https://jina.ai/api-dashboard"
+  });
 }
 function buildSearchRequest(query, options, numResults) {
   const filters = normalizeDomainFilters(options.domainFilter);
@@ -12619,16 +12613,13 @@ async function getApiKey13(signal) {
   });
 }
 async function requireApiKey4(signal) {
-  const apiKey = await getApiKey13(signal);
-  if (!apiKey) {
-    throw new Error(
-      `SERPdive API key not found. Either:
-  1. Create ${CONFIG_PATH16} with { "serpdiveApiKey": "your-key" }
-  2. Set SERPDIVE_API_KEY environment variable
-Get a key at https://serpdive.com/dashboard/keys`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey13(signal), {
+    provider: "SERPdive",
+    configPath: CONFIG_PATH16,
+    configKey: "serpdiveApiKey",
+    envVar: "SERPDIVE_API_KEY",
+    keyInstructions: "Get a key at https://serpdive.com/dashboard/keys"
+  });
 }
 function resolveModel2() {
   const raw = process.env.SERPDIVE_MODEL ?? loadConfig17().serpdiveModel;
@@ -12777,16 +12768,13 @@ async function getApiKey15(signal) {
   });
 }
 async function requireApiKey6(signal) {
-  const apiKey = await getApiKey15(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Bocha API key not found. Either:
-  1. Create ${CONFIG_PATH18} with { "bochaApiKey": "your-key" }
-  2. Set BOCHA_API_KEY environment variable
-Create a key at https://open.bochaai.com/`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey15(signal), {
+    provider: "Bocha",
+    configPath: CONFIG_PATH18,
+    configKey: "bochaApiKey",
+    envVar: "BOCHA_API_KEY",
+    keyInstructions: "Create a key at https://open.bochaai.com/"
+  });
 }
 function mapFreshness(value) {
   switch (value) {
@@ -13805,16 +13793,13 @@ async function getApiKey19(signal) {
   });
 }
 async function requireApiKey8(signal) {
-  const apiKey = await getApiKey19(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Bright Data API key not found. Either:
-  1. Create ${CONFIG_PATH24} with { "brightdataApiKey": "your-key" }
-  2. Set BRIGHTDATA_API_KEY environment variable
-Get a key at https://brightdata.com/cp/setting/users`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey19(signal), {
+    provider: "Bright Data",
+    configPath: CONFIG_PATH24,
+    configKey: "brightdataApiKey",
+    envVar: "BRIGHTDATA_API_KEY",
+    keyInstructions: "Get a key at https://brightdata.com/cp/setting/users"
+  });
 }
 function normalizeZone(value) {
   if (typeof value !== "string") return null;
@@ -14033,16 +14018,13 @@ async function getApiKey20(signal) {
   });
 }
 async function requireApiKey9(signal) {
-  const apiKey = await getApiKey20(signal);
-  if (!apiKey) {
-    throw new Error(
-      `SerpBase API key not found. Either:
-  1. Create ${CONFIG_PATH25} with { "serpbaseApiKey": "your-key" }
-  2. Set SERPBASE_API_KEY environment variable
-Get a key at https://serpbase.dev`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey20(signal), {
+    provider: "SerpBase",
+    configPath: CONFIG_PATH25,
+    configKey: "serpbaseApiKey",
+    envVar: "SERPBASE_API_KEY",
+    keyInstructions: "Get a key at https://serpbase.dev"
+  });
 }
 function invalidResponse8(message) {
   return new Error(`SerpBase API returned invalid response: ${message}`);
@@ -14142,16 +14124,13 @@ async function getApiKey21(signal) {
   });
 }
 async function requireApiKey10(signal) {
-  const apiKey = await getApiKey21(signal);
-  if (!apiKey) {
-    throw new Error(
-      `SerpApi API key not found. Either:
-  1. Create ${CONFIG_PATH26} with { "serpapiApiKey": "your-key" }
-  2. Set SERPAPI_KEY environment variable
-Get a key at https://serpapi.com/manage-api-key`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey21(signal), {
+    provider: "SerpApi",
+    configPath: CONFIG_PATH26,
+    configKey: "serpapiApiKey",
+    envVar: "SERPAPI_KEY",
+    keyInstructions: "Get a key at https://serpapi.com/manage-api-key"
+  });
 }
 function invalidResponse9(message) {
   return new Error(`SerpApi returned invalid response: ${message}`);
@@ -14249,16 +14228,13 @@ async function getApiKey22(signal) {
   });
 }
 async function requireApiKey11(signal) {
-  const apiKey = await getApiKey22(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Serper API key not found. Either:
-  1. Create ${CONFIG_PATH27} with { "serperApiKey": "your-key" }
-  2. Set SERPER_API_KEY environment variable
-Get a key at https://serper.dev`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey22(signal), {
+    provider: "Serper",
+    configPath: CONFIG_PATH27,
+    configKey: "serperApiKey",
+    envVar: "SERPER_API_KEY",
+    keyInstructions: "Get a key at https://serper.dev"
+  });
 }
 function invalidResponse10(message) {
   return new Error(`Serper API returned invalid response: ${message}`);
@@ -14357,16 +14333,13 @@ async function getApiKey23(signal) {
   });
 }
 async function requireApiKey12(signal) {
-  const apiKey = await getApiKey23(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Serply API key not found. Either:
-  1. Create ${CONFIG_PATH28} with { "serplyApiKey": "your-key" }
-  2. Set SERPLY_API_KEY environment variable
-Get a key at https://serply.io`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey23(signal), {
+    provider: "Serply",
+    configPath: CONFIG_PATH28,
+    configKey: "serplyApiKey",
+    envVar: "SERPLY_API_KEY",
+    keyInstructions: "Get a key at https://serply.io"
+  });
 }
 function invalidResponse11(message) {
   return new Error(`Serply returned invalid response: ${message}`);
@@ -14714,16 +14687,13 @@ async function getApiKey24(signal) {
   });
 }
 async function requireApiKey13(signal) {
-  const apiKey = await getApiKey24(signal);
-  if (!apiKey) {
-    throw new Error(
-      `Valyu API key not found. Either:
-  1. Create ${CONFIG_PATH29} with { "valyuApiKey": "your-key" }
-  2. Set VALYU_API_KEY environment variable
-Get a key at https://platform.valyu.ai`
-    );
-  }
-  return apiKey;
+  return requireProviderCredential(await getApiKey24(signal), {
+    provider: "Valyu",
+    configPath: CONFIG_PATH29,
+    configKey: "valyuApiKey",
+    envVar: "VALYU_API_KEY",
+    keyInstructions: "Get a key at https://platform.valyu.ai"
+  });
 }
 function mapDomainFilter5(domains) {
   const { include: included_sources, exclude: excluded_sources } = domains;
@@ -14961,21 +14931,18 @@ function loadConfig34() {
   return cachedConfig34 ??= loadWebAccessConfig();
 }
 async function requireApiKey14(signal) {
-  const apiKey = await resolveCredential({
+  return requireProviderCredential(await resolveCredential({
     provider: "Ceramic",
     configuredValue: loadConfig34().ceramicApiKey,
     environmentValue: process.env.CERAMIC_API_KEY,
     signal
+  }), {
+    provider: "Ceramic",
+    configPath: CONFIG_PATH30,
+    configKey: "ceramicApiKey",
+    envVar: "CERAMIC_API_KEY",
+    keyInstructions: "Get a key at https://platform.ceramic.ai/keys"
   });
-  if (!apiKey) {
-    throw new Error(
-      `Ceramic API key not found. Either:
-  1. Create ${CONFIG_PATH30} with { "ceramicApiKey": "your-key" }
-  2. Set CERAMIC_API_KEY environment variable
-Get a key at https://platform.ceramic.ai/keys`
-    );
-  }
-  return apiKey;
 }
 function buildQuery2(query, filters) {
   if (filters.include.length === 0) return query;

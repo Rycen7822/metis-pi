@@ -2,7 +2,7 @@ import { errorMessage } from "./search-error-redaction.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 import type { ExtractedContent } from "./content.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
@@ -49,16 +49,11 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await getApiKey(signal);
-	if (!apiKey) {
-		throw new Error(
-			"Jina Search API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "jinaApiKey": "your-key" }\n` +
-			"  2. Set JINA_API_KEY environment variable\n" +
-			"Get a key at https://jina.ai/api-dashboard",
-		);
-	}
-	return apiKey;
+	return requireProviderCredential(await getApiKey(signal), {
+		provider: "Jina Search", configPath: CONFIG_PATH,
+		configKey: "jinaApiKey", envVar: "JINA_API_KEY",
+		keyInstructions: "Get a key at https://jina.ai/api-dashboard",
+	});
 }
 
 function buildSearchRequest(query: string, options: JinaSearchOptions, numResults: number): { url: string; filters: DomainFilters } {

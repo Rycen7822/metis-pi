@@ -6,7 +6,7 @@ import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const CERAMIC_SEARCH_URL = "https://api.ceramic.ai/search";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -34,21 +34,16 @@ function loadConfig(): WebSearchConfig {
 }
 
 async function requireApiKey(signal?: AbortSignal): Promise<string> {
-	const apiKey = await resolveCredential({
+	return requireProviderCredential(await resolveCredential({
 		provider: "Ceramic",
 		configuredValue: loadConfig().ceramicApiKey,
 		environmentValue: process.env.CERAMIC_API_KEY,
 		signal,
+	}), {
+		provider: "Ceramic", configPath: CONFIG_PATH,
+		configKey: "ceramicApiKey", envVar: "CERAMIC_API_KEY",
+		keyInstructions: "Get a key at https://platform.ceramic.ai/keys",
 	});
-	if (!apiKey) {
-		throw new Error(
-			"Ceramic API key not found. Either:\n" +
-			`  1. Create ${CONFIG_PATH} with { "ceramicApiKey": "your-key" }\n` +
-			"  2. Set CERAMIC_API_KEY environment variable\n" +
-			"Get a key at https://platform.ceramic.ai/keys",
-		);
-	}
-	return apiKey;
 }
 
 // Ceramic documents `site:`, uppercase `OR`, and parentheses, but not `-site:`, so
