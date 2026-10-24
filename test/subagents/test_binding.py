@@ -288,9 +288,9 @@ class EnvironmentBindingChain(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data['has_auth'])
         self.assertFalse(data['has_daemon_only'])
         for path in self.home.rglob('*'):
-            # Live byte locks (daemon/session lease) cannot be read on Windows;
-            # they are empty by construction and cannot carry the secret.
-            if path.is_file() and path.suffix != '.lock':
+            # Live leases and SQLite's SHM WAL index carry locks, not row bodies.
+            # Keep checking the actual database, WAL and every other persisted file.
+            if path.is_file() and path.suffix != '.lock' and path.name != 'registry.sqlite-shm':
                 self.assertNotIn(b'real-secret-123',path.read_bytes(),path)
 
 

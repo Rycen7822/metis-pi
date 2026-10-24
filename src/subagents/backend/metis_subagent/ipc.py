@@ -25,7 +25,8 @@ def address(home: Path):
     """The connectable address for a state directory."""
     if not IS_WINDOWS:
         return socket_path(home)
-    return PIPE_PREFIX + hashlib.sha256(str(home).encode()).hexdigest()[:24]
+    # The CLI resolves state roots; aliases must identify the same server too.
+    return PIPE_PREFIX + hashlib.sha256(str(home.resolve()).encode()).hexdigest()[:24]
 
 
 def remove(home: Path):

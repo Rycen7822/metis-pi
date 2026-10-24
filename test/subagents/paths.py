@@ -2,6 +2,11 @@
 from pathlib import Path
 import sys
 import os
+import tempfile
+
+# Windows runner TEMP can be an 8.3 alias; fixture paths model resolved CLI roots.
+if sys.platform == 'win32':
+    tempfile.tempdir = str(Path(tempfile.gettempdir()).resolve())
 
 TEST_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = TEST_ROOT.parent.parent
