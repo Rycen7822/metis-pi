@@ -55,6 +55,7 @@ FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
 PIPE_TYPE_BYTE = 0
 PIPE_READMODE_BYTE = 0
 PIPE_WAIT = 0
+PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
 PIPE_UNLIMITED_INSTANCES = 255
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
@@ -215,14 +216,14 @@ def process_identity(pid):
     if handle is None:
         return None
     try:
-        return handle_identity(handle)
+        return None if _exited(handle) else handle_identity(handle)
     finally:
         kernel32.CloseHandle(handle)
 
 
 def handle_identity(handle):
-    """Identity of an already-held process handle; no PID lookup involved."""
-    if not handle or _exited(handle):
+    """Creation identity stays readable after exit while this handle is held."""
+    if not handle:
         return None
     created = _creation_time(handle)
     return f"win:{created:016x}" if created else "unknown"
@@ -534,12 +535,13 @@ def create_pipe_instance(name, first):
         flags |= FILE_FLAG_FIRST_PIPE_INSTANCE
     attributes, descriptor = private_security_attributes()
     handle = kernel32.CreateNamedPipeW(
-        name, flags, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        name, flags, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
         PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, ctypes.byref(attributes),
     )
+    error = _last_error()
     kernel32.LocalFree(descriptor)
     if not _valid(handle):
-        raise OSError(0, f"Cannot create IPC pipe {name}", None, _last_error())
+        raise OSError(0, f"Cannot create IPC pipe {name}", None, error)
     return pipe_handle(handle)
 
 
@@ -558,18 +560,20 @@ def connect_pipe(name):
         )
         return handle if _valid(handle) else None
 
-    handle = attempt()
-    if handle is None:
+    deadline = time.monotonic() + 5
+    while True:
+        handle = attempt()
+        if handle is not None:
+            return pipe_handle(handle)
         error = _last_error()
-        if error == ERROR_PIPE_BUSY:
-            kernel32.WaitNamedPipeW(name, 5000)
-            handle = attempt()
-        if handle is None:
-            error = _last_error()
-            if error in (ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER):
-                raise FileNotFoundError(2, "No daemon is listening", name)
-            raise OSError(0, f"Cannot connect to IPC pipe {name}", None, error)
-    return pipe_handle(handle)
+        remaining = int((deadline - time.monotonic()) * 1000)
+        if error == ERROR_PIPE_BUSY and remaining > 0:
+            # WaitNamedPipe signals availability, but does not reserve an instance.
+            kernel32.WaitNamedPipeW(name, remaining)
+            continue
+        if error in (ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER):
+            raise FileNotFoundError(2, "No daemon is listening", name)
+        raise OSError(0, f"Cannot connect to IPC pipe {name}", None, error)
 
 
 def _pipe_pid(handle, client):

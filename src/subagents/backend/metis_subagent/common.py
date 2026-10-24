@@ -174,7 +174,10 @@ def socket_path(home: Path) -> Path:
 
 def process_identity(pid: int) -> str | None:
     if IS_WINDOWS:
-        return windows.process_identity(pid)
+        try:
+            return windows.process_identity(pid)
+        except OSError:
+            return "unknown"
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
         rest = raw[raw.rfind(")")+2:].split()

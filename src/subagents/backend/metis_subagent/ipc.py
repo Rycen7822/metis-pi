@@ -109,17 +109,16 @@ class PipeServer:
         self._accept = asyncio.create_task(self._accept_loop())
         return self
 
-    def _next_instance(self):
-        if self.closed:
-            return None
-        try:
-            return windows.create_pipe_instance(self.name, first=False)
-        except OSError:
-            return None
-
     async def _accept_loop(self):
         loop = asyncio.get_running_loop()
-        while not self.closed and self._listening is not None:
+        while not self.closed:
+            if self._listening is None:
+                try:
+                    self._listening = windows.create_pipe_instance(self.name, first=False)
+                except OSError:
+                    # A temporary allocation failure must not retire admission.
+                    await asyncio.sleep(0.05)
+                    continue
             handle, self._listening = self._listening, None
             try:
                 await loop._proactor.accept_pipe(handle)
@@ -128,10 +127,7 @@ class PipeServer:
                 raise
             except OSError:
                 handle.close()
-                self._listening = self._next_instance()
                 continue
-            # Keep one instance listening before this connection is dispatched.
-            self._listening = self._next_instance()
             try:
                 pid = windows.named_pipe_client_pid(handle)
                 if pid is None or windows.process_sid(pid) != windows.current_user_sid():

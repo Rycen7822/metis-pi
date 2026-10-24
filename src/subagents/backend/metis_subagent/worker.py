@@ -353,7 +353,7 @@ def members(pgid):
     caller can turn a permission or OS error into "cleanup verified"."""
     try:
         return group_members(pgid)
-    except AgentError:
+    except (AgentError, OSError):
         return None
 
 
@@ -363,22 +363,30 @@ def publish_job_cleanup(directory: Path, generation):
     POSIX still needs the guard's receipt: an empty PGID cannot prove that
     descendants which detached from that group have exited.
     """
-    if not IS_WINDOWS:
+    if not IS_WINDOWS or generation is None:
         return None
     try:
-        record = json.loads((directory / "owner.json").read_text())
+        with open(directory / "session.lock", "a+b") as lease:
+            if not locks.try_lock(lease.fileno()):
+                return None
+            try:
+                record = json.loads((directory / "owner.json").read_text())
+                if record.get("generation") != generation or not record.get("guard_pid"):
+                    return None
+                if any(live_identity(record.get(k + "_pid"), record.get(k + "_identity")) is not False
+                       for k in ("guard", "pi")) or members(record["guard_pid"]) != []:
+                    return None
+                updated = {
+                    **record, "spawning": False, "descendants_cleanup": "verified",
+                    "cleanup_proof": "job-empty",
+                    "cleanup_confirmation": {"generation": generation, "by": "daemon", "at": time.time()},
+                }
+                atomic_json(directory / "owner.json", updated)
+                return updated
+            finally:
+                locks.unlock(lease.fileno())
     except (OSError, ValueError):
         return None
-    if record.get("generation") != generation:
-        return None
-    updated = {
-        **record,
-        "descendants_cleanup": "verified",
-        "cleanup_proof": "job-empty",
-        "cleanup_confirmation": {"generation": generation, "by": "daemon", "at": time.time()},
-    }
-    atomic_json(directory / "owner.json", updated)
-    return updated
 
 
 def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
@@ -410,6 +418,10 @@ def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
             "record": None,
         }
     matches = {k: live_identity(record.get(k + "_pid"), record.get(k + "_identity")) for k in ("guard", "pi")}
+    if IS_WINDOWS and all(v is False for v in matches.values()) and (
+        record.get("spawning") or record.get("descendants_cleanup") == "pending"
+    ):
+        record = publish_job_cleanup(directory, record.get("generation")) or record
     if record.get("spawning") or any(v is None for v in matches.values()):
         return {"status": "unknown", "reason": "Cannot safely prove orphan process identity", "record": record}
     if any(matches.values()):
@@ -428,19 +440,20 @@ def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
             "record": record,
         }
     if not descendants_confirmed and record.get("descendants_cleanup", "verified") != "verified":
-        # Only Windows' empty Job proves detached descendants are gone too.
-        if not IS_WINDOWS:
-            return {
-                "status": "unknown",
-                "reason": "Guard exited without confirming descendant cleanup; manual inspection required",
-                "record": record,
-            }
-        record = {**record, "descendants_cleanup": "verified", "cleanup_proof": "job-empty"}
+        return {
+            "status": "unknown",
+            "reason": "Guard exited without confirming descendant cleanup; manual inspection required",
+            "record": record,
+        }
     return {"status": "gone", "reason": "Verified leaders are dead and no process group remains", "record": record}
 
 
 async def stop_group(pgid, graceful_guard=False, identity=None):
-    """Signal and verify a group whose ownership the caller has already proved."""
+    """Stop and verify an already-owned group.
+
+    graceful_guard selects POSIX signal forwarding only. Windows has no TERM;
+    explicit interruption terminates the Job, including detached descendants.
+    """
     if IS_WINDOWS:
         # The job is the only mechanism that covers detached descendants. A guard
         # that has not created its job yet must not be mistaken for a settled one,

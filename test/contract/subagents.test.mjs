@@ -474,7 +474,7 @@ test(
       } finally {
         if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
         else process.env.PI_CODING_AGENT_DIR = previous;
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
       }
     });
     const errors = [],

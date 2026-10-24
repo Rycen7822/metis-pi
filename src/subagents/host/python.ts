@@ -9,11 +9,14 @@ const inspect = "import json,sys; print(json.dumps([sys.executable, sys.version_
 function onPath(name: string): string[] {
   return (process.env.PATH ?? "").split(delimiter).filter(Boolean).map(directory =>
     join(directory.replace(/^"|"$/g, ""), `${name}.exe`),
-  ).filter(path => existsSync(path) && !/\\Microsoft\\WindowsApps\\[^\\]+\.exe$/i.test(path));
+  ).filter(path => existsSync(path) && (name === "py" || !/\\Microsoft\\WindowsApps\\[^\\]+\.exe$/i.test(path)));
 }
 
 function compatiblePython(command: string, args: string[] = []): string | undefined {
-  const result = spawnSync(command, [...args, "-I", "-c", inspect], options);
+  const env: NodeJS.ProcessEnv = { ...process.env, PYTHON_MANAGER_AUTOMATIC_INSTALL: "false" };
+  delete env.PYLAUNCHER_ALLOW_INSTALL;
+  delete env.PYLAUNCHER_ALWAYS_INSTALL;
+  const result = spawnSync(command, [...args, "-I", "-c", inspect], { ...options, env });
   if (result.status !== 0) return;
   try {
     // ASCII JSON avoids the console code page corrupting non-ASCII home paths.

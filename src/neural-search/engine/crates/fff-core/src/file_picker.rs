@@ -31,6 +31,7 @@ use ahash::AHashMap;
 use fff_query_parser::FFFQuery;
 use git2::Status;
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -87,6 +88,18 @@ pub(crate) struct FileSync {
     chunked_paths: Option<crate::simd_path::ChunkedPathStore>,
     /// Walker ignore rules, shared with the background filesystem watcher.
     pub(crate) ignore_rules: Option<Arc<crate::walk::WalkIgnoreRules>>,
+}
+
+// Scanner and watcher keys share '/', while Unix backslashes remain filename data.
+fn index_path(path: &str) -> Cow<'_, str> {
+    #[cfg(windows)]
+    {
+        Cow::Owned(path.replace('\\', "/"))
+    }
+    #[cfg(not(windows))]
+    {
+        Cow::Borrowed(path)
+    }
 }
 
 impl FileSync {
@@ -156,7 +169,7 @@ impl FileSync {
     #[inline]
     fn find_file_index(&self, path: &Path, base_path: &Path) -> Option<usize> {
         let relative = path.strip_prefix(base_path).ok()?.to_string_lossy();
-        self.find_by_relative_path(&relative)
+        self.find_by_relative_path(&index_path(&relative))
     }
 
     // Lookup for a base-relative, '/'-canonical path — the form paths are
@@ -353,8 +366,7 @@ impl FileItem {
         metadata: Option<&std::fs::Metadata>,
     ) -> (Self, String) {
         let path_buf = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
-        // Linux paths keep literal backslashes; only `/` is a separator.
-        let relative_path = path_buf.to_string_lossy().into_owned();
+        let relative_path = index_path(&path_buf.to_string_lossy()).into_owned();
 
         let (size, modified) = match metadata {
             Some(metadata) => {
@@ -1457,7 +1469,7 @@ impl FilePicker {
     /// Admit/revive a walked directory without requiring a file beneath it.
     pub(crate) fn add_directory(&mut self, path: &Path) -> Option<bool> {
         let relative = path.strip_prefix(&self.base_path).ok()?.to_str()?;
-        let mut relative = std::borrow::Cow::Borrowed(relative);
+        let mut relative = index_path(relative);
         if !relative.is_empty() && !relative.ends_with('/') {
             relative.to_mut().push('/');
         }
@@ -1616,12 +1628,12 @@ impl FilePicker {
 
     /// Convert an absolute path to a relative path string (relative to base_path).
     /// Returns None if the path doesn't start with base_path.
-    fn to_relative_path<'a>(&self, path: &'a Path) -> Option<std::borrow::Cow<'a, str>> {
+    fn to_relative_path<'a>(&self, path: &'a Path) -> Option<Cow<'a, str>> {
         if let Ok(stripped) = path.strip_prefix(&self.base_path)
             && let Some(s) = stripped.to_str()
         {
             // Callers compare against '/'-canonical stored paths.
-            return Some(std::borrow::Cow::Borrowed(s));
+            return Some(index_path(s));
         }
 
         None

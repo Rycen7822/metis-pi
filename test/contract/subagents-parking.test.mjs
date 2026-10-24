@@ -50,7 +50,7 @@ async function fixture(t) {
       if (clients.some((client) => client.scope))
         waitForDaemonExit(runtime, state);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     }
   });
   return { dir, state, runtime, client, clients, ctx };

@@ -11,10 +11,61 @@ import { captureBatch } from "../../src/condense/batch-capture.ts";
 import { packToolResult } from "../../src/condense/packing.ts";
 import { waitForExitOrInactivity } from "../../src/execution/exec/wait.ts";
 import { trackExecSpools } from "../helpers/exec.mjs";
+import { getShellConfig } from "@earendil-works/pi-coding-agent";
 
 const Mi = 1024 * 1024;
-const binary = fileURLToPath(new URL("../../assets/native-tools/exec/linux-x64/exec_bridge", import.meta.url));
-const nativeTest = process.platform === "linux" && process.arch === "x64" && fs.existsSync(binary);
+const binary = fileURLToPath(new URL(process.platform === "win32"
+  ? "../../assets/native-tools/exec/win32-x64/exec_bridge.exe"
+  : "../../assets/native-tools/exec/linux-x64/exec_bridge", import.meta.url));
+const nativeTest = ["linux", "win32"].includes(process.platform) && process.arch === "x64" && fs.existsSync(binary);
+const nativeShell = () => process.platform === "win32" ? getShellConfig().shell : "/bin/sh";
+
+function nativeExec(t, options = {}) {
+  const directories = trackExecSpools(t);
+  const manager = createExecSessionManager({
+    bridgeBinaryPath: () => binary,
+    minNonInteractiveExecYieldTimeMs: 250,
+    minEmptyWriteYieldTimeMs: 250,
+    maxEmptyWriteYieldTimeMs: 500,
+    ...options,
+  });
+  t.after(() => manager.shutdown());
+  const exec = (script, options, signal, onUpdate) =>
+    manager.exec(command(script, options), process.cwd(), signal, onUpdate);
+  return { manager, directories, exec };
+}
+
+function command(script, options = {}) {
+  const quote = (text) => `'${text.replaceAll("'", `'"'"'`)}'`;
+  return { cmd: `${quote(process.platform === "win32" ? process.execPath.replaceAll("\\", "/") : process.execPath)} -e ${quote(script)}`, shell: nativeShell(), login: false, ...options };
+}
+
+test(
+  "incremental byte decoding and TTY stdin continuation survive the buffer change",
+  { timeout: 15_000, skip: !nativeTest },
+  async (t) => {
+    const { manager, exec } = nativeExec(t);
+    const script = `process.stdout.write(Buffer.from([0xf0, 0x9f])); setTimeout(() => process.stdout.write(Buffer.from([0x99, 0x82])), 50)`;
+    const decoded = await exec(script, { yield_time_ms: 10_000 });
+    assert.equal(decoded.output, "🙂");
+    const waiting = await manager.exec(
+      {
+        cmd: "read line; printf 'reply:%s\\n' \"$line\"",
+        shell: nativeShell(),
+        login: false,
+        tty: true,
+        yield_time_ms: 250,
+      },
+      process.cwd(),
+    );
+    assert.equal(typeof waiting.session_id, "number");
+    const done = await manager.write({ session_id: waiting.session_id, chars: "hello\n", yield_time_ms: 1000 });
+    assert.match(done.output, /reply:hello/);
+    assert.equal(done.exit_code, 0);
+  },
+);
+
+
 
 test("a failed snapshot rejects and releases its wait callback without declaring the process exited", async () => {
   const session = { exitCode: undefined, outputVersion: 0, listeners: new Set() };
@@ -27,27 +78,7 @@ test("a failed snapshot rejects and releases its wait callback without declaring
   assert.equal(session.exitCode, undefined);
 });
 
-describe("native exec session lifecycle", { skip: !nativeTest }, () => {
-  function nativeExec(t, options = {}) {
-    const directories = trackExecSpools(t);
-    const manager = createExecSessionManager({
-      bridgeBinaryPath: () => binary,
-      minNonInteractiveExecYieldTimeMs: 250,
-      minEmptyWriteYieldTimeMs: 250,
-      maxEmptyWriteYieldTimeMs: 500,
-      ...options,
-    });
-    t.after(() => manager.shutdown());
-    const exec = (script, options, signal, onUpdate) =>
-      manager.exec(command(script, options), process.cwd(), signal, onUpdate);
-    return { manager, directories, exec };
-  }
-
-  function command(script, options = {}) {
-    const quote = (text) => `'${text.replaceAll("'", `'"'"'`)}'`;
-    return { cmd: `${quote(process.execPath)} -e ${quote(script)}`, shell: "/bin/sh", login: false, ...options };
-  }
-
+describe("native exec session lifecycle", { skip: !nativeTest || process.platform !== "linux" }, () => {
   function retainedBridge(t, mode = "ready") {
     const directory = fs.mkdtempSync(join(tmpdir(), "metis-retained-bridge-"));
     const path = join(directory, "bridge.mjs");
@@ -497,31 +528,6 @@ createInterface({ input: process.stdin }).on("line", line => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
-
-  test(
-    "incremental byte decoding and TTY stdin continuation survive the buffer change",
-    { timeout: 15_000 },
-    async (t) => {
-      const { manager, exec } = nativeExec(t);
-      const script = `process.stdout.write(Buffer.from([0xf0, 0x9f])); setTimeout(() => process.stdout.write(Buffer.from([0x99, 0x82])), 50)`;
-      const decoded = await exec(script, { yield_time_ms: 10_000 });
-      assert.equal(decoded.output, "🙂");
-      const waiting = await manager.exec(
-        {
-          cmd: "read line; printf 'reply:%s\\n' \"$line\"",
-          shell: "/bin/sh",
-          login: false,
-          tty: true,
-          yield_time_ms: 250,
-        },
-        process.cwd(),
-      );
-      assert.equal(typeof waiting.session_id, "number");
-      const done = await manager.write({ session_id: waiting.session_id, chars: "hello\n", yield_time_ms: 1000 });
-      assert.match(done.output, /reply:hello/);
-      assert.equal(done.exit_code, 0);
-    },
-  );
 
   test(
     "one failed spool removal does not prevent other sessions from releasing resources",

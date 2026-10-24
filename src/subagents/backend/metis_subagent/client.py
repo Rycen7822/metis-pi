@@ -66,7 +66,7 @@ async def connect_daemon(home,autostart):
                                    if IS_WINDOWS else {'start_new_session': True})
                         with log.open('ab') as f:
                             subprocess.Popen([python_executable(),str(ENTRYPOINT),'--home',str(home),'daemon'],stdin=subprocess.DEVNULL,
-                                             stdout=f,stderr=f,env=env,close_fds=True,**options)
+                                             stdout=f,stderr=f,env=env,cwd=home,close_fds=True,**options)
                         started=True
                         until=time.monotonic()+8
                 finally: os.close(fd)

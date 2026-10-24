@@ -87,7 +87,8 @@ if (mode === "verify") {
 } else {
   const native = process.platform === "win32";
   if (!native && (process.platform !== "linux" || process.arch !== "x64")) throw new Error("Build Windows x64 assets on Windows x64 or cross-build from Linux x64.");
-  const rustc = command("rustc", ["--version"]);
+  const rustInfo = command("rustc", ["-vV"]);
+  const rustc = rustInfo.split("\n")[0];
   if (!rustc.startsWith("rustc 1.94.0 ")) throw new Error("Publish builds require Rust 1.94.0; see src/neural-search/engine/README.md.");
   if (!native) {
     const zig = command(process.env.ZIG, ["version"]);
@@ -97,7 +98,7 @@ if (mode === "verify") {
   const before = inputs();
   const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine-win/target", "owned-rust1.94.0-win-x64");
   const flags = ["-Ctarget-feature=+crt-static", "-Ctarget-cpu=x86-64"];
-  const remapPaths = [[root, "/metis-neural-search"], [realpathSync(process.env.CARGO_HOME ?? join(homedir(), ".cargo")), "/cargo"], [output, "/metis-target"]];
+  const remapPaths = [[root, "/metis-neural-search"], [realpathSync(process.env.CARGO_HOME ?? join(homedir(), ".cargo")), "/cargo"], [output, "/metis-target"], [join(command("rustc", ["--print", "sysroot"]), "lib/rustlib/src/rust"), `/rustc/${/^commit-hash: (.+)$/m.exec(rustInfo)[1]}`]];
   flags.push(...remapPaths.map(([from, to]) => `--remap-path-prefix=${from}=${to}`));
   const args = ["build", "--manifest-path", "src/neural-search/engine/Cargo.toml", "--profile", "ci", "--locked", "--target", target, "-p", "fff-c"];
   const environment = { ...process.env, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" };

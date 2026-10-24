@@ -1,7 +1,16 @@
 use std::path::{Path, PathBuf};
 
 pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
-    std::fs::canonicalize(path)
+    // Avoid verbatim prefixes for ordinary Windows roots: the walker joins
+    // canonical '/' keys onto them, which verbatim Win32 paths do not accept.
+    #[cfg(windows)]
+    {
+        dunce::canonicalize(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::canonicalize(path)
+    }
 }
 
 /// Calculate distance penalty based on directory proximity.

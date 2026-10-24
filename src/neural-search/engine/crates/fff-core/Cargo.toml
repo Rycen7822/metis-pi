@@ -45,6 +45,9 @@ regex-syntax = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 zlob = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+dunce = "=1.0.5"
+
 [dev-dependencies]
 tempfile = "3.8"
 

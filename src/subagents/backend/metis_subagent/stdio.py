@@ -111,6 +111,8 @@ class Stdio:
                 finally: self.loop.remove_writer(self.fd)
 
     def _write_blocking(self,data):
+        # A timed-out write retires the entire bridge; this fd is never reused
+        # for another connection, even if the daemon thread finishes late.
         while data:
             data=data[os.write(self.fd,data):]
 

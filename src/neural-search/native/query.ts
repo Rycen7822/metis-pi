@@ -56,6 +56,7 @@ export function buildQuery(
 
 /** Split lists only outside native glob structure; class backslashes are data. */
 function excludeTokens(raw: string, whitespace: boolean): string[] {
+  raw = raw.split(path.sep).join("/");
   const tokens: string[] = [];
   let start = 0, braces = 0, classFirst = -1, escaped = false;
   for (let i = 0; i < raw.length; i++) {
@@ -80,9 +81,9 @@ function excludeTokens(raw: string, whitespace: boolean): string[] {
 
 function relativeConstraint(value: string, cwd: string): string {
   const relative = path.relative(cwd, path.resolve(cwd, value));
-  if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative))
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
     throw new Error(`Path constraint must be relative to the search root: ${value}`);
-  return relative;
+  return relative.split(path.sep).join("/");
 }
 
 /** Literal file identity is independent of main/auxiliary index selection. */
