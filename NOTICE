@@ -46,6 +46,19 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
   upstream fires no goal event in between. Goal state/accounting now lives in
   src/goal/state.ts, while the extension retains host I/O and the existing wire format.
 
+The BTW side-chat extension (src/btw/runtime.ts) and bundled commit, github,
+and uv skills (skills/*/SKILL.md) derive from:
+Upstream: https://github.com/mitsuhiko/agent-stuff
+Commit: 0865c849befd2021490679f96a8dee58c84ac857 (mitsupi 1.6.0).
+Upstream copyright: the mitsuhiko/agent-stuff authors. Apache License 2.0
+(full text in LICENSE-APACHE-2.0).
+Modifications: Copyright (c) 2026 Rycen7822. MIT License.
+- Packaged BTW through an owned Metis entrypoint, adapting child sessions to
+  Pi 1.4's native model runtime and SessionManager history authority; retained
+  Pi-managed authentication, side-session lifecycle and persisted thread format.
+- Consolidated request and overlay state and simplified child-session reuse.
+- Packaged the three skill documents unchanged for Pi discovery with Metis.
+
 The execution supplement (src/execution) is locally maintained code derived from:
 Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-conversion)
   npm: @howaboua/pi-codex-conversion 3.0.34 (MIT, full text in

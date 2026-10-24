@@ -26,12 +26,13 @@ test("package exposes extensions, themes and portable skills with their referenc
       cwd: new URL("..", import.meta.url), encoding: "utf8", windowsHide: true,
     })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp", "ask-user-question"]) {
+  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp", "ask-user-question", "btw"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of [
     "CHANGELOG.md", "metis-pi.toml", "metis-pi-config.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "skills/ast-grep/SKILL.md", "skills/ast-grep/references/rule_reference.md",
+    "skills/commit/SKILL.md", "skills/github/SKILL.md", "skills/uv/SKILL.md", "src/btw/runtime.ts",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/exec/win32-x64/exec_bridge.exe", "assets/native-tools/win32-x64-manifest.json",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",

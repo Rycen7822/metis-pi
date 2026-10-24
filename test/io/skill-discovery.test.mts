@@ -70,6 +70,9 @@ test("Metis package skills load with local references and obey Pi resource filte
   await loader.reload();
   const { skills, diagnostics } = loader.getSkills();
   assert.deepEqual(diagnostics, []);
+  for (const name of ["commit", "github", "uv"]) {
+    assert.equal(skills.find(skill => skill.name === name)?.filePath, join(packageRoot, "skills", name, "SKILL.md"));
+  }
   const skill = skills.find(skill => skill.name === "ast-grep");
   assert.ok(skill, "discover the declared package resource, not a user-directory copy");
   assert.equal(skill.filePath, join(packageRoot, "skills/ast-grep/SKILL.md"));

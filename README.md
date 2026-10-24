@@ -14,7 +14,7 @@ pi install .
 
 Restart Pi to load the changes, then select `metis-pi` in the theme picker. To install from Git, use `pi install git:git@github.com:Rycen7822/metis-pi.git`. This package provides independent execution tools; remove or disable the standalone `@howaboua/pi-codex-conversion` before installing to avoid duplicate tool registrations.
 
-Metis also maintains bundled `pi-web-access`, `pi-session-recall`, and `@narumitw/pi-lsp` sources. Remove or disable their standalone npm entries before activating Metis to avoid duplicate tools or `/lsp` commands; original files and sessions are retained. See the [managed extensions guide](docs/features/managed-plugins.md) and [LSP guide](docs/features/lsp.md).
+Metis also maintains bundled `pi-web-access`, `pi-session-recall`, and `@narumitw/pi-lsp` sources. Remove or disable their standalone npm entries before activating Metis to avoid duplicate tools or `/lsp` commands; original files and sessions are retained. The BTW side chat and `commit`, `github`, `uv` skills are also maintained here; disable their matching agent-stuff resources to avoid duplicate commands or skills. See the [managed extensions guide](docs/features/managed-plugins.md) and [LSP guide](docs/features/lsp.md).
 
 Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-extensions/goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
 
@@ -28,8 +28,9 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Selection copy](docs/features/selection-copy.md) | In fullscreen mode, maps selected display content back to logical source text. Falls back to native extraction for lines that cannot be verified. |
 | [Long histories](docs/features/interface.md#全屏历史与留白) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
 | [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
+| [BTW side chat](docs/features/managed-plugins.md#btw-旁路对话) | `/btw` opens a side conversation using Pi's current model and authentication, with optional summary handoff to the main conversation. |
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
-| [ast-grep skill](docs/features/skills.md#随包-skills) | Bundled structural code-search guidance and rule reference, discovered by Pi and updated with Metis. Requires `ast-grep` on PATH; no automatic CLI installation or extra service. |
+| [Bundled skills](docs/features/skills.md#随包-skills) | `ast-grep`, `commit`, `github`, `uv`, discovered by Pi and updated with Metis. The corresponding external CLIs must be installed separately. |
 | [MCP](docs/configuration.md#mcp) | Optional Pi-native MCP integration: cached directory, lazy connections and idle shutdown; shares native CLI/OAuth and tool permissions. Disabled by default. |
 | [Neural Search](docs/features/neural-search.md) | One deferred `neural_search` entry for local fuzzy path/content searches; a short directory stays visible, native `tool_search` loads it for direct calls. Metis owns the Rust engine and integration; Linux x64 (glibc ≥2.31) and Windows x64. |
 | [LSP](docs/features/lsp.md) | One direct `lsp` tool with `action: diagnostics/fix`, flat parameters and preview-by-default fixes; `/lsp` checks configured command availability. Name-only read-only allowlists need an argument-level policy to distinguish writes. |
@@ -63,4 +64,4 @@ Run `npm run test:pty` for visible interaction checks, or `npm run preview` for 
 
 ## Attribution and licenses
 
-Based on `pi-codex-style-tools`, retaining its MIT license. Goal-derived code comes from an Apache-2.0 upstream; codex-conversion and the maintained LSP module come from MIT upstreams. See [NOTICE](NOTICE), [LICENSE](LICENSE), and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for attribution and modification notices. This project is not officially affiliated with OpenAI or the Pi upstream project.
+Based on `pi-codex-style-tools`, retaining its MIT license. Goal, BTW and the commit/github/uv skills derive from an Apache-2.0 upstream; codex-conversion and the maintained LSP module come from MIT upstreams. See [NOTICE](NOTICE), [LICENSE](LICENSE), and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for attribution and modification notices. This project is not officially affiliated with OpenAI or the Pi upstream project.

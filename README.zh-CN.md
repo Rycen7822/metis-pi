@@ -14,7 +14,7 @@ pi install .
 
 重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包保留独立执行工具，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
 
-Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`。激活前应移除或禁用原来的独立 npm 包入口，避免重复工具或 `/lsp` 命令；原文件和历史会话保留。详见[内置维护扩展](docs/features/managed-plugins.md)和 [LSP 指南](docs/features/lsp.md)。
+Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`。激活前应移除或禁用原来的独立 npm 包入口，避免重复工具或 `/lsp` 命令；原文件和历史会话保留。BTW 旁路对话及 `commit`、`github`、`uv` 技能也由本包维护；启用时应禁用 agent-stuff 中对应资源，避免同名命令或技能重复。详见[内置维护扩展](docs/features/managed-plugins.md)和 [LSP 指南](docs/features/lsp.md)。
 
 可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-extensions/goal.ts"]`。详细用法见[功能手册](docs/README.md)。
 
@@ -28,8 +28,9 @@ Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`�
 | [选区复制](docs/features/selection-copy.md) | fullscreen 下将所选显示内容按来源映射还原为逻辑文本；无法验证的行回退原生提取。 |
 | [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
+| [BTW 旁路对话](docs/features/managed-plugins.md#btw-旁路对话) | `/btw` 沿用 Pi 当前模型和认证发起旁路问答，可将摘要送回主会话。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
-| [ast-grep skill](docs/features/skills.md#随包-skills) | 随 Metis 安装和更新的结构搜索指导及规则参考，由 Pi 原生发现；需要 PATH 中已有 `ast-grep`，不自动安装 CLI 或增加服务。 |
+| [随包 skills](docs/features/skills.md#随包-skills) | `ast-grep`、`commit`、`github`、`uv` 随 Metis 安装和更新，由 Pi 原生发现；相应外部 CLI 须另外安装。 |
 | [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
 | [Neural Search](docs/features/neural-search.md) | 一个 deferred `neural_search` 聚合本地路径/内容搜索；常驻简短目录，原生 `tool_search` 发现后直接调用，Rust 引擎与集成均由 Metis 维护，支持 Linux x64（glibc ≥2.31）和 Windows x64。 |
 | [LSP](docs/features/lsp.md) | 一个 direct `lsp` 工具，以 `action: diagnostics/fix` 和扁平参数调用；修复默认预览，`/lsp` 查看命令可用性。只按名字的只读 allowlist 须另按参数限制写入。 |

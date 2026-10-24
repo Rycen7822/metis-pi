@@ -1,4 +1,4 @@
-# 网页、会话与 LSP 扩展
+# 内置维护扩展
 
 Metis 统一维护并交付以下入口；同一工具或命令只启用一个提供者。
 
@@ -7,6 +7,15 @@ Metis 统一维护并交付以下入口；同一工具或命令只启用一个�
 | 网页访问 | `extensions/web-access.ts` | [`src/pi-web-access/`](../../src/pi-web-access/METIS.md) |
 | 会话回忆 | `extensions/session-recall.ts` | [`src/pi-session-recall/`](../../src/pi-session-recall/METIS.md) |
 | LSP | `extensions/lsp.ts` | [独立指南](lsp.md) |
+| BTW 旁路对话 | `extensions/btw.ts` | `src/btw/runtime.ts`，来源 mitsuhiko/agent-stuff；归属与许可见根目录 NOTICE。 |
+
+## BTW 旁路对话
+
+`/btw <问题>` 发起旁路问答；`/btw` 打开已有对话，也可选择重新开始。弹窗中 Enter 提交、Esc 关闭；关闭时可保留旁路对话，或把摘要送回主会话。BTW 可使用 Pi 的 read、bash、edit、write 工具，不是只读沙箱。
+
+新建旁路会话时采用主会话当前的模型和思考级别，认证复用同一个 Pi 模型运行时；不维护独立凭据。BTW 针对 Pi 1.4 的运行时结构做能力检查，检查失败时拒绝启动，不回退到独立认证运行时。旁路内容以 `btw-thread-entry` / `btw-thread-reset` 保存于 Pi 会话，恢复或切换分支时重建线程，关闭会话时释放临时 agent 和弹窗。
+
+用 Pi 包配置的 `"extensions": ["-extensions/btw.ts"]` 单独停用。不要同时启用 agent-stuff 的 `extensions/btw.ts`；随包 `commit`、`github`、`uv` 的启用与外部 CLI 依赖见 [Skills](skills.md)。
 
 ## 工具接口
 
