@@ -103,9 +103,9 @@ class IpcHarness:
     async def asyncTearDown(self):
         with contextlib.suppress(AgentError):
             await self.request('shutdown', {'force':True}, timeout=5, autostart=False)
+        # Shutdown acknowledges the request before workers are reaped; wait for
+        # the daemon to finish cleanup before falling back to a forced kill.
         for proc in self.daemons:
-            if proc.poll() is None:
-                proc.terminate()
             try:
                 await asyncio.to_thread(proc.wait, 45)
             except subprocess.TimeoutExpired:
