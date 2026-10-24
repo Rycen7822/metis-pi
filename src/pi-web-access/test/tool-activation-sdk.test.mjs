@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools, getSystemMessageText } from "@earendil-works/pi-ai";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 
-const extensionPath = new URL("../index.ts", import.meta.url).pathname;
+const extensionPath = fileURLToPath(new URL("../index.ts", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "pi-web-access-sdk-"));
 
 async function withNativeEnv(config, run) {

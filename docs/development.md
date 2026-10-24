@@ -40,7 +40,7 @@ Python 子代理运行核心使用标准库；测试另需 [requirements.txt](ht
 | E3 / E4 | 思考手势 / 复制、草稿和实际提交。 |
 | E6 | 多 skill 补全、payload 和折叠。 |
 
-CI 在 Pi 1.4.0 基线运行 verify 与 PTY；独立 job 重建自有 Rust 搜索引擎、核对二进制并运行单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
+CI 在 Ubuntu / Windows 的 Pi 1.4.0 基线上运行 verify；Linux 另跑 tmux/严格 PTY，并由独立 job 重建 Rust 搜索引擎、核对二进制与单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
 
 CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由 `test/package.test.mjs` 调用 `npm pack --dry-run --json --ignore-scripts`，不把未实际运行的安装当验证。
 
@@ -50,7 +50,7 @@ CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由
 
 根 manifest 管理构建依赖。`scripts/build-web-access.mjs` 构建两个 Web bundle；子代理 `prepack` 从 Python schema 生成工具目录载荷。
 
-发布包含运行时 TS、Web bundle、Python/JS 子代理核心、shell WASM、Linux x64 PTY helper、搜索共享库、主题、skills 和许可。测试、构建工具及 Rust 源码保留在 Git。发布范围变化时，实际打包、解包核对入口、动态资源、二进制与执行权限；安装使用随包资产，不在用户目录构建。
+发布包含运行时 TS、Web bundle、Python/JS 子代理核心、shell WASM、Linux / Windows x64 PTY helper 与搜索共享库、主题、skills 和许可。测试、构建工具及 Rust 源码保留在 Git。发布范围变化时，实际打包、解包核对入口、动态资源、二进制与执行权限；安装使用随包资产，不在用户目录构建。
 
 PTY helper 的测试与构建：
 
@@ -60,6 +60,6 @@ node native/tools/build-linux-x64.mjs build
 node native/tools/build-linux-x64.mjs verify
 ```
 
-构建需要 Linux x64、Rust musl target、`musl-gcc`、`readelf` 与已缓存锁定依赖；脚本以 release/locked/offline 构建，校验静态 ABI 后更新 helper 和 manifest。安装包中的 manifest 本身不证明源码匹配。来源和许可见 [执行来源](provenance/execution/README.md)、[condense LICENSE](provenance/condense/LICENSE)及根 [NOTICE](../NOTICE)。
+Linux helper 构建需要 Rust musl target、`musl-gcc`、`readelf` 与已缓存锁定依赖。Windows 使用 `node native/tools/build-win32-x64.mjs build`，需要 Rust MSVC target、Visual Studio C++ Build Tools 和 Windows SDK；`verify` 使用内置 PE 读取器。Windows 交叉构建环境变量见该脚本。`npm run verify:native-assets` 核对两平台的源码、资产及许可字节，再检查当前平台 ABI；不编译 Rust。安装包中的 manifest 本身不证明源码匹配。来源和许可见 [执行来源](provenance/execution/README.md)、[condense LICENSE](provenance/condense/LICENSE)及根 [NOTICE](../NOTICE)。
 
 本地安装用 `pi install .`，更新用 `pi update --extensions`；用隔离 profile 验证实际发现和执行，不以直接导入源码替代安装验收。推送、发布和修改个人安装按当次授权执行。

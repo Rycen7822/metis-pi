@@ -156,7 +156,12 @@ for (const source of ["uppercase", "lowercase", "all-proxy", "global-setting"]) 
       source === "uppercase"
         ? { HTTP_PROXY: f.proxy, HTTPS_PROXY: f.proxy }
         : source === "lowercase"
-          ? { http_proxy: f.proxy, https_proxy: f.proxy, HTTP_PROXY: "http://127.0.0.1:1", NO_PROXY: "*", no_proxy: "" }
+          ? {
+              http_proxy: f.proxy, https_proxy: f.proxy,
+              // Windows aliases these spellings; only POSIX can test precedence.
+              ...(process.platform === "win32" ? {} : { HTTP_PROXY: "http://127.0.0.1:1", NO_PROXY: "*" }),
+              no_proxy: "",
+            }
           : source === "all-proxy"
             ? { ALL_PROXY: f.proxy }
             : {};

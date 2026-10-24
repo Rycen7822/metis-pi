@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { metisConfigPath } from "../../configuration/store.ts";
 import type { RuntimePackage } from "./runtime-package.ts";
+import { getPythonCommand } from "./python.ts";
 export class RuntimeError extends Error {
   readonly code: string;
   readonly agent_id?: string;
@@ -129,9 +130,9 @@ export class SubagentClient {
     if (this.ended) throw new Error("Subagent frontend closed; reload to reconnect");
     if (!this.bridge) {
       const child = spawn(
-        "python3",
+        getPythonCommand(),
         [join(this.runtime.root, "main.py"), "--home", join(this.agentDir, "metis", "subagent"), "pi-host"],
-        { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
+        { cwd: this.ctx.cwd, stdio: "pipe", windowsHide: true, env: { ...process.env, PYTHONUTF8: "1", METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
       );
       const bridge = (this.bridge = { child, fragments: [], frameBytes: 0, stderr: "" });
       child.stdout.on("data", (chunk: Buffer) => this.receive(bridge, chunk));
@@ -139,7 +140,7 @@ export class SubagentClient {
         bridge.stderr = (bridge.stderr + chunk.toString("utf8")).slice(-2048);
       });
       child.on("error", (error) =>
-        this.fail(bridge, new Error(`Subagents require Linux and Python 3.11+: ${error.message}`)),
+        this.fail(bridge, new Error(`Subagents require Python 3.11+: ${error.message}`)),
       );
       child.on("exit", () =>
         this.fail(bridge, new Error(`Subagent bridge exited; inspect mutations before retrying. ${bridge.stderr}`)),

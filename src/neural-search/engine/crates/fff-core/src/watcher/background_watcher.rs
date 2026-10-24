@@ -9,7 +9,6 @@ use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
 use notify::{Config, EventKind, EventKindMask, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use parking_lot::Mutex;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1291,15 +1290,29 @@ fn defer_local_rescan(pending: &mut Option<(RescanReason, Instant)>, reason: Res
 #[derive(PartialEq, Eq)]
 struct GitWatchIdentity {
     path: PathBuf,
-    directory: (u64, u64),
-    logs: Option<(u64, u64)>,
-    common: Option<(PathBuf, (u64, u64))>,
+    directory: file_id::FileId,
+    logs: Option<file_id::FileId>,
+    common: Option<(PathBuf, file_id::FileId)>,
+}
+
+/// Stable directory identity: device+inode on Linux, volume+file id on Windows.
+fn directory_identity(metadata: &std::fs::Metadata, path: &Path) -> std::io::Result<file_id::FileId> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(file_id::FileId::new_inode(metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = metadata;
+        file_id::get_file_id(path)
+    }
 }
 
 fn watch_git_directory(
     debouncer: &mut Debouncer,
     path: &Path,
-) -> notify::Result<Option<(u64, u64)>> {
+) -> notify::Result<Option<file_id::FileId>> {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => metadata,
         Ok(_) => return Ok(None),
@@ -1307,7 +1320,10 @@ fn watch_git_directory(
         Err(error) => return Err(notify::Error::io(error)),
     };
     match debouncer.watch(path, RecursiveMode::NonRecursive) {
-        Ok(()) => Ok(Some((metadata.dev(), metadata.ino()))),
+        Ok(()) => match directory_identity(&metadata, path) {
+            Ok(identity) => Ok(Some(identity)),
+            Err(error) => Err(notify::Error::io(error)),
+        },
         Err(error) if missing_path_error(&error) => Ok(None),
         Err(error) => Err(error),
     }

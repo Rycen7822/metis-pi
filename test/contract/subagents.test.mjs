@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +18,7 @@ import { RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 import { subagentWidget } from "../../src/subagents/ui/widget.ts";
 import { makeSubagentTheme, subagentTheme } from "../helpers/subagent-theme.mjs";
-import { subagentAdmin } from "../helpers/subagent-admin.mjs";
+import { subagentAdmin, waitForDaemonExit } from "../helpers/subagent-admin.mjs";
 
 function enableAnimation(t) {
   const previous = process.env.NO_COLOR;
@@ -124,19 +123,7 @@ test("native subagent registration honors the global switch without starting bac
 function stopDaemon(core, state) {
   subagentAdmin({ root: core }, state, "shutdown", { force: true });
   // Shutdown is accepted before guards finish writing their cleanup receipts.
-  execFileSync("python3", ["-c", `import fcntl,sys,time
-with open(sys.argv[1], 'rb') as lock:
-    until=time.monotonic()+10
-    while True:
-        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB); break
-        except BlockingIOError:
-            if time.monotonic()>=until: raise TimeoutError('Daemon shutdown did not release its lease')
-            time.sleep(.025)
-`,
-      join(state, "daemon.lock"),
-    ],
-    { timeout: 12000 },
-  );
+  waitForDaemonExit({ root: core }, state, 10000);
 }
 
 test(

@@ -11,14 +11,14 @@ const sdkGlobal = globalThis as typeof globalThis & {
 const sdkPromises = sdkGlobal.__metisNeuralSearchSdkPromisesV7 ??= new Map<string, Promise<Sdk>>();
 
 export function loadSdk(): Promise<Sdk> {
-  if (process.platform !== "linux" || process.arch !== "x64")
-    return Promise.reject(new Error("Metis Neural Search requires Linux x64 (glibc)."));
+  if (process.arch !== "x64" || (process.platform !== "linux" && process.platform !== "win32"))
+    return Promise.reject(new Error(`Metis Neural Search does not support ${process.platform} ${process.arch}.`));
   const key = import.meta.url;
   let pending = sdkPromises.get(key);
   if (!pending) {
     pending = import("./binding/finder.ts").catch(error => {
       sdkPromises.delete(key);
-      throw new Error(`Neural Search could not load its Linux binding: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      throw new Error(`Neural Search could not load its binding: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     });
     sdkPromises.set(key, pending);
   }

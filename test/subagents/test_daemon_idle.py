@@ -7,7 +7,8 @@ from paths import TEST_ROOT
 from test_transport import IpcHarness
 from metis_subagent import PROTOCOL_VERSION
 from metis_subagent.daemon import IDLE_SHUTDOWN_SECONDS
-from metis_subagent.common import AgentError, dumps, socket_path
+from metis_subagent import ipc, locks
+from metis_subagent.common import AgentError, dumps, python_executable
 
 class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
     async def parked(self, proc, timeout=None):
@@ -84,7 +85,7 @@ daemon.Runtime.dispatch=dispatch
 with fixture_launch([sys.executable,str(paths.TEST_ROOT/'fake_pi.py')]):
     asyncio.run(daemon.serve(Path(sys.argv[1])))
 """
-        proc=await asyncio.create_subprocess_exec(sys.executable,'-c',script,str(self.home),str(gate),cwd=TEST_ROOT,
+        proc=await asyncio.create_subprocess_exec(python_executable(),'-c',script,str(self.home),str(gate),cwd=TEST_ROOT,
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:
             end=asyncio.get_running_loop().time()+5
@@ -97,9 +98,9 @@ with fixture_launch([sys.executable,str(paths.TEST_ROOT/'fake_pi.py')]):
                     await asyncio.sleep(.01)
             sid=(await self.request('scope_open',{'cwd':str(self.workspace)},autostart=False))['scope']
             params={'scope':sid,'task':'detached caller work','access':'read','request_id':'detached-admission'}
-            _,writer=await asyncio.open_unix_connection(str(socket_path(self.home)))
+            _,writer=await ipc.connect(self.home)
             writer.write((dumps({'v':PROTOCOL_VERSION,'op':'spawn','params':params,'source':self.source})+'\n').encode()); await writer.drain()
-            self.assertEqual(await asyncio.wait_for(proc.stdout.readline(),5),b'SPAWN_ADMITTED\n')
+            self.assertEqual((await asyncio.wait_for(proc.stdout.readline(),5)).strip(),b'SPAWN_ADMITTED')
             writer.close(); await writer.wait_closed(); writer=None
             await asyncio.sleep(IDLE_SHUTDOWN_SECONDS+1)
             self.assertEqual((await self.request('ping',{},autostart=False))['pid'],proc.pid,'admitted detached operation keeps admission open')
@@ -119,12 +120,11 @@ with fixture_launch([sys.executable,str(paths.TEST_ROOT/'fake_pi.py')]):
     async def test_autostart_waits_for_a_draining_daemon_lock(self):
         # Model the real socket-close / verified-cleanup gap without touching
         # another process: no replacement may be spawned until the lock is free.
-        import fcntl
         with (self.home/'daemon.lock').open('a+b') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            self.assertTrue(locks.try_lock(lock.fileno()))
             pending=asyncio.create_task(self.request('ping',{},timeout=5))
             await asyncio.sleep(.2)
             self.assertFalse(pending.done()); self.assertEqual(self.daemons,[])
-            fcntl.flock(lock,fcntl.LOCK_UN)
+            locks.unlock(lock.fileno())
             result=await pending
         self.assertEqual(result['pid'],self.daemons[0].pid)

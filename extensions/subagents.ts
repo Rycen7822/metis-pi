@@ -14,7 +14,7 @@ const namespace = {
 const guidance = "Subagent tools are deferred in the subagents namespace. Use codemode: discover with describeNamespace('subagents') or searchTools(query, {namespace:'subagents', limit:1}), then call tools.subagents_<operation>(args). Use the subagent-delegation skill before spawning or assigning work. Check result.isError and preserve IDs, request_id, errors, questions and not_consumed inputs in output. Partial script success is not rolled back; do not blindly rerun mutations.";
 
 export default function subagents(pi: ExtensionAPI) {
-  if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
+  if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || (process.platform !== "linux" && process.platform !== "win32")) return;
   const agentDir = getAgentDir();
   let runtime: ReturnType<typeof runtimePackage>;
   try {

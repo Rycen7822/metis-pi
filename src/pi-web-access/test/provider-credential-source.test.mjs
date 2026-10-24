@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, markerCredentialCommand, nodeCommand } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -24,8 +24,8 @@ test("previously unsupported providers resolve explicit env and command sources 
 	const openaiMarker = join(await mkdtemp(join(tmpdir(), "pi-web-access-credential-marker-")), "openai-ran");
 	const { home, agentDir } = await createHome({
 		braveApiKey: "${BRAVE_SCOPED_KEY}",
-		openaiApiKey: `!touch ${openaiMarker} && printf openai-command-key`,
-		tavilyApiKey: `!touch ${tavilyMarker} && printf tavily-command-key`,
+		openaiApiKey: await markerCredentialCommand(openaiMarker, "openai-command-key"),
+		tavilyApiKey: await markerCredentialCommand(tavilyMarker, "tavily-command-key"),
 	});
 	const child = runChild(`
 		import { existsSync } from "node:fs";
@@ -98,7 +98,7 @@ test("provider requests can resolve credentials through an inherited 1Password s
 		if (process.env.UNRELATED_SECRET !== undefined) process.exit(4);
 		process.stdout.write("synthetic-brave-key");
 	`, "utf8");
-	const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fakeOp)} read ${JSON.stringify("op://Automation/Brave/credential")}`;
+	const command = nodeCommand(fakeOp, "read", "op://Automation/Brave/credential");
 	const { home, agentDir } = await createHome({ braveApiKey: `!${command}` });
 	const child = runChild(`
 		const { searchWithBrave } = await import(${JSON.stringify(braveModuleUrl)});
@@ -128,11 +128,11 @@ test("provider API errors redact resolved credential-source values", async () =>
 		braveApiKey: "${BRAVE_SCOPED_KEY}",
 		cloudflareApiKey: "${CLOUDFLARE_SCOPED_KEY}",
 		geminiBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/google-ai-studio",
-		openaiApiKey: "!printf openai-redaction-secret",
-		parallelApiKey: "!printf parallel-redaction-secret",
-		tinyfishApiKey: "!printf tinyfish-redaction-secret",
-		perplexityApiKey: "!printf perplexity-redaction-secret",
-		tavilyApiKey: "!printf tavily-redaction-secret",
+		openaiApiKey: "!echo openai-redaction-secret",
+		parallelApiKey: "!echo parallel-redaction-secret",
+		tinyfishApiKey: "!echo tinyfish-redaction-secret",
+		perplexityApiKey: "!echo perplexity-redaction-secret",
+		tavilyApiKey: "!echo tavily-redaction-secret",
 	});
 	const child = runChild(`
 		const modules = {
@@ -194,7 +194,7 @@ test("Cloudflare gateway response redacts the credential used by the request", a
 		process.stdout.write("cf-rotating-secret-" + next);
 	`, "utf8");
 	const { home, agentDir } = await createHome({
-		cloudflareApiKey: `!${JSON.stringify(process.execPath)} ${JSON.stringify(resolverPath)}`,
+		cloudflareApiKey: `!${nodeCommand(resolverPath)}`,
 		geminiBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/google-ai-studio",
 	});
 	const child = runChild(`

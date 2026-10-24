@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import { clearProviderEnvironment } from "./provider-env.mjs";
@@ -16,6 +16,24 @@ export async function createHome(prefix, config = {}, agentPath = "") {
   return home;
 }
 
+export function nodeCommand(script, ...args) {
+  return [process.execPath, script, ...args].map(value => JSON.stringify(value.replaceAll("\\", "/"))).join(" ");
+}
+
+export async function writeCredentialCommand(directory, name, source) {
+  const script = join(directory, `${name}.mjs`);
+  await writeFile(script, source, "utf8");
+  return `!${nodeCommand(script)}`;
+}
+
+export function markerCredentialCommand(marker, credential) {
+  return writeCredentialCommand(dirname(marker), `${basename(marker)}-command`, `
+    import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(marker)}, "");
+    process.stdout.write(${JSON.stringify(credential)});
+  `);
+}
+
 export function runChild(script, env = {}, { timeout, maxBuffer = 2 * 1024 * 1024, execArgv = [] } = {}) {
   const environment = { ...process.env };
   clearProviderEnvironment(environment);
@@ -24,6 +42,6 @@ export function runChild(script, env = {}, { timeout, maxBuffer = 2 * 1024 * 102
     else environment[key] = value;
   }
   return spawnSync(process.execPath, [...execArgv, "--input-type=module"], {
-    input: script, encoding: "utf8", env: environment, maxBuffer, timeout,
+    input: script, encoding: "utf8", env: environment, maxBuffer, timeout, windowsHide: true,
   });
 }

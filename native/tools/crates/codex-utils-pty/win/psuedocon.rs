@@ -42,6 +42,7 @@ use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use winapi::shared::minwindef::DWORD;
 use winapi::shared::ntdef::NTSTATUS;
 use winapi::shared::ntstatus::STATUS_SUCCESS;
@@ -115,12 +116,23 @@ fn windows_build_number() -> Option<u32> {
     }
 }
 
+/// The pseudoconsole handle is a raw pointer that Win32 allows crossing threads.
+#[derive(Debug)]
+pub(crate) struct ConsoleHandle(pub(crate) HPCON);
+unsafe impl Send for ConsoleHandle {}
+unsafe impl Sync for ConsoleHandle {}
+
 pub struct PsuedoCon {
-    con: HPCON,
-    // CreatePseudoConsole borrows these pipe handles for the lifetime of the
-    // pseudoconsole, so we must keep owning them until ClosePseudoConsole.
-    _input: FileDescriptor,
-    _output: FileDescriptor,
+    // Closing the pseudoconsole is what breaks the client's output channel, so the
+    // handle is closable from whoever observes the child exit and exactly once. It
+    // is shared with the spawned child instead of living until this struct drops,
+    // which in this crate is far later than the session.
+    con: Arc<Mutex<ConsoleHandle>>,
+    // The pipe ends handed to CreatePseudoConsole. The console copies them, so
+    // holding ours past process creation keeps a redundant reference alive and
+    // hides a broken channel from our I/O; spawn_command drops them as soon as
+    // the child is attached.
+    pipes: Mutex<Option<(FileDescriptor, FileDescriptor)>>,
 }
 
 unsafe impl Send for PsuedoCon {}
@@ -128,7 +140,30 @@ unsafe impl Sync for PsuedoCon {}
 
 impl Drop for PsuedoCon {
     fn drop(&mut self) {
-        unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
+        close_console(&self.con);
+    }
+}
+
+/// Closes the pseudoconsole at most once, from whichever side runs first.
+/// The slot is invalidated while holding the lock, then the blocking Win32 call
+/// is handed to a helper thread. Neither `Drop` nor the reader teardown can wait
+/// on that call, so closing our own pipe handles stays independent of it.
+pub(crate) fn close_console(con: &Mutex<ConsoleHandle>) {
+    let handle = {
+        let Ok(mut con) = con.lock() else {
+            return;
+        };
+        std::mem::replace(&mut con.0, INVALID_HANDLE_VALUE)
+    };
+    if handle != INVALID_HANDLE_VALUE {
+        // Capture the resolved function pointer, not the library: load_conpty may
+        // have selected a sideloaded conpty.dll, and a handle from one implementation
+        // must be closed by that same implementation. The process-wide instance
+        // lives for the whole program, so a plain pointer copy is sufficient and
+        // keeps the helper thread free of any raw-pointer or non-Sync capture.
+        let close: unsafe extern "C" fn(HPCON) = CONPTY.ClosePseudoConsole;
+        let raw = handle as usize;
+        std::thread::spawn(move || unsafe { close(raw as HPCON) });
     }
 }
 
@@ -149,14 +184,17 @@ impl PsuedoCon {
             "failed to create psuedo console: HRESULT {result}"
         );
         Ok(Self {
-            con,
-            _input: input,
-            _output: output,
+            con: Arc::new(Mutex::new(ConsoleHandle(con))),
+            pipes: Mutex::new(Some((input, output))),
         })
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
-        let result = unsafe { (CONPTY.ResizePseudoConsole)(self.con, size) };
+        // Hold the guard across the call: releasing it first would let a
+        // concurrent close free the raw handle mid-resize.
+        let con = self.con.lock().unwrap();
+        ensure!(con.0 != INVALID_HANDLE_VALUE, "psuedo console is already closed");
+        let result = unsafe { (CONPTY.ResizePseudoConsole)(con.0, size) };
         ensure!(
             result == S_OK,
             "failed to resize console to {}x{}: HRESULT: {}",
@@ -177,7 +215,7 @@ impl PsuedoCon {
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
 
         let mut attrs = ProcThreadAttributeList::with_capacity(/*num_attributes*/ 2)?;
-        attrs.set_pty(self.con)?;
+        attrs.set_pty(self.con.lock().unwrap().0)?;
         attrs.set_job(job.as_raw_handle().cast())?;
         si.lpAttributeList = attrs.as_mut_ptr();
 
@@ -218,7 +256,13 @@ impl PsuedoCon {
         let _main_thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) };
         let proc = unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) };
 
-        Ok(WinChild::new(proc, job))
+        // Per the pseudoconsole documentation these handles should be freed once
+        // the child is attached: the console keeps its own copies, so dropping
+        // ours only removes a redundant reference and does not disturb the
+        // channel the output reader is draining.
+        self.pipes.lock().unwrap().take();
+
+        Ok(WinChild::new(proc, job, Arc::clone(&self.con)))
     }
 }
 

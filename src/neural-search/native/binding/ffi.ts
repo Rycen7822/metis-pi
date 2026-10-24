@@ -1,5 +1,5 @@
-// Metis private Linux x64 ABI v7. Rust owns each envelope and its payload;
-// decode into detached JS values before freeing the envelope in finally.
+// Metis private ABI v7 (Linux x64 and Windows x64). Rust owns each envelope and
+// its payload; decode into detached JS values before freeing the envelope in finally.
 import { DataType, type FieldType, isNullPointer, type JsExternal, load, open, restorePointer, wrapPointer } from "ffi-rs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -35,10 +35,16 @@ let loaded = false;
 function invoke(name: string, paramsType: FieldType[], paramsValue: unknown[], retType: FieldType = DataType.External): unknown {
   return load({ library: LIBRARY_KEY, funcName: `metis_search_${name}`, retType, paramsType, paramsValue, freeResultMemory: false });
 }
+// Both libraries ship in the package; load only the current host asset.
+const libraryAsset = (): string => {
+  if (process.arch !== "x64") throw new Error("Metis Neural Search requires x64.");
+  if (process.platform === "linux") return "../../assets/linux-x64/libmetis_neural_search.so";
+  if (process.platform === "win32") return "../../assets/win32-x64/metis_neural_search.dll";
+  throw new Error(`Metis Neural Search does not support ${process.platform} ${process.arch}.`);
+};
 function loadLibrary(): void {
   if (loaded) return;
-  if (process.platform !== "linux" || process.arch !== "x64") throw new Error("Metis Neural Search requires Linux x64 (glibc).");
-  const path = fileURLToPath(new URL("../../assets/linux-x64/libmetis_neural_search.so", import.meta.url));
+  const path = fileURLToPath(new URL(libraryAsset(), import.meta.url));
   if (!existsSync(path)) throw new Error("Metis Neural Search library is missing; reinstall the complete Metis package.");
   open({ library: LIBRARY_KEY, path });
   if (invoke("abi_version", [], [], DataType.U32) !== ABI_VERSION)

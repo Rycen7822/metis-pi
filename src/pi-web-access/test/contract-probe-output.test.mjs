@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 const probeUrl = new URL("../evidence/contract-probe.mjs", import.meta.url);
@@ -29,7 +30,7 @@ test("contract evidence sanitizes response credentials before truncation and per
 			};
 			process.on("exit", () => writeFileSync(${JSON.stringify(tracePath)}, JSON.stringify(calls)));
 		`);
-		const child = spawnSync(process.execPath, ["--import", preload, script], {
+		const child = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, script], {
 			env: { ...process.env, SERPDIVE_API_KEY: key }, encoding: "utf8",
 		});
 		assert.equal(child.status, 0, child.stderr);

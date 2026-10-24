@@ -31,9 +31,9 @@ Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`�
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
 | [ast-grep skill](docs/features/skills.md#随包-skills) | 随 Metis 安装和更新的结构搜索指导及规则参考，由 Pi 原生发现；需要 PATH 中已有 `ast-grep`，不自动安装 CLI 或增加服务。 |
 | [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
-| [Neural Search](docs/features/neural-search.md) | 一个 deferred `neural_search` 聚合本地路径/内容搜索；常驻简短目录，原生 `tool_search` 发现后直接调用，Rust 引擎与集成均由 Metis 维护，支持 Linux x64（glibc ≥2.31）。 |
+| [Neural Search](docs/features/neural-search.md) | 一个 deferred `neural_search` 聚合本地路径/内容搜索；常驻简短目录，原生 `tool_search` 发现后直接调用，Rust 引擎与集成均由 Metis 维护，支持 Linux x64（glibc ≥2.31）和 Windows x64。 |
 | [LSP](docs/features/lsp.md) | 一个 direct `lsp` 工具，以 `action: diagnostics/fix` 和扁平参数调用；修复默认预览，`/lsp` 查看命令可用性。只按名字的只读 allowlist 须另按参数限制写入。 |
-| [子代理](docs/subagents/native.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
+| [子代理](docs/subagents/native.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 或 Windows，需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
 | [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 工具；普通图片使用 Pi `read` + `image()`，provider 和登录由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 按 provider/模型从全局 TOML 选择全局指令策略，在下一次 agent run 生效；仅替换请求中的全局指令，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
@@ -48,7 +48,7 @@ metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CO
 - 精确复制依赖 fullscreen 应用选区；Markdown 表格、未知 token、图片等保留原生回退。终端原生选区不受此插件控制。
 - 5,000 行是保留窗口上限；单个超大组件仍可能完整排版一次，原生搜索仅覆盖已加载窗口。
 - 本包的主界面外观与其它替换 editor/footer/Working 的插件可能冲突。`pi-copy-soft-wrap` 的启发式复制由本包精确路径接管，建议只保留一套。
-- 随包原生 PTY helper 仅包含 linux-x64 载荷，详见[执行工具](docs/execution.md)。
+- 随包 PTY / Neural Search 资产支持 Linux x64 和 Windows 10/11 x64。Windows shell 命令需 Git Bash，更新原生资产前先退出 Pi；详见[兼容性](docs/compatibility.md)。
 
 [兼容性说明](docs/compatibility.md)记录宿主契约与限制，不保证任意插件组合完全兼容。
 

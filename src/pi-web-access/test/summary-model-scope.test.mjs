@@ -179,7 +179,7 @@ test("summaryModel thinking suffix strips before lookup and reaches completion o
 			options = requestOptions;
 			return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: "Low-thinking summary" }] });
 		},
-		1000,
+		SUMMARY_GENERATION_DEADLINE_MS,
 	);
 
 	assert.ok(lookups.some(lookup => lookup.provider === "anthropic" && lookup.id === "claude-haiku-4-5"));

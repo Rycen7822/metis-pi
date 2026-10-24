@@ -81,7 +81,7 @@ if (mode === "verify") {
   if (/target-(?:cpu|feature)|target_feature/.test([...flags, targetFlags].join(" ")) || /(?:-march=|-mcpu=|-m(?:avx|sse|aes|bmi))/.test(cflags))
     throw new Error("Packaged search builds reject host-specific CPU flags; use the portable build environment.");
   flags.push("-Ctarget-cpu=x86-64");
-  writeNotices(root, source);
+  writeNotices(root, source, target);
   const before = inputs();
   // Do not reuse objects produced by an older compiler-selection policy.
   const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target", "owned-rust1.94.0-zig0.16.0-zigbuild0.23.4");

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from paths import TEST_ROOT
 from metis_subagent.runtime import Runtime
 from metis_subagent.config import launch_spec as native_launch_spec
+from metis_subagent.common import python_executable
 
 
 class RuntimeHarness:
@@ -23,7 +24,7 @@ class RuntimeHarness:
         self.home = self.root/'state'; self.home.mkdir()
         self.workspace = self.root/'workspace'; self.workspace.mkdir()
         self.fake = TEST_ROOT/'fake_pi.py'
-        self.command = [sys.executable,str(self.fake)]
+        self.command = [python_executable(),str(self.fake)]
         config = self.root/'metis-pi.toml'
         config.write_text('[subagents]\nrpcTimeoutSeconds=8\nstartupTimeoutSeconds=10\n')
         self.enterContext(patch.dict(os.environ,{'METIS_PI_CONFIG':str(config)}))

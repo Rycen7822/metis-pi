@@ -138,11 +138,13 @@ function runCookieScript(env, body, platformOverride) {
 }
 
 function skipWithoutPython(t) {
-	if (!python) t.skip("fixture creation requires Python on macOS/Linux");
+	if (python) return false;
+	t.skip("fixture creation requires Python on macOS/Linux");
+	return true;
 }
 
 test("cookie extraction remains opt-in even when a browser database exists", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-opt-out-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Default", [["__Secure-1PSID", "one", ".google.com", null, 1]]);
@@ -156,7 +158,7 @@ test("cookie extraction remains opt-in even when a browser database exists", (t)
 });
 
 test("auto-discovery finds a non-default Chromium profile", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-profile-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 2", [
@@ -177,7 +179,7 @@ for (const scenario of [
 	{ browser: "Chromium", id: "chromium", folder: "Chromium Keys", entry: "Chromium Safe Storage" },
 ]) {
 	test(`KDE ${scenario.browser} decrypts v11 cookies with the KWallet safe-storage password`, (t) => {
-		skipWithoutPython(t);
+		if (skipWithoutPython(t)) return;
 		const home = mkdtempSync(join(tmpdir(), "pi-cookie-kwallet-"));
 		const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 		const password = "synthetic-kwallet-password";
@@ -206,7 +208,7 @@ for (const scenario of [
 }
 
 test("KDE keeps Secret Service ahead of KWallet", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-kwallet-precedence-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Default", googleLinuxRows("peanuts"), { targetPlatform: "linux" });
@@ -225,7 +227,7 @@ test("KDE keeps Secret Service ahead of KWallet", (t) => {
 });
 
 test("KDE caches both Secret Service and KWallet passwords", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-kwallet-stale-secret-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const password = "synthetic-kwallet-password";
@@ -258,7 +260,7 @@ test("KDE caches both Secret Service and KWallet passwords", (t) => {
 });
 
 test("failed KWallet reads retry and successful passwords are cached", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-kwallet-cache-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const password = "synthetic-kwallet-password";
@@ -292,7 +294,7 @@ test("failed KWallet reads retry and successful passwords are cached", (t) => {
 });
 
 test("auto-discovery finds a Brave profile on macOS", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-brave-profile-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Default", [
@@ -312,7 +314,7 @@ test("auto-discovery finds a Brave profile on macOS", (t) => {
 });
 
 test("browser selection checks only the requested preset", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-selected-browser-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 1", [
@@ -336,7 +338,7 @@ test("browser selection checks only the requested preset", (t) => {
 });
 
 test("Windows Chrome profiles decrypt v10 cookies with DPAPI keys", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-windows-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const argsPath = join(home, "powershell-args");
@@ -357,7 +359,7 @@ test("Windows Chrome profiles decrypt v10 cookies with DPAPI keys", (t) => {
 });
 
 test("cookie queries keep high Chromium expiry values safe", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-high-expiry-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 2", [
@@ -374,7 +376,7 @@ test("cookie queries keep high Chromium expiry values safe", (t) => {
 });
 
 test("cookie expiry filtering preserves same-second validity", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-subsecond-expiry-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const nowMs = 1_700_000_000_500;
@@ -392,7 +394,7 @@ test("cookie expiry filtering preserves same-second validity", (t) => {
 });
 
 test("Windows Edge uses the USERPROFILE AppData fallback and reports unsupported v20 cookies", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-windows-edge-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const key = Buffer.alloc(32, 4);
@@ -411,7 +413,7 @@ test("Windows Edge uses the USERPROFILE AppData fallback and reports unsupported
 });
 
 test("required-cookie preflight avoids password invocation for unrelated profiles", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-preflight-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 1", [["NID", "unrelated", ".google.com", null, 1]], { targetPlatform: "linux" });
@@ -430,7 +432,7 @@ test("required-cookie preflight avoids password invocation for unrelated profile
 });
 
 test("diagnostics report browser profile when password-store access fails", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-keychain-failure-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Default", [
@@ -449,7 +451,7 @@ test("diagnostics report browser profile when password-store access fails", (t) 
 });
 
 test("diagnostics distinguish required cookie decryption failure", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-decrypt-failure-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const encrypted = `hex:${Buffer.from("v10bad-ciphertext").toString("hex")}`;
@@ -469,7 +471,7 @@ test("diagnostics distinguish required cookie decryption failure", (t) => {
 });
 
 test("browser encryption password is cached within a process", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-cache-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 2", [
@@ -492,7 +494,7 @@ test("browser encryption password is cached within a process", (t) => {
 
 for (const targetPlatform of ["linux", "darwin"]) {
 	test(`failed password lookups are retried instead of cached (${targetPlatform})`, (t) => {
-		skipWithoutPython(t);
+		if (skipWithoutPython(t)) return;
 		const home = mkdtempSync(join(tmpdir(), "pi-cookie-cache-failure-"));
 		const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 		try {
@@ -533,7 +535,7 @@ for (const targetPlatform of ["linux", "darwin"]) {
 }
 
 test("configured profile names cannot escape the browser profile root", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-profile-traversal-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const env = makeEnvironment(home, bin);
@@ -545,7 +547,7 @@ test("configured profile names cannot escape the browser profile root", (t) => {
 });
 
 test("explicit profile symlinks cannot escape the browser profile root", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-profile-symlink-"));
 	const outsideHome = mkdtempSync(join(tmpdir(), "pi-cookie-outside-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
@@ -572,7 +574,7 @@ test("explicit profile symlinks cannot escape the browser profile root", (t) => 
 });
 
 test("SQLite fallback reads a copied database when node sqlite is unavailable", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-fallback-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 2", [
@@ -588,7 +590,7 @@ test("SQLite fallback reads a copied database when node sqlite is unavailable", 
 });
 
 test("unavailable SQLite backends produce actionable sanitized diagnostics", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-diagnostic-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 2", [["__Secure-1PSID", "one", ".google.com", null, 1]]);
@@ -604,7 +606,7 @@ test("unavailable SQLite backends produce actionable sanitized diagnostics", (t)
 });
 
 test("cookie failures keep diagnostics with each concurrent operation", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-operation-diagnostic-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	try {
@@ -633,7 +635,7 @@ test("cookie failures keep diagnostics with each concurrent operation", (t) => {
 });
 
 test("successful basic-store reads retain password-store warnings", (t) => {
-	skipWithoutPython(t);
+	if (skipWithoutPython(t)) return;
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-operation-warning-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	try {

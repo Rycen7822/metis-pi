@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 
+import "./node-cli-fixture.mjs";
+
 const extractModuleUrl = new URL("../github-extract.ts", import.meta.url).href;
 
 const heldCloneSource = `
@@ -744,7 +746,7 @@ test("clone runtime initialization preserves live, unknown, and symlink runtimes
 	await writeFile(join(deadRuntime, ".owner.json"), JSON.stringify({ version: 1, pid: 999999999, platform: process.platform, bootId: "test", startTime: "1" }), "utf8");
 	await mkdir(outside, { recursive: true });
 	await writeFile(join(outside, "marker.txt"), "preserve", "utf8");
-	await symlink(outside, symlinkRuntime, "dir");
+	await symlink(outside, symlinkRuntime, process.platform === "win32" ? "junction" : "dir");
 	await writeFile(join(agentDir, "metis-pi.toml"), stringify({ webAccess: { githubClone: { clonePath } } }), "utf8");
 	await writeControlledGh(binDir);
 

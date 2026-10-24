@@ -29,4 +29,4 @@ text(await tools.exec_command({cmd: "bash", tty: true}));
 - PTY 大输出归档到会话旁 `<sessionId>-blobs/`，返回路径与完整性标志。显示缓冲淘汰不删除恢复证据。
 - condense 归档 nested 子结果，使用 `context_tree_query({parentToolCallId})` 回读；保护、失败、未完成与归档失败传播到父结果。
 
-安装和启动使用随包 Linux x64 helper。原生资产维护见[来源说明](provenance/execution/README.md)与[开发说明](development.md)。
+安装和启动按平台使用随包 Linux x64 helper 或 Windows x64 EXE。Windows shell 配置见[兼容性](compatibility.md)；原生资产维护见[来源说明](provenance/execution/README.md)与[开发说明](development.md)。

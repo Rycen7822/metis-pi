@@ -263,8 +263,15 @@ class CodingAgentDirBinding(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 class EnvironmentBindingChain(IpcHarness, unittest.IsolatedAsyncioTestCase):
     async def test_native_ipc_keeps_custom_path_authorized_env_and_secret_isolation(self):
         fakebin = self.root/'bin'; fakebin.mkdir()
-        interp = fakebin/'tag-interp'
-        interp.write_text('#!/bin/sh\necho interp-ok\n'); interp.chmod(0o755)
+        # A program on PATH the child really executes. Windows uses a batch shim
+        # that the fixture starts through cmd.exe explicitly (never a file
+        # association); the discovery still happens through the custom PATH.
+        if sys.platform == 'win32':
+            interp = fakebin/'tag-interp.cmd'
+            interp.write_text('@echo off\r\necho interp-ok\r\n')
+        else:
+            interp = fakebin/'tag-interp'
+            interp.write_text('#!/bin/sh\necho interp-ok\n'); interp.chmod(0o755)
         probe = self.root/'probe.json'
         self.config_path.write_text('[subagents]\nchildEnv=["PI_TEST_AUTH","PI_TEST_HOME_TAG",'
             '"PI_TEST_PROBE_FILE","PI_TEST_PROBE_CMD"]\n')
@@ -281,7 +288,9 @@ class EnvironmentBindingChain(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data['has_auth'])
         self.assertFalse(data['has_daemon_only'])
         for path in self.home.rglob('*'):
-            if path.is_file():
+            # Live byte locks (daemon/session lease) cannot be read on Windows;
+            # they are empty by construction and cannot carry the secret.
+            if path.is_file() and path.suffix != '.lock':
                 self.assertNotIn(b'real-secret-123',path.read_bytes(),path)
 
 
@@ -289,9 +298,14 @@ class StoreSchemaBoundary(unittest.TestCase):
     def test_future_schema_is_refused(self):
         with tempfile.TemporaryDirectory(prefix='native-schema-') as tmp:
             home = Path(tmp)
-            with sqlite3.connect(home/'registry.sqlite') as db:
+            # Close explicitly: the context manager only ends the transaction, and
+            # Windows cannot remove a file whose handle is still open.
+            db = sqlite3.connect(home/'registry.sqlite')
+            try:
                 db.executescript("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); "
                     "INSERT INTO meta VALUES('schema','999'); INSERT INTO meta VALUES('owner','metis-pi/native-subagent');")
+            finally:
+                db.close()
             before = (home/'registry.sqlite').read_bytes()
             with self.assertRaises(AgentError) as caught:
                 Store(home)

@@ -17,21 +17,24 @@ for (const [operation, delayBody] of [["search", false], ["ask", true]]) {
 		const output = run(`
 			const { createServer } = await import("node:http");
 			process.env.PERPLEXITY_API_KEY = "synthetic-perplexity-key";
-			const packets = [], calls = [], deadlines = [];
+			const packets = [], calls = [], deadlines = [], deadline = new AbortController();
+			const expire = () => setImmediate(() => deadline.abort(new DOMException("synthetic deadline", "TimeoutError")));
 			const server = createServer(async (req, res) => {
 				let body = ""; for await (const part of req) body += part;
 				JSON.parse(body);
 				packets.push({ method: req.method, headers: req.headers });
-				${delayBody ? 'res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders();' : ""}
-				setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ results: [], choices: [{ message: { content: "late answer" } }] })); }, 250);
+				${delayBody ? 'res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders();' : "expire();"}
 			});
 			await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 			const origin = "http://127.0.0.1:" + server.address().port;
-			const nativeFetch = globalThis.fetch, nativeTimeout = AbortSignal.timeout;
-			AbortSignal.timeout = ms => { deadlines.push(ms); return nativeTimeout(100); };
-			globalThis.fetch = (url, init) => {
+			const nativeFetch = globalThis.fetch;
+			AbortSignal.timeout = ms => { deadlines.push(ms); return deadline.signal; };
+			globalThis.fetch = async (url, init) => {
 				calls.push({ hasSignal: !!init.signal });
-				return nativeFetch(origin + new URL(url).pathname, init);
+				const response = await nativeFetch(origin + new URL(url).pathname, init);
+				// Expire at the intended stage, not during cold connection setup.
+				${delayBody ? "expire();" : ""}
+				return response;
 			};
 			const { searchWithPerplexity, askPerplexity } = await import(${JSON.stringify(modules)} + "perplexity.ts");
 			const { activityMonitor } = await import(${JSON.stringify(modules)} + "activity.ts");

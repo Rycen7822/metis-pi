@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 
 p = argparse.ArgumentParser(add_help=False)
 p.add_argument("--hold-eof", action="store_true")
@@ -176,7 +177,8 @@ async def run(raw_task, rid):
     if task == "CRASH":
         os._exit(9)
     if task in {"SPAWN_CHILD", "SPAWN_DETACHED_CHILD"}:
-        proc = subprocess.Popen(["sleep", "120"], start_new_session=task == "SPAWN_DETACHED_CHILD")
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
+                                start_new_session=sys.platform != 'win32')
         emit(
             {
                 "type": "tool_execution_start",
@@ -325,13 +327,56 @@ async def run(raw_task, rid):
         emit({"type": "managed_task_end", "runId": rid})
 
 
+class BlockingLines:
+    """Portable JSONL stdin: Windows subprocess pipes are not overlapped, so the
+    proactor cannot own them. A helper thread performs the blocking reads."""
+
+    def __init__(self, stream):
+        self.lines = []
+        self.eof = False
+        self.wake = asyncio.Event()
+        self.loop = asyncio.get_running_loop()
+        self.stream = stream
+
+    def start(self):
+        threading.Thread(target=self._pump, daemon=True).start()
+        return self
+
+    def _pump(self):
+        while True:
+            line = self.stream.readline()
+            self.loop.call_soon_threadsafe(self._push, line)
+            if not line:
+                return
+
+    def _push(self, line):
+        if line:
+            self.lines.append(line)
+        else:
+            self.eof = True
+        self.wake.set()
+
+    async def readline(self):
+        while not self.lines and not self.eof:
+            self.wake.clear()
+            await self.wake.wait()
+        return self.lines.pop(0) if self.lines else b''
+
+
+async def stdin_lines():
+    if sys.platform == 'win32':
+        return BlockingLines(os.fdopen(os.dup(sys.stdin.fileno()), 'rb')).start()
+    reader = asyncio.StreamReader()
+    await asyncio.get_running_loop().connect_read_pipe(
+        lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer
+    )
+    return reader
+
+
 async def main():
     global current
     surface_report()
-    reader = asyncio.StreamReader()
-    transport, _ = await asyncio.get_running_loop().connect_read_pipe(
-        lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer
-    )
+    reader = await stdin_lines()
     while line := await reader.readline():
         r = json.loads(line)
         kind = r["type"]
@@ -349,7 +394,13 @@ async def main():
                 if pc:
                     exe = shutil.which(pc)
                     if exe:
-                        proc = subprocess.run([exe], capture_output=True, text=True, timeout=10)
+                        # Discovered through the child's own PATH and really executed.
+                        # A batch shim is started by cmd.exe explicitly; relying on a
+                        # file association or ShellExecute would not prove anything.
+                        argv = ([os.environ.get('COMSPEC') or 'cmd.exe', '/c', exe]
+                                if sys.platform == 'win32' and exe.lower().endswith(('.cmd', '.bat'))
+                                else [exe])
+                        proc = subprocess.run(argv, capture_output=True, text=True, timeout=10)
                         rc = proc.returncode
                         out = proc.stdout.strip()[:80]
                 with open(probe_file, "w") as f:

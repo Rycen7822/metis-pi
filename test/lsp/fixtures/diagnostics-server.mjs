@@ -7,6 +7,12 @@ const openedUris = [];
 
 if (scenario === "delayed-sigterm") process.on("SIGTERM", exitAfterDelay);
 
+// Expose the child pid so a test can prove the process really exited. The exit
+// marker below only exists on platforms where termination runs the handler.
+if (process.env.PI_LSP_TEST_PID_FILE) {
+  writeFileSync(process.env.PI_LSP_TEST_PID_FILE, `${process.pid}\n`);
+}
+
 const lifecycle = scenario.startsWith("lifecycle-");
 function record(event) {
   if (process.env.PI_LSP_TEST_LOG) {

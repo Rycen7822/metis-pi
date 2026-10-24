@@ -23,6 +23,8 @@ dirs = "5.0"
 git2 = { version = "0.21.0", default-features = false, features = [
   "vendored-libgit2",
 ] }
+# Cross-platform file identity; already in the graph via the debouncer.
+file-id = "0.2.3"
 glidesort = "0.1"
 heed = "0.22.0"
 zlob = { version = "=1.6.5" }

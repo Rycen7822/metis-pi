@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,13 +17,25 @@ function runEditor(command: string, file: string, signal?: AbortSignal): Promise
 	if (!editor) return Promise.reject(new Error("External editor command is empty"));
 
 	return new Promise((resolve, reject) => {
-		const child = spawn(editor, [...args, file], {
+		const child = spawn(editor, [...args, process.platform === "win32" ? `"${file}"` : file], {
 			stdio: "inherit",
 			shell: process.platform === "win32",
 		});
 		let launchError: Error | undefined;
 		let killTimer: ReturnType<typeof setTimeout> | undefined;
+		let aborting: Promise<void> | undefined;
 		const abort = () => {
+			if (process.platform === "win32" && child.pid && child.exitCode === null && child.signalCode === null) {
+				// Killing cmd.exe alone leaves its editor running on the restored TUI.
+				aborting = new Promise(resolve => {
+					execFile(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+						["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, error => {
+							if (error) child.kill("SIGKILL");
+							resolve();
+						});
+				});
+				return;
+			}
 			child.kill("SIGTERM");
 			killTimer = setTimeout(() => child.kill("SIGKILL"), 1000);
 			killTimer.unref();
@@ -31,9 +43,10 @@ function runEditor(command: string, file: string, signal?: AbortSignal): Promise
 		signal?.addEventListener("abort", abort, { once: true });
 		if (signal?.aborted) abort();
 		child.once("error", (error) => { launchError = error; });
-		child.once("close", (code, exitSignal) => {
+		child.once("close", async (code, exitSignal) => {
 			signal?.removeEventListener("abort", abort);
 			clearTimeout(killTimer);
+			await aborting;
 			if (signal?.aborted || launchError) {
 				reject(signal?.aborted ? signal.reason : launchError);
 				return;

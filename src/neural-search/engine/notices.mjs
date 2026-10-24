@@ -4,9 +4,12 @@ import { dirname, join, relative, resolve } from "node:path";
 
 // Include Rust dependency notices, including the C libraries bundled by *-sys
 // crates. Cargo's SPDX field alone does not contain their copyright notices.
-export function writeNotices(root, source) {
+// `target` selects the dependency closure; Windows writes its own files so the
+// Linux notices recorded by the packaged Linux manifest stay valid.
+export function writeNotices(root, source, target = "x86_64-unknown-linux-gnu") {
+  const windows = target.includes("windows");
   const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--manifest-path", join(source, "Cargo.toml"),
-    "--locked", "--format-version", "1", "--filter-platform", "x86_64-unknown-linux-gnu"], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }));
+    "--locked", "--format-version", "1", "--filter-platform", target], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }));
   const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
   const graph = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
   const closure = new Set([metadata.packages.find(pkg => pkg.name === "fff-c").id]);
@@ -22,7 +25,7 @@ export function writeNotices(root, source) {
     }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   }
   const rows = [...closure].map(id => packages.get(id)).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.version.localeCompare(b.version));
-  const sections = ["Metis Neural Search — Rust and bundled native dependency notices", "Generated from the locked Linux x64 runtime/build dependency closure; dev-only dependencies are excluded."];
+  const sections = ["Metis Neural Search — Rust and bundled native dependency notices", `Generated from the locked ${windows ? "Windows x64 MSVC" : "Linux x64"} runtime/build dependency closure; dev-only dependencies are excluded.`];
   for (const pkg of rows) {
     const directory = dirname(pkg.manifest_path);
     const supplied = join(source, "licenses", `${pkg.name}-${pkg.version}`);
@@ -37,9 +40,15 @@ export function writeNotices(root, source) {
   }
   const output = join(source, "../assets");
   mkdirSync(output, { recursive: true });
-  writeFileSync(join(output, "THIRD_PARTY_NOTICES.txt"), sections.join("\n\n") + "\n");
+  const dependencies = join(output, windows ? "THIRD_PARTY_NOTICES-win32-x64.txt" : "THIRD_PARTY_NOTICES.txt");
+  writeFileSync(dependencies, sections.join("\n\n") + "\n");
   const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
   const standardLibraryNotices = join(sysroot, "share/doc/rust/COPYRIGHT-library.html");
   if (!existsSync(standardLibraryNotices)) throw new Error("Rust standard-library notices missing; install the rust-docs component before building.");
-  copyFileSync(standardLibraryNotices, join(output, "RUST-STDLIB-NOTICES.html"));
+  // The Rust standard library ships identical copyright text for every target
+  // built from this sysroot, so keep one shared copy instead of a second 400 KiB.
+  const standardLibrary = join(output, "RUST-STDLIB-NOTICES.html");
+  if (!existsSync(standardLibrary) || !readFileSync(standardLibrary).equals(readFileSync(standardLibraryNotices)))
+    copyFileSync(standardLibraryNotices, standardLibrary);
+  return [dependencies, standardLibrary];
 }

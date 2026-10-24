@@ -118,7 +118,7 @@ test("Mistral accepts config, environment, and trusted command credential source
 	const cases = [
 		{ config: { mistralApiKey: "config-key" }, env: {}, expected: "config-key" },
 		{ config: {}, env: { MISTRAL_API_KEY: "environment-key" }, expected: "environment-key" },
-		{ config: { mistralApiKey: "!printf command-key" }, env: {}, expected: "command-key" },
+		{ config: { mistralApiKey: "!echo command-key" }, env: {}, expected: "command-key" },
 	];
 	for (const [index, current] of cases.entries()) {
 		const home = await createHome(current.config);

@@ -47,16 +47,22 @@ test("shutdown waits for the LSP process to exit", async () => {
 test("shutdown waits for a process terminated by close", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-close-"));
   const marker = path.join(root, "exited.txt");
+  const pidFile = path.join(root, "pid.txt");
   const adapter = fixtureAdapter("delayed-sigterm", 30);
-  adapter.env = { PI_LSP_TEST_EXIT_MARKER: marker };
+  adapter.env = { PI_LSP_TEST_EXIT_MARKER: marker, PI_LSP_TEST_PID_FILE: pidFile };
   const client = new LspClient(adapter, root, 1_000);
 
   try {
     await client.start();
     await client.initialize();
+    const pid = Number(readFileSync(pidFile, "utf8"));
     client.close();
     await client.shutdown();
-    assert.equal(readFileSync(marker, "utf8"), "exited\n");
+    // Shutdown must have settled only once the child is really gone. Windows
+    // terminates the process directly, so the SIGTERM handler that writes the
+    // marker never runs there; OS liveness is the portable proof.
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+    if (process.platform !== "win32") assert.equal(readFileSync(marker, "utf8"), "exited\n");
   } finally {
     await client.shutdown();
     rmSync(root, { recursive: true, force: true });

@@ -2,13 +2,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import array
-import fcntl
-import termios
 import json
 import os
 from pathlib import Path
 import re
-import signal
 import shutil
 import socket
 import struct
@@ -18,10 +15,35 @@ import tempfile
 import unittest
 from unittest import mock
 from paths import ROOT, TEST_ROOT, REPO_ROOT, WORKER_ROOT
+from metis_subagent import ipc
 from metis_subagent.client import request as ipc_request
 from metis_subagent import PROTOCOL_VERSION, RUNTIME_REVISION
-from metis_subagent.common import AgentError, TERMINAL, dumps, group_members, read_frame, socket_path
+from metis_subagent.common import (AgentError, BASE_ENV_KEYS, TERMINAL, dumps, group_members,
+    python_executable, read_frame)
+
+# The non-secret Windows OS locations Python/Node need to start at all.
+WINDOWS_BASE_ENV = tuple(k for k in BASE_ENV_KEYS if k.upper() in {
+    'SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','USERPROFILE','HOMEDRIVE','HOMEPATH',
+    'APPDATA','LOCALAPPDATA','TEMP','TMP'})
 from metis_subagent.config import launch_spec as native_launch_spec
+from metis_subagent import locks
+
+WINDOWS = sys.platform == 'win32'
+# A POSIX-only probe owns these; skipping keeps its Linux protection intact.
+posix_only = unittest.skipIf(WINDOWS, 'POSIX process-group/signal semantics')
+if not WINDOWS:
+    import fcntl
+    import signal
+    import termios
+
+
+def force_kill(pid):
+    """Terminate one process we spawned: SIGKILL on POSIX, TerminateProcess here."""
+    if WINDOWS:
+        subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        os.kill(pid, signal.SIGKILL)
 
 
 def fixture_launch(command):
@@ -57,7 +79,7 @@ class IpcHarness:
         self.config_path = self.root/'metis-pi.toml'
         self.config_path.write_text('[subagents]\nrpcTimeoutSeconds=8\nstartupTimeoutSeconds=10\n')
         self.enterContext(mock.patch.dict(os.environ, {'METIS_PI_CONFIG':str(self.config_path)}))
-        self.command = [sys.executable, str(TEST_ROOT/'fake_pi.py')]
+        self.command = [python_executable(), str(TEST_ROOT/'fake_pi.py')]
         self.source = {'env':{'PATH':os.environ['PATH'], 'HOME':str(self.root)}, 'parent':{
             'kind':'pi', 'session_id':'fixture', 'agent_dir':str(self.root), 'session_file':'',
             'sdk_path':str(self.root/'dist/index.js'), 'node_path':sys.executable,
@@ -66,11 +88,11 @@ class IpcHarness:
         self.reqid = 0
         self.daemons = []
         popen = subprocess.Popen
-        expected = [sys.executable, str(ROOT/'main.py'), '--home', str(self.home), 'daemon']
+        expected = [python_executable(), str(ROOT/'main.py'), '--home', str(self.home), 'daemon']
         def owned_daemon(command, *args, **kwargs):
             if command == expected:
                 if self.use_fake:
-                    command = [sys.executable, str(TEST_ROOT/'test_transport.py'), '--fixture-daemon',
+                    command = [python_executable(), str(TEST_ROOT/'test_transport.py'), '--fixture-daemon',
                                str(self.home), json.dumps(self.command)]
                 proc = popen(command, *args, **kwargs)
                 self.daemons.append(proc)
@@ -91,7 +113,17 @@ class IpcHarness:
                 await asyncio.to_thread(proc.wait)
                 self.tmp._finalizer.detach()
                 self.fail(f'Owned daemon {proc.pid} did not shut down; state retained at {self.home}')
-        self.tmp.cleanup()
+        # A killed daemon may still be closing its SQLite/lease handles; Windows
+        # cannot remove files that are open, so retry the tree briefly.
+        for attempt in range(40):
+            try:
+                self.tmp.cleanup()
+                break
+            except PermissionError:
+                if attempt == 39:
+                    self.tmp._finalizer.detach()
+                    self.fail(f'State remained locked at {self.home}')
+                await asyncio.sleep(0.05)
 
     async def request(self, op, params, **kwargs):
         kwargs.setdefault('source', self.source)
@@ -174,9 +206,9 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
                 writer.close()
                 await writer.wait_closed()
                 self.peers.discard(writer)
-        self.server = await asyncio.start_unix_server(handle, str(socket_path(self.home)))
+        self.server = await ipc.serve(handle, self.home)
         env = {**os.environ, 'METIS_PI_CONFIG':str(self.home/'metis-pi.toml')}
-        self.host = await asyncio.create_subprocess_exec(sys.executable, str(ROOT/'main.py'),
+        self.host = await asyncio.create_subprocess_exec(python_executable(), str(ROOT/'main.py'),
             '--home', str(self.home), 'pi-host', stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
             limit=8*1024*1024)
@@ -234,6 +266,7 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
             await self.host.stdout.read()
 
 
+    @unittest.skipIf(WINDOWS, 'pipe capacity/occupancy probes need fcntl/termios')
     async def fill_stdout_pipe(self):
         output=self.host.stdout._transport
         fd=output.get_extra_info('pipe').fileno()
@@ -280,6 +313,7 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
+    @posix_only
     async def check_blocked_stdin_cleanup(self,by_idle):
         config=self.config_path
         config.write_text(config.read_text().replace('rpcTimeoutSeconds=8','rpcTimeoutSeconds=1'))
@@ -329,10 +363,12 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
             with contextlib.suppress(ProcessLookupError): os.killpg(pgid,signal.SIGCONT)
 
 
+    @posix_only
     async def test_backpressured_child_can_be_closed_after_rpc_timeout(self):
         await self.check_blocked_stdin_cleanup(False)
 
 
+    @posix_only
     async def test_backpressured_model_is_stopped_by_inactivity(self):
         await self.check_blocked_stdin_cleanup(True)
 
@@ -502,7 +538,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         first = await self.request( "result", {"scope": sid, "run_id": a["run_id"]})
         await self.request( "shutdown", {"force": True})
         until = asyncio.get_running_loop().time() + 8
-        while socket_path(self.home).exists() and asyncio.get_running_loop().time() < until:
+        while ipc.exists(self.home) and asyncio.get_running_loop().time() < until:
             await asyncio.sleep(0.05)
         second = await self.request( "result", {"scope": sid, "run_id": a["run_id"]})
         self.assertEqual(first["result_sha256"], second["result_sha256"])
@@ -514,7 +550,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         from metis_subagent.common import dumps
 
         sid = await self.open_scope()
-        reader, writer = await asyncio.open_unix_connection(str(socket_path(self.home)))
+        reader, writer = await ipc.connect(self.home)
         params = {
             "scope": sid,
             "request_id": "lost-reply",
@@ -537,7 +573,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         sid = await self.open_scope()
         a = await self.spawn(sid, "delay=30|orphan")
         pid = (await self.request( "ping", {}))["pid"]
-        os.kill(pid, signal.SIGKILL)
+        force_kill(pid)
         await asyncio.sleep(0.3)
         listing = await self.request( "list", {"scope": sid})
         self.assertEqual(listing["agents"][0]["state"], "orphaned")
@@ -609,7 +645,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         # The production pi-host really exits; the daemon and child are separate
         # owned processes and must finish the already-admitted work.
         env = os.environ.copy()
-        host = await asyncio.create_subprocess_exec(sys.executable, str(ROOT/'main.py'),
+        host = await asyncio.create_subprocess_exec(python_executable(), str(ROOT/'main.py'),
             '--home', str(self.home), 'pi-host', stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
         await self.request('ping', {})  # retain the daemon's owned Popen handle
@@ -638,8 +674,10 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_base_env_survives_daemon_restart(self):
         env_file = self.root/'child-env.json'
+        # The probe program must be startable on both platforms (whoami is a
+        # console executable there and a coreutils binary on Linux).
         self.config_path.write_text('[subagents]\nrpcTimeoutSeconds=8\nstartupTimeoutSeconds=15\n'
-            '[subagents.profiles.reader.env]\nPI_TEST_PROBE_FILE='+json.dumps(str(env_file))+'\nPI_TEST_PROBE_CMD="true"\n')
+            '[subagents.profiles.reader.env]\nPI_TEST_PROBE_FILE='+json.dumps(str(env_file))+'\nPI_TEST_PROBE_CMD="whoami"\n')
         sid = await self.open_scope()
         a = await self.spawn(sid, 'warm')
         first = json.loads(env_file.read_text())
@@ -664,8 +702,13 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         await self.request('shutdown', {'force':True})
         await asyncio.to_thread(self.daemons[-1].wait, 10)
         import sqlite3
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
+        # Close explicitly: the context manager keeps the connection (and the
+        # file handle) open, which blocks the temp-tree cleanup on Windows.
+        db = sqlite3.connect(self.home/'registry.sqlite')
+        try:
             stored = json.loads(db.execute('SELECT base_env FROM scopes WHERE id=?', (sid,)).fetchone()[0])
+        finally:
+            db.close()
         self.assertIn('PATH', stored)
         self.assertNotIn('SECRET_CANARY', stored)
         self.assertNotIn(b'sk-do-not-persist', (self.home/'registry.sqlite').read_bytes())
@@ -679,8 +722,15 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
             raise unittest.SkipTest('set SUBAGENT_PI_LIVE_PI=1 for the isolated offline real-SDK lifecycle checks')
         self.sdk = (REPO_ROOT/'node_modules/@earendil-works/pi-coding-agent/dist/index.js').resolve()
         self.node = shutil.which('node')
+        if not self.sdk.is_file():
+            # A shallow clone may keep only the sibling runtime's installed tree;
+            # the parent CI has node_modules in place.
+            sibling = REPO_ROOT.parent/'runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js'
+            self.sdk = sibling.resolve() if sibling.is_file() else self.sdk
         if not self.sdk.is_file() or not self.node:
             self.skipTest('local Pi SDK and Node are required')
+        # The SDK resolves its own dependencies (undici, ...) from its install tree.
+        self.node_modules = self.sdk.parents[2]
         await super().asyncSetUp()
         self.pi_home = self.root/'userhome'; self.pi_home.mkdir()
         self.pi_agent = self.root/'agent'; self.pi_agent.mkdir()
@@ -887,7 +937,7 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         await self.wait_marker(trace,'PI_MOCK_TOOL_START')
         # SO_PEERCRED identifies only this harness's private daemon. Pause its
         # reader without touching global Pi/Codex or creating paid model calls.
-        _,writer=await asyncio.open_unix_connection(str(socket_path(self.home)))
+        _,writer=await ipc.connect(self.home)
         pid,_,_=struct.unpack('3i',writer.get_extra_info('socket').getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
         writer.close(); await writer.wait_closed()
         owner=json.loads((self.home/'agents'/a['agent_id']/'owner.json').read_text())
@@ -924,10 +974,12 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(closed['cleanup'],'verified')
 
 
+    @posix_only
     async def test_sdk_output_backpressure_keeps_questions_results_and_followups(self):
         await self.sdk_output_backpressure(False)
 
 
+    @posix_only
     async def test_sdk_critical_output_overflow_is_a_crash_not_a_completion(self):
         await self.sdk_output_backpressure(True)
 
@@ -1274,7 +1326,11 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
     def plain_sdk_probe(self):
         # Same isolated SDK/resources, with no managed surface plan and no model
         # prompt: a real baseline for an extension overriding a builtin name.
-        env = {'PATH':os.environ['PATH'],'HOME':str(self.pi_home),'PI_CODING_AGENT_DIR':str(self.pi_agent),
+        # Node cannot initialize its crypto provider without the OS locations;
+        # they are pure paths, not credentials, and the production base-env set
+        # forwards the same names to managed children.
+        env = {**{k: os.environ[k] for k in WINDOWS_BASE_ENV if k in os.environ},
+            'PATH':os.environ['PATH'],'HOME':str(self.pi_home),'PI_CODING_AGENT_DIR':str(self.pi_agent),
             'METIS_PI_CONFIG':str(self.config_path),'PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1'}
         proc = subprocess.Popen([self.node,str(WORKER_ROOT/'pi-sdk.mjs'),str(self.sdk),
             '--offline','--provider','pi-mock-offline','--model','mock'], cwd=self.workspace, env=env,

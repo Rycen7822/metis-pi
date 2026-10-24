@@ -12,7 +12,7 @@ In source checkouts, the owned Rust workspace is in `engine/`; it is not part of
 The reduced Linux `ffi-rs` adapter in `native/` and the bundled library plus manifest/notices in `assets/` ship with the runtime.
 All engine implementation and delivery files are maintained under `src/neural-search/`; `extensions/neural-search.ts` is only the host entry.
 No upstream FFF npm package or binary download remains. The engine is a Metis-specialized Rust fork of 0.11.0, with the original zlob semantics and existing LMDB format.
-It retains AI search/ranking and live indexing, not upstream editor/SDK compatibility. Delivery targets Linux x64 glibc >=2.31 only; other platforms are out of scope.
+It retains AI search/ranking and live indexing, not upstream editor/SDK compatibility. Delivery targets Linux x64 glibc >=2.31 and Windows x64, using bundled native libraries.
 See the repository's [engine maintenance guide](https://github.com/Rycen7822/metis-pi/blob/main/src/neural-search/engine/README.md) for builds and redistribution.
 The product name does not imply embeddings, vector indexing or model-assisted semantic search; searches run locally.
 

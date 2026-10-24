@@ -1,9 +1,12 @@
-//! Metis private Linux x64 ABI. Handles own picker/DB lifetimes; each result
+//! Metis private Linux x64 / Windows x64 ABI. Handles own picker/DB lifetimes; each result
 //! envelope owns its payload until decoded, or the new instance is transferred.
 //! Derived from FFF 0.11.0 (MIT); maintained by Metis, not an upstream SDK.
 
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
-compile_error!("Metis Neural Search supports Linux x64 glibc only");
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
+    all(target_os = "windows", target_arch = "x86_64", target_env = "msvc")
+)))]
+compile_error!("Metis Neural Search supports Linux x64 glibc and Windows x64 MSVC only");
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::PathBuf;

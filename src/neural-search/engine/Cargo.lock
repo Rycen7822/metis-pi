@@ -311,6 +311,7 @@ dependencies = [
  "fff-grep",
  "fff-notify-debouncer-full",
  "fff-query-parser",
+ "file-id",
  "git2",
  "glidesort",
  "heed",

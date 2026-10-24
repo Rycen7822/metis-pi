@@ -1,8 +1,8 @@
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
-    assert_eq!(
-        target, "x86_64-unknown-linux-gnu",
-        "Metis neural search supports Linux x64 glibc only"
+    assert!(
+        matches!(target.as_str(), "x86_64-unknown-linux-gnu" | "x86_64-pc-windows-msvc"),
+        "Metis neural search supports Linux x64 glibc and Windows x64 MSVC only, not {target}"
     );
 
     // Preserve development diagnostics and opt-in release rescan accounting.

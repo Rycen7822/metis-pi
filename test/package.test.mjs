@@ -19,9 +19,12 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
 test("package exposes extensions, themes and portable skills with their references", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
-  const packed = Object.values(JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-    cwd: new URL("..", import.meta.url), encoding: "utf8",
-  })))[0];
+  const args = ["pack", "--dry-run", "--json", "--ignore-scripts"];
+  const windows = process.platform === "win32";
+  const packed = Object.values(JSON.parse(execFileSync(windows ? process.env.ComSpec || "cmd.exe" : "npm",
+    windows ? ["/d", "/s", "/c", `npm ${args.join(" ")}`] : args, {
+      cwd: new URL("..", import.meta.url), encoding: "utf8", windowsHide: true,
+    })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
   for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp", "ask-user-question"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
@@ -30,6 +33,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "CHANGELOG.md", "metis-pi.toml", "metis-pi-config.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "skills/ast-grep/SKILL.md", "skills/ast-grep/references/rule_reference.md",
     "assets/native-tools/exec/linux-x64/exec_bridge",
+    "assets/native-tools/exec/win32-x64/exec_bridge.exe", "assets/native-tools/win32-x64-manifest.json",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
     "src/pi-web-access/index.ts", "src/pi-web-access/dist/index.js", "src/pi-web-access/dist/mcp-cli.js",
     "src/appearance/runtime.ts", "src/presentation/renderers.ts",
@@ -44,7 +48,9 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/pi-web-access/licenses/typebox.LICENSE",
     "src/neural-search/native/binding/ffi.ts", "src/neural-search/LICENSE",
     "src/neural-search/assets/linux-x64/libmetis_neural_search.so",
-    "src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
+    "src/neural-search/assets/win32-x64/metis_neural_search.dll", "src/neural-search/assets/win32-x64-manifest.json",
+    "src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/THIRD_PARTY_NOTICES-win32-x64.txt",
+    "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
   for (const path of files) {

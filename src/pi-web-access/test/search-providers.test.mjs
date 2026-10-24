@@ -1,7 +1,7 @@
-import { runChild } from "./provider-fixtures.mjs";
+import { runChild, writeCredentialCommand } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -698,12 +698,16 @@ test("Exa direct API key ignores full legacy usage counter", async (t) => {
 test("Exa command source is lazy, overrides stale env, and rotates per request", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-command-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const commandPath = join(home, "read-key.sh");
 	const counterPath = join(home, "counter");
-	await writeFile(commandPath, `#!/bin/sh\ncount=0\n[ ! -f "$1" ] || count=$(cat "$1")\ncount=$((count + 1))\nprintf '%s' "$count" >"$1"\nprintf 'synthetic-exa-%s\\n' "$count"\n`, "utf8");
-	await chmod(commandPath, 0o700);
+	const command = await writeCredentialCommand(home, "read-key", `
+		import { existsSync, readFileSync, writeFileSync } from "node:fs";
+		const path = ${JSON.stringify(counterPath)};
+		const count = (existsSync(path) ? Number(readFileSync(path, "utf8")) : 0) + 1;
+		writeFileSync(path, String(count));
+		process.stdout.write("synthetic-exa-" + count);
+	`);
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		exaApiKey: `!${commandPath} ${counterPath}`,
+		exaApiKey: command,
 	}) + "\n", "utf8");
 
 	const child = runChild(`
@@ -740,11 +744,10 @@ test("Exa command source is lazy, overrides stale env, and rotates per request",
 test("failed Exa command source is redacted and blocks MCP or provider fallback", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-command-failure-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const commandPath = join(home, "fail-key.sh");
-	await writeFile(commandPath, "#!/bin/sh\nprintf 'SYNTHETIC_SECRET_MUST_NOT_ESCAPE\\n' >&2\nexit 9\n", "utf8");
-	await chmod(commandPath, 0o700);
+	const commandPath = join(home, "fail-key.mjs");
+	const command = await writeCredentialCommand(home, "fail-key", 'process.stderr.write("SYNTHETIC_SECRET_MUST_NOT_ESCAPE"); process.exit(9);');
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		exaApiKey: `!${commandPath}`,
+		exaApiKey: command,
 	}) + "\n", "utf8");
 
 	const child = runChild(`
@@ -900,11 +903,10 @@ test("keyless Exa search falls back to the default MCP tool when the advanced to
 test("failed Gemini command source is redacted and blocks browser fallback", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-command-failure-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	const commandPath = join(home, "fail-key.sh");
-	await writeFile(commandPath, "#!/bin/sh\nprintf 'SYNTHETIC_GEMINI_SECRET_MUST_NOT_ESCAPE\\n' >&2\nexit 9\n", "utf8");
-	await chmod(commandPath, 0o700);
+	const commandPath = join(home, "fail-key.mjs");
+	const command = await writeCredentialCommand(home, "fail-key", 'process.stderr.write("SYNTHETIC_GEMINI_SECRET_MUST_NOT_ESCAPE"); process.exit(9);');
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
-		geminiApiKey: `!${commandPath}`,
+		geminiApiKey: command,
 	}) + "\n", "utf8");
 
 	const child = runChild(`

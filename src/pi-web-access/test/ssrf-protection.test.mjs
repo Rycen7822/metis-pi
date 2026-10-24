@@ -502,8 +502,8 @@ test("proxy transport and environment trust share port-aware NO_PROXY routing", 
 	const previous = Object.fromEntries(["HTTPS_PROXY", "NO_PROXY", "no_proxy"].map(key => [key, process.env[key]]));
 	try {
 		process.env.HTTPS_PROXY = "http://proxy.example.test:8080";
-		process.env.NO_PROXY = "public.example.test:443, .internal.example.test, [2606:4700:4700::1111]:8443";
 		delete process.env.no_proxy;
+		process.env.NO_PROXY = "public.example.test:443, .internal.example.test, [2606:4700:4700::1111]:8443";
 		for (const [address, bypass] of [
 			["https://public.example.test/", true],
 			["https://public.example.test:8443/", false],

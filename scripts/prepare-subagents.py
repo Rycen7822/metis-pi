@@ -14,4 +14,4 @@ from metis_subagent.schema import NATIVE_TOOLS
     "hostProtocol": 1, "baseEnvKeys": BASE_ENV_KEYS,
     "scopeEnvKeys": BASE_ENV_KEYS + PROXY_ENV_KEYS,
     "maxFrame": MAX_FRAME, "tools": NATIVE_TOOLS,
-}, ensure_ascii=False, indent=2) + "\n")
+}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")

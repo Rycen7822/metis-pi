@@ -97,7 +97,7 @@ test("authFetch true selects the only profile", () => {
 });
 
 test("authenticated fetch sends only browser-scoped cookies with raw values", (t) => {
-	if (!python) t.skip("fixture creation requires Python on macOS/Linux");
+	if (!python) return t.skip("fixture creation requires Python on macOS/Linux");
 	const root = mkdtempSync(join(tmpdir(), "pi-auth-fetch-cookie-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-auth-fetch-bin-"));
 	try {
@@ -151,7 +151,7 @@ test("authenticated fetch sends only browser-scoped cookies with raw values", (t
 });
 
 test("authenticated same-origin redirects recompute path-scoped cookies", (t) => {
-	if (!python) t.skip("fixture creation requires Python on macOS/Linux");
+	if (!python) return t.skip("fixture creation requires Python on macOS/Linux");
 	const root = mkdtempSync(join(tmpdir(), "pi-auth-fetch-redirect-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-auth-fetch-bin-"));
 	try {
@@ -209,7 +209,7 @@ test("authenticated fetch failure does not fall through to hosted providers", ()
 });
 
 test("authenticated Cloudflare challenge stays direct-only", (t) => {
-	if (!python) t.skip("fixture creation requires Python on macOS/Linux");
+	if (!python) return t.skip("fixture creation requires Python on macOS/Linux");
 	const root = mkdtempSync(join(tmpdir(), "pi-auth-fetch-challenge-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-auth-fetch-bin-"));
 	try {

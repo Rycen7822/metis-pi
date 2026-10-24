@@ -4,7 +4,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve, extname, basename, join, dirname } from "node:path";
+import { resolve, extname, basename, join, dirname, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 import { activityMonitor } from "./activity.ts";
 import { canAttachImages } from "./feature-config.ts";
 import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";
@@ -93,13 +94,13 @@ export function isVideoFile(input: string): VideoFileInfo | null {
 	const config = loadVideoConfig();
 	if (!config.enabled) return null;
 
-	const isFilePath = input.startsWith("/") || input.startsWith("./") || input.startsWith("../") || input.startsWith("file://");
+	const isFilePath = isAbsolute(input) || /^\.\.?[/\\]/.test(input) || input.startsWith("file://");
 	if (!isFilePath) return null;
 
 	let filePath = input;
 	if (input.startsWith("file://")) {
 		try {
-			filePath = decodeURIComponent(new URL(input).pathname);
+			filePath = fileURLToPath(input);
 		} catch {
 			return null;
 		}
@@ -203,7 +204,7 @@ export async function extractVideoFrame(filePath: string, seconds: number = 1, s
 		const { stdout: buffer } = await execFileAsync("ffmpeg", [
 			"-ss", String(seconds), "-i", filePath,
 			"-frames:v", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
-		], { maxBuffer: 5 * 1024 * 1024, timeout: 10000, encoding: "buffer", signal });
+		], { maxBuffer: 5 * 1024 * 1024, timeout: 10000, encoding: "buffer", signal, windowsHide: true });
 		if (buffer.length === 0) return { error: "ffmpeg failed: empty output" };
 		return { data: buffer.toString("base64"), mimeType: "image/jpeg" };
 	} catch (err) {
@@ -218,7 +219,7 @@ export async function getLocalVideoDuration(filePath: string, signal?: AbortSign
 			"-show_entries", "format=duration",
 			"-of", "csv=p=0",
 			filePath,
-		], { timeout: 10000, encoding: "utf8", signal });
+		], { timeout: 10000, encoding: "utf8", signal, windowsHide: true });
 		const output = stdout.trim();
 		const duration = Number.parseFloat(output);
 		if (!Number.isFinite(duration)) return { error: "ffprobe failed: invalid duration output" };

@@ -1,4 +1,5 @@
 use std::io::Read;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -516,11 +517,14 @@ impl FileItem {
 
 /// Open without waiting for a FIFO writer, then validate the actual descriptor.
 /// Index metadata alone cannot protect against a path changing type before IO.
+/// Windows named pipes are not opened by the filesystem path check below, so
+/// the regular-file validation alone carries the guarantee there.
 pub(crate) fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    let file = options.open(path)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,

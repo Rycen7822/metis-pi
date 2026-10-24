@@ -1,4 +1,4 @@
-import { runChild as runProviderChild } from "./provider-fixtures.mjs";
+import { runChild as runProviderChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
@@ -414,7 +414,7 @@ test("Bright Data Web Unlocker resolves the credential at request time, after th
 	);
 	await writeFile(
 		join(home, "web-search.json"),
-		JSON.stringify({ brightdataApiKey: `!touch ${marker} && printf bd-command-key` }) + "\n",
+		JSON.stringify({ brightdataApiKey: await markerCredentialCommand(marker, "bd-command-key") }) + "\n",
 		"utf8",
 	);
 	const child = runChild(
