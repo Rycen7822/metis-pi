@@ -130,7 +130,8 @@ def launch_spec(config, profile_name, model, cwd, access, thinking=None, host=No
         paths = p.get(key,[])
         if not isinstance(paths,list): raise AgentError('invalid_config',f'{key} must be a list')
         for raw in paths:
-            resolved = Path(text(raw,key)).expanduser().resolve()
+            resolved = Path(text(raw,key)).expanduser()
+            resolved = (Path(cwd) / resolved).resolve()
             if not resolved.exists(): raise AgentError('invalid_config',f'Missing {key} path: {resolved}')
             argv += [flag,str(resolved)]
     actual_model = model or p.get('model')
