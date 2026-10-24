@@ -1,0 +1,2096 @@
+export const CURATOR_PAGE_SCRIPT = `(function() {
+  var DATA = __INLINE_DATA__;
+  var token = DATA.sessionToken;
+  var timeoutSec = DATA.timeout;
+  var queries = Array.isArray(DATA.queries) ? DATA.queries : [];
+  var providers = DATA.providers;
+  var providerLabels = DATA.providerLabels;
+  var availProviders = DATA.availableProviders && typeof DATA.availableProviders === "object" ? DATA.availableProviders : {};
+  var initialDefaultProvider = typeof DATA.defaultProvider === "string" ? DATA.defaultProvider : "exa";
+  if (providers.indexOf(initialDefaultProvider) === -1) initialDefaultProvider = "exa";
+  var initialSearchProvider = typeof DATA.searchProvider === "string" ? DATA.searchProvider.toLowerCase() : initialDefaultProvider;
+  if (initialSearchProvider !== "auto" && providers.indexOf(initialSearchProvider) === -1) initialSearchProvider = initialDefaultProvider;
+
+  var summaryModelError = typeof DATA.summaryModelError === "string" ? DATA.summaryModelError : "";
+  var summaryModels = Array.isArray(DATA.summaryModels)
+    ? DATA.summaryModels.filter(function(model) {
+      return model && typeof model === "object" && typeof model.value === "string";
+    })
+    : [];
+  var defaultSummaryModel = typeof DATA.defaultSummaryModel === "string"
+    ? DATA.defaultSummaryModel.trim()
+    : "";
+
+  var submitted = false;
+  var timerExpired = false;
+  var submitInFlight = false;
+  var searchesDone = false;
+  var stage = "results";
+  var summaryMeta = null;
+  var summaryRequestSeq = 0;
+  var lastAutoSummarySignature = "";
+  var lastInteraction = Date.now();
+  var completedCount = 0;
+  var es = null;
+  var lastLiveEventAt = Date.now();
+  var stateSyncInFlight = false;
+  var liveUpdateWarning = false;
+
+  var allQueries = queries.map(function(query, slotId) { return { slotId: slotId, query: query }; });
+  var nextSlotId = queries.length;
+  var queryIndexToSlot = new Map();
+  var providerCoverage = new Map();
+
+  var currentProvider = initialDefaultProvider;
+  var currentSearchProvider = initialSearchProvider;
+  var initialStreamDone = queries.length === 0;
+  var providerBatchInFlight = false;
+  var batchLoadingProvider = null;
+  var addSearchInFlight = 0;
+  var isRegenerating = false;
+
+  var timerEl = document.getElementById("timer");
+  var timerAdjustEl = document.getElementById("timer-adjust");
+  var timerInput = document.getElementById("timer-input");
+  var timerSetBtn = document.getElementById("timer-set");
+  var heroTitle = document.querySelector(".hero-title");
+  var heroDesc = document.querySelector(".hero-desc");
+  var resultCardsEl = document.getElementById("result-cards");
+  var ownedResultCards = new WeakSet();
+  var cardCheckboxes = new WeakMap();
+  var btnSend = document.getElementById("btn-send");
+  var btnSendRaw = document.getElementById("btn-send-raw");
+  var sendRawRow = document.getElementById("send-raw-row");
+  var summaryPanel = document.getElementById("summary-panel");
+  var summarySubtitle = document.getElementById("summary-subtitle");
+  var summaryGeneratingEl = document.getElementById("summary-generating");
+  var summaryGeneratingCopy = document.getElementById("summary-generating-copy");
+  var summaryInput = document.getElementById("summary-input");
+  var summaryFeedback = document.getElementById("summary-feedback");
+  var btnSummaryBack = document.getElementById("btn-summary-back");
+  var btnSummaryRegenerate = document.getElementById("btn-summary-regenerate");
+  var btnSummaryPreview = document.getElementById("btn-summary-preview");
+  var btnSummaryApprove = document.getElementById("btn-summary-approve");
+  var btnSummaryApproveRemaining = document.getElementById("btn-summary-approve-remaining");
+  var successOverlay = document.getElementById("success-overlay");
+  var successText = document.getElementById("success-text");
+  var expiredOverlay = document.getElementById("expired-overlay");
+  var expiredText = document.getElementById("expired-text");
+  var closeCountdown = document.getElementById("close-countdown");
+  var errorBanner = document.getElementById("error-banner");
+  var addSearchInput = document.getElementById("add-search-input");
+  var addSearchEl = document.getElementById("add-search");
+  var addSearchWand = document.getElementById("add-search-wand");
+  var heroStatus = document.getElementById("hero-status");
+  var summaryProviderSelect = document.getElementById("summary-provider-select");
+  var summaryModelSelect = document.getElementById("summary-model-select");
+  var previewModal = document.getElementById("preview-modal");
+  var previewModalBody = document.getElementById("preview-modal-body");
+  var previewModalClose = document.getElementById("preview-modal-close");
+  var previewModalModel = document.getElementById("preview-modal-model");
+  var previewModalRegenerate = document.getElementById("preview-modal-regenerate");
+  var previewModalApprove = document.getElementById("preview-modal-approve");
+  var previewPopover = document.getElementById("preview-popover");
+  var previewPopoverQuote = document.getElementById("preview-popover-quote");
+  var previewPopoverInput = document.getElementById("preview-popover-input");
+  var previewPopoverRegen = document.getElementById("preview-popover-regen");
+  var providerButtons = Array.prototype.slice.call(document.querySelectorAll(".provider-btn"));
+  var loadingPanelEl = null;
+
+  var summaryModelsByProvider = Object.create(null);
+  var summaryProviders = [];
+  var currentSummaryProvider = "";
+  var currentSummaryModel = "";
+  var explicitSummaryModel = false;
+  var previewModelExplicit = false;
+  var summaryPendingModel = "";
+  var summaryGeneratingStartedAt = 0;
+  var summaryGeneratingPhase = -1;
+  var rewriteInFlight = false;
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;");
+  }
+
+  function sanitizeHref(url) {
+    var value = typeof url === "string" ? url.trim() : "";
+    return /^https?:\\/\\//i.test(value) ? value : "#";
+  }
+
+  function sanitizeMarkdownHtml(html) {
+    if (!window.DOMPurify || !window.DOMPurify.isSupported) return escHtml(html);
+    var container = document.createElement("div");
+    container.innerHTML = window.DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: ["p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote",
+        "ul", "ol", "li", "strong", "em", "b", "i", "del", "s", "pre", "code", "a", "img",
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "sup", "sub"],
+      ALLOWED_ATTR: ["href", "src", "alt", "title", "colspan", "rowspan", "start"],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
+    });
+
+    var anchors = container.querySelectorAll("a[href]");
+    anchors.forEach(function(anchor) {
+      var safe = sanitizeHref(anchor.getAttribute("href") || "");
+      anchor.setAttribute("href", safe);
+      anchor.setAttribute("rel", "noopener noreferrer");
+      anchor.setAttribute("target", "_blank");
+    });
+
+    var images = container.querySelectorAll("img[src]");
+    images.forEach(function(img) {
+      var safe = sanitizeHref(img.getAttribute("src") || "");
+      if (safe === "#") {
+        img.remove();
+      } else {
+        img.setAttribute("src", safe);
+      }
+    });
+
+    return container.innerHTML;
+  }
+
+  function getResultCards() {
+    return resultCardsEl ? Array.from(resultCardsEl.children).filter(function(card) {
+      return ownedResultCards.has(card);
+    }) : [];
+  }
+
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ token: token }, body)),
+    });
+  }
+
+  function extractServerError(data) {
+    if (!data || typeof data !== "object") return "";
+    if (typeof data.error === "string" && data.error.trim()) return data.error.trim();
+    return "";
+  }
+
+  function postJson(path, body) {
+    return post(path, body).then(function(res) {
+      return res.text().then(function(raw) {
+        var data = null;
+        if (raw) {
+          try {
+            data = JSON.parse(raw);
+          } catch (err) {
+            var parseMessage = err instanceof Error ? err.message : String(err);
+            throw new Error("Invalid JSON response from " + path + ": " + parseMessage);
+          }
+        }
+
+        if (!res.ok) {
+          var failure = new Error(extractServerError(data) || ("HTTP " + res.status));
+          failure.code = data && data.code;
+          throw failure;
+        }
+
+        return data;
+      });
+    });
+  }
+
+  function formatTime(sec) {
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function normalizeProvider(provider, fallback) {
+    if (typeof provider === "string") {
+      var normalized = provider.toLowerCase();
+      if (providers.indexOf(normalized) !== -1) return normalized;
+    }
+    if (typeof fallback === "string") {
+      var fallbackNormalized = fallback.toLowerCase();
+      if (providers.indexOf(fallbackNormalized) !== -1) return fallbackNormalized;
+    }
+    return "";
+  }
+
+  function providerLabel(provider) {
+    return typeof providerLabels[provider] === "string" ? providerLabels[provider] : "Unknown";
+  }
+
+  function providerTagHtml(provider) {
+    var normalized = normalizeProvider(provider, "");
+    if (!normalized) return "";
+    return '<span class="provider-tag provider-' + normalized + '">' + escHtml(providerLabel(normalized)) + "</span>";
+  }
+
+  function buildAltChipsHtml(provider, queryText) {
+    var normalizedProv = normalizeProvider(provider, "");
+    if (!normalizedProv) return "";
+    var altProviders = providers.filter(function(p) { return p !== normalizedProv && availProviders[p] === true; });
+    if (altProviders.length === 0) return "";
+    var html = '<div class="card-alt-providers"><span>Also try</span>';
+    for (var ap = 0; ap < altProviders.length; ap++) {
+      html += '<button type="button" class="card-alt-chip" data-alt-provider="' + altProviders[ap] + '" data-alt-query="' + escHtml(queryText) + '">' + escHtml(providerLabel(altProviders[ap])) + '</button>';
+    }
+    html += "</div>";
+    return html;
+  }
+
+  function getSummaryProvider(modelValue) {
+    if (typeof modelValue !== "string") return "";
+    var trimmed = modelValue.trim();
+    var slash = trimmed.indexOf("/");
+    if (slash <= 0) return "";
+    return trimmed.slice(0, slash);
+  }
+
+  function summaryProviderLabel(provider) {
+    if (!provider) return "";
+    if (provider === "openai") return "OpenAI";
+    if (provider === "google") return "Google";
+    if (provider === "anthropic") return "Anthropic";
+    return provider.charAt(0).toUpperCase() + provider.slice(1);
+  }
+
+  function buildSummaryModelState() {
+    summaryModelsByProvider = Object.create(null);
+    summaryProviders = [];
+    var seenValues = {};
+
+    for (var i = 0; i < summaryModels.length; i++) {
+      var model = summaryModels[i];
+      if (!model || typeof model.value !== "string") continue;
+      var value = model.value.trim();
+      if (!value || seenValues[value]) continue;
+      var provider = getSummaryProvider(value);
+      if (!provider) continue;
+      seenValues[value] = true;
+
+      if (!summaryModelsByProvider[provider]) {
+        summaryModelsByProvider[provider] = [];
+        summaryProviders.push(provider);
+      }
+
+      summaryModelsByProvider[provider].push({ value: value });
+    }
+  }
+
+  function renderSummaryProviderSelect() {
+    if (!summaryProviderSelect) return;
+
+    summaryProviderSelect.innerHTML = "";
+    for (var i = 0; i < summaryProviders.length; i++) {
+      var provider = summaryProviders[i];
+      var option = document.createElement("option");
+      option.value = provider;
+      option.textContent = summaryProviderLabel(provider);
+      summaryProviderSelect.appendChild(option);
+    }
+  }
+
+  function populateSummaryModelSelect(provider, preferredModel) {
+    if (!summaryModelSelect) return;
+
+    summaryModelSelect.innerHTML = "";
+
+    var autoOption = document.createElement("option");
+    autoOption.value = "";
+    autoOption.textContent = summaryModelError ? "Select a model" : "Auto";
+    summaryModelSelect.appendChild(autoOption);
+
+    var models = summaryModelsByProvider[provider] || [];
+    for (var i = 0; i < models.length; i++) {
+      var option = document.createElement("option");
+      option.value = models[i].value;
+      var shortLabel = models[i].value;
+      var labelSlash = shortLabel.indexOf("/");
+      if (labelSlash > 0) shortLabel = shortLabel.slice(labelSlash + 1);
+      option.textContent = shortLabel;
+      summaryModelSelect.appendChild(option);
+    }
+
+    var hasPreferred = false;
+    if (preferredModel) {
+      for (var j = 0; j < models.length; j++) {
+        if (models[j].value === preferredModel) {
+          hasPreferred = true;
+          break;
+        }
+      }
+    }
+
+    if (hasPreferred) {
+      summaryModelSelect.value = preferredModel;
+    } else if (models.length > 0 && !summaryModelError) {
+      summaryModelSelect.value = models[0].value;
+    } else {
+      summaryModelSelect.value = "";
+    }
+
+    currentSummaryModel = typeof summaryModelSelect.value === "string"
+      ? summaryModelSelect.value.trim()
+      : "";
+  }
+
+  function setSummaryProvider(provider, preferredModel) {
+    if (summaryProviders.indexOf(provider) === -1) return;
+    currentSummaryProvider = provider;
+
+    if (summaryProviderSelect) {
+      summaryProviderSelect.value = provider;
+    }
+
+    populateSummaryModelSelect(provider, preferredModel);
+  }
+
+  function initializeSummaryModelControls() {
+    buildSummaryModelState();
+    renderSummaryProviderSelect();
+
+    if (summaryProviders.length === 0) {
+      currentSummaryProvider = "";
+      currentSummaryModel = "";
+      if (summaryProviderSelect) summaryProviderSelect.innerHTML = "";
+      if (summaryModelSelect) {
+        summaryModelSelect.innerHTML = '<option value="">Auto</option>';
+        summaryModelSelect.value = "";
+      }
+      return;
+    }
+
+    var defaultProvider = getSummaryProvider(defaultSummaryModel);
+    if (defaultProvider && summaryProviders.indexOf(defaultProvider) !== -1) {
+      setSummaryProvider(defaultProvider, defaultSummaryModel);
+      return;
+    }
+
+    setSummaryProvider(summaryProviders[0], "");
+    if (summaryModelError) setError(summaryModelError);
+  }
+
+  function getSelectedSummaryModel() {
+    if (!summaryModelSelect) return currentSummaryModel;
+    if (typeof summaryModelSelect.value !== "string") return currentSummaryModel;
+    currentSummaryModel = summaryModelSelect.value.trim();
+    return currentSummaryModel;
+  }
+
+  function getFeedbackText() {
+    if (!summaryFeedback || typeof summaryFeedback.value !== "string") return "";
+    return summaryFeedback.value;
+  }
+
+  function getCoverageSet(provider) {
+    var set = providerCoverage.get(provider);
+    if (set) return set;
+    set = new Set();
+    providerCoverage.set(provider, set);
+    return set;
+  }
+
+  function markCoverage(provider, slotId) {
+    if (typeof slotId !== "number") return;
+    var normalized = normalizeProvider(provider, "");
+    if (!normalized) return;
+    getCoverageSet(normalized).add(slotId);
+  }
+
+  function removeSlot(slotId) {
+    allQueries = allQueries.filter(function(slot) { return slot.slotId !== slotId; });
+
+    providerCoverage.forEach(function(coveredSlots) {
+      coveredSlots.delete(slotId);
+    });
+
+    queryIndexToSlot.forEach(function(mappedSlotId, qi) {
+      if (mappedSlotId === slotId) queryIndexToSlot.delete(qi);
+    });
+
+    syncLoadingPanel();
+  }
+
+  function isResultMutationLocked() {
+    return submitted || timerExpired || submitInFlight;
+  }
+
+  function applyProviderInterlocks() {
+    var disableProviders = isResultMutationLocked() || providerBatchInFlight || addSearchInFlight;
+    for (var i = 0; i < providerButtons.length; i++) {
+      var btn = providerButtons[i];
+      var state = btn.dataset.state || "idle";
+      btn.disabled = disableProviders || state === "loading";
+    }
+
+    var disableAddSearch = isResultMutationLocked();
+    if (addSearchInput) {
+      addSearchInput.disabled = disableAddSearch;
+    }
+
+    if (addSearchEl) {
+      addSearchEl.style.opacity = disableAddSearch ? "0.6" : "";
+      addSearchEl.style.pointerEvents = disableAddSearch ? "none" : "";
+    }
+
+    var cards = getResultCards();
+    cards.forEach(function(card) {
+      var cb = cardCheckboxes.get(card);
+      if (!cb) return;
+      var searching = card.classList.contains("searching");
+      var error = card.classList.contains("error");
+      cb.disabled = searching || error || isResultMutationLocked();
+    });
+  }
+
+  function recomputeProviderStates() {
+    for (var i = 0; i < providerButtons.length; i++) {
+      var btn = providerButtons[i];
+      var provider = normalizeProvider(btn.dataset.provider, "");
+      if (!provider) continue;
+
+      var state = "idle";
+      if (providerBatchInFlight && batchLoadingProvider === provider) {
+        state = "loading";
+      } else if (!initialStreamDone && queries.length > 0 && provider === initialDefaultProvider) {
+        state = "loading";
+      } else if (allQueries.length > 0) {
+        var coveredSlots = providerCoverage.get(provider);
+        if (coveredSlots && coveredSlots.size >= allQueries.length) {
+          state = "searched";
+        }
+      }
+
+      btn.dataset.state = state;
+      btn.classList.remove("idle", "loading", "searched");
+      btn.classList.add(state);
+      btn.classList.toggle("is-default", provider === currentProvider);
+    }
+
+    applyProviderInterlocks();
+  }
+
+  function updateSummaryText() {
+    if (completedCount <= 0) return;
+    var totalCards = getResultCards().length;
+    var searchingCount = totalCards - completedCount;
+    if (searchingCount > 0) {
+      heroTitle.textContent = completedCount + " of " + totalCards + " Searches Complete";
+    } else {
+      heroTitle.textContent = completedCount + " Search" + (completedCount !== 1 ? "es" : "") + " Complete";
+    }
+    heroDesc.textContent = "Check the results to include, then generate and approve a summary.";
+    if (heroStatus) heroStatus.textContent = completedCount + " completed" + (searchingCount > 0 ? ", " + searchingCount + " searching" : "");
+  }
+
+  function getSummaryDraftText() {
+    if (!summaryInput || typeof summaryInput.value !== "string") return "";
+    return summaryInput.value.trim();
+  }
+
+  function clearError() {
+    liveUpdateWarning = false;
+    if (!errorBanner) return;
+    errorBanner.hidden = true;
+    errorBanner.textContent = "";
+  }
+
+  function setError(text) {
+    liveUpdateWarning = false;
+    if (!errorBanner) return;
+    errorBanner.textContent = text;
+    errorBanner.hidden = false;
+  }
+
+  function setLiveUpdateWarning(text) {
+    liveUpdateWarning = true;
+    if (!errorBanner) return;
+    errorBanner.textContent = text;
+    errorBanner.hidden = false;
+  }
+
+  function clearLiveUpdateWarning() {
+    if (liveUpdateWarning) clearError();
+  }
+
+  function updateSummaryGeneratingIndicator() {
+    if (!summaryGeneratingCopy) return;
+
+    if (stage !== "generating-summary") {
+      summaryGeneratingCopy.textContent = "Generating summary draft…";
+      summaryGeneratingPhase = -1;
+      if (summaryGeneratingEl) {
+        summaryGeneratingEl.removeAttribute("data-phase");
+      }
+      return;
+    }
+
+    if (summaryGeneratingStartedAt <= 0) {
+      summaryGeneratingStartedAt = Date.now();
+    }
+
+    var elapsedMs = Date.now() - summaryGeneratingStartedAt;
+    var nextPhase = Math.min(2, Math.floor(elapsedMs / 1800));
+    if (nextPhase === summaryGeneratingPhase) return;
+
+    summaryGeneratingPhase = nextPhase;
+
+    var phaseLabel = "Planning summary";
+    if (nextPhase === 1) phaseLabel = "Drafting summary";
+    if (nextPhase === 2) phaseLabel = "Polishing summary";
+
+    summaryGeneratingCopy.textContent = summaryPendingModel
+      ? phaseLabel + " with " + summaryPendingModel + "…"
+      : phaseLabel + "…";
+
+    if (summaryGeneratingEl) {
+      summaryGeneratingEl.dataset.phase = String(nextPhase);
+    }
+  }
+
+  function updateStageUI() {
+    var showSummary = stage === "summary-review" || stage === "generating-summary" || isRegenerating;
+    if (summaryPanel) {
+      summaryPanel.classList.toggle("hidden", !showSummary);
+      summaryPanel.classList.toggle("updating", isRegenerating);
+    }
+    if (summarySubtitle) {
+      var selCount = getSelectedIndices().length;
+      var selLabel = selCount + " selected result" + (selCount !== 1 ? "s" : "");
+      if (isRegenerating && stage === "generating-summary") {
+        summarySubtitle.textContent = "Selection changed — regenerating summary…";
+      } else if (isRegenerating) {
+        summarySubtitle.textContent = "Selection changed — summary will regenerate shortly…";
+      } else if (stage === "generating-summary") {
+        summarySubtitle.textContent = summaryPendingModel
+          ? "Summarizing " + selLabel + " with " + summaryPendingModel + "…"
+          : "Summarizing " + selLabel + "…";
+      } else if (summaryMeta && summaryMeta.fallbackUsed) {
+        var fallbackLabel = summaryMeta.phase === "deterministic-fallback" ? "Deterministic fallback summary" : "Fallback summary";
+        var fallbackReason = summaryMeta.fallbackReason ? " Reason: " + summaryMeta.fallbackReason + "." : "";
+        summarySubtitle.textContent = fallbackLabel + " of " + selLabel + "." + fallbackReason;
+      } else {
+        summarySubtitle.textContent = "Summary of " + selLabel + ". Edit directly, regenerate with feedback, or approve.";
+      }
+    }
+
+    if (summaryGeneratingEl) {
+      var showGenerating = stage === "generating-summary" && !isRegenerating;
+      summaryGeneratingEl.classList.toggle("hidden", !showGenerating);
+    }
+    updateSummaryGeneratingIndicator();
+
+    if (summaryInput) {
+      summaryInput.classList.toggle("hidden", stage === "generating-summary" && !isRegenerating);
+      summaryInput.disabled = submitted || timerExpired || stage === "generating-summary" || submitInFlight || isRegenerating;
+    }
+    if (summaryFeedback) {
+      summaryFeedback.disabled = submitted || timerExpired || submitInFlight || stage === "generating-summary" || isRegenerating;
+    }
+    var disableSummaryModelControls = submitted || timerExpired || stage === "generating-summary" || submitInFlight || summaryProviders.length === 0;
+    if (summaryProviderSelect) {
+      summaryProviderSelect.disabled = disableSummaryModelControls;
+    }
+    if (summaryModelSelect) {
+      summaryModelSelect.disabled = disableSummaryModelControls;
+    }
+
+    var inResults = stage === "results";
+    var hasSelection = getSelectedIndices().length > 0;
+    var hasCompleted = getCompletedSelectableIndices().length > 0;
+    var canGenerate = inResults && !submitted && !timerExpired && !submitInFlight && hasCompleted;
+
+    if (btnSend) {
+      if (stage === "generating-summary") {
+        btnSend.textContent = "Generating summary…";
+        btnSend.disabled = true;
+      } else if (!inResults) {
+        btnSend.textContent = "Summary ready";
+        btnSend.disabled = true;
+      } else if (!hasCompleted) {
+        btnSend.textContent = searchesDone ? "No results yet" : "Waiting for results…";
+        btnSend.disabled = true;
+      } else {
+        btnSend.textContent = hasSelection ? "Generate summary" : "Select results to summarize";
+        btnSend.disabled = !canGenerate || !hasSelection;
+      }
+    }
+    if (sendRawRow) {
+      sendRawRow.classList.toggle("hidden", !hasSelection || submitted || timerExpired);
+    }
+    if (btnSendRaw) {
+      btnSendRaw.disabled = !hasSelection || submitted || timerExpired || submitInFlight;
+    }
+
+    if (btnSummaryBack) btnSummaryBack.disabled = submitted || timerExpired || submitInFlight || (stage === "generating-summary" && !isRegenerating);
+    if (btnSummaryRegenerate) btnSummaryRegenerate.disabled = submitted || timerExpired || submitInFlight || stage === "generating-summary" || isRegenerating;
+    var hasDraft = getSummaryDraftText().length > 0;
+    if (btnSummaryPreview) btnSummaryPreview.disabled = !hasDraft || stage === "generating-summary";
+    if (btnSummaryApprove) {
+      btnSummaryApprove.disabled = submitted || timerExpired || submitInFlight || stage === "generating-summary" || isRegenerating || !hasSelection || !hasDraft;
+    }
+    if (btnSummaryApproveRemaining) {
+      btnSummaryApproveRemaining.disabled = submitted || timerExpired || submitInFlight || stage === "generating-summary" || isRegenerating || !hasSelection || !hasDraft;
+    }
+
+    applyProviderInterlocks();
+  }
+
+  function shouldShowLoadingPanel() {
+    if (submitted || timerExpired || searchesDone) return false;
+    if (completedCount > 0) return false;
+    return allQueries.length > 0;
+  }
+
+  function ensureLoadingPanel() {
+    if (loadingPanelEl) return loadingPanelEl;
+    if (!resultCardsEl) return null;
+
+    var panel = document.createElement("div");
+    panel.className = "result-loading";
+    panel.innerHTML =
+      '<div class="result-loading-header">' +
+        '<div class="result-loading-title">Searching sources</div>' +
+        '<div class="result-loading-sub">Searching\u2026</div>' +
+      '</div>' +
+      '<div class="result-loading-grid">' +
+        '<div class="loading-card"><div class="loading-card-row long"></div><div class="loading-card-row mid"></div><div class="loading-card-row short"></div></div>' +
+        '<div class="loading-card"><div class="loading-card-row long"></div><div class="loading-card-row mid"></div><div class="loading-card-row short"></div></div>' +
+      '</div>';
+
+    resultCardsEl.prepend(panel);
+    loadingPanelEl = panel;
+    return panel;
+  }
+
+  function updateLoadingPanelSummary() {
+    if (!loadingPanelEl) return;
+    var sub = loadingPanelEl.querySelector(".result-loading-sub");
+    if (!sub) return;
+
+    var total = allQueries.length;
+    if (total <= 0) {
+      sub.textContent = "Searching\u2026";
+      return;
+    }
+
+    var done = Math.min(completedCount, total);
+    var noun = total === 1 ? "query" : "queries";
+    sub.textContent = "Searching " + done + "/" + total + " " + noun + "\u2026";
+  }
+
+  function syncLoadingPanel() {
+    if (shouldShowLoadingPanel()) {
+      if (!ensureLoadingPanel()) return;
+      updateLoadingPanelSummary();
+      return;
+    }
+
+    if (loadingPanelEl) {
+      loadingPanelEl.remove();
+      loadingPanelEl = null;
+    }
+  }
+
+  function renderErrorCard(card, queryText, errorText, provider) {
+    var tag = providerTagHtml(provider);
+    card.innerHTML =
+      '<div class="result-card-header">' +
+        '<input type="checkbox" disabled>' +
+        '<div class="result-card-info">' +
+          '<div class="result-card-query-row">' +
+            '<div class="result-card-query">' + escHtml(queryText) + "</div>" +
+            tag +
+          "</div>" +
+          '<div class="result-card-meta" style="color:var(--timer-urgent-fg)">Failed</div>' +
+        "</div>" +
+      "</div>" +
+      '<div class="result-card-error-msg">' + escHtml(errorText || "Search failed") + "</div>";
+  }
+
+  function populateResultCard(card, data, queryText, provider) {
+    var sourceCount = data.results ? data.results.length : 0;
+    var domains = [];
+    if (data.results) {
+      for (var i = 0; i < Math.min(data.results.length, 3); i++) {
+        domains.push(data.results[i].domain);
+      }
+    }
+    var metaText = sourceCount + " source" + (sourceCount !== 1 ? "s" : "");
+    if (domains.length > 0) metaText += " \u00B7 " + domains.join(", ");
+    if (sourceCount > 3) metaText += ", +" + (sourceCount - 3);
+
+    var preview = "";
+    if (data.answer) {
+      preview = data.answer.substring(0, 200).replace(/\\n+/g, " ").replace(/[#*_\\[\\]]/g, "");
+    }
+
+    var bodyHtml = "";
+    if (data.answer) {
+      var rendered = typeof marked !== "undefined" && marked.parse
+        ? marked.parse(data.answer, { breaks: true })
+        : "<p>" + escHtml(data.answer) + "</p>";
+      bodyHtml += '<div class="result-card-answer">' + sanitizeMarkdownHtml(rendered) + "</div>";
+    }
+    if (data.results && data.results.length > 0) {
+      bodyHtml += '<div class="result-card-sources"><div class="result-card-sources-title">Sources</div>';
+      for (var k = 0; k < data.results.length; k++) {
+        var r = data.results[k];
+        var label = r.title && r.title.indexOf("Source ") !== 0 ? r.title : r.url;
+        var href = sanitizeHref(r.url);
+        bodyHtml += '<a class="source-link" href="' + escHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escHtml(label) + '<span class="source-domain">' + escHtml(r.domain) + "</span></a>";
+      }
+      bodyHtml += "</div>";
+    }
+
+    var altChipsHtml = buildAltChipsHtml(provider, queryText);
+
+    card.innerHTML =
+      '<div class="result-card-header">' +
+        '<input type="checkbox" checked>' +
+        '<div class="result-card-info">' +
+          '<div class="result-card-query-row">' +
+            '<div class="result-card-query">' + escHtml(queryText) + "</div>" +
+            providerTagHtml(provider) +
+          "</div>" +
+          '<div class="result-card-meta">' + escHtml(metaText) + "</div>" +
+          (preview ? '<div class="result-card-preview">' + escHtml(preview) + "</div>" : "") +
+        "</div>" +
+        '<div class="result-card-expand">\u25BC</div>' +
+      "</div>" +
+      altChipsHtml +
+      '<div class="result-card-body">' + bodyHtml + "</div>";
+  }
+
+  function createSearchingCard(queryText, provider) {
+    var card = document.createElement("div");
+    ownedResultCards.add(card);
+    card.className = "result-card searching";
+    card.innerHTML =
+      '<div class="result-card-header">' +
+        '<input type="checkbox" checked disabled>' +
+        '<div class="result-card-info">' +
+          '<div class="result-card-query-row">' +
+            '<div class="result-card-query">' + escHtml(queryText) + "</div>" +
+            providerTagHtml(provider) +
+          "</div>" +
+          '<div class="result-card-meta"><span class="searching-dots">Searching</span></div>' +
+        "</div>" +
+      "</div>" +
+      buildAltChipsHtml(provider, queryText);
+    cardCheckboxes.set(card, card.querySelector("input[type=checkbox]"));
+    return card;
+  }
+
+  function insertResultCard(card, slotId, afterCard) {
+    card.dataset.slot = String(slotId);
+    if (afterCard && afterCard.parentNode === resultCardsEl) {
+      resultCardsEl.insertBefore(card, afterCard.nextSibling);
+      return;
+    }
+    var slotCards = getResultCards().filter(function(existing) { return existing.dataset.slot === String(slotId); });
+    var lastCard = slotCards.length > 0 ? slotCards[slotCards.length - 1] : null;
+    if (lastCard) resultCardsEl.insertBefore(card, lastCard.nextSibling);
+    else resultCardsEl.appendChild(card);
+  }
+
+  function applySearchResponseEntries(primaryCard, data, queryText, providerHint, slotId) {
+    var entries = Array.isArray(data && data.entries) && data.entries.length > 0 ? data.entries : [data];
+    var previousCard = primaryCard;
+    for (var entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+      var entry = entries[entryIndex];
+      var entryProvider = normalizeProvider(entry && entry.provider, providerHint);
+      var targetCard = entryIndex === 0 ? primaryCard : createSearchingCard(queryText, entryProvider);
+      if (entryIndex > 0) insertResultCard(targetCard, slotId, previousCard);
+      applyResponseToCard(targetCard, entry, queryText, entryProvider, slotId);
+      previousCard = targetCard;
+    }
+  }
+
+  function applyResponseToCard(card, data, queryText, providerHint, slotHint) {
+    if (!card || !data) return;
+    if (submitted || timerExpired) return;
+
+    var queryIndex = typeof data.queryIndex === "number" ? data.queryIndex : null;
+    if (queryIndex !== null) {
+      card.dataset.qi = String(queryIndex);
+    }
+
+    var slotId = typeof slotHint === "number" ? slotHint : (queryIndex !== null ? queryIndexToSlot.get(queryIndex) : undefined);
+    if (typeof slotId !== "number" && queryIndex !== null) {
+      slotId = queryIndex;
+    }
+    if (queryIndex !== null && typeof slotId === "number") {
+      queryIndexToSlot.set(queryIndex, slotId);
+    }
+    if (typeof slotId === "number") {
+      card.dataset.slot = String(slotId);
+    }
+
+    var provider = normalizeProvider(data.provider, providerHint);
+
+    card.classList.remove("searching", "checked", "error");
+
+    if (data.error) {
+      card.classList.add("error");
+      renderErrorCard(card, queryText, data.error, provider);
+    } else {
+      card.classList.add("checked");
+      populateResultCard(card, data, queryText, provider);
+      setupCardInteraction(card);
+    }
+
+    if (card.dataset.completed !== "true") {
+      completedCount++;
+      card.dataset.completed = "true";
+    }
+    markCoverage(provider, slotId);
+    updateSummaryText();
+    syncLoadingPanel();
+    recomputeProviderStates();
+    updateStageUI();
+    maybeAutoGenerateSummary();
+    resetTimer();
+  }
+
+  function resetTimer() { lastInteraction = Date.now(); }
+
+  function updateTimer() {
+    var idleSec = searchesDone ? Math.floor((Date.now() - lastInteraction) / 1000) : 0;
+    var remaining = Math.max(0, timeoutSec - idleSec);
+    timerEl.textContent = formatTime(remaining);
+
+    timerEl.classList.remove("warn", "urgent", "active");
+    if (remaining <= 15) timerEl.classList.add("urgent");
+    else if (remaining <= 30) timerEl.classList.add("warn");
+    else if (remaining < timeoutSec) timerEl.classList.add("active");
+
+    updateSummaryGeneratingIndicator();
+
+    if (remaining <= 0 && !submitted && !timerExpired) onTimeout();
+  }
+
+  setInterval(updateTimer, 1000);
+  updateTimer();
+
+  ["click", "keydown", "input", "change"].forEach(function(evt) {
+    document.addEventListener(evt, resetTimer, { passive: true });
+  });
+  document.addEventListener("scroll", resetTimer, { passive: true });
+  document.addEventListener("mousemove", resetTimer, { passive: true });
+
+  timerEl.addEventListener("click", function(e) {
+    e.stopPropagation();
+    timerInput.value = timeoutSec;
+    timerAdjustEl.classList.add("visible");
+    timerEl.style.display = "none";
+    timerInput.focus();
+    timerInput.select();
+  });
+
+  function applyTimerAdjust() {
+    var val = parseInt(timerInput.value, 10);
+    if (val && val > 0) timeoutSec = Math.min(val, 600);
+    timerAdjustEl.classList.remove("visible");
+    timerEl.style.display = "";
+    resetTimer();
+  }
+
+  timerSetBtn.addEventListener("click", function(e) { e.stopPropagation(); applyTimerAdjust(); });
+  timerInput.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") { e.preventDefault(); applyTimerAdjust(); }
+    if (e.key === "Escape") { timerAdjustEl.classList.remove("visible"); timerEl.style.display = ""; }
+    e.stopPropagation();
+  });
+  document.addEventListener("click", function() {
+    if (timerAdjustEl.classList.contains("visible")) {
+      timerAdjustEl.classList.remove("visible");
+      timerEl.style.display = "";
+    }
+  });
+
+  function setDefaultProvider(provider, persist) {
+    var normalized = normalizeProvider(provider, currentProvider);
+    if (!normalized) return;
+    currentProvider = normalized;
+    currentSearchProvider = normalized;
+    recomputeProviderStates();
+    if (persist) {
+      postJson("/provider", { provider: normalized }).then(function(data) {
+        if (data && data.ok === false) {
+          throw new Error(extractServerError(data) || "request rejected");
+        }
+      }).catch(function(err) {
+        var message = err instanceof Error ? err.message : String(err);
+        setError("Failed to save provider preference: " + (message || "unknown error"));
+      });
+    }
+  }
+
+  providerButtons.forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      if (isResultMutationLocked()) return;
+      if (providerBatchInFlight || addSearchInFlight) return;
+
+      var provider = normalizeProvider(btn.dataset.provider, "");
+      if (!provider) return;
+
+      var state = btn.dataset.state || "idle";
+      if (state === "loading") return;
+
+      if (state === "searched") {
+        if (provider === currentProvider) return;
+        setDefaultProvider(provider, true);
+        resetTimer();
+        return;
+      }
+
+      setDefaultProvider(provider, true);
+      if (allQueries.length === 0) {
+        resetTimer();
+        return;
+      }
+
+      interruptSummaryIfNeeded();
+      providerBatchInFlight = true;
+      batchLoadingProvider = provider;
+      recomputeProviderStates();
+
+      var batchQueries = allQueries.slice();
+      var inflight = batchQueries.length;
+      if (inflight === 0) {
+        providerBatchInFlight = false;
+        batchLoadingProvider = null;
+        recomputeProviderStates();
+        return;
+      }
+
+      var batchCards = [];
+      for (var bi = 0; bi < batchQueries.length; bi++) {
+        var bq = batchQueries[bi];
+        var card = createSearchingCard(bq.query, provider);
+        insertResultCard(card, bq.slotId, null);
+        batchCards.push(card);
+      }
+      updateSummaryText();
+
+      batchQueries.forEach(function(slot, si) {
+        var searchingCard = batchCards[si];
+        postJson("/search", { query: slot.query, provider: provider })
+          .then(function(data) {
+            if (submitted || timerExpired) return;
+            if (!data || data.ok === false) {
+              applyResponseToCard(searchingCard, {
+                answer: "",
+                results: [],
+                error: extractServerError(data) || "Search failed",
+                provider: provider,
+              }, slot.query, provider, slot.slotId);
+              return;
+            }
+            applySearchResponseEntries(searchingCard, data, slot.query, provider, slot.slotId);
+          })
+          .catch(function(err) {
+            if (submitted || timerExpired) return;
+            var message = err instanceof Error ? err.message : String(err);
+            applyResponseToCard(searchingCard, {
+              answer: "",
+              results: [],
+              error: message || "Search failed",
+              provider: provider,
+            }, slot.query, provider, slot.slotId);
+          })
+          .finally(function() {
+            inflight -= 1;
+            if (inflight <= 0) {
+              providerBatchInFlight = false;
+              batchLoadingProvider = null;
+              recomputeProviderStates();
+              updateStageUI();
+              maybeAutoGenerateSummary();
+            }
+          });
+      });
+
+      resetTimer();
+    });
+  });
+
+  if (resultCardsEl) {
+    resultCardsEl.addEventListener("click", function(e) {
+      if (!(e.target instanceof Element)) return;
+      var chip = e.target.closest(".card-alt-chip");
+      if (!chip) return;
+      if (isResultMutationLocked()) return;
+
+      var altProvider = chip.dataset.altProvider;
+      var altQuery = chip.dataset.altQuery;
+      if (!altProvider || !altQuery) return;
+
+      interruptSummaryIfNeeded();
+
+      chip.classList.add("loading");
+      chip.disabled = true;
+      resetTimer();
+
+      var slotId = nextSlotId++;
+      allQueries.push({ slotId: slotId, query: altQuery });
+
+      var parentCard = chip.closest(".result-card");
+      var newCard = createSearchingCard(altQuery, altProvider);
+      insertResultCard(newCard, slotId, parentCard);
+      updateSummaryText();
+
+      postJson("/search", { query: altQuery, provider: altProvider })
+        .then(function(data) {
+          if (submitted || timerExpired) return;
+          if (!data || data.ok === false) {
+            applyResponseToCard(newCard, {
+              answer: "", results: [],
+              error: extractServerError(data) || "Search failed",
+              provider: altProvider,
+            }, altQuery, altProvider, slotId);
+            return;
+          }
+          applySearchResponseEntries(newCard, data, altQuery, altProvider, slotId);
+        })
+        .catch(function(err) {
+          removeSlot(slotId);
+          newCard.remove();
+          var message = err instanceof Error ? err.message : String(err);
+          setError("Re-search failed: " + (message || "Search failed"));
+          updateSummaryText();
+        })
+        .finally(function() {
+          chip.classList.remove("loading");
+          chip.disabled = false;
+          recomputeProviderStates();
+          updateStageUI();
+          maybeAutoGenerateSummary();
+        });
+    });
+  }
+
+  if (addSearchInput && addSearchWand) {
+    addSearchInput.addEventListener("input", function() {
+      addSearchWand.disabled = rewriteInFlight || !addSearchInput.value.trim() || isResultMutationLocked();
+    });
+
+    addSearchWand.addEventListener("click", function() {
+      var text = addSearchInput.value.trim();
+      if (!text || rewriteInFlight || isResultMutationLocked()) return;
+      rewriteInFlight = true;
+      addSearchWand.disabled = true;
+      addSearchWand.classList.add("rewriting");
+      resetTimer();
+
+      postJson("/rewrite", { query: text })
+        .then(function(data) {
+          if (!data || data.ok === false) {
+            throw new Error(extractServerError(data) || "Rewrite failed");
+          }
+          var rewritten = typeof data.query === "string" ? data.query.trim() : "";
+          if (rewritten) {
+            addSearchInput.value = rewritten;
+            addSearchInput.focus();
+          }
+        })
+        .catch(function(err) {
+          var message = err instanceof Error ? err.message : String(err);
+          setError("Rewrite failed: " + (message || "unknown error"));
+        })
+        .finally(function() {
+          rewriteInFlight = false;
+          addSearchWand.classList.remove("rewriting");
+          addSearchWand.disabled = !addSearchInput.value.trim() || isResultMutationLocked();
+        });
+    });
+  }
+
+  addSearchInput.addEventListener("keydown", function(e) {
+    if (e.key !== "Enter") return;
+    var text = addSearchInput.value.trim();
+    if (!text || isResultMutationLocked()) return;
+    interruptSummaryIfNeeded();
+    e.preventDefault();
+    e.stopPropagation();
+
+    addSearchInFlight++;
+    applyProviderInterlocks();
+    addSearchInput.value = "";
+
+    var slotId = nextSlotId++;
+    allQueries.push({ slotId: slotId, query: text });
+    syncLoadingPanel();
+    recomputeProviderStates();
+
+    var requestedProvider = currentSearchProvider;
+    var displayProvider = currentProvider;
+
+    var card = createSearchingCard(text, displayProvider);
+    insertResultCard(card, slotId, null);
+    updateSummaryText();
+    resetTimer();
+
+    var searchPayload = { query: text };
+    if (requestedProvider !== "auto") searchPayload.provider = requestedProvider;
+
+    postJson("/search", searchPayload)
+      .then(function(data) {
+        if (!data || data.ok === false) {
+          removeSlot(slotId);
+          card.remove();
+          setError("Failed to add search: " + (extractServerError(data) || "Search failed"));
+          recomputeProviderStates();
+          updateSummaryText();
+          return;
+        }
+
+        if (submitted || timerExpired) return;
+
+        applySearchResponseEntries(card, data, text, displayProvider, slotId);
+      })
+      .catch(function(err) {
+        removeSlot(slotId);
+        card.remove();
+        var message = err instanceof Error ? err.message : String(err);
+        setError("Failed to add search: " + (message || "Search failed"));
+        recomputeProviderStates();
+        updateSummaryText();
+      })
+      .finally(function() {
+        addSearchInFlight--;
+        recomputeProviderStates();
+        updateStageUI();
+        maybeAutoGenerateSummary();
+      });
+  });
+
+  function showSuccess(text) {
+    if (es) { es.close(); es = null; }
+    closePreviewModal();
+    successText.textContent = text;
+    successOverlay.classList.remove("hidden");
+    setTimeout(function() { window.close(); }, 800);
+  }
+
+  function showExpired(text) {
+    if (es) { es.close(); es = null; }
+    closePreviewModal();
+    expiredText.textContent = text;
+    expiredOverlay.classList.remove("hidden");
+    requestAnimationFrame(function() { expiredOverlay.classList.add("visible"); });
+  }
+
+  function startOverlayCloseCountdown(seconds) {
+    var count = seconds;
+    closeCountdown.textContent = count;
+    var iv = setInterval(function() {
+      count--;
+      closeCountdown.textContent = count;
+      if (count <= 0) {
+        clearInterval(iv);
+        window.close();
+      }
+    }, 1000);
+  }
+
+  function submitPayload(payload, successText) {
+    if (submitInFlight) return Promise.reject(new Error("Submit already in progress"));
+    submitInFlight = true;
+    submitted = true;
+    syncLoadingPanel();
+    updateStageUI();
+    clearError();
+
+    return postJson("/submit", payload)
+      .then(function(data) {
+        if (data && data.ok === false) {
+          throw new Error(extractServerError(data) || "submit rejected");
+        }
+        showSuccess(successText);
+      })
+      .catch(function(err) {
+        submitInFlight = false;
+        submitted = false;
+        syncLoadingPanel();
+        updateStageUI();
+        throw err;
+      });
+  }
+
+  function submitWithTimeoutFallback(payload) {
+    if (submitInFlight) return;
+    submitInFlight = true;
+    submitted = true;
+    timerExpired = true;
+    syncLoadingPanel();
+    updateStageUI();
+    clearError();
+    showExpired("Time\u2019s up \u2014 submitting current summary state.");
+
+    function finalizeClose() {
+      submitInFlight = false;
+      startOverlayCloseCountdown(5);
+    }
+
+    function toErrorMessage(err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+
+    function attemptCancelFallback(submitErrorMessage) {
+      return postJson("/cancel", { reason: "timeout" })
+        .catch(function(cancelErr) {
+          console.error("Timeout finalize failed after submit errors:", submitErrorMessage, "| cancel:", toErrorMessage(cancelErr));
+        })
+        .finally(finalizeClose);
+    }
+
+    postJson("/submit", payload)
+      .then(function(data) {
+        if (data && data.ok === false) {
+          throw new Error(extractServerError(data) || "submit rejected");
+        }
+        finalizeClose();
+      })
+      .catch(function(firstErr) {
+        var firstMessage = toErrorMessage(firstErr);
+        setTimeout(function() {
+          postJson("/submit", payload)
+            .then(function(data) {
+              if (data && data.ok === false) {
+                throw new Error(extractServerError(data) || "submit rejected");
+              }
+              finalizeClose();
+            })
+            .catch(function(secondErr) {
+              var secondMessage = toErrorMessage(secondErr);
+              attemptCancelFallback(firstMessage + " | " + secondMessage);
+            });
+        }, 250);
+      });
+  }
+
+  function onTimeout() {
+    if (submitted || timerExpired) return;
+    var timeoutSelected = getTimeoutSelectedIndices();
+    var payload = { selected: timeoutSelected };
+    var draft = getSummaryDraftText();
+    if (stage === "summary-review" && draft.length > 0) {
+      payload.summary = draft;
+      if (summaryMeta) payload.summaryMeta = summaryMeta;
+    }
+    submitWithTimeoutFallback(payload);
+  }
+
+  if (queries.length === 0) {
+    heroTitle.textContent = "What do you need?";
+    heroDesc.textContent = "Search for anything below, then generate and approve a summary.";
+    if (heroStatus) heroStatus.textContent = "";
+    btnSend.textContent = "No results yet";
+  } else {
+    for (var i = 0; i < queries.length; i++) {
+      queryIndexToSlot.set(i, i);
+      var card = createSearchingCard(queries[i], initialDefaultProvider);
+      card.dataset.qi = i;
+      insertResultCard(card, i, null);
+    }
+  }
+
+  initializeSummaryModelControls();
+  syncLoadingPanel();
+  recomputeProviderStates();
+  updateStageUI();
+
+  es = new EventSource("/events?session=" + encodeURIComponent(token));
+
+  function parseSseEventData(eventName, e) {
+    try {
+      return JSON.parse(e.data);
+    } catch (err) {
+      var message = err instanceof Error ? err.message : String(err);
+      setError("Invalid " + eventName + " event payload: " + (message || "unknown parse error"));
+      return null;
+    }
+  }
+
+  function applyResultEvent(data, response) {
+    if (!data) return;
+    lastLiveEventAt = Date.now();
+    clearLiveUpdateWarning();
+
+    var queryText = data.query || queries[data.queryIndex] || "";
+    var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
+    if (typeof slotId !== "number") slotId = data.queryIndex;
+    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
+    if (!card) {
+      card = createSearchingCard(queryText, data.provider);
+      card.dataset.qi = data.queryIndex;
+      insertResultCard(card, slotId, null);
+    } else if (card.dataset.completed === "true") {
+      return;
+    }
+    applyResponseToCard(card, response === undefined ? data : response, queryText, data.provider, slotId);
+  }
+
+  function applySearchErrorEvent(data) {
+    if (!data) return;
+    applyResultEvent(data, {
+      queryIndex: data.queryIndex,
+      answer: "",
+      results: [],
+      error: data.error || "Search failed",
+      provider: data.provider,
+    });
+  }
+
+  function applyDoneEvent() {
+    var wasSearchesDone = searchesDone;
+    lastLiveEventAt = Date.now();
+    clearLiveUpdateWarning();
+    searchesDone = true;
+    initialStreamDone = true;
+    if (completedCount > 0) {
+      updateSummaryText();
+    }
+    syncLoadingPanel();
+    recomputeProviderStates();
+    updateStageUI();
+    maybeAutoGenerateSummary();
+    if (!wasSearchesDone) resetTimer();
+  }
+
+  function applyStoredLiveEvent(item) {
+    if (!item || typeof item !== "object") return;
+    if (item.event === "result") applyResultEvent(item.data);
+    if (item.event === "search-error") applySearchErrorEvent(item.data);
+  }
+
+  function syncStateFromServer(showWarning) {
+    if (stateSyncInFlight || submitted || timerExpired || searchesDone) return;
+    stateSyncInFlight = true;
+    fetch("/state?session=" + encodeURIComponent(token), { cache: "no-store" })
+      .then(function(res) {
+        return res.text().then(function(raw) {
+          var data = raw ? JSON.parse(raw) : null;
+          if (!res.ok || !data || data.ok === false) {
+            throw new Error(extractServerError(data) || ("HTTP " + res.status));
+          }
+          return data;
+        });
+      })
+      .then(function(data) {
+        if (Array.isArray(data.events)) {
+          data.events.forEach(applyStoredLiveEvent);
+        }
+        if (data.done) applyDoneEvent();
+        if (showWarning && !searchesDone) {
+          setLiveUpdateWarning("Live search updates disconnected. Reconnecting and polling for results.");
+        }
+      })
+      .catch(function(err) {
+        if (!showWarning || submitted || timerExpired) return;
+        var message = err instanceof Error ? err.message : String(err);
+        setLiveUpdateWarning("Live search updates disconnected. Retrying: " + (message || "unknown error"));
+      })
+      .finally(function() {
+        stateSyncInFlight = false;
+      });
+  }
+
+  es.addEventListener("open", function() {
+    lastLiveEventAt = Date.now();
+    clearLiveUpdateWarning();
+    syncStateFromServer(false);
+  });
+
+  es.addEventListener("result", function(e) {
+    var data = parseSseEventData("result", e);
+    applyResultEvent(data);
+  });
+
+  es.addEventListener("search-error", function(e) {
+    var data = parseSseEventData("search-error", e);
+    applySearchErrorEvent(data);
+  });
+
+  es.addEventListener("done", function() {
+    applyDoneEvent();
+  });
+
+  es.onerror = function() {
+    if (submitted || timerExpired || searchesDone) return;
+    syncStateFromServer(true);
+  };
+
+  setInterval(function() {
+    if (submitted || timerExpired || searchesDone || initialStreamDone) return;
+    if (Date.now() - lastLiveEventAt <= 5000) return;
+    syncStateFromServer(false);
+  }, 5000);
+
+  function setupCardInteraction(card) {
+    var header = card.querySelector(".result-card-header");
+    var body = card.querySelector(".result-card-body");
+    var cb = card.querySelector("input[type=checkbox]");
+    var expandEl = card.querySelector(".result-card-expand");
+
+    if (!header || !cb) return;
+    cardCheckboxes.set(card, cb);
+
+    header.addEventListener("click", function(e) {
+      if (e.target.tagName === "A") return;
+      if (e.target === cb) {
+        if (isResultMutationLocked()) {
+          e.preventDefault();
+          return;
+        }
+        card.classList.toggle("checked", cb.checked);
+        if (stage === "summary-review" || stage === "generating-summary") {
+          interruptSummaryIfNeeded();
+        }
+        updateStageUI();
+        maybeAutoGenerateSummary();
+        return;
+      }
+      var isExpanded = body && body.classList.contains("open");
+      if (body) body.classList.toggle("open");
+      if (expandEl) expandEl.textContent = isExpanded ? "\u25BC" : "\u25B2";
+    });
+
+    if (body) {
+      body.addEventListener("click", function(e) {
+        e.stopPropagation();
+      });
+    }
+  }
+
+  function getSelectedIndices() {
+    var indices = [];
+    var cards = getResultCards();
+    cards.forEach(function(card) {
+      if (card.dataset.completed !== "true") return;
+      if (card.classList.contains("error")) return;
+      var cb = cardCheckboxes.get(card);
+      if (!cb || !cb.checked) return;
+      var qi = parseInt(card.dataset.qi, 10);
+      if (!Number.isNaN(qi)) indices.push(qi);
+    });
+    return indices;
+  }
+
+  function getCompletedSelectableIndices() {
+    var indices = [];
+    var cards = getResultCards();
+    cards.forEach(function(card) {
+      if (card.dataset.completed !== "true") return;
+      if (card.classList.contains("error")) return;
+      var qi = parseInt(card.dataset.qi, 10);
+      if (!Number.isNaN(qi)) indices.push(qi);
+    });
+    return indices;
+  }
+
+  function hasPendingSearchCards() {
+    var cards = getResultCards();
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      if (card.dataset.completed !== "true") return true;
+    }
+    return addSearchInFlight || providerBatchInFlight;
+  }
+
+  function getTimeoutSelectedIndices() {
+    var selected = getSelectedIndices();
+    if (selected.length > 0) return selected;
+    return getCompletedSelectableIndices();
+  }
+
+  function normalizeSummaryMeta(meta, edited) {
+    if (!meta || typeof meta !== "object") {
+      return {
+        model: null,
+        durationMs: 0,
+        tokenEstimate: 0,
+        fallbackUsed: false,
+        edited: !!edited,
+      };
+    }
+
+    return {
+      model: typeof meta.model === "string" || meta.model === null ? meta.model : null,
+      durationMs: typeof meta.durationMs === "number" && Number.isFinite(meta.durationMs) && meta.durationMs >= 0 ? meta.durationMs : 0,
+      tokenEstimate: typeof meta.tokenEstimate === "number" && Number.isFinite(meta.tokenEstimate) && meta.tokenEstimate >= 0 ? meta.tokenEstimate : 0,
+      fallbackUsed: meta.fallbackUsed === true,
+      fallbackReason: typeof meta.fallbackReason === "string" ? meta.fallbackReason : undefined,
+      phase: meta.phase === "summary-model" || meta.phase === "deterministic-fallback" ? meta.phase : undefined,
+      edited: !!edited,
+    };
+  }
+
+  function resetSummaryGeneratingState() {
+    summaryPendingModel = "";
+    summaryGeneratingStartedAt = 0;
+    summaryGeneratingPhase = -1;
+  }
+
+  function cancelInFlightSummaryRequest() {
+    summaryRequestSeq += 1;
+    resetSummaryGeneratingState();
+  }
+
+  function interruptSummaryIfNeeded() {
+    if (stage !== "generating-summary" && stage !== "summary-review") return;
+    if (stage === "generating-summary") {
+      cancelInFlightSummaryRequest();
+    }
+    clearError();
+    isRegenerating = getSummaryDraftText().length > 0;
+    stage = "results";
+    updateStageUI();
+  }
+
+  function exitRegeneratingState() {
+    if (!isRegenerating) return false;
+    if (stage === "generating-summary") {
+      cancelInFlightSummaryRequest();
+    }
+    isRegenerating = false;
+    clearError();
+    stage = "results";
+    updateStageUI();
+    return true;
+  }
+
+  function requestSummary(indices, feedback) {
+    if (submitted || timerExpired || submitInFlight) return;
+
+    if (!Array.isArray(indices) || indices.length === 0) {
+      setError("Select at least one result to summarize");
+      stage = "results";
+      updateStageUI();
+      return;
+    }
+
+    if (hasPendingSearchCards()) {
+      setError("Wait for running searches to finish before generating summary");
+      stage = "results";
+      updateStageUI();
+      return;
+    }
+
+    clearError();
+    var previousStage = stage;
+    var wasRegenerating = isRegenerating;
+    var selectedSummaryModel = explicitSummaryModel ? getSelectedSummaryModel() : "";
+    if (summaryModelError && !selectedSummaryModel) {
+      setError(summaryModelError);
+      stage = "summary-review";
+      updateStageUI();
+      return;
+    }
+    summaryPendingModel = selectedSummaryModel;
+    summaryGeneratingStartedAt = Date.now();
+    summaryGeneratingPhase = -1;
+    stage = "generating-summary";
+    updateStageUI();
+
+    var requestId = ++summaryRequestSeq;
+    var feedbackText = typeof feedback === "string" ? feedback.trim() : "";
+    var summarizePayload = { selected: indices };
+    if (selectedSummaryModel.length > 0) {
+      summarizePayload.model = selectedSummaryModel;
+    }
+    if (feedbackText.length > 0) {
+      summarizePayload.feedback = feedbackText;
+    }
+
+    postJson("/summarize", summarizePayload)
+      .then(function(data) {
+        if (requestId !== summaryRequestSeq) return data;
+        if (!data || data.ok === false) {
+          var failure = new Error(extractServerError(data) || "summary request rejected");
+          failure.code = data && data.code;
+          throw failure;
+        }
+        return data;
+      })
+      .then(function(data) {
+        if (requestId !== summaryRequestSeq) return;
+
+        var summaryText = typeof data.summary === "string" ? data.summary.trim() : "";
+        if (!summaryText) {
+          throw new Error("Summary response was empty");
+        }
+
+        if (summaryInput) {
+          summaryInput.value = summaryText;
+        }
+        if (summaryFeedback) {
+          summaryFeedback.value = "";
+        }
+        summaryMeta = normalizeSummaryMeta(data.meta || null, false);
+        lastAutoSummarySignature = selectionSignature(indices);
+        resetSummaryGeneratingState();
+        isRegenerating = false;
+        stage = "summary-review";
+        updateStageUI();
+      })
+      .catch(function(err) {
+        if (requestId !== summaryRequestSeq) return;
+        var message = err instanceof Error ? err.message : String(err);
+        setError("Failed to generate summary — " + (message || "unknown error"));
+        resetSummaryGeneratingState();
+        isRegenerating = false;
+        if (err && err.code === "ambiguous_model") {
+          summaryModelError = message;
+          explicitSummaryModel = false;
+          currentSummaryModel = "";
+          if (summaryModelSelect) summaryModelSelect.value = "";
+          stage = "summary-review";
+        } else if (wasRegenerating && getSummaryDraftText().length > 0) {
+          stage = "summary-review";
+        } else {
+          stage = previousStage === "summary-review" ? "summary-review" : "results";
+        }
+        updateStageUI();
+      });
+  }
+
+  function selectionSignature(indices) {
+    return indices.slice().sort(function(a, b) { return a - b; }).join(",");
+  }
+
+  function maybeAutoGenerateSummary() {
+    if (!searchesDone) return;
+    if (stage !== "results") return;
+    if (submitted || timerExpired || submitInFlight) return;
+    if (hasPendingSearchCards()) return;
+
+    var selected = getSelectedIndices();
+    if (selected.length === 0) {
+      if (isRegenerating) {
+        isRegenerating = false;
+        updateStageUI();
+      }
+      return;
+    }
+
+    var signature = selectionSignature(selected);
+    if (signature === lastAutoSummarySignature) {
+      if (isRegenerating) {
+        isRegenerating = false;
+        if (getSummaryDraftText().length > 0) {
+          stage = "summary-review";
+        }
+        updateStageUI();
+      }
+      return;
+    }
+
+    lastAutoSummarySignature = signature;
+    requestSummary(selected);
+  }
+
+  function doApprove(autoApproveRemainingSearches) {
+    if (submitted || timerExpired || submitInFlight || stage !== "summary-review") return;
+
+    var selected = getSelectedIndices();
+    if (selected.length === 0) {
+      setError("Select at least one result before approving");
+      updateStageUI();
+      return;
+    }
+
+    var draft = getSummaryDraftText();
+    var payload = { selected: selected };
+    if (autoApproveRemainingSearches === true) payload.autoApproveRemainingSearches = true;
+    if (draft.length > 0) {
+      payload.summary = draft;
+      payload.summaryMeta = normalizeSummaryMeta(summaryMeta, summaryMeta && summaryMeta.edited === true);
+    }
+
+    submitPayload(payload, "Summary approved")
+      .catch(function(err) {
+        var message = err instanceof Error ? err.message : String(err);
+        setError("Failed to approve summary — " + (message || "the agent may have moved on"));
+      });
+  }
+
+  function doCancel() {
+    if (submitted || timerExpired || submitInFlight) return;
+    submitted = true;
+    submitInFlight = true;
+    syncLoadingPanel();
+    updateStageUI();
+    clearError();
+
+    postJson("/cancel", { reason: "user" })
+      .then(function(data) {
+        if (data && data.ok === false) {
+          throw new Error(extractServerError(data) || "cancel rejected");
+        }
+        showSuccess("Skipped");
+      })
+      .catch(function(err) {
+        submitted = false;
+        submitInFlight = false;
+        syncLoadingPanel();
+        updateStageUI();
+        var message = err instanceof Error ? err.message : String(err);
+        setError("Failed to cancel — " + (message || "the agent may have moved on"));
+      });
+  }
+
+  btnSend.addEventListener("click", function() {
+    if (stage !== "results") return;
+    requestSummary(getSelectedIndices());
+  });
+
+  if (btnSendRaw) {
+    btnSendRaw.addEventListener("click", function() {
+      var selected = getSelectedIndices();
+      if (selected.length === 0) return;
+      submitPayload({ selected: selected, rawResults: true }, "Results sent")
+        .catch(function(err) {
+          var message = err instanceof Error ? err.message : String(err);
+          setError("Failed to send results — " + (message || "the agent may have moved on"));
+        });
+    });
+  }
+
+  if (btnSummaryBack) {
+    btnSummaryBack.addEventListener("click", function() {
+      if (exitRegeneratingState()) {
+        resetTimer();
+        return;
+      }
+      if (stage !== "summary-review") return;
+      clearError();
+      stage = "results";
+      updateStageUI();
+      resetTimer();
+    });
+  }
+
+  if (btnSummaryRegenerate) {
+    btnSummaryRegenerate.addEventListener("click", function() {
+      requestSummary(getSelectedIndices(), getFeedbackText());
+      resetTimer();
+    });
+  }
+
+  function openPreviewModal() {
+    previewModelExplicit = explicitSummaryModel;
+    var draft = getSummaryDraftText();
+    if (!draft || !previewModal || !previewModalBody) return;
+    var rendered = typeof marked !== "undefined" && marked.parse
+      ? marked.parse(draft, { breaks: true })
+      : "<pre>" + escHtml(draft) + "</pre>";
+    previewModalBody.innerHTML = sanitizeMarkdownHtml(rendered);
+    if (previewModalModel) {
+      previewModalModel.innerHTML = '<option value="">Auto</option>';
+      for (var i = 0; i < summaryModels.length; i++) {
+        var m = summaryModels[i];
+        var opt = document.createElement("option");
+        opt.value = m.value;
+        opt.textContent = m.label;
+        previewModalModel.appendChild(opt);
+      }
+      previewModalModel.value = getSelectedSummaryModel() || "";
+    }
+    previewModal.classList.remove("hidden");
+    resetTimer();
+  }
+
+  function closePreviewModal() {
+    if (previewModal) previewModal.classList.add("hidden");
+    if (previewModalBody) previewModalBody.innerHTML = "";
+    hidePreviewPopover();
+  }
+
+  var popoverSelectedText = "";
+
+  function hidePreviewPopover() {
+    if (previewPopover) previewPopover.classList.add("hidden");
+    if (previewPopoverInput) previewPopoverInput.value = "";
+    popoverSelectedText = "";
+  }
+
+  function showPreviewPopover(text, rect) {
+    if (!previewPopover || !previewPopoverQuote || !previewModalBody) return;
+    popoverSelectedText = text;
+    var display = text.length > 120 ? text.slice(0, 117) + "\u2026" : text;
+    previewPopoverQuote.textContent = "\u201c" + display + "\u201d";
+    if (previewPopoverInput) previewPopoverInput.value = "";
+    previewPopover.classList.remove("hidden");
+
+    var bodyRect = previewModalBody.getBoundingClientRect();
+    var popH = previewPopover.offsetHeight;
+    var top = rect.bottom - bodyRect.top + previewModalBody.scrollTop + 6;
+    if (rect.bottom + popH + 20 > bodyRect.bottom) {
+      top = rect.top - bodyRect.top + previewModalBody.scrollTop - popH - 6;
+    }
+    var left = Math.max(8, Math.min(rect.left - bodyRect.left, bodyRect.width - previewPopover.offsetWidth - 8));
+    previewPopover.style.top = top + "px";
+    previewPopover.style.left = left + "px";
+
+    if (previewPopoverInput) previewPopoverInput.focus();
+  }
+
+  if (btnSummaryPreview) {
+    btnSummaryPreview.addEventListener("click", openPreviewModal);
+  }
+  if (previewModalClose) {
+    previewModalClose.addEventListener("click", closePreviewModal);
+  }
+  if (previewModalRegenerate) {
+    previewModalRegenerate.addEventListener("click", function() {
+      var selectedModel = previewModalModel ? previewModalModel.value.trim() : "";
+      closePreviewModal();
+      var modelProvider = getSummaryProvider(selectedModel);
+      if (modelProvider && modelProvider !== currentSummaryProvider) {
+        setSummaryProvider(modelProvider, selectedModel);
+      } else if (summaryModelSelect) {
+        summaryModelSelect.value = selectedModel;
+        currentSummaryModel = selectedModel;
+      }
+      explicitSummaryModel = previewModelExplicit;
+      requestSummary(getSelectedIndices(), getFeedbackText());
+      resetTimer();
+    });
+  }
+  if (previewModalModel) {
+    previewModalModel.addEventListener("change", function() {
+      previewModelExplicit = previewModalModel.value.trim().length > 0;
+    });
+  }
+  if (previewModalApprove) {
+    previewModalApprove.addEventListener("click", function() {
+      closePreviewModal();
+      doApprove();
+    });
+  }
+  if (previewModalBody) {
+    previewModalBody.addEventListener("mouseup", function() {
+      var sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return;
+      var text = sel.toString().trim();
+      if (!text) return;
+      var range = sel.getRangeAt(0);
+      showPreviewPopover(text, range.getBoundingClientRect());
+    });
+    previewModalBody.addEventListener("mousedown", function(e) {
+      if (previewPopover && !previewPopover.contains(e.target)) {
+        hidePreviewPopover();
+      }
+    });
+  }
+
+  if (previewPopoverRegen) {
+    previewPopoverRegen.addEventListener("click", function() {
+      var note = previewPopoverInput ? previewPopoverInput.value.trim() : "";
+      var quoted = popoverSelectedText;
+      hidePreviewPopover();
+
+      var feedback = 'Regarding: "' + quoted + '"';
+      if (note) feedback += " \u2014 " + note;
+
+      var selectedModel = previewModalModel ? previewModalModel.value.trim() : "";
+      closePreviewModal();
+      var modelProvider = getSummaryProvider(selectedModel);
+      if (modelProvider && modelProvider !== currentSummaryProvider) {
+        setSummaryProvider(modelProvider, selectedModel);
+      } else if (summaryModelSelect) {
+        summaryModelSelect.value = selectedModel;
+        currentSummaryModel = selectedModel;
+      }
+      explicitSummaryModel = previewModelExplicit;
+      requestSummary(getSelectedIndices(), feedback);
+      resetTimer();
+    });
+  }
+
+  if (previewPopoverInput) {
+    previewPopoverInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (previewPopoverRegen) previewPopoverRegen.click();
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        hidePreviewPopover();
+      }
+    });
+  }
+
+  if (previewModal) {
+    previewModal.addEventListener("click", function(e) {
+      if (e.target === previewModal) closePreviewModal();
+    });
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape" && !previewModal.classList.contains("hidden")) {
+        if (previewPopover && !previewPopover.classList.contains("hidden")) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          hidePreviewPopover();
+          return;
+        }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        closePreviewModal();
+      }
+    });
+  }
+
+  if (btnSummaryApprove) {
+    btnSummaryApprove.addEventListener("click", function() {
+      doApprove();
+      resetTimer();
+    });
+  }
+
+  if (btnSummaryApproveRemaining) {
+    btnSummaryApproveRemaining.addEventListener("click", function() {
+      doApprove(true);
+      resetTimer();
+    });
+  }
+
+  if (summaryInput) {
+    summaryInput.addEventListener("input", function() {
+      if (!summaryMeta || typeof summaryMeta !== "object") {
+        summaryMeta = normalizeSummaryMeta(null, true);
+      }
+      summaryMeta.edited = true;
+      clearError();
+      updateStageUI();
+      resetTimer();
+    });
+  }
+
+  if (summaryProviderSelect) {
+    summaryProviderSelect.addEventListener("change", function() {
+      var provider = typeof summaryProviderSelect.value === "string" ? summaryProviderSelect.value : "";
+      if (!provider || provider === currentSummaryProvider) return;
+      setSummaryProvider(provider, "");
+      explicitSummaryModel = true;
+      clearError();
+      updateStageUI();
+      resetTimer();
+    });
+  }
+
+  if (summaryModelSelect) {
+    summaryModelSelect.addEventListener("change", function() {
+      currentSummaryModel = typeof summaryModelSelect.value === "string"
+        ? summaryModelSelect.value.trim()
+        : "";
+      explicitSummaryModel = currentSummaryModel.length > 0;
+      clearError();
+      resetTimer();
+    });
+  }
+
+  function isInteractiveTarget(target) {
+    if (!target || !target.tagName) return false;
+    var tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON" || tag === "A") return true;
+    if (typeof target.isContentEditable === "boolean" && target.isContentEditable) return true;
+    if (typeof target.closest === "function") {
+      return !!target.closest('[contenteditable=""], [contenteditable="true"]');
+    }
+    return false;
+  }
+
+  document.addEventListener("keydown", function(e) {
+    if (submitted || timerExpired || submitInFlight) return;
+
+    var isSummaryInput = summaryInput && e.target === summaryInput;
+    if (isSummaryInput && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      if (stage === "summary-review") doApprove();
+      return;
+    }
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (exitRegeneratingState()) {
+        return;
+      }
+      if (stage === "summary-review") {
+        stage = "results";
+        clearError();
+        updateStageUI();
+      } else if (stage === "results") {
+        doCancel();
+      }
+      return;
+    }
+
+    if (isInteractiveTarget(e.target)) return;
+
+    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+      if (stage !== "results") return;
+      e.preventDefault();
+      requestSummary(getSelectedIndices());
+      return;
+    }
+
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      if (stage !== "summary-review") return;
+      e.preventDefault();
+      doApprove();
+      return;
+    }
+
+    if (e.key.toLowerCase() === "a" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      if (stage !== "results") return;
+      var boxes = getResultCards().map(function(card) { return cardCheckboxes.get(card); });
+      var selectable = [];
+      boxes.forEach(function(cb) {
+        if (!cb || cb.disabled) return;
+        selectable.push(cb);
+      });
+      if (selectable.length === 0) return;
+      var allChecked = true;
+      selectable.forEach(function(cb) { if (!cb.checked) allChecked = false; });
+      selectable.forEach(function(cb) {
+        cb.checked = !allChecked;
+        var parentCard = typeof cb.closest === "function" ? cb.closest(".result-card") : null;
+        if (parentCard) parentCard.classList.toggle("checked", cb.checked);
+      });
+      updateStageUI();
+      maybeAutoGenerateSummary();
+      resetTimer();
+    }
+  });
+
+  setInterval(function() {
+    if (submitted) return;
+    postJson("/heartbeat", {
+      idleMs: Math.max(0, Date.now() - lastInteraction),
+      timeoutSec: timeoutSec,
+    }).catch(function() {
+      // Heartbeat is best-effort.
+    });
+  }, 10000);
+
+  var lastResizeHeight = 0;
+  function checkContentHeight() {
+    if (!window.glimpse || typeof window.glimpse.send !== "function") return;
+    var h = document.documentElement.scrollHeight || document.body.scrollHeight;
+    if (h > 0 && Math.abs(h - lastResizeHeight) > 30) {
+      lastResizeHeight = h;
+      window.glimpse.send({ type: "resize", height: h });
+    }
+  }
+  setInterval(checkContentHeight, 500);
+
+  if (queries.length === 0 && addSearchInput) {
+    addSearchInput.focus();
+  }
+})();`;
