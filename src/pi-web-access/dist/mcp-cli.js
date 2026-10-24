@@ -4922,7 +4922,8 @@ import { execFile as execFile2 } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
 import { existsSync as existsSync3, readdirSync as readdirSync3, statSync } from "node:fs";
 import { readFile as readFile2 } from "node:fs/promises";
-import { resolve, extname, basename as basename2, join as join8, dirname as dirname2 } from "node:path";
+import { resolve, extname, basename as basename2, join as join8, dirname as dirname2, isAbsolute as isAbsolute2 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shouldRethrow(err) {
   const message = err instanceof Error ? err.message : String(err);
   return message.startsWith("Failed to parse ");
@@ -4953,12 +4954,12 @@ function loadVideoConfig() {
 function isVideoFile(input) {
   const config = loadVideoConfig();
   if (!config.enabled) return null;
-  const isFilePath = input.startsWith("/") || input.startsWith("./") || input.startsWith("../") || input.startsWith("file://");
+  const isFilePath = isAbsolute2(input) || /^\.\.?[/\\]/.test(input) || input.startsWith("file://");
   if (!isFilePath) return null;
   let filePath = input;
   if (input.startsWith("file://")) {
     try {
-      filePath = decodeURIComponent(new URL(input).pathname);
+      filePath = fileURLToPath2(input);
     } catch {
       return null;
     }
@@ -5051,7 +5052,7 @@ async function extractVideoFrame(filePath, seconds = 1, signal) {
       "-vcodec",
       "mjpeg",
       "pipe:1"
-    ], { maxBuffer: 5 * 1024 * 1024, timeout: 1e4, encoding: "buffer", signal });
+    ], { maxBuffer: 5 * 1024 * 1024, timeout: 1e4, encoding: "buffer", signal, windowsHide: true });
     if (buffer.length === 0) return { error: "ffmpeg failed: empty output" };
     return { data: buffer.toString("base64"), mimeType: "image/jpeg" };
   } catch (err) {
@@ -5068,7 +5069,7 @@ async function getLocalVideoDuration(filePath, signal) {
       "-of",
       "csv=p=0",
       filePath
-    ], { timeout: 1e4, encoding: "utf8", signal });
+    ], { timeout: 1e4, encoding: "utf8", signal, windowsHide: true });
     const output = stdout.trim();
     const duration = Number.parseFloat(output);
     if (!Number.isFinite(duration)) return { error: "ffprobe failed: invalid duration output" };

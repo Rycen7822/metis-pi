@@ -6,9 +6,8 @@ import json
 import os
 from pathlib import Path
 import re
-import socket
 import stat
-import struct
+import sys
 import time
 import uuid
 
@@ -29,7 +28,15 @@ DELIVERY_OPS = frozenset({'wait','result','inspect','soft_interrupt'})
 # carries credentials. PI_CODING_AGENT_DIR is a non-secret LOCATION the child Pi
 # resolves itself (like HOME), so it is forwarded. Proxy keys stay in memory.
 BASE_ENV_KEYS = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR', 'SHELL', 'USER',
-                 'LOGNAME', 'PI_CODING_AGENT_DIR')
+                 'LOGNAME', 'PI_CODING_AGENT_DIR',
+                 # Windows needs these pure locations to start an interpreter at
+                 # all; they carry no credentials. Node exposes them in their
+                 # original casing, Python in upper case, so both spellings are
+                 # admitted and only the value the child actually sees is used.
+                 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'USERPROFILE',
+                 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP',
+                 'SystemRoot', 'windir', 'ComSpec', 'PathExt', 'UserProfile',
+                 'HomeDrive', 'HomePath', 'AppData', 'LocalAppData', 'Temp', 'Tmp')
 # Network routing follows the opening client, not the daemon. Proxy URLs may
 # contain credentials: unlike BASE_ENV_KEYS these values must never be persisted.
 PROXY_ENV_KEYS = ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
@@ -53,6 +60,17 @@ async def close_writer(writer):
 
 def dumps(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+def python_executable() -> str:
+    """The interpreter process we actually get.
+
+    A Windows venv `python.exe` is a redirector that starts the base interpreter
+    as a child, so a spawned PID would not be the process running our code. Use
+    the base executable there and keep one identity for every owner we spawn.
+    """
+    if IS_WINDOWS:
+        return getattr(sys, "_base_executable", None) or sys.executable
+    return sys.executable
 
 def now() -> float:
     return time.time()
@@ -115,7 +133,14 @@ def bounded(value, budget=4096):
         return out
     return value
 
+IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    from . import windows
+
+
 def private_dir(path: Path):
+    if IS_WINDOWS:
+        return windows.private_dir(path)
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     s = path.lstat()
     if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid():
@@ -123,6 +148,8 @@ def private_dir(path: Path):
     os.chmod(path, 0o700)
 
 def atomic_write(path: Path, data: bytes):
+    if IS_WINDOWS:
+        return windows.atomic_write(path, data)
     private_dir(path.parent)
     tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
@@ -145,14 +172,12 @@ def socket_path(home: Path) -> Path:
     private_dir(base)
     return base / (hashlib.sha256(str(home).encode()).hexdigest()[:20] + ".sock")
 
-def check_peer(writer):
-    sock = writer.get_extra_info("socket")
-    if hasattr(socket, "SO_PEERCRED"):
-        _, uid, _ = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-        if uid != os.getuid():
-            raise AgentError("permission_denied", "IPC peer belongs to another user")
-
 def process_identity(pid: int) -> str | None:
+    if IS_WINDOWS:
+        try:
+            return windows.process_identity(pid)
+        except OSError:
+            return "unknown"
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
         rest = raw[raw.rfind(")")+2:].split()
@@ -172,6 +197,17 @@ def live_identity(pid, identity) -> bool | None:
     return current == identity
 
 def group_members(pgid: int):
+    """Live members of one owned process group (POSIX) or job (Windows).
+
+    An empty POSIX list means the group has no live member. On Windows an empty
+    list means the named job does not exist; a job that exists but cannot be
+    queried raises instead of being reported as empty.
+    """
+    if IS_WINDOWS:
+        try:
+            return windows.job_members(pgid)
+        except windows.JobUnavailable as exc:
+            raise AgentError("ownership_unknown", str(exc)) from exc
     found = []
     for item in Path("/proc").iterdir():
         if not item.name.isdigit(): continue

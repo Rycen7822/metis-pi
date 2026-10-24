@@ -17,7 +17,16 @@ import weakref
 from unittest import mock as m
 
 from paths import TEST_ROOT
-from metis_subagent.common import AgentError, dumps, group_members, process_identity
+from metis_subagent.common import AgentError, dumps, group_members, process_identity, python_executable
+
+
+def force_kill(pid):
+    """Kill exactly one process we own; SIGKILL on POSIX, TerminateProcess here."""
+    if sys.platform == 'win32':
+        subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        os.kill(pid, signal.SIGKILL)
 from metis_subagent import worker
 from metis_subagent import views
 from metis_subagent.pi_parent import PiNotifications, bind
@@ -558,7 +567,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 """ % (str(release), completed),
                     )
                 )
-                self.command = [sys.executable, str(fake)]
+                self.command = [python_executable(), str(fake)]
                 spawned = await self.spawn("delay=120|OLD")
                 aid = spawned["agent_id"]
                 old_worker = self.rt.workers[aid]
@@ -646,7 +655,8 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         original = asyncio.create_subprocess_exec
 
         async def delayed_fork(*args, **kwargs):
-            if any(str(arg).endswith("/" + aid + "/launch.json") for arg in args):
+            if any(Path(os.fspath(arg)).parent.name == aid and Path(os.fspath(arg)).name == "launch.json"
+                   for arg in args):
                 gate.set()
                 await release.wait()
             else:
@@ -1292,6 +1302,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(w.pending, {})
         self.assertFalse((await w.rpc("get_state"))["isStreaming"])
 
+    @unittest.skipIf(sys.platform == 'win32', 'needs SIGSTOP/SIGCONT on a process group')
     async def test_repeated_write_timeouts_do_not_accumulate_buffered_commands(self):
         run = await self.spawn("delay=30|blocked")
         w = self.rt.workers[run["agent_id"]]
@@ -1491,7 +1502,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 events = await self.until(lambda: self.events(aid, "tool_execution_start"))
                 child = json.loads(events[0]["payload"])["args"]["pid"]
                 owner = json.loads((self.home / "agents" / aid / "owner.json").read_text())
-                os.kill(owner["pi_pid"], signal.SIGKILL)
+                force_kill(owner["pi_pid"])
                 await self.until(lambda: self.rt.store.run(self.scope, s["run_id"])["state"] == "crashed", timeout=3)
                 self.assertEqual(self.rt.store.run(self.scope, queued["run_id"])["state"], "cancelled")
                 self.assertEqual(self.rt.store.agent(self.scope, aid)["cleanup"], "verified")
@@ -1504,6 +1515,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(w.closed)
                 self.assertTrue(all(t.done() for t in w.tasks))
 
+    @unittest.skipIf(sys.platform == 'win32', 'needs SIGKILL and /proc identity checks')
     async def test_killed_guard_cannot_claim_verified_cleanup(self):
         s = await self.spawn("SPAWN_DETACHED_CHILD")
         aid = s["agent_id"]
@@ -1937,7 +1949,8 @@ class RestartOwnershipVerdict(unittest.TestCase):
     verified cleanup while a live process may still hold the session."""
 
     def test_live_pid_without_owner_record_is_orphaned_not_verified(self):
-        alive = subprocess.Popen(["sleep", "60"])
+        # A real live child for the identity check; `sleep` does not exist here.
+        alive = subprocess.Popen([python_executable(), "-c", "import time; time.sleep(60)"])
         try:
             tmp, home = seed_owner_row(pid=alive.pid, identity=process_identity(alive.pid))
             rt = Runtime(home)
@@ -1946,6 +1959,7 @@ class RestartOwnershipVerdict(unittest.TestCase):
                 row["cleanup"], "verified", "a live, unverifiable process was reported as a verified cleanup"
             )
             self.assertEqual(row["state"], "orphaned")
+            rt.store.close()
         finally:
             alive.kill()
             alive.wait()
@@ -1956,6 +1970,7 @@ class RestartOwnershipVerdict(unittest.TestCase):
         rt = Runtime(home)
         row = rt.store.one("SELECT * FROM agents WHERE id=?", ("pi_seed",))
         self.assertEqual(row["cleanup"], "verified")
+        rt.store.close()
         tmp.cleanup()
 
     def test_unreadable_owner_record_is_never_verified(self):
@@ -1964,6 +1979,7 @@ class RestartOwnershipVerdict(unittest.TestCase):
         rt = Runtime(home)
         row = rt.store.one("SELECT * FROM agents WHERE id=?", ("pi_seed",))
         self.assertEqual(row["cleanup"], "unknown")
+        rt.store.close()
         tmp.cleanup()
 
     def test_never_launched_row_is_verified_not_a_phantom_orphan(self):
@@ -1974,6 +1990,7 @@ class RestartOwnershipVerdict(unittest.TestCase):
         rt=Runtime(home)
         row=rt.store.one('SELECT * FROM agents WHERE id=?',('pi_seed',))
         self.assertEqual((row['state'],row['cleanup']),('dormant','verified'))
+        rt.store.close()
         tmp.cleanup()
 
     def test_pending_launch_without_owner_record_stays_unknown(self):
@@ -1983,6 +2000,7 @@ class RestartOwnershipVerdict(unittest.TestCase):
         rt=Runtime(home)
         row=rt.store.one('SELECT * FROM agents WHERE id=?',('pi_seed',))
         self.assertEqual((row['state'],row['cleanup']),('orphaned','unknown'))
+        rt.store.close()
         tmp.cleanup()
 
 class ReconcileAndReapAgree(unittest.TestCase):
@@ -1997,6 +2015,7 @@ class ReconcileAndReapAgree(unittest.TestCase):
         with self.assertRaises(AgentError) as cm:
             asyncio.run(worker.reap_orphan(home/'agents'/'pi_seed',rt.store.one('SELECT * FROM agents WHERE id=?',('pi_seed',))))
         self.assertEqual(cm.exception.code,'ownership_unknown')
+        rt.store.close()
         tmp.cleanup()
 
     def test_both_paths_clear_a_verified_gone_owner(self):
@@ -2007,6 +2026,7 @@ class ReconcileAndReapAgree(unittest.TestCase):
         self.assertEqual((row['state'],row['cleanup']),('dormant','verified'))
         verdict=asyncio.run(worker.reap_orphan(home/'agents'/'pi_seed',rt.store.one('SELECT * FROM agents WHERE id=?',('pi_seed',))))
         self.assertEqual(verdict,'verified')
+        rt.store.close()
         tmp.cleanup()
 
 if __name__=='__main__': unittest.main()

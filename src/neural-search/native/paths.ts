@@ -35,10 +35,12 @@ export function scanOptOutReason(root: string, config: { enableHomeDirScanning: 
   return null;
 }
 
-/** Linux paths retain whitespace and literal backslashes; expand home shorthand once. */
+/** Use index separators on Windows; preserve Linux literal backslashes. */
 export function pathConstraintText(value: string): string {
   const text = path.isAbsolute(value) ? value : value.trim();
-  return text === "~" || text.startsWith("~/") ? path.join(HOME_DIR, text.slice(1)) : text;
+  const expanded = text === "~" || text.startsWith("~/") || text.startsWith(`~${path.sep}`)
+    ? path.join(HOME_DIR, text.slice(1)) : text;
+  return expanded.split(path.sep).join("/");
 }
 
 export function resolveAuxRoot(absPath: string): { root: string; suffix: string } | null {

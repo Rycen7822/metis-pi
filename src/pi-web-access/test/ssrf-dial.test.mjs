@@ -55,11 +55,14 @@ async function httpProxy(t, { connectAllowed = true } = {}) {
 }
 
 function environment(t, values) {
+	const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
 	for (const [key, value] of Object.entries(values)) {
-		const previous = process.env[key];
 		if (value === undefined) delete process.env[key]; else process.env[key] = value;
-		t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
 	}
+	t.after(() => {
+		for (const [key, value] of Object.entries(previous))
+			if (value === undefined) delete process.env[key]; else process.env[key] = value;
+	});
 }
 
 async function socksProxy(t) {
@@ -271,7 +274,7 @@ test("operator-trusted remote-DNS forward proxy remains opt-in while literal tar
 test("port-aware NO_PROXY removes remote-DNS trust and pins the actual direct route", { skip: curlSkip, timeout: 5000 }, async (t) => {
 	const allowed = await origin(t, checked);
 	const proxy = await httpProxy(t);
-	environment(t, { HTTP_PROXY: proxy.url, NO_PROXY: `${hostname}:${allowed.port}`, no_proxy: "" });
+	environment(t, { HTTP_PROXY: proxy.url, no_proxy: "", NO_PROXY: `${hostname}:${allowed.port}` });
 	let lookups = 0;
 	const response = await fetchRemoteUrl(`http://${hostname}:${allowed.port}/resource`, { signal: AbortSignal.timeout(3000) }, {
 		trustEnvProxy: true, allowRanges: [`${checked}/32`], lookup: async () => { lookups++; return [{ address: checked, family: 4 }]; },

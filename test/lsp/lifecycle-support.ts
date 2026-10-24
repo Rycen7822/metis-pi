@@ -110,8 +110,12 @@ export function fixture(scenario = "lifecycle-normal") {
   }
   function exited() {
     const records = events();
+    // The portable contract is that every fixture child is really gone. Windows
+    // terminates a child directly, so its SIGTERM/exit handlers never run and no
+    // "exited" record can be written; only POSIX can prove orderly termination.
+    const recordsExit = process.platform !== "win32";
     for (const pid of new Set(records.map((event) => event.pid))) {
-      assert.ok(records.some((event) => event.pid === pid && event.method === "exited"));
+      if (recordsExit) assert.ok(records.some((event) => event.pid === pid && event.method === "exited"));
       assert.throws(() => process.kill(pid, 0), /ESRCH/);
     }
   }

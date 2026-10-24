@@ -106,9 +106,12 @@ test("writes are only tracked for builtin tools with sourceInfo (adapter install
 
 test("the native write target and captured pre-image agree across normalized paths", async (t) => {
   const dir = temporaryDirectory(t);
-  const previousHome = process.env.HOME;
-  process.env.HOME = dir;
-  t.after(() => { if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome; });
+  const previousHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  Object.assign(process.env, { HOME: dir, USERPROFILE: dir });
+  t.after(() => {
+    for (const [key, value] of Object.entries(previousHome))
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  });
   const cases = [
     ["nested/../relative.txt", path.join(dir, "relative.txt")],
     ["@prefixed.txt", path.join(dir, "prefixed.txt")],

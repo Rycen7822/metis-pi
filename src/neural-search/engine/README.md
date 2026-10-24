@@ -8,26 +8,24 @@ Metis maintains a specialized fork, not a byte-identical copy or a standalone FF
 
 - `crates/fff-core`: file/directory indexes, AI ranking, live filesystem updates, content reads, plain/regex/fuzzy/OR orchestration and compatible LMDB storage.
   Literal OR uses Aho-Corasick, verifying sensitive candidates for mixed smart-case without changing uniform-case fast paths.
-  Content-bigram indexing, editor mode and unused SDK operations are retired.
 - `crates/fff-query-parser`: file/mixed query grammar and explicit content filters, using the single `zlob` backend.
   Content needles are not filter expressions. Unsupported `type:` filters fail explicitly; use extensions/globs.
 - `crates/fff-grep`: slice searching, matcher/sink interfaces and line/context collection.
-- `crates/fff-c`: private **ABI v7** in `libmetis_neural_search.so`, with `metis_search_*` symbols.
+- `crates/fff-c`: private **ABI v7** in `libmetis_neural_search.so` / `metis_neural_search.dll`, with `metis_search_*` symbols.
   Rust owns result envelopes and payloads; JS copies a borrowed view and releases the envelope in `finally`.
   Only creation transfers an instance, subsequently destroyed once. This is not a public C SDK.
-  ABI v7 removes the separate scanning probe and integer envelope slot; progress still reports scanning/readiness/errors.
+  Progress reports scanning, readiness and errors.
   Its borrowed prefix is 24 bytes; Rust alone owns the payload-release tail.
-- `src/neural-search/native/binding/`: one Linux Node/Bun binding.
+- `src/neural-search/native/binding/`: one Linux / Windows x64 Node/Bun binding.
   Only consumed display/continuation data crosses it, not detailed rank/highlight objects.
 - `src/neural-search/assets/`: bundled library, paired source/binding/build/ABI/hash manifest and redistribution notices.
 
 The Rust workspace, TS adapter and bundled assets all live under `src/neural-search/`.
 The package scripts and CI refer to this module; `extensions/neural-search.ts` is only its host entry.
 
-Only **Linux x64 with glibc >=2.31** is delivered. There are no other-platform builds or upstream binary fallbacks.
+Bundled targets are **Linux x64 with glibc >=2.31** and **Windows x64**. The Windows DLL uses a static CRT; its supported ABI is the 16 `metis_search_*` exports, not dependency exports from bundled libgit2.
 Runtime CPU detection and scalar fallbacks remain: x64 does not imply AVX2.
-Private Rust source APIs are specialized too: scores retain totals, grep results retain display/context/limit facts, and constant parser/searcher extension hooks are retired.
-Detailed rank breakdowns and highlight coordinates are not supported Rust or wire contracts; their removal does not remove ranking or fuzzy quality checks.
+Private Rust APIs carry score totals and grep display/context/limit data. Ranking and fuzzy quality remain covered by workspace checks.
 
 Ordinary installation uses the bundled library, needs **no Rust/Zig compiler** and performs no engine download.
 Missing optional `ffi-rs`, missing library bytes or an ABI mismatch fail on index use, not during tool discovery.
@@ -177,10 +175,11 @@ These guards cover Metis-managed updates, not arbitrary interior mutation by ext
 Development prerequisites:
 
 - Rust **1.94.0** with `rust-docs`, which supplies standard-library notices.
-- Zig **0.16.0** on PATH and `cargo-zigbuild` **0.23.4**.
-- Node and GNU binutils (`readelf`).
+- Zig **0.16.0**, libclang and Node.
+- Linux: `cargo-zigbuild` **0.23.4** and GNU binutils (`readelf`).
+- Windows: Rust's MSVC target, Visual Studio C++ Build Tools and Windows SDK. Linux cross-build variables are documented in `build-win32-x64.mjs`.
 
-Tool installation is separate from ordinary package installation:
+Linux tool installation is separate from ordinary package installation:
 
 ```sh
 rustup toolchain install 1.94.0 --component rust-docs
@@ -190,14 +189,15 @@ RUSTUP_TOOLCHAIN=1.94.0 npm run build:neural-engine
 npm run verify:neural-engine
 ```
 
-The builder uses the locked graph, `ci` profile, `x86_64-unknown-linux-gnu.2.31` and baseline x64 CPU settings.
+On Windows, activate an x64 MSVC developer shell, set `$env:RUSTUP_TOOLCHAIN="1.94.0"`, and run the same npm build/verify commands.
+
+The platform-selected builder uses the locked graph, `ci` profile and baseline x64 CPU settings: `x86_64-unknown-linux-gnu.2.31` or `x86_64-pc-windows-msvc`.
 It rejects host-specific CPU overrides and pins `ZLOB_ZIG_CPU=baseline` for the Zig helper in the manifest.
 Local profiling may use Cargo directly, but must not replace the published artifact. Outputs stay under `.work/neural-engine/target`.
 
-Verification checks paired Rust/header/build and TS binding sources, exported ABI, ELF dependencies, glibc symbol floor, library bytes and notices.
-Packing a source/Git checkout also requires Linux x64 and GNU binutils; delivery checks are not skipped on unsupported hosts.
+Verification checks paired Rust/header/build and TS binding sources, exported private ABI, library bytes and notices. Linux checks ELF dependencies and the glibc floor; Windows checks PE imports without external inspection tools. Root `verify:native-assets` checks both platforms' source/payload inventories and the current host's ABI.
 `prepack` verifies without compiling Rust; this checks declared source, library, ABI and notice consistency, not proof that the library was compiled from those sources.
-CI also rebuilds with the pinned toolchain and rejects any difference from the checked-in library, manifest or notices.
+Linux CI also rebuilds with the pinned toolchain and rejects any difference from the checked-in library, manifest or notices.
 A successfully compiled CI candidate is retained even if that comparison fails; a failed-run artifact is diagnostic, not release approval.
 Rust source locations are remapped to stable workspace, Cargo-home and target prefixes so local checkout paths do not become shipped bytes.
 The verified PATH Zig executable is also fixed for cargo-zigbuild and zlob; Python's bundled Zig cannot silently override it.
@@ -234,7 +234,7 @@ Deploy source, binding, manifest and library as **one package**, not independent
 
 ## Redistribution
 
-`notices.mjs` collects the locked Linux runtime/build dependency closure, including bundled C notices, and retains Rust standard-library notices.
+`notices.mjs` collects each target's locked runtime/build dependency closure, including bundled C notices, and retains Rust standard-library notices.
 `licenses/` supplies pinned texts missing from some published crates; provenance is in `licenses/SOURCE.md`.
 
 Regenerate notices through the builder after dependency removal, not by trimming copyright/license text manually.

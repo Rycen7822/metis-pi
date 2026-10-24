@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
@@ -62,7 +62,7 @@ test("Querit resolves command credentials only when a request starts", async () 
 	);
 	const marker = join(markerDir, "ran");
 	const home = await createHome({
-		queritApiKey: `!touch ${marker} && printf synthetic-querit-command-key`,
+		queritApiKey: await markerCredentialCommand(marker, "synthetic-querit-command-key"),
 	});
 	const child = runChild(
 		`

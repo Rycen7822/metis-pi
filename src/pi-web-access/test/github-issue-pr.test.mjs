@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 
+import "./node-cli-fixture.mjs";
+
 const moduleUrl = new URL("../github-issue-pr.ts", import.meta.url).href;
 const extractUrl = new URL("../extract.ts", import.meta.url).href;
 const publicLookup = async () => [{ address: "140.82.112.6", family: 4 }];
@@ -15,10 +17,10 @@ async function writeFakeExecutable(binDir, name, source) {
 	return executable;
 }
 
-// For tests that assert a wall-clock bound: a Node shim costs 300–900 ms just
-// to boot on a loaded host and the bound is 1 s, so the probe alone can fail
-// the assertion. A /bin/sh shim starts in a few ms.
-async function writeFakeShellExecutable(binDir, name, script) {
+// Unix keeps the low-startup-cost shell fixture for the cancellation deadline.
+async function writeCancellationExecutable(binDir, script, windowsSource) {
+	const name = "gh";
+	if (process.platform === "win32") return writeFakeExecutable(binDir, name, windowsSource);
 	const executable = join(binDir, name);
 	await writeFile(executable, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
 	return executable;
@@ -303,7 +305,8 @@ test("extractGitHubIssuePr aborts active gh work with the caller signal", async 
 	const agentDir = join(root, "agent");
 	await mkdir(binDir, { recursive: true });
 	await mkdir(agentDir, { recursive: true });
-	await writeFakeShellExecutable(binDir, "gh", `if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi\nsleep 30`);
+	await writeCancellationExecutable(binDir, `if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi\nsleep 30`,
+		'if (process.argv[2] === "--version") { console.log("gh version 2.0.0"); process.exit(0); } setInterval(() => {}, 1000);');
 
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
@@ -335,7 +338,7 @@ test("extractGitHubIssuePr aborts a hung gh availability probe", async () => {
 	const agentDir = join(root, "agent");
 	await mkdir(binDir, { recursive: true });
 	await mkdir(agentDir, { recursive: true });
-	await writeFakeShellExecutable(binDir, "gh", `sleep 30`);
+	await writeCancellationExecutable(binDir, `sleep 30`, "setInterval(() => {}, 1000);");
 
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
@@ -362,7 +365,7 @@ test("REST fallback preserves caller cancellation", async () => {
 	const agentDir = join(root, "agent");
 	await mkdir(binDir, { recursive: true });
 	await mkdir(agentDir, { recursive: true });
-	await writeFakeShellExecutable(binDir, "gh", `exit 1`);
+	await writeCancellationExecutable(binDir, `exit 1`, "process.exit(1);");
 
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `

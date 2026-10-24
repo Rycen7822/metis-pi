@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "source": {
+    "root": "native/tools",
+    "baseRevision": "90aef0f2419368df2ea5c004fae55e55040d85c6",
+    "baseRef": "v0.21.0-67-g90aef0f",
+    "modified": true,
+    "verification": "Requires a Git checkout containing native/tools; installed packages contain helper bytes only.",
+    "sha256": "d5852fc3b10c04dc817aa70ced000089fd90151f5925655f2481aca7852726fd",
+    "inputs": [
+      {
+        "path": "native/tools/Cargo.lock",
+        "sha256": "38d3545a5d2e49f770cf92e85f8079f09dedae466bb91d348b3476ddd598fd0d"
+      },
+      {
+        "path": "native/tools/Cargo.toml",
+        "sha256": "b6b86644df540eaa59a6139cbe6a4b09f413e3e651482384e1343b359e8eb5d1"
+      },
+      {
+        "path": "native/tools/build-linux-x64.mjs",
+        "sha256": "f8a40031d6cf74abeee959690a7967e5c290e54fb085a613ba4f8ca8f7e8895e"
+      },
+      {
+        "path": "native/tools/build-win32-x64.mjs",
+        "sha256": "1e0ba916fa85f192b1875039a2110c56c5b21ffdd846d41f463d6d1948f094b4"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/Cargo.toml",
+        "sha256": "5b2c2e4a625941e25e8e5bedf7d209096f159657a952ef6a0429b45459a6d4c6"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/lib.rs",
+        "sha256": "86b5886c5fd679f6c98b1377a733e490cad97645caf4746bbd55b4ea01c3cb43"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/pipe.rs",
+        "sha256": "eddd3d51e4a039c220ef8d6508f1d310d048c23d4b0e17931e15722e3ff81e44"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/pipe_tests.rs",
+        "sha256": "f9a8fc8902a869b49687d3b295abf956d7f326569b1058e3fca4d6d125cc47d4"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/process.rs",
+        "sha256": "a50c951dd56b28609e5831203a470cd6959967f836a7f51e4a4a6afd75e3295a"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/process_group.rs",
+        "sha256": "dbf2ab039e52898ae9273e2b71ede2246344728f0ff7fd0a7976e848c7cfa3a2"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/pty.rs",
+        "sha256": "3812b7030d5130d755659165222af8facb55221621e6a136a79f71ffc8c9abda"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/tests.rs",
+        "sha256": "9172908595a3c616dd4d05fdaa0bb02f78dd137616071ffe22567b21a18ce675"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/conpty.rs",
+        "sha256": "59cd607835666c037e2dd1ea840dd1a7b3a751e43b075cce71d445d7984f716b"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/job.rs",
+        "sha256": "8b00360743d62541e5a75859c07455984a0e2fd96f2f82e07d40643fb548fbe8"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/mod.rs",
+        "sha256": "e15b782ce380851e12e940f77e0d60f59f4e54d4de12a51eebe1a4bd12c4a715"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/procthreadattr.rs",
+        "sha256": "f143dff9ff9ce080e617e6bae2e1864e7f59b6f83569eae18fd7f02e997a1956"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/psuedocon.rs",
+        "sha256": "f40812f7b67f69a3651416649a116850af235e1b0ca50fb55a4d36ed7e7db2a9"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/windows_input.rs",
+        "sha256": "bac4b55825fe7becafb532c00d98188cd253a0ce07525f6474f8c76ad3681bad"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/windows_input_tests.rs",
+        "sha256": "dca6cc92c081ca7a3bfdaaec13cc7bbf32185e3c0b343e6def76d2039a2a6921"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/windows_tests.rs",
+        "sha256": "6611b880c61d1c9cb8ffc45bcffc1462738509ef8a1886e6ceed17b8c250044a"
+      },
+      {
+        "path": "native/tools/exec/Cargo.toml",
+        "sha256": "0fbda3c7e138172a7f29cd65a69e6b7fa5161837c1eb44172c87e77535773b54"
+      },
+      {
+        "path": "native/tools/exec/lib.rs",
+        "sha256": "d1e16b97c5c3cd36fb949964a5d721ac90c251f62d32014c396e1f518bd618fc"
+      },
+      {
+        "path": "native/tools/exec/local_process.rs",
+        "sha256": "c34f2616952dbd0763af4514d9678dab582545d275de42b4b30689f5e1f7cbbc"
+      },
+      {
+        "path": "native/tools/exec/main.rs",
+        "sha256": "65981cac5d7a67d46dd3c1bfe023ccdbf07964c47844257ec205d5aeb0546b3f"
+      },
+      {
+        "path": "native/tools/exec/protocol.rs",
+        "sha256": "37fc86765b99eacf60fe781d357742eddb5a345fefba13948097cccf37646966"
+      },
+      {
+        "path": "scripts/lib/native-assets.mjs",
+        "sha256": "5a4a865a01a3683dc9dcc13d057f2b4c45b569faf51640cf97f2b9046bdd4d82"
+      }
+    ]
+  },
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "--manifest-path",
+      "native/tools/Cargo.toml",
+      "--release",
+      "--locked",
+      "--target",
+      "x86_64-pc-windows-msvc",
+      "--bin",
+      "exec_bridge"
+    ],
+    "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "linker": "rust-lld",
+    "rustFlags": [
+      "-C",
+      "target-feature=+crt-static",
+      "-C",
+      "target-cpu=x86-64"
+    ]
+  },
+  "assets": [
+    {
+      "path": "assets/native-tools/exec/win32-x64/exec_bridge.exe",
+      "sha256": "e88d9c47dfac99ccb1e5abaf50208fb146a59df21686c93bb0dc92f2ba76da08",
+      "bytes": 1263616,
+      "abi": {
+        "machine": "x86-64",
+        "crt": "static",
+        "imports": [
+          "KERNEL32.dll",
+          "advapi32.dll",
+          "api-ms-win-core-synch-l1-2-0.dll",
+          "bcryptprimitives.dll",
+          "ntdll.dll",
+          "ws2_32.dll"
+        ]
+      }
+    }
+  ]
+}

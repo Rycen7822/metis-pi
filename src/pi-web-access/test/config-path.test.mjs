@@ -1,6 +1,6 @@
-import { runChild as runProviderChild } from "./provider-fixtures.mjs";
+import { runChild as runProviderChild, writeCredentialCommand } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { stringify } from "smol-toml";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,13 +53,17 @@ test("Gemini base URL and Cloudflare auth use env before config", async () => {
 test("Gemini command source is lazy, overrides stale env, rotates, and uses header auth", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-command-"));
 	const agentDir = join(root, "agent-dir");
-	const commandPath = join(root, "read-key.sh");
 	const counterPath = join(root, "counter");
 	await mkdir(agentDir, { recursive: true });
-	await writeFile(commandPath, `#!/bin/sh\ncount=0\n[ ! -f "$1" ] || count=$(cat "$1")\ncount=$((count + 1))\nprintf '%s' "$count" >"$1"\nprintf 'synthetic-gemini-%s\\n' "$count"\n`, "utf8");
-	await chmod(commandPath, 0o700);
+	const command = await writeCredentialCommand(root, "read-key", `
+		import { existsSync, readFileSync, writeFileSync } from "node:fs";
+		const path = ${JSON.stringify(counterPath)};
+		const count = (existsSync(path) ? Number(readFileSync(path, "utf8")) : 0) + 1;
+		writeFileSync(path, String(count));
+		process.stdout.write("synthetic-gemini-" + count);
+	`);
 	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({
-		geminiApiKey: `!${commandPath} ${counterPath}`,
+		geminiApiKey: command,
 	}) + "\n", "utf8");
 
 	const child = runChild(`

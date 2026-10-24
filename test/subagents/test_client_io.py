@@ -7,15 +7,16 @@ import unittest
 from unittest import mock
 
 from paths import ROOT
+from metis_subagent import ipc
 from metis_subagent.client import request
-from metis_subagent.common import AgentError, dumps, read_frame, socket_path
+from metis_subagent.common import AgentError, dumps, python_executable, read_frame
 
 class ClientIO(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='subagent-client-')
         self.home=Path(self.tmp.name); self.peers=[]; self.jobs=[]
         self.accepted=asyncio.Event(); self.handler=None
-        self.server=await asyncio.start_unix_server(self.connected,str(socket_path(self.home)))
+        self.server=await ipc.serve(self.connected,self.home)
     def connected(self,reader,writer):
         self.peers.append(writer); self.accepted.set()
         if self.handler: self.jobs.append(asyncio.create_task(self.handler(reader,writer)))
@@ -77,7 +78,7 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
             await read_frame(reader)
             writer.write(b'{"ok":true,"result":{"runs":[]}}\n'); await writer.drain()
         self.handler=handler
-        connect=asyncio.open_unix_connection; delivered=[]
+        connect=ipc.connect; delivered=[]
         async def wrapped_connect(*args,**kwargs):
             reader,writer=await connect(*args,**kwargs)
             drain=writer.drain
@@ -87,7 +88,7 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
             writer.drain=blocked_receipt
             return reader,writer
         async def deliver(value): delivered.append(value)
-        with mock.patch('metis_subagent.client.asyncio.open_unix_connection',wrapped_connect):
+        with mock.patch('metis_subagent.client.ipc.connect',wrapped_connect):
             task=asyncio.create_task(request(self.home,'wait',{},timeout=.1,autostart=False,on_result=deliver))
             try:
                 done,_=await asyncio.wait({task},timeout=1.5)
@@ -117,14 +118,14 @@ daemon.close_writer=close
 asyncio.run(daemon.serve(Path(sys.argv[1])))
 """
         with tempfile.TemporaryDirectory(prefix='subagent-daemon-io-') as tmp:
-            home=Path(tmp); path=socket_path(home)
-            proc=await asyncio.create_subprocess_exec(sys.executable,'-c',script,str(home),cwd=ROOT,
+            home=Path(tmp)
+            proc=await asyncio.create_subprocess_exec(python_executable(),'-c',script,str(home),cwd=ROOT,
                 stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
             writer=None
             try:
                 end=asyncio.get_running_loop().time()+5
                 while writer is None:
-                    try: reader,writer=await asyncio.open_unix_connection(str(path),limit=1024)
+                    try: reader,writer=await ipc.connect(home,limit=1024)
                     except (FileNotFoundError,ConnectionRefusedError):
                         if asyncio.get_running_loop().time()>=end: raise
                         await asyncio.sleep(.01)
@@ -132,10 +133,13 @@ asyncio.run(daemon.serve(Path(sys.argv[1])))
                 from metis_subagent import PROTOCOL_VERSION
                 writer.write((dumps({'v':PROTOCOL_VERSION,'op':'doctor','params':{}})+'\n').encode())
                 await writer.drain()
-                self.assertEqual(await asyncio.wait_for(proc.stdout.readline(),14),b'REPLY_CLOSED\n')
+                self.assertEqual((await asyncio.wait_for(proc.stdout.readline(),14)).strip(),b'REPLY_CLOSED')
                 writer.transport.resume_reading()
                 partial=await asyncio.wait_for(reader.read(),2)
-                self.assertGreater(len(partial),0)
+                if sys.platform != 'win32':
+                    # POSIX sockets keep the already-written prefix readable; a
+                    # named pipe discards it when the server closes its handle.
+                    self.assertGreater(len(partial),0)
                 self.assertLess(len(partial),1024*1024,'unread reply was not bounded')
                 self.assertFalse(partial.endswith(b'\n'))
                 try: await request(home,'shutdown',{'force':True},autostart=False)

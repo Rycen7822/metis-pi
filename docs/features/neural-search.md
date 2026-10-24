@@ -1,6 +1,6 @@
 # Neural Search
 
-Metis 维护的本地路径与内容搜索，索引、排序和 Rust 引擎均在本机运行，不上传项目文件。随包提供 Linux x64 / glibc ≥2.31 的原生库；普通安装无需编译器，需要保留可选依赖 `ffi-rs`。
+Metis 维护的本地路径与内容搜索，索引、排序和 Rust 引擎均在本机运行，不上传项目文件。随包提供 Linux x64 / glibc ≥2.31 和 Windows x64 的原生库；普通安装无需编译器，需要保留可选依赖 `ffi-rs`。Windows 更新前先退出加载该库的 Pi 进程，详见[兼容性](../compatibility.md)。
 
 ## 一个入口，按需加载
 

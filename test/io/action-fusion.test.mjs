@@ -125,7 +125,8 @@ test("native command retains exact Unicode output and nonzero status after succe
 test("native explicit timeout and cancellation stop the command and retain prior output", async (t) => {
   const ctx = fixture(t);
   writeFileSync(join(ctx.cwd, "hang.mjs"), 'process.stdout.write("started\\n"); setTimeout(()=>require("fs"), 60000);');
-  const timed = await runNativeFusionCommand({ command: "node hang.mjs", timeout: 0.3 }, ctx);
+  // Git Bash and Node startup under concurrent Windows CI is part of this budget.
+  const timed = await runNativeFusionCommand({ command: "node hang.mjs", timeout: 2.5 }, ctx);
   assert.equal(timed.status, "timed_out", timed.error);
   assert.equal(readFileSync(timed.fullOutputPath, "utf8"), "started\n");
   const controller = new AbortController();

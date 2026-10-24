@@ -1,13 +1,14 @@
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile, chmod } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 
 import initializeExtension from "../index.ts";
 import { webFetch as fetch, runWithProxy } from "../proxy-transport.ts";
+import "./node-cli-fixture.mjs";
 
 const originalFetch = globalThis.fetch;
 const originalPath = process.env.PATH;
@@ -55,9 +56,8 @@ if (!route) throw new Error("unexpected url " + url);
 fs.writeFileSync(valueAfter("-D"), "HTTP/1.1 " + route.status + " " + route.statusText + "\\r\\n" + (route.location ? "Location: " + route.location + "\\r\\n" : "") + "\\r\\n");
 fs.writeFileSync(valueAfter("--output"), route.body || "");
 process.stdout.write(JSON.stringify({ url_effective: url, num_redirects: 0 }));
-`);
-	await chmod(curlPath, 0o755);
-	process.env.PATH = `${dir}:${originalPath ?? ""}`;
+`, { mode: 0o755 });
+	process.env.PATH = `${dir}${delimiter}${originalPath ?? ""}`;
 	process.env.PI_PROXY_TEST_LOG = logPath;
 	process.env.PI_PROXY_TEST_ROUTES = JSON.stringify(routes);
 	process.env.NO_PROXY = "";

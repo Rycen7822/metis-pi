@@ -3,11 +3,11 @@
   "target": "x86_64-unknown-linux-musl",
   "source": {
     "root": "native/tools",
-    "baseRevision": "73011973c86ea02b6c40a5461cc2e607148cb53e",
-    "baseRef": "v0.21.0-65-g7301197",
+    "baseRevision": "90aef0f2419368df2ea5c004fae55e55040d85c6",
+    "baseRef": "v0.21.0-67-g90aef0f",
     "modified": true,
     "verification": "Requires a Git checkout containing native/tools; installed packages contain helper bytes only.",
-    "sha256": "5749710e93ad2ab31004257716d4ad55974c769ecb4f017543ab9940f0d5d42d",
+    "sha256": "3154df2a6722e20693f9a5531142253f9d1e6f6135f47004c63ab071fec89b30",
     "inputs": [
       {
         "path": "native/tools/Cargo.lock",
@@ -63,7 +63,7 @@
       },
       {
         "path": "native/tools/crates/codex-utils-pty/win/mod.rs",
-        "sha256": "6027170742328984611d20ac73b685c8649f107eba5bffcee0de079b3275b575"
+        "sha256": "e15b782ce380851e12e940f77e0d60f59f4e54d4de12a51eebe1a4bd12c4a715"
       },
       {
         "path": "native/tools/crates/codex-utils-pty/win/procthreadattr.rs",
@@ -71,7 +71,7 @@
       },
       {
         "path": "native/tools/crates/codex-utils-pty/win/psuedocon.rs",
-        "sha256": "05e325e62fe8c2343df5f43b2c188762951baad38e24af208466981e9387df77"
+        "sha256": "f40812f7b67f69a3651416649a116850af235e1b0ca50fb55a4d36ed7e7db2a9"
       },
       {
         "path": "native/tools/crates/codex-utils-pty/windows_input.rs",
@@ -107,7 +107,7 @@
       },
       {
         "path": "scripts/lib/native-assets.mjs",
-        "sha256": "4b5cb7b87307db8314e509904f15e89c35e81d58c8460334669898e862f8dd1b"
+        "sha256": "5a4a865a01a3683dc9dcc13d057f2b4c45b569faf51640cf97f2b9046bdd4d82"
       }
     ]
   },

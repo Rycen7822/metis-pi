@@ -28,4 +28,10 @@ pub const RESCAN_MIN_INTERVAL_LARGE_INDEX: std::time::Duration =
 /// Live-file count at which [`RESCAN_MIN_INTERVAL_LARGE_INDEX`] takes over.
 pub const LARGE_INDEX_FILE_COUNT: usize = 1_000_000;
 
+// Longest indexed relative/absolute path the stack buffers accept. Linux uses
+// the kernel limit; Windows MAX_PATH is 260 UTF-16 units, which can expand to
+// three UTF-8 bytes per unit, so keep a separate, larger byte budget.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub const PATH_BUF_SIZE: usize = libc::PATH_MAX as usize;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub const PATH_BUF_SIZE: usize = 4096;

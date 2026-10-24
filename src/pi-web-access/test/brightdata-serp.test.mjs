@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild as runProviderChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild as runProviderChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -619,7 +619,7 @@ test("the key uses the shared credential-source path, resolved at request time",
 	);
 	await writeFile(
 		join(agentDir, "web-search.json"),
-		JSON.stringify({ brightdataApiKey: `!touch ${marker} && printf bd-command-key` }) + "\n",
+		JSON.stringify({ brightdataApiKey: await markerCredentialCommand(marker, "bd-command-key") }) + "\n",
 		"utf8",
 	);
 

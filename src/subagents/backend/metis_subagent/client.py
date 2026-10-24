@@ -1,12 +1,11 @@
 from __future__ import annotations
 import asyncio
 import contextlib
-import fcntl
 import os
 import subprocess
-import sys
 import time
-from .common import MAX_FRAME, DEFAULT_WAIT_SECONDS, DELIVERY_OPS, AgentError, dumps, private_dir, read_frame, socket_path, close_writer
+from . import ipc, locks
+from .common import IS_WINDOWS, DEFAULT_WAIT_SECONDS, DELIVERY_OPS, AgentError, dumps, private_dir, python_executable, read_frame, close_writer
 from . import PROTOCOL_VERSION
 from .paths import ENTRYPOINT
 
@@ -41,17 +40,15 @@ def call_timeout(op, params, home=None):
     return max(BASE_TIMEOUT, (seconds or 0) + 10)
 
 async def connect_daemon(home,autostart):
-    sock=socket_path(home)
-    async def connect(): return await asyncio.open_unix_connection(str(sock),limit=MAX_FRAME)
-    try: reader,writer=await connect()
+    try: reader,writer=await ipc.connect(home)
     except (FileNotFoundError,ConnectionRefusedError):
         if not autostart: raise AgentError('daemon_unavailable','Daemon is not running')
         private_dir(home)
         log=home/'daemon.log'
         if log.exists() and log.stat().st_size>512*1024:
             log.replace(home/'daemon.previous.log')
-        entry=ENTRYPOINT
         env=os.environ.copy(); env['PI_AGENTS_HOME']=str(home)
+        env['PYTHONUTF8']='1'
         until=time.monotonic()+boot_budget(home)
         started=False
         while True:
@@ -61,19 +58,19 @@ async def connect_daemon(home,autostart):
             if not started:
                 fd=os.open(home/'daemon.lock',os.O_RDWR|os.O_CREAT,0o600)
                 try:
-                    try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                    except BlockingIOError: pass
-                    else:
+                    if locks.try_lock(fd):
                         # Probe only. The child must acquire its own lease even
                         # if the parent is descheduled immediately after spawn.
-                        fcntl.flock(fd,fcntl.LOCK_UN)
+                        locks.unlock(fd)
+                        options = ({'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+                                   if IS_WINDOWS else {'start_new_session': True})
                         with log.open('ab') as f:
-                            subprocess.Popen([sys.executable,str(entry),'--home',str(home),'daemon'],stdin=subprocess.DEVNULL,
-                                             stdout=f,stderr=f,start_new_session=True,env=env,close_fds=True)
+                            subprocess.Popen([python_executable(),str(ENTRYPOINT),'--home',str(home),'daemon'],stdin=subprocess.DEVNULL,
+                                             stdout=f,stderr=f,env=env,cwd=home,close_fds=True,**options)
                         started=True
                         until=time.monotonic()+8
                 finally: os.close(fd)
-            try: reader,writer=await connect(); break
+            try: reader,writer=await ipc.connect(home); break
             except (FileNotFoundError,ConnectionRefusedError):
                 if time.monotonic()>until: raise AgentError('daemon_start_failed',f'Cannot start daemon; inspect {log}')
                 await asyncio.sleep(.05)

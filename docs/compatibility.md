@@ -6,9 +6,11 @@
 | --- | --- |
 | Pi | **1.4.0**；依赖、锁文件和 CI 使用同一基线。 |
 | Node.js | **22.19.0+**。 |
-| 子代理 | Linux/WSL、Python **3.11+**，使用父会话的 Pi SDK 和 Node。 |
-| PTY helper | 随包提供 **Linux x64** 静态可执行文件。 |
-| Neural Search | **Linux x64，glibc ≥2.31**。 |
+| 子代理 | Linux/WSL 或 Windows，Python **3.11+**；使用父会话的 Pi SDK 和 Node。 |
+| PTY helper | 随包提供 **Linux x64** 静态可执行文件及 **Windows x64** EXE；Windows 需要 ConPTY（Windows 10 1809+ / Windows 11）。 |
+| Neural Search | **Linux x64，glibc ≥2.31** 或 **Windows x64**；保留可选依赖 `ffi-rs`。 |
+
+Windows 的 Python 可通过 PATH 或 `py` launcher 查找；shell 命令需要 Git for Windows。Git Bash 不在默认位置时，在 Pi `settings.json` 设置 `shellPath`，例如 `"D:\\app\\Git\\bin\\bash.exe"`，不要误用 PATH 中的 WSL `bash.exe`。普通安装使用随包资产，无需 Rust/MSVC。更新前退出所有加载 Metis 的 Pi 进程，以免 DLL 被占用，完成后重新启动。
 
 其他平台需要对应原生资产和实际验证。在线服务、模型、终端图片协议及第三方插件组合需在使用环境验证。
 

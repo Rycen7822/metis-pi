@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -70,7 +70,7 @@ test("AnySearch accepts missing or null result content", async () => {
 
 test("AnySearch sends keyed auth and resolves command credentials lazily", async () => {
 	const marker = join(await mkdtemp(join(tmpdir(), "pi-web-access-anysearch-marker-")), "ran");
-	const home = await createHome({ anysearchApiKey: `!touch ${marker} && printf anysearch-command-key` });
+	const home = await createHome({ anysearchApiKey: await markerCredentialCommand(marker, "anysearch-command-key") });
 	const child = runChild(`
 		import { existsSync } from "node:fs";
 		let captured;

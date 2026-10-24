@@ -10,7 +10,7 @@ Explicit requests restart the daemon on demand; passive watches and automatic sy
 
 Interrupt stops current work; close terminates its owned worker. A verified parked/closed worker resumes from its saved session without replaying old input. Per-scope capacity includes live and cleanup-unverified workers, not retained history alone.
 
-On Linux/WSL, a worker guard adopts and reaps orphaned descendants, including detached process groups, before releasing the session lease. A generation-specific receipt and process ownership prove cleanup. If the guard dies first, inspect descendants before operator reconciliation; unknown ownership is never cleared automatically.
+On Linux/WSL, a worker guard adopts and reaps orphaned descendants, including detached process groups. On Windows, the guard joins a private kill-on-close Job Object before launching Pi; process creation times and job membership establish ownership. Cleanup precedes releasing the session lease. A generation-specific receipt and OS ownership prove cleanup; unknown ownership is never cleared automatically.
 
 ## Notification and input delivery
 

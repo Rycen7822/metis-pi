@@ -348,7 +348,7 @@ test("streamed write executes through the entry and real padded edits reach the 
   assert.equal(readFileSync(target, "utf8"), args.content, "the real write tool persists the streamed content");
   h.fire({ type: "tool_execution_end", toolCallId: "write-entry", toolName: "write", result, isError: false }, { cwd });
   write.updateResult({ ...result, isError: false });
-  assert.match(plain(write.render(80)), /• Added[\s\S]*\+3 -0[\s\S]*# first/);
+  assert.match(plain(write.render(80)), /• Added[\s\S]*\+3\s+-0[\s\S]*# first/);
   write.setExpanded(true);
   assert.match(plain(write.render(80)), /third/);
 

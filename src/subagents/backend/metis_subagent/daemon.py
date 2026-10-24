@@ -1,12 +1,12 @@
 from __future__ import annotations
 import asyncio
-import fcntl
 import json
 import os
 from pathlib import Path
 import signal
 import sys
-from .common import MAX_FRAME, DELIVERY_OPS, AgentError, check_peer, dumps, private_dir, read_frame, socket_path, close_writer
+from . import ipc, locks
+from .common import IS_WINDOWS, MAX_FRAME, DELIVERY_OPS, AgentError, dumps, private_dir, read_frame, close_writer
 from .runtime import Runtime
 from .schema import validate_op
 from . import PROTOCOL_VERSION
@@ -18,16 +18,13 @@ PASSIVE_OPS = frozenset(
 
 
 async def serve(home: Path):
-    if not sys.platform.startswith("linux"):
-        raise AgentError("unsupported_platform", "Version 0.1 supports Linux/WSL2 only")
+    if not (sys.platform.startswith("linux") or IS_WINDOWS):
+        raise AgentError("unsupported_platform", "Version 0.1 supports Linux/WSL2 and Windows")
     private_dir(home)
     fd = os.open(home / "daemon.lock", os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    if not locks.try_lock(fd):
         os.close(fd)
         return
-    sock = socket_path(home)
     runtime = None
     clients = {}
     operations = set()
@@ -35,7 +32,6 @@ async def serve(home: Path):
     try:
         runtime = Runtime(home)
         notifications = runtime.parent_notifications  # One idle-drain fact for admission and watchers.
-        sock.unlink(missing_ok=True)
 
         async def handle(reader, writer):
             nonlocal idle_since
@@ -48,7 +44,7 @@ async def serve(home: Path):
             op = None
             try:
                 try:
-                    check_peer(writer)
+                    ipc.check_peer(writer)
                     req = await asyncio.wait_for(read_frame(reader), 10)
                     if not isinstance(req, dict):
                         raise AgentError("invalid_request", "Expected an object")
@@ -129,11 +125,12 @@ async def serve(home: Path):
                 finally:
                     clients.pop(current, None)
 
-        server = await asyncio.start_unix_server(handle, str(sock), limit=MAX_FRAME)
-        os.chmod(sock, 0o600)
+        server = await ipc.serve(handle, home, limit=MAX_FRAME)
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, runtime.shutdown_requested.set)
+        # Console-less Windows daemons stop through shutdown or idle drain.
+        if not IS_WINDOWS:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, runtime.shutdown_requested.set)
         runtime.notify()  # Deliver durable pending attention, including restart reconciliation.
 
         async def monitor():
@@ -180,6 +177,6 @@ async def serve(home: Path):
         for t in list(clients):
             t.cancel()
     finally:
-        sock.unlink(missing_ok=True)
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        ipc.remove(home)
+        locks.unlock(fd)
         os.close(fd)

@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
@@ -62,7 +62,7 @@ test("Search1API resolves command credentials only when a request starts", async
 	);
 	const marker = join(markerDir, "ran");
 	const home = await createHome({
-		search1apiApiKey: `!touch ${marker} && printf synthetic-search1api-command-key`,
+		search1apiApiKey: await markerCredentialCommand(marker, "synthetic-search1api-command-key"),
 	});
 	const child = runChild(
 		`

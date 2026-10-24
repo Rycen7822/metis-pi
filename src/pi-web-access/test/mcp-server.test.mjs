@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -207,7 +207,7 @@ async function builtBinDir() {
 	const dependencies = join(repoRoot, "..", "..", "node_modules");
 	for (const entry of await readdir(dependencies)) {
 		if (entry === "typebox" || entry === "@earendil-works" || entry.startsWith(".")) continue;
-		await symlink(join(dependencies, entry), join(modules, entry));
+		await symlink(join(dependencies, entry), join(modules, entry), process.platform === "win32" ? "junction" : "dir");
 	}
 	binDir = dir;
 	return dir;
@@ -240,7 +240,7 @@ async function startBin(t, config) {
 	const imageUrl = `http://127.0.0.1:${origin.address().port}/pixel.png`;
 	const transport = new StdioClientTransport({
 		command: process.execPath,
-		args: ["--import", join(dir, "mock-fetch.mjs"), join(packagedRoot(dir), "src", "pi-web-access", "dist", "mcp-cli.js")],
+		args: ["--import", pathToFileURL(join(dir, "mock-fetch.mjs")).href, join(packagedRoot(dir), "src", "pi-web-access", "dist", "mcp-cli.js")],
 		cwd: dir,
 		env: {
 			HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key",

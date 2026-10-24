@@ -1,4 +1,4 @@
-import { runChild } from "./provider-fixtures.mjs";
+import { runChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -165,7 +165,7 @@ test("la clé passe par le chemin de credentials partagé, résolue à la requê
 	const marker = join(home, "serpdive-resolver-ran");
 	await writeFile(
 		join(agentDir, "web-search.json"),
-		JSON.stringify({ serpdiveApiKey: `!touch ${marker} && printf serpdive-command-key` }) + "\n",
+		JSON.stringify({ serpdiveApiKey: await markerCredentialCommand(marker, "serpdive-command-key") }) + "\n",
 		"utf8",
 	);
 

@@ -6,14 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from paths import ROOT
-from metis_subagent import RUNTIME_REVISION
-from metis_subagent.common import dumps, read_frame, socket_path
+from metis_subagent import RUNTIME_REVISION, ipc
+from metis_subagent.common import dumps, python_executable, read_frame
 
 class PiHostContracts(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='metis-subagent-host-')
         self.home=Path(self.tmp.name); self.revision=RUNTIME_REVISION; self.calls=[]; self.peers=[]; self.jobs=[]; self.spawn_mode=None
-        self.sock=socket_path(self.home)
         async def handle(reader,writer):
             self.peers.append(writer)
             try:
@@ -34,8 +33,8 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
             finally:
                 writer.close(); await writer.wait_closed()
         def connected(reader,writer): self.jobs.append(asyncio.create_task(handle(reader,writer)))
-        self.server=await asyncio.start_unix_server(connected,str(self.sock))
-        self.proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'main.py'),'--home',str(self.home),'pi-host',
+        self.server=await ipc.serve(connected,self.home)
+        self.proc=await asyncio.create_subprocess_exec(python_executable(),str(ROOT/'main.py'),'--home',str(self.home),'pi-host',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         self.rid=0
         self.addAsyncCleanup(self.cleanup)
@@ -52,7 +51,7 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
         self.server.close(); await self.server.wait_closed()
         for peer in self.peers: peer.close()
         await asyncio.gather(*self.jobs,return_exceptions=True)
-        self.sock.unlink(missing_ok=True); self.tmp.cleanup()
+        self.tmp.cleanup()
 
     async def call(self,op,p,**extra):
         self.rid+=1
@@ -84,7 +83,7 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts[0]['request_id'],'same-operation')
 
     async def test_passive_call_to_an_absent_daemon_does_not_autostart(self):
-        self.server.close(); await self.server.wait_closed(); self.sock.unlink()
+        self.server.close(); await self.server.wait_closed()
         result=await self.call('pi_watch',{},passive=True)
         self.assertFalse(result['ok']); self.assertEqual(result['error']['code'],'daemon_idle')
         self.assertFalse((self.home/'daemon.lock').exists(),'no daemon starter ran')

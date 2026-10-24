@@ -6,6 +6,7 @@ import { editWithExternalEditor } from "./external-editor.ts";
 
 let fixtureDir: string;
 let stdout: ReturnType<typeof vi.spyOn>;
+const nodeCommand = process.platform === "win32" ? `"${process.execPath}"` : process.execPath;
 
 beforeEach(() => {
 	fixtureDir = mkdtempSync(join(tmpdir(), "rpiv-external-editor-test-"));
@@ -27,7 +28,7 @@ describe("editWithExternalEditor", () => {
 			+ 'setInterval(() => {}, 100);');
 		const controller = new AbortController();
 		const tui = { stop: vi.fn(), start: vi.fn(), requestRender: vi.fn() };
-		const pending = editWithExternalEditor(tui, `${process.execPath} ${editor} ${ready}`, "draft", controller.signal);
+		const pending = editWithExternalEditor(tui, `${nodeCommand} ${editor} ${ready}`, "draft", controller.signal);
 		void pending.catch(() => {});
 		let pid: number | undefined;
 		try {
@@ -55,7 +56,7 @@ describe("editWithExternalEditor", () => {
 		);
 		const tui = { stop: vi.fn(), start: vi.fn(), requestRender: vi.fn() };
 
-		const result = await editWithExternalEditor(tui, `${process.execPath} ${editor}`, "draft");
+		const result = await editWithExternalEditor(tui, `${nodeCommand} ${editor}`, "draft");
 
 		expect(result).toBe("edited answer");
 		expect(tui.stop).toHaveBeenCalledOnce();
@@ -68,7 +69,7 @@ describe("editWithExternalEditor", () => {
 		writeFileSync(editor, "process.exit(7);");
 		const tui = { stop: vi.fn(), start: vi.fn(), requestRender: vi.fn() };
 
-		await expect(editWithExternalEditor(tui, `${process.execPath} ${editor}`, "draft")).rejects.toThrow(
+		await expect(editWithExternalEditor(tui, `${nodeCommand} ${editor}`, "draft")).rejects.toThrow(
 			"exit code 7",
 		);
 		expect(tui.start).toHaveBeenCalledOnce();

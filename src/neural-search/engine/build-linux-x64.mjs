@@ -61,7 +61,8 @@ function verify(manifest) {
 if (mode === "verify") {
   verify(JSON.parse(readFileSync(manifestPath, "utf8")));
 } else {
-  const rustc = command("rustc", ["--version"]);
+  const rustInfo = command("rustc", ["-vV"]);
+  const rustc = rustInfo.split("\n")[0];
   const zigPath = realpathSync(resolve(root, command("sh", ["-c", "command -v zig"])));
   const zig = command(zigPath, ["version"]);
   const zigbuild = command("cargo-zigbuild", ["--version"]);
@@ -81,13 +82,13 @@ if (mode === "verify") {
   if (/target-(?:cpu|feature)|target_feature/.test([...flags, targetFlags].join(" ")) || /(?:-march=|-mcpu=|-m(?:avx|sse|aes|bmi))/.test(cflags))
     throw new Error("Packaged search builds reject host-specific CPU flags; use the portable build environment.");
   flags.push("-Ctarget-cpu=x86-64");
-  writeNotices(root, source);
+  writeNotices(root, source, target);
   const before = inputs();
   // Do not reuse objects produced by an older compiler-selection policy.
   const output = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/neural-engine/target", "owned-rust1.94.0-zig0.16.0-zigbuild0.23.4");
   // Panic/source locations must not make checkout or Cargo-home paths part
   // of the shipped bytes. Keep recorded policy independent of host prefixes.
-  const remapPaths = [[root, "/metis-neural-search"], [realpathSync(resolve(root, process.env.CARGO_HOME ?? join(homedir(), ".cargo"))), "/cargo"], [output, "/metis-target"]];
+  const remapPaths = [[root, "/metis-neural-search"], [realpathSync(resolve(root, process.env.CARGO_HOME ?? join(homedir(), ".cargo"))), "/cargo"], [output, "/metis-target"], [join(command("rustc", ["--print", "sysroot"]), "lib/rustlib/src/rust"), `/rustc/${/^commit-hash: (.+)$/m.exec(rustInfo)[1]}`]];
   const compileFlags = [...flags, ...remapPaths.map(([from, to]) => `--remap-path-prefix=${from}=${to}`)];
   const args = ["zigbuild", "--manifest-path", "src/neural-search/engine/Cargo.toml", "--profile", "ci", "--locked", "--target", `${target}.2.31`, "-p", "fff-c"];
   execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...toolEnv, CARGO_ZIGBUILD_CACHE_DIR: output, CARGO_TARGET_DIR: output, CARGO_ENCODED_RUSTFLAGS: compileFlags.join("\x1f"), ZLOB_ZIG_CPU: "baseline" } });

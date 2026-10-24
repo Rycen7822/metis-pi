@@ -78,7 +78,7 @@ test("extractPDFToMarkdown uses Gemini before loading unpdf", () => {
 	try {
 		const child = spawnSync(
 			process.execPath,
-			["--experimental-loader", loaderPath, "--input-type=module"],
+			["--experimental-loader", pathToFileURL(loaderPath).href, "--input-type=module"],
 			{
 				input: buildChildScript(extractorUrl, false, "success"),
 				encoding: "utf8",
@@ -139,7 +139,7 @@ test("extractPDFToMarkdown passes PDF.js errors-only verbosity", () => {
 	try {
 		const child = spawnSync(
 			process.execPath,
-			["--experimental-loader", loaderPath, "--input-type=module"],
+			["--experimental-loader", pathToFileURL(loaderPath).href, "--input-type=module"],
 			{
 				input: buildChildScript(extractorUrl, true),
 				encoding: "utf8",

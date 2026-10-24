@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild as runProviderChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild as runProviderChild, markerCredentialCommand } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -47,7 +47,7 @@ test("Jina Search resolves command credentials only when a request starts", asyn
 	const markerDir = await mkdtemp(join(tmpdir(), "pi-web-access-jina-marker-"));
 	const marker = join(markerDir, "ran");
 	const home = await createHome({
-		jinaApiKey: `!touch ${marker} && printf synthetic-jina-command-key`,
+		jinaApiKey: await markerCredentialCommand(marker, "synthetic-jina-command-key"),
 	});
 	const child = runChild(`
 		import { existsSync } from "node:fs";

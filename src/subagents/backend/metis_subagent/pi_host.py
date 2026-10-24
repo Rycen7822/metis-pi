@@ -204,7 +204,7 @@ async def serve_pi(home):
             tasks[rid] = task
             task.add_done_callback(lambda t, key=rid: tasks.pop(key, None))
     finally:
-        io.transport.close()
+        io.close()
         pending = list(tasks.values())
         for task in pending:
             task.cancel()
@@ -212,4 +212,3 @@ async def serve_pi(home):
         if source and scope and not parked:
             with contextlib.suppress(AgentError, OSError, TimeoutError):
                 await request(home, "pi_detach", {"scope": scope}, timeout=2, autostart=False, source=source)
-        io.close()

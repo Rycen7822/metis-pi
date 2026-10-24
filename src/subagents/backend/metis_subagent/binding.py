@@ -37,6 +37,9 @@ class ScopeBindings:
         env = {k:v for k,v in snapshot.items() if k in allowed and isinstance(v,str)}
         profile = self.config['profiles'].get(spec.get('profile'),{})
         env.update(profile.get('env',{}))
+        # A profile or the operator's environment may spell UTF-8 differently;
+        # the managed child always speaks UTF-8 on its JSONL channel.
+        env['PYTHONUTF8'] = '1'
         env['PI_AGENTS_MANAGED_CHILD'] = '1'
         parent = json.loads(self.store.scope(sid)['parent'])
         env['PI_CODING_AGENT_DIR'] = parent['agent_dir']

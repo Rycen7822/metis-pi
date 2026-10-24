@@ -1,0 +1,8 @@
+# Asset source manifests must see identical checkout bytes on every platform.
+* text=auto eol=lf
+*.exe binary
+*.dll binary
+*.so binary
+*.wasm binary
+# Preserve generated third-party legal text and its manifest-recorded bytes.
+src/neural-search/assets/*NOTICES* -text -whitespace

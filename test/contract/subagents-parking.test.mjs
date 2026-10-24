@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +8,7 @@ import { isDaemonIdle, RuntimeError, SubagentClient } from "../../src/subagents/
 import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 import { SubagentSession } from "../../src/subagents/host/session.ts";
 import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
-import { subagentAdmin } from "../helpers/subagent-admin.mjs";
+import { subagentAdmin, waitForDaemonExit } from "../helpers/subagent-admin.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -49,17 +48,9 @@ async function fixture(t) {
       if (status(runtime, state))
         subagentAdmin(runtime, state, "shutdown", { force: true });
       if (clients.some((client) => client.scope))
-        execFileSync(
-          "python3",
-          [
-            "-c",
-            "import fcntl,sys; f=open(sys.argv[1],'rb'); fcntl.flock(f,fcntl.LOCK_EX)",
-            join(state, "daemon.lock"),
-          ],
-          { timeout: 20000 },
-        );
+        waitForDaemonExit(runtime, state);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     }
   });
   return { dir, state, runtime, client, clients, ctx };

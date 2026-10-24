@@ -6,7 +6,11 @@ import sys
 import tempfile
 import unittest
 from paths import ROOT, TEST_ROOT, REPO_ROOT, WORKER_ROOT
-from metis_subagent.common import AgentError, live_identity, crop
+from metis_subagent.common import BASE_ENV_KEYS, AgentError, live_identity, crop
+
+WINDOWS_BASE_ENV = tuple(k for k in BASE_ENV_KEYS if k.upper() in {
+    'SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','USERPROFILE','HOMEDRIVE','HOMEPATH',
+    'APPDATA','LOCALAPPDATA','TEMP','TMP'})
 from metis_subagent.client import call_timeout, boot_budget
 from unittest.mock import patch
 
@@ -62,10 +66,14 @@ class ClientTimeoutBudget(unittest.TestCase):
 
 class ProcessIdentity(unittest.TestCase):
     def test_pid_reuse_is_not_live_owner(self):
-        with patch('metis_subagent.common.process_identity',return_value='boot:new-tick'):
+        # Verdict logic shared by both platforms: patch the identity source that
+        # live_identity() actually consults.
+        source = ('metis_subagent.windows.process_identity' if sys.platform == 'win32'
+                  else 'metis_subagent.common.process_identity')
+        with patch(source,return_value='boot:new-tick'):
             self.assertFalse(live_identity(123,'boot:old-tick'))
             self.assertTrue(live_identity(123,'boot:new-tick'))
-        with patch('metis_subagent.common.process_identity',return_value='unknown'):
+        with patch(source,return_value='unknown'):
             self.assertIsNone(live_identity(123,'boot:old-tick'))
     def test_utf8_crop(self):
         self.assertEqual(crop('🙂字',4),'🙂')
@@ -134,7 +142,10 @@ class SdkTransport(unittest.TestCase):
                     '    pi.sendUserMessage("/policy-snapshot", {expandPromptTemplates:true});\n'
                     '  });\n'
                     '};\n')
-                env={'PATH':os.environ['PATH'],'HOME':tmp,'TMPDIR':tmp,'PI_CODING_AGENT_DIR':tmp,
+                # The plain-SDK baseline needs the same non-secret OS locations a
+                # managed child gets, or Node cannot start on Windows.
+                env={**{k: os.environ[k] for k in WINDOWS_BASE_ENV if k in os.environ},
+                     'PATH':os.environ['PATH'],'HOME':tmp,'TMPDIR':tmp,'PI_CODING_AGENT_DIR':tmp,
                      'XDG_CACHE_HOME':tmp,'XDG_CONFIG_HOME':tmp,'XDG_DATA_HOME':tmp,
                      'PI_AGENTS_HOST':'pi','PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1'}
                 cmd=['node',str(WORKER_ROOT/'pi-sdk.mjs'),str(sdk),'--offline',

@@ -37,6 +37,7 @@ use winapi::um::processthreadsapi::*;
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 
+pub(crate) use psuedocon::close_console;
 pub(crate) mod conpty;
 mod job;
 mod procthreadattr;
@@ -51,13 +52,19 @@ pub use psuedocon::conpty_supported;
 pub struct WinChild {
     proc: Mutex<OwnedHandle>,
     job: Arc<JobObject>,
+    // Closing the pseudoconsole ends the session, which breaks the output
+    // channel so the reader observes end-of-stream. Sharing it with the child
+    // ties that close to the process lifetime rather than to this crate's
+    // owning struct, which outlives the session.
+    con: Arc<Mutex<psuedocon::ConsoleHandle>>,
 }
 
 impl WinChild {
-    pub(crate) fn new(proc: OwnedHandle, job: Arc<JobObject>) -> Self {
+    pub(crate) fn new(proc: OwnedHandle, job: Arc<JobObject>, con: Arc<Mutex<psuedocon::ConsoleHandle>>) -> Self {
         Self {
             proc: Mutex::new(proc),
             job,
+            con,
         }
     }
 
@@ -85,6 +92,15 @@ impl WinChild {
         if let Err(err) = self.job.preserve_descendants() {
             log::warn!("ConPTY failed to preserve descendants after root exit: {err}");
         }
+    }
+}
+
+impl Drop for WinChild {
+    fn drop(&mut self) {
+        // Ends the session once the child is reaped; the close itself runs off
+        // this thread so the output reader keeps draining concurrently, which is
+        // what keeps ClosePseudoConsole from deadlocking.
+        close_console(&self.con);
     }
 }
 
