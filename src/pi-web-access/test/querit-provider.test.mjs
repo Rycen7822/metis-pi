@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild, markerCredentialCommand } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, markerCredentialCommand, availabilityFor } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
@@ -432,23 +432,7 @@ test("curator page exposes Querit as a manual provider", async () => {
 		["querit query"],
 		"session-token",
 		20,
-		{
-			all: false,
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: false,
-			search1api: false,
-			querit: true,
-			tavily: false,
-			serpdive: false,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-		},
+		availabilityFor("querit"),
 		"querit",
 		"querit",
 		[],

@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild as runProviderChild, markerCredentialCommand } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild as runProviderChild, markerCredentialCommand, availabilityFor } from "./provider-fixtures.mjs";
 import { stringify } from "smol-toml";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -1161,21 +1161,7 @@ test("curator page exposes Bright Data as a manual provider", async () => {
 		["brightdata query"],
 		"session-token",
 		20,
-		{
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: false,
-			tavily: false,
-			serpdive: false,
-			brightdata: true,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-		},
+		availabilityFor("brightdata"),
 		"brightdata",
 		"brightdata",
 		[],

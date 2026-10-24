@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild, markerCredentialCommand } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, markerCredentialCommand, availabilityFor } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
@@ -355,23 +355,7 @@ test("curator page exposes Search1API as a manual provider", async () => {
 		["search1api query"],
 		"session-token",
 		20,
-		{
-			all: false,
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: false,
-			search1api: true,
-			querit: false,
-			tavily: false,
-			serpdive: false,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-		},
+		availabilityFor("search1api"),
 		"search1api",
 		"search1api",
 		[],

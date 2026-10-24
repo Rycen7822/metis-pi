@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, availabilityFor } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 
@@ -185,23 +185,7 @@ test("curator page exposes Searchinfinity as a manual provider", async () => {
 		["searchinfinity query"],
 		"session-token",
 		20,
-		{
-			all: false,
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: false,
-			search1api: false,
-			searchinfinity: true,
-			tavily: false,
-			serpdive: false,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-		},
+		availabilityFor("searchinfinity"),
 		"searchinfinity",
 		"searchinfinity",
 		[],

@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, availabilityFor } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 
@@ -301,25 +301,7 @@ test("curator page exposes xAI as a manual provider", async () => {
 		["query"],
 		"token",
 		20,
-		{
-			all: false,
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: false,
-			search1api: false,
-			searchinfinity: false,
-			querit: false,
-			tavily: false,
-			serpdive: false,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-			xai: true,
-		},
+		availabilityFor("xai"),
 		"xai",
 		"xai",
 		[],

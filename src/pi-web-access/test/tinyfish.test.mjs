@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild, availabilityFor } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 
@@ -344,22 +344,7 @@ test("curator page exposes TinyFish as a manual provider", async () => {
 		["tinyfish query"],
 		"session-token",
 		20,
-		{
-			all: false,
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: true,
-			tavily: false,
-			serpdive: false,
-			brightdata: false,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-		},
+		availabilityFor("tinyfish"),
 		"tinyfish",
 		"tinyfish",
 		[],

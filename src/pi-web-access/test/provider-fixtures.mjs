@@ -5,6 +5,11 @@ import { basename, dirname, join } from "node:path";
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import { clearProviderEnvironment } from "./provider-env.mjs";
+import { RESOLVED_SEARCH_PROVIDERS } from "../search-providers.ts";
+
+export function availabilityFor(only) {
+  return { all: false, ...Object.fromEntries(RESOLVED_SEARCH_PROVIDERS.map(provider => [provider, provider === only])) };
+}
 
 export async function createHome(prefix, config = {}, agentPath = "") {
   const home = await mkdtemp(join(tmpdir(), prefix));

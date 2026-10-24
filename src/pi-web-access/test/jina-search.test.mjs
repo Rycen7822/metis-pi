@@ -1,4 +1,4 @@
-import { createHome as createProviderHome, runChild as runProviderChild, markerCredentialCommand } from "./provider-fixtures.mjs";
+import { createHome as createProviderHome, runChild as runProviderChild, markerCredentialCommand, availabilityFor } from "./provider-fixtures.mjs";
 
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -382,30 +382,7 @@ test("curator page exposes Jina Search as a manual provider", async () => {
 		["jina query"],
 		"session-token",
 		20,
-		{
-			all: false,
-			openai: false,
-			brave: false,
-			parallel: false,
-			tinyfish: false,
-			search1api: false,
-			searchinfinity: false,
-			querit: false,
-			tavily: false,
-			jina: true,
-			serpdive: false,
-			kagi: false,
-			ollama: false,
-			searxng: false,
-			perplexity: false,
-			exa: false,
-			gemini: false,
-			kimi: false,
-			anysearch: false,
-			xai: false,
-			brightdata: false,
-			serpbase: false,
-		},
+		availabilityFor("jina"),
 		"jina",
 		"jina",
 		[],
