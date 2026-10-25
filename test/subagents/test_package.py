@@ -127,9 +127,9 @@ class SdkTransport(unittest.TestCase):
                 events=root/'events.jsonl'
                 (root/'settings.json').write_text(json.dumps({'defaultTools':['codemode','read']}))
                 extension.write_text(
-                    f'import {{ createMcpExtension, createCodemodeExtension }} from {json.dumps(sdk.as_uri())};\n'
+                    f'import {{ createMcpExtension }} from {json.dumps(sdk.as_uri())};\n'
                     'export default pi => {\n'
-                    '  createMcpExtension()(pi); createCodemodeExtension()(pi);\n'
+                    '  createMcpExtension()(pi);\n'
                     '  pi.registerMcpServer("compat",'+json.dumps({'command':sys.executable,
                         'args':[str(TEST_ROOT/'fake_mcp_stdio.py')],
                         'env':{'FAKE_MCP_EVENTS':str(events),'FAKE_MCP_RESOURCES':'1'}})+');\n'
@@ -149,7 +149,7 @@ class SdkTransport(unittest.TestCase):
                      'XDG_CACHE_HOME':tmp,'XDG_CONFIG_HOME':tmp,'XDG_DATA_HOME':tmp,
                      'PI_AGENTS_HOST':'pi','PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1'}
                 cmd=['node',str(WORKER_ROOT/'pi-sdk.mjs'),str(sdk),'--offline',
-                     '--no-extensions','--no-skills','--no-context-files','--no-themes','--no-prompt-templates',
+                     '--no-skills','--no-context-files','--no-themes','--no-prompt-templates',
                      '--extension',str(TEST_ROOT/'pi_mock_provider.ts'),'--extension',str(extension),
                      '--provider','pi-mock-offline','--model','mock',*flags]
                 proc=subprocess.Popen(cmd,cwd=tmp,env=env,text=True,
@@ -181,6 +181,7 @@ class SdkTransport(unittest.TestCase):
                 self.assertEqual(set(snapshot['all']) & mcp,expected)
                 self.assertEqual('read' in snapshot['all'],read_allowed)
                 self.assertEqual('read' in snapshot['active'],read_allowed and '--no-builtin-tools' not in flags)
+                if read_allowed: self.assertIn('codemode',snapshot['active'])
                 stages=[json.loads(line)['event'] for line in events.read_text().splitlines()]
                 self.assertIn('tools-list-received',stages,'deny must not be inferred from a failed connection')
                 self.assertNotIn('resources-list-received',stages)

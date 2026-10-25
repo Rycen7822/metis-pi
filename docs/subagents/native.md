@@ -7,6 +7,7 @@ Metis provides durable Pi workers through deferred `subagents_*` tools. Discover
 - Linux/WSL or Windows, Python 3.11+, Node.js 22.19+ and Pi SDK 1.4.0. Children use the parent's SDK, Node executable and agent directory; Windows discovers installed Python through PATH or `py`.
 - Global `[subagents]` controls registration, capacity, timeouts, `childEnv` and profiles. Backend policy is loaded at daemon startup.
 - Profiles select tools, extensions, skills and optional model/thinking overrides. Read access is a tool policy, not an OS sandbox.
+- Workers load and activate Pi's native `codemode` and `tool_search` when enabled. Scripted calls obey the same access and no-recursion rules; explicit extension/tool exclusions remain effective.
 - Resolve registered model IDs and thinking capabilities before launch; do not guess them.
 
 See the [parameter guide](../../metis-pi-config.md) and [lifecycle](lifecycle.md).

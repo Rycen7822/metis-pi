@@ -197,11 +197,19 @@ const services = await sdk.createAgentSessionServices({
     systemPrompt: args.systemPrompt,
     appendSystemPrompt: args.appendSystemPrompt,
     extensionFactories: [
+      { name: "codemode", builtin: true, replaceable: true, factory: sdk.createCodemodeExtension() },
+      { name: "tool-search", builtin: true, replaceable: true, factory: sdk.createToolSearchExtension() },
       {
         name: "metis-subagent",
         hidden: true,
         factory(pi) {
-          pi.on("session_start", bindManagedActions);
+          pi.on("session_start", () => {
+            bindManagedActions();
+            const discovery = pi.getAllTools().filter(tool =>
+              tool.name === "codemode" && tool.sourceInfo.path === "builtin:codemode" ||
+              tool.name === "tool_search" && tool.sourceInfo.path === "builtin:tool-search");
+            pi.setActiveTools([...new Set([...pi.getActiveTools(), ...discovery.map(tool => tool.name)])]);
+          });
           pi.registerTool({
             name: "ask_parent",
             label: "Ask parent agent",
