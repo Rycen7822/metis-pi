@@ -363,6 +363,7 @@ test("streamed write executes through the entry and real padded edits reach the 
   const edit = h.row("edit", "edit-entry", editArgs, undefined, cwd);
   edit.markExecutionStarted();
   edit.updateResult({ ...edited, isError: false });
+  edit.setExpanded(true);
   const rows = edit.render(80);
   assert.ok(rows.every((line) => visibleWidth(line) <= 80));
   const text = rows.map(stripVTControlCharacters);
