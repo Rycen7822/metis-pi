@@ -127,7 +127,7 @@ function renderCollapsedOutput(result: CollapsedExecOutput, theme: { fg(role: st
   };
 }
 
-function renderCall(
+export function renderExecCall(
   args: { cmd?: unknown },
   theme: { fg(role: string, text: string): string; bold(text: string): string },
   context: ExecCommandRenderContextLike | undefined,
@@ -137,7 +137,7 @@ function renderCall(
   return typeof text === "string" ? new Text(text, 0, 0) : text;
 }
 
-function renderResult(
+export function renderExecResult(
   result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown | undefined },
   renderOptions: { expanded: boolean; isPartial: boolean },
   theme: { fg(role: string, text: string): string },
@@ -195,12 +195,12 @@ export function createExecCommandTool(sessions: ExecSessionManager, options: Exe
             args: { cmd?: unknown },
             theme: { fg(role: string, text: string): string; bold(text: string): string },
             context?: ExecCommandRenderContextLike,
-          ) => renderCall(args, theme, context)) as never,
+          ) => renderExecCall(args, theme, context)) as never,
           renderResult: ((
             result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown },
             renderOptions: { expanded: boolean; isPartial: boolean },
             theme: { fg(role: string, text: string): string },
-          ) => renderResult(result, renderOptions, theme)) as never,
+          ) => renderExecResult(result, renderOptions, theme)) as never,
         }),
   };
   return tool;

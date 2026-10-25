@@ -213,7 +213,7 @@ export class SubagentSession {
                 { agent_id: id, after },
                 signal,
               )) as unknown as AgentInspection,
-            this.readAppearance().thinking,
+            this.readAppearance(),
             () => saved ? [saved] : this.agents,
             !saved,
           )),

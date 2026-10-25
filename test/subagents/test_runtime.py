@@ -710,6 +710,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.wait(final["run_id"]))["runs"][0]["state"], "completed")
 
     async def test_pi_view_reads_complete_messages_without_consuming_attention_or_signatures(self):
+        self.command += ["--fixture-tool-renderers", json.dumps({"read": "builtin", "codemode": "builtin"})]
         started = await self.spawn()
         await self.wait(started["run_id"])
         a = self.rt.store.agent(self.scope, started["agent_id"])
@@ -725,7 +726,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                     "role": "assistant",
                     "content": [
                         {"type": "thinking", "thinking": "检查依赖", "thinkingSignature": "private-signature"},
-                        {"type": "toolCall", "id": "call", "name": "read", "arguments": {"path": "file.ts"}},
+                        {"type": "toolCall", "id": "call", "name": "codemode", "arguments": {"code": 'text(await tools.read({path:"file.png"}));'}},
                     ],
                 },
             },
@@ -735,7 +736,9 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 "message": {
                     "role": "toolResult",
                     "toolCallId": "call",
-                    "toolName": "read",
+                    "toolName": "codemode",
+                    "durationMs": 1250,
+                    "nestedCalls": {"complete": True, "calls": [{"id": "call/1", "name": "read", "status": "ok", "arguments": {"path": "file.png"}}]},
                     "content": [
                         {"type": "text", "text": "file contents"},
                         {"type": "image", "data": "private-image", "mimeType": "image/png"},
@@ -750,6 +753,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         notifications = [dict(row) for row in self.rt.store.all("SELECT * FROM parent_notifications")]
         first = await host.dispatch("pi_view", params, source)
         self.assertEqual(first["next_cursor"], len(raw[0]))
+        self.assertEqual(first["tool_renderers"], {"read": "builtin", "codemode": "builtin"})
         self.assertEqual(first["messages"][0]["message"]["content"][0], {"type": "thinking", "thinking": "检查依赖"})
         params["after"] = first["next_cursor"]
         self.assertEqual((await host.dispatch("pi_view", params, source))["messages"], [])
@@ -760,6 +764,10 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             final["messages"][0]["message"]["content"], [{"type": "text", "text": "file contents"}, {"type": "image"}]
         )
         self.assertEqual(final["next_cursor"], sum(map(len, raw)))
+        projected = final["messages"][0]["message"]
+        self.assertEqual(projected["durationMs"], 1250)
+        self.assertEqual(projected["nestedCalls"]["calls"][0]["arguments"], {"path": "file.png"})
+        self.assertNotIn("private-signature", json.dumps([first, final]))
         self.assertEqual([dict(row) for row in self.rt.store.all("SELECT * FROM parent_notifications")], notifications)
         self.assertFalse(
             self.rt.store.one(

@@ -31,6 +31,7 @@ p.add_argument("--no-context-files", action="store_true")
 p.add_argument("--handle-prompt", action="store_true")
 p.add_argument("--hold-prompt-ms", type=int, default=0)
 p.add_argument("--no-managed-protocol", action="store_true")
+p.add_argument("--fixture-tool-renderers", type=json.loads, default={})
 p.add_argument("--reject-abort", action="store_true")
 a, _ = p.parse_known_args()
 if a.no_context_files and any(Path(path).name == "managed-context.ts" for path in a.extension or []):
@@ -420,6 +421,7 @@ async def main():
             state = {
                 "sessionFile": str(path),
                 "sessionId": "fake-session",
+                "toolRenderers": a.fixture_tool_renderers,
                 "isStreaming": bool(current and not current.done()),
                 "model": {"id": "fake", "provider": "test"},
                 "env_probe": {

@@ -262,6 +262,7 @@ class Runtime:
                     'The child must use metis-subagent SDK transport; stock Pi RPC and host patches are not supported')
             if spec.get('host')=='pi':
                 if state.get('nativeHost')!='pi': raise AgentError('context_unavailable','Pi native host policy did not initialize')
+            spec['tool_renderers'] = state.get('toolRenderers', {})
             if spec.get('surface'):
                 report=await worker.surface_report(w)
                 self.store.event(aid,None,generation,'tool_surface',bounded(report if report is not None else {'ok':False,'reason':'no-report'},2048))
@@ -276,7 +277,7 @@ class Runtime:
                 if '--provider' not in spec['argv'] and resolved_model.get('provider'):
                     spec['argv'] += ['--provider',resolved_model['provider']]
                 spec['resolved_model']={'id':resolved_model['id'],'provider':resolved_model.get('provider')}
-                self.store.agent_update(aid,launch=dumps(spec))
+            self.store.agent_update(aid,launch=dumps(spec))
             w.idle_since=time.monotonic()
             self.store.agent_update(aid,state='idle',cleanup='not_checked')
             self.event(w,'worker_ready',{'pi_session_id':state.get('sessionId'),'model':bounded(state.get('model'),1000)})

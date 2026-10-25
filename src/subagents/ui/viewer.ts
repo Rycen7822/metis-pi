@@ -11,6 +11,7 @@ import {
 import { DEFAULT_CONFIG, type AppearanceConfig } from "../../appearance/config.ts";
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
 import { activeAgents } from "./widget.ts";
+import type { ToolPresentation } from "../../presentation/tool-source.mjs";
 
 export interface AgentInspection {
   agent: {
@@ -22,6 +23,7 @@ export interface AgentInspection {
     active_tools?: string[];
   };
   messages: Array<{ id: string; message: ViewerMessage }>;
+  tool_renderers?: Record<string, ToolPresentation>;
   session_file: string;
   reset?: boolean;
   next_cursor: number;
@@ -78,7 +80,7 @@ export class SubagentViewer implements Component {
   private readonly done: (value: undefined) => void;
   private readonly abort: AbortController;
   private readonly inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>;
-  private readonly thinking: AppearanceConfig["thinking"];
+  private readonly appearance: AppearanceConfig;
   private readonly agentSource: () => ViewerAgent[];
   private readonly live: boolean;
 
@@ -90,13 +92,13 @@ export class SubagentViewer implements Component {
     done: (value: undefined) => void,
     abort: AbortController,
     inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>,
-    thinking: AppearanceConfig["thinking"] = DEFAULT_CONFIG.thinking,
+    appearance: AppearanceConfig = DEFAULT_CONFIG,
     agentSource: () => ViewerAgent[],
     live = true,
   ) {
     this.agentId = agentId; this.theme = theme; this.tui = tui; this.keys = keys;
     this.done = done; this.abort = abort; this.inspect = inspect;
-    this.thinking = thinking; this.agentSource = agentSource; this.live = live;
+    this.appearance = appearance; this.agentSource = agentSource; this.live = live;
     this.cacheView(agentId);
     this.onAbort = () => this.close();
     abort.signal.addEventListener("abort", this.onAbort, { once: true });
@@ -131,7 +133,7 @@ export class SubagentViewer implements Component {
     if (view) this.views.delete(id);
     else {
       const state: AgentView = {
-        content: new ViewerContent(this.theme, this.tui, this.thinking, () => {
+        content: new ViewerContent(this.theme, this.tui, this.appearance, () => {
           state.cachedWidth = -1;
           if (!this.disposed && this.view === state) this.tui.requestRender();
         }),
@@ -183,6 +185,7 @@ export class SubagentViewer implements Component {
       view.snapshot = snapshot; view.cursor = snapshot.next_cursor; more = snapshot.has_more;
       if (snapshot.agent.name) this.agents.set(this.agentId, { ...this.agents.get(this.agentId)!, name: snapshot.agent.name });
       if (snapshot.history_pruned) view.truncated = true;
+      view.content.setToolRenderers(snapshot.tool_renderers ?? {});
       for (const entry of snapshot.messages) view.content.append(entry.message, snapshot.agent.cwd ?? "");
       view.truncated ||= view.content.truncated;
       view.error = ""; view.cachedWidth = -1;
@@ -405,7 +408,7 @@ export class SubagentViewer implements Component {
     const body = view.lines.slice(offset, offset + this.pageSize);
     while (body.length < this.pageSize) body.push("");
     content.push(...body,
-      this.theme.fg("muted", `Click to fold · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`),
+      this.theme.fg("muted", `Click tools/thoughts · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`),
     );
     const header = this.renderHeader(width);
     const border = (text: string) => this.theme.fg("border", text);

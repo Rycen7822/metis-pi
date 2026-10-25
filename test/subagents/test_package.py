@@ -176,6 +176,8 @@ class SdkTransport(unittest.TestCase):
                 ready=next(e for e in map(json.loads,stdout.splitlines()) if e.get('id')=='ready')
                 self.assertTrue(ready['success'],ready)
                 self.assertFalse(ready['data'].get('configurationError'),ready)
+                self.assertEqual(ready['data']['toolRenderers'].get('read'),'builtin' if read_allowed else None)
+                if read_allowed: self.assertEqual(ready['data']['toolRenderers'].get('codemode'),'builtin')
                 snapshot=json.loads(next(line.removeprefix('POLICY_SNAPSHOT ')
                     for line in stderr.splitlines() if line.startswith('POLICY_SNAPSHOT ')))
                 self.assertEqual(set(snapshot['all']) & mcp,expected)

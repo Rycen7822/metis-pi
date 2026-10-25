@@ -5,6 +5,8 @@ import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { SubagentViewer } from "../../src/subagents/ui/viewer.ts";
+import { execToolResult } from "../../src/execution/exec/results.ts";
+import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
 import { sgr, theme } from "../helpers.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 
@@ -12,12 +14,17 @@ initTheme("dark", false);
 
 const defaultAgents = ["reader", "writer", "tester"].map(name => ({ id: name, name, state: "running" }));
 const textMessage = text => ({ role: "assistant", content: [{ type: "text", text }] });
+// Trusted registration metadata supplied separately from serialized messages.
+const toolRenderers = { bash: "builtin", read: "builtin", grep: "builtin", find: "builtin", ls: "builtin",
+  codemode: "builtin", tool_search: "builtin", write: "fusion", edit: "fusion", exec_command: "execution",
+  neural_search: "neural", subagents_wait_agent: "subagents", pi_wait_agent: "subagents" };
 const inspection = (agentId, messages = [], options = {}) => ({
   agent: { name: agentId, state: "running" },
   messages: messages.map((message, id) => ({ id: String(id), message })),
   session_file: `${agentId}.jsonl`,
   next_cursor: 1,
   has_more: false,
+  tool_renderers: toolRenderers,
   ...options,
 });
 
@@ -44,7 +51,7 @@ function popup(t, options = {}) {
       calls.push({ agentId, after, signal });
       return inspect(agentId, after, signal);
     },
-    undefined, agents, options.live,
+    options.appearance, agents, options.live,
   );
   t.after(() => viewer.dispose());
   const rows = (width = 90) => viewer.render(width).map(stripVTControlCharacters);
@@ -108,7 +115,8 @@ test("conversation popup keeps native click folds through refresh and scrolling"
     {
       role: "assistant",
       content: [
-        { type: "thinking", thinking: Array.from({ length: 18 }, (_, i) => `THINK_${i + 1}`).join("\n\n") },
+        { type: "thinking", thinking: Array.from({ length: 9 }, (_, i) => `THINK_${i + 1}`).join("\n\n") },
+        { type: "thinking", thinking: Array.from({ length: 9 }, (_, i) => `THINK_${i + 10}`).join("\n\n") },
         { type: "toolCall", id: "shell", name: "bash", arguments: { command: "printf 'hello world'" } },
       ],
     },
@@ -118,6 +126,12 @@ test("conversation popup keeps native click folds through refresh and scrolling"
       toolName: "bash",
       content: [{ type: "text", text: Array.from({ length: 14 }, (_, i) => `OUTPUT_${i + 1}`).join("\n") }],
     },
+    { role: "assistant", content: [
+      { type: "toolCall", id: "read-group", name: "read", arguments: { path: "GROUP_FIRST.txt" } },
+      { type: "toolCall", id: "search-group", name: "neural_search", arguments: { action: "grep", params: { pattern: "GROUP_QUERY" } } },
+    ] },
+    ...["read-group", "search-group"].map(id => ({ role: "toolResult", toolCallId: id,
+      toolName: id === "read-group" ? "read" : "neural_search", content: [{ type: "text", text: "hidden exploration output" }] })),
   ];
   let sent = false,
     refreshes = 0;
@@ -139,6 +153,7 @@ test("conversation popup keeps native click folds through refresh and scrolling"
         agent: { name: "reader", state: "running" },
         messages: sent ? [] : messages.map((message, id) => ({ id: String(id), message })),
         session_file: "saved.jsonl",
+        tool_renderers: toolRenderers,
         next_cursor: 1,
         has_more: false,
       };
@@ -157,6 +172,8 @@ test("conversation popup keeps native click folds through refresh and scrolling"
     return viewer.handleMouse({ type, button, x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 });
   };
   assert.ok(!rows().some(row => row.includes("OUTPUT_7")));
+  assert.equal(rows().filter(row => row.includes("Explored")).length, 1, "read and owned neural search share one exploration header");
+  assert.match(rows().join("\n"), /GROUP_FIRST\.txt[\s\S]*GROUP_QUERY/);
   assert.equal(click("Ran").handled, true);
   assert.ok(rows().some(row => row.includes("OUTPUT_7")));
   click("Ran"); assert.ok(!rows().some(row => row.includes("OUTPUT_7")));
@@ -184,6 +201,74 @@ test("conversation popup keeps native click folds through refresh and scrolling"
   tui.terminal.rows = 30; click("Ran"); viewer.handleInput("\u001b[F");
   click("OUTPUT_7"); assert.ok(!rows().some(row => row.includes("OUTPUT_7")), "scrolled output receives the correct native mouse coordinates");
   for (const width of [1, 4, 40]) assert.ok(viewer.render(width).every(row => visibleWidth(row) <= width));
+});
+
+test("conversation reuses codemode folds and keeps unrecognized tools bounded", async t => {
+  const messages = ["codemode", "tool_search"].flatMap(name => [
+    { role: "assistant", content: [{ type: "toolCall", id: name, name, arguments: name === "codemode" ? { code: "// SOURCE_MARKER\ntext(await tools.read({path:\"FULL_NESTED_PATH\"}));" } : { query: "tools" } }] },
+    { role: "toolResult", toolCallId: name, toolName: name, durationMs: 1250,
+      content: [{ type: "text", text: Array.from({ length: 20 }, (_, i) => `RESULT_${name}_${i}`).join("\n") }],
+      details: { calls: name === "codemode" ? [{ id: "codemode/1", name: "read", status: "ok", args: "{truncated" }] : [] },
+      ...(name === "codemode" ? { nestedCalls: { complete: true, calls: [{ id: "codemode/1", name: "read", status: "ok", arguments: { path: "FULL_NESTED_PATH" } }] } } : {}), },
+  ]);
+  const { viewer, rows, clickText } = popup(t, { messages: { reader: messages } });
+  await nextTurn();
+  assert.doesNotMatch(rows().join("\n"), /SOURCE_MARKER|RESULT_codemode_19|RESULT_tool_search_19/);
+  assert.match(rows().join("\n"), /Took 1\.3s/);
+  assert.match(rows().join("\n"), /FULL_NESTED_PATH/, "saved nested arguments survive the popup renderer bridge");
+  clickText("codemode");
+  assert.match(rows().join("\n"), /SOURCE_MARKER/);
+  assert.doesNotMatch(rows().join("\n"), /RESULT_codemode_19/, "script and output fold independently");
+  viewer.handleInput("\u000f");
+  assert.match(rows().join("\n"), /RESULT_codemode_19|RESULT_tool_search_19/);
+});
+
+test("conversation preserves mutation evidence, follow-up commands and native execution status", async t => {
+  const change = { kind: "update", added: 1, removed: 1, rows: [
+    { kind: "remove", oldNumber: 1, content: "BEFORE_LINE" }, { kind: "add", newNumber: 1, content: "AFTER_LINE" },
+  ] };
+  const cases = [
+    ["write", { path: "note.md", content: "AFTER_LINE\n" }, { metisWriteDiff: change }, false, /BEFORE_LINE/],
+    ["write", { path: "note.md", content: "AFTER_LINE\n", then_run: { command: "verify" } },
+      { metisWriteDiff: change, metisActionFusion: { version: 1, mutationStatus: "success",
+        command: { command: "verify", status: "failed", exitCode: 3, outputBlock: 2 } } }, true, /BEFORE_LINE[\s\S]*COMMAND_MARKER/],
+    ["edit", { path: "note.md", edits: [{ oldText: "BEFORE_LINE", newText: "AFTER_LINE" }], then_run: { command: "verify" } },
+      { diff: "-1 BEFORE_LINE\n+1 AFTER_LINE", metisActionFusion: { version: 1, mutationStatus: "success",
+        command: { command: "verify", status: "succeeded", exitCode: 0, outputBlock: 2 } } }, false, /AFTER_LINE[\s\S]*COMMAND_MARKER/],
+    ["exec_command", { cmd: "verify" }, { output: "RESULT\n".repeat(12), session_id: 17, wall_time_seconds: 1.25 },
+      false, /Session 17 still running/],
+  ];
+  for (const [name, args, details, isError, expected] of cases) await t.test(`${name} ${details.metisActionFusion?.command.status ?? "result"}`, async t => {
+    const { rows } = popup(t, { messages: { reader: [
+      { role: "assistant", content: [{ type: "toolCall", id: "call", name, arguments: args }] },
+      { role: "toolResult", toolCallId: "call", toolName: name, isError, details,
+        content: name === "exec_command" ? execToolResult(details, args.cmd).content : [
+          { type: "text", text: "Successfully changed note.md" }, { type: "text", text: "COMMAND_MARKER" },
+        ] },
+    ] } });
+    await nextTurn();
+    const rendered = rows().join("\n");
+    assert.match(rendered, expected);
+    assert.doesNotMatch(rendered, /write failed|not written|Chunk ID:/);
+  });
+});
+
+test("conversation respects registration and appearance opt-outs", async t => {
+  const { rows } = popup(t, { inspect: async () => inspection("reader", [
+    { role: "assistant", content: [{ type: "toolCall", id: "foreign", name: "write", arguments: { path: "note.md", content: "text" } }] },
+    { role: "toolResult", toolCallId: "foreign", toolName: "write", isError: true,
+      content: [{ type: "text", text: "FOREIGN_ERROR" }] },
+  ], { tool_renderers: {} }) });
+  await nextTurn();
+  assert.match(rows().join("\n"), /FOREIGN_ERROR/);
+  assert.doesNotMatch(rows().join("\n"), /write failed|not written|Wrote note.md/);
+  const native = popup(t, { appearance: { ...DEFAULT_CONFIG, enabled: false }, messages: { reader: [
+    { role: "assistant", content: [{ type: "thinking", thinking: "VISIBLE_NATIVE_THOUGHT" },
+      { type: "toolCall", id: "native", name: "codemode", arguments: { code: "text(1)" } }] },
+    { role: "toolResult", toolCallId: "native", toolName: "codemode", content: [{ type: "text", text: "NATIVE_FALLBACK" }] },
+  ] } });
+  await nextTurn();
+  assert.match(native.rows().join("\n"), /VISIBLE_NATIVE_THOUGHT[\s\S]*NATIVE_FALLBACK/);
 });
 
 test("conversation tools retain subagent summaries for current and pre-rename transcripts", async t => {

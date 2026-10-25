@@ -427,6 +427,23 @@ export class TranscriptState {
     this.memberOf.set(toolCallId, group.id);
   }
 
+  /** A bounded replay surface may release tools the main transcript still retains. */
+  retainTools(ids: ReadonlySet<string>): void {
+    for (const [id, group] of this.groups) {
+      for (let index = group.members.length - 1; index >= 0; index--) {
+        const member = group.members[index]!;
+        if (!ids.has(member.toolCallId)) {
+          this.memberOf.delete(member.toolCallId);
+          group.members.splice(index, 1);
+        }
+      }
+      if (!group.members.length) {
+        this.groups.delete(id);
+        if (this.openGroupId === id) this.openGroupId = undefined;
+      }
+    }
+  }
+
   /** Display plan for an exploration member row (or undefined if ungrouped). */
   explorationPlan(toolCallId: string): ExplorationPlan | undefined {
     const groupId = this.memberOf.get(toolCallId);

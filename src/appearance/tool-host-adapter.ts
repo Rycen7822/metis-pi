@@ -1,7 +1,7 @@
 import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "../presentation/tool-names.ts";
 import type { Component, Palette, Renderers, ViewContext, ViewOptions } from "../presentation/contracts.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "../selection-copy/model.ts";
-import { OWNED_EXECUTION_ENTRY, OWNED_FUSION_ENTRY, OWNED_NEURAL_SEARCH_ENTRY } from "../extension-paths.ts";
+import { toolPresentation } from "../presentation/tool-source.mjs";
 import { fusionRenderers } from "./transcript/fusion-view.ts";
 import type { NestedRendererLookup } from "./transcript/codemode-view.ts";
 
@@ -223,20 +223,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // Respect third-party overrides of builtin names; only named FFF searches opt in.
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
-    const source = asRecord(info.sourceInfo);
-    if (
-      (name === "edit" || name === "write") &&
-      typeof source.source === "string" &&
-      source.path === OWNED_FUSION_ENTRY
-    ) {
+    const kind = toolPresentation(name, info.sourceInfo);
+    if ((name === "edit" || name === "write") && kind === "fusion") {
       return fusionRenderers(options.renderers[name], options.renderers.bash, () => current.result);
     }
-    if (
-      name === "exec_command" &&
-      options.highlightOwnedCommand &&
-      typeof source.source === "string" &&
-      source.path === OWNED_EXECUTION_ENTRY
-    ) {
+    if (kind === "execution" && options.highlightOwnedCommand) {
       const call = definition.renderCall;
       const result = definition.renderResult;
       if (typeof call !== "function" || typeof result !== "function") return;
@@ -258,7 +249,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
       };
     }
-    if (name === "codemode" && source.source === "builtin" && source.path === "builtin:codemode" && codemode)
+    if (name === "codemode" && kind === "builtin" && codemode)
       return {
         renderCall: codemode.renderCall,
         // Native render callbacks omit the persisted nested-call argument ledger.
@@ -271,7 +262,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
           ),
       };
     if (name === "neural_search") {
-      if (typeof source.source !== "string" || source.path !== OWNED_NEURAL_SEARCH_ENTRY) return;
+      if (kind !== "neural") return;
       const call = definition.renderCall;
       const result = definition.renderResult;
       if (typeof call !== "function" || typeof result !== "function") return;
@@ -284,10 +275,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       };
     }
     if (!TOOL_NAMES.includes(name as ToolName)) return;
-    const builtin = source.source === "builtin" && source.path === `builtin:${name}`;
-    const fff = (name === "ffgrep" || name === "fffind") && typeof source.path === "string" && typeof source.source === "string"
-      && (source.source === "npm:@ff-labs/pi-fff" || source.source.startsWith("npm:@ff-labs/pi-fff@"));
-    if (!builtin && !fff) return;
+    if (kind !== "builtin" && kind !== "fff") return;
     // Approved self-shell tools use the same compact renderer as text tools;
     // other provider origins and independent overlays have backed off above.
     return options.renderers[name as ToolName];

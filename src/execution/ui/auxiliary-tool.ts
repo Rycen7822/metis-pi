@@ -17,7 +17,7 @@ interface AuxiliaryToolPresentation {
 export function auxiliaryToolRenderers(
 	failureTitle: string,
 	present: (args: Record<string, unknown>, result?: AgentToolResult<unknown>) => AuxiliaryToolPresentation,
-): Pick<ToolDefinition, "renderCall" | "renderResult"> {
+): Required<Pick<ToolDefinition, "renderCall" | "renderResult">> {
 	return {
 		renderCall(args, theme, context) {
 			const view = present(displayRecord(args));

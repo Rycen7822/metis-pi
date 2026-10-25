@@ -59,6 +59,7 @@ def conversation(store, worker_for, p):
         "has_more": False,
         "session_file": a["session_file"],
         "history_pruned": False,
+        "tool_renderers": json.loads(a["launch"]).get("tool_renderers", {}),
     }
     if run:
         result["run"] = brief_run({**run, "name": a["name"]})
@@ -103,7 +104,7 @@ def conversation(store, worker_for, p):
             ]
         display = {
             k: message[k]
-            for k in ("role", "toolCallId", "toolName", "isError", "details", "errorMessage")
+            for k in ("role", "toolCallId", "toolName", "isError", "details", "errorMessage", "nestedCalls", "durationMs")
             if k in message
         }
         display["content"] = content

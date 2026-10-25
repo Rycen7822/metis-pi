@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { TaskQueue } from "./task-queue.mjs";
 import { configureNetwork } from "./network.mjs";
 import { createProtocolOutput, projectSdkEvent } from "./protocol-output.mjs";
+import { toolPresentation } from "../../presentation/tool-source.mjs";
 
 // Only this writer owns the protocol pipe. Extension console/terminal output is
 // diagnostic data, even when it contains JSON or lacks a trailing newline.
@@ -426,6 +427,10 @@ async function command(request) {
           thinking: session.thinkingLevel,
           availableThinking: session.getAvailableThinkingLevels(),
           configurationError: thinkingError,
+          toolRenderers: Object.fromEntries(session.getAllTools().flatMap(tool => {
+            const kind = toolPresentation(tool.name, tool.sourceInfo);
+            return kind ? [[tool.name, kind]] : [];
+          })),
           isStreaming: Boolean(queue.active),
         });
         break;

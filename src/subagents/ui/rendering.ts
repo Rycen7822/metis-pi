@@ -51,9 +51,11 @@ function summary(name: string, data: Record<string, unknown>): string {
   return [data.name ?? data.agent_id, data.state ?? data.delivery ?? "Accepted"].filter(Boolean).join(" · ");
 }
 
+export const isSubagentTool = (name: string): boolean => Object.hasOwn(titles, name.replace(/^pi_/, "subagents_"));
+
 export function subagentToolRenderers(
   name: string,
-): Pick<ToolDefinition, "renderCall" | "renderResult" | "renderShell"> {
+): Required<Pick<ToolDefinition, "renderCall" | "renderResult" | "renderShell">> {
   // Read pre-rename transcripts without registering callable aliases.
   const canonical = name.replace(/^pi_/, "subagents_");
   const [active, complete] = titles[canonical] ?? [name, name];
@@ -96,7 +98,7 @@ export function subagentToolRenderers(
     ...base,
     renderShell: "self",
     renderCall(args, theme, context) {
-      const head = base.renderCall!(args, theme, context);
+      const head = base.renderCall(args, theme, context);
       if (!context.expanded) return head;
       const box = new Container();
       box.addChild(head);
