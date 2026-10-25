@@ -73,24 +73,29 @@ test("failure output is visible even when collapsed", () => {
   assert.match(multi, /TWO/);
 });
 
-test("edit diffs use line-number-first Codex ordering and are not arbitrarily truncated", () => {
+test("edit and write previews start at the first change and expand to the complete diff", () => {
   const diff = [
     "  2029 ",
     "- 2030 old value",
     "+ 2030 new value",
     ...Array.from({ length: 30 }, (_, i) => `  ${2031 + i} context-${i}`),
   ].join("\n");
-  const input = { content: [], details: { diff } };
-  const text = stripVTControlCharacters(
-    renderers.edit
-      .renderResult(input, { expanded: true }, theme, { args: { path: "file" } })
-      .render(100)
-      .join("\n"),
-  );
-  assert.match(text, /2030 -old value/);
-  assert.match(text, /2030 \+new value/);
-  assert.match(text, /2060  context-29/);
-  assert.doesNotMatch(text, /more lines|expand tool output/);
+  const input = deepFreeze({ content: [], details: { diff } });
+  const ctx = deepFreeze({ args: { path: "file" },
+    writeChanges: { kind: "update", added: 1, removed: 1, rows: parseDisplayDiff(diff) } });
+  for (const name of ["edit", "write"]) {
+    const compact = stripVTControlCharacters(renderers[name].renderResult(input, {}, theme, ctx).render(100).join("\n"));
+    assert.match(compact.split("\n")[0], /2030 -old value/);
+    assert.equal(compact.split("\n").filter(line => /2030|context-/.test(line)).length, 5);
+    assert.match(compact, /2033  context-2/);
+    assert.doesNotMatch(compact, /context-3\b|context-29/);
+    const text = stripVTControlCharacters(renderers[name].renderResult(input, { expanded: true }, theme, ctx).render(100).join("\n"));
+    assert.match(text, /2029/);
+    assert.match(text, /2030 -old value/);
+    assert.match(text, /2030 \+new value/);
+    assert.match(text, /2060  context-29/);
+    assert.doesNotMatch(text, /more lines|expand tool output/);
+  }
 });
 
 test("one mixed Pi diff preserves numbers, indentation, Unicode and unnumbered rows", () => {

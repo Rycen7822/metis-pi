@@ -78,7 +78,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     prototype,
     makeText: (text) => new Tui.Text(text, 0, 0),
     makeDiff: (input) => createDiffComponent({
-      rows: input.rows, filePath: input.filePath,
+      rows: input.rows, filePath: input.filePath, expanded: input.options.expanded === true,
       paint: paintDiff(input.theme),
       colorLevel,
     }, layoutOps()),

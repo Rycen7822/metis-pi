@@ -2,7 +2,7 @@
 // call region = title/command; result region = output/diff body.
 // Never modifies tool data.
 
-import { formatReadLineRange, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
+import { formatReadLineRange } from "@earendil-works/pi-coding-agent";
 import { renderCodexDiffComponent } from "./diff-component.ts";
 import {
   renderExplorationHeader,
@@ -19,8 +19,8 @@ import type {
   Palette, ViewContext, ViewOptions, TextFactory, Highlight, Renderers,
   DiffFactory, Component, TextComponent, DiffLayoutOps, ExplorationPlan, WritePreviewInput, ShellFactories,
 } from "./contracts.ts";
-import { parseDisplayDiff, diffStatsFromRows, renderDiffLines } from "./diff.ts";
-import type { WriteDiff, DiffStats } from "../file-changes/diff.ts";
+import { parseDisplayDiff, diffStatsFromRows } from "./diff.ts";
+import type { WriteDiff, DiffStats, DiffRow } from "../file-changes/diff.ts";
 import { resolveWriteStage } from "./write-preview.ts";
 import { shellTitle } from "./shell.ts";
 
@@ -304,6 +304,13 @@ export function makeRenderers(
   }
   const layout: DiffLayoutOps = layoutOps ?? { wrap: (text) => [text], visibleWidth: (text) => text.length };
 
+  function diffBody(rows: readonly DiffRow[], filePath: string, options: ViewOptions, theme: Palette, ctx: ViewContext): Component {
+    if (makeDiff) return makeDiff({ rows, filePath, theme, context: ctx, options });
+    return component(renderCodexDiffComponent({
+      rows, filePath, paint, colorLevel: colorFor(ctx), expanded: options.expanded === true,
+    }, 100, layout).join("\n"), ctx);
+  }
+
   function writeBody(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext): Component {
     const args = asRecord(ctx.args);
     const expanded = options.expanded === true;
@@ -327,15 +334,7 @@ export function makeRenderers(
 
     const change = writeChangeFor(ctx);
     if (change && (change.kind === "add" || change.kind === "update") && change.rows?.length) {
-      const filePath = path(args, ctx);
-      if (makeDiff) {
-        return makeDiff({ rows: change.rows, filePath, theme, context: ctx, options });
-      }
-      const rendered = renderDiffLines({
-        rows: change.rows, width: 100, layout, colorLevel: colorFor(ctx),
-        language: getLanguageFromPath(filePath), paint,
-      });
-      return component(rendered.join("\n"), ctx);
+      return diffBody(change.rows, path(args, ctx), options, theme, ctx);
     }
 
     // unchanged/unavailable/no tracker: preview from the call's own args — never a fabricated +N/-0.
@@ -454,14 +453,7 @@ export function makeRenderers(
               state.stats = rows ? diffStatsFromRows(rows) : undefined;
               state.call?.setText(editCall(ctx.args, theme, ctx, state.stats));
             }
-            if (rows && ctx.isError !== true) {
-              const filePath = path(asRecord(ctx.args), ctx);
-              if (makeDiff) return makeDiff({ rows, filePath, theme, context: ctx, options });
-              return component(
-                renderCodexDiffComponent({ rows, filePath, paint, colorLevel: colorFor(ctx) }, 100, layout).join("\n"),
-                ctx,
-              );
-            }
+            if (rows && ctx.isError !== true) return diffBody(rows, path(asRecord(ctx.args), ctx), options, theme, ctx);
           }
           if (name === "write") {
             if (options.isPartial) return component("", ctx);
