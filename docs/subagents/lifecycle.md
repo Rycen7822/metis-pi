@@ -6,7 +6,7 @@ Python Runtime owns scheduling and the ledger; the JS worker owns a child Pi ses
 
 After **30 consecutive idle seconds** without active, queued or input-waiting runs, the daemon closes admission, finishes in-flight requests and notifications, parks settled workers with verified cleanup, then exits. Unknown cleanup or active tools prevent automatic exit. Sessions, results and attention remain durable.
 
-Explicit requests restart the daemon on demand; passive watches and automatic synchronization do not create restart loops. The frontend can release an unused IPC helper while retaining its logical session lease; reconnect cannot replace a later owner.
+Reopening a parent session with a saved scope performs one non-consuming recovery read, restarting the daemon if needed but not its workers. Fresh sessions do not start it automatically. Subsequent watches remain passive; explicit requests can restart it on demand without automatic restart loops. The frontend can release an unused IPC helper while retaining its logical session lease; reconnect cannot replace a later owner.
 
 Interrupt stops current work; close terminates its owned worker. A verified parked/closed worker resumes from its saved session without replaying old input. Per-scope capacity includes live and cleanup-unverified workers, not retained history alone.
 
@@ -17,14 +17,14 @@ On Linux/WSL, a worker guard adopts and reaps orphaned descendants, including de
 | State | Contract |
 | --- | --- |
 | Accepted input | May still be queued; `not_consumed` input after interruption requires explicit resend if wanted. |
-| Terminal result | Reading delivery consumes its notices only after receipts are saved to the active parent branch. Failed delivery leaves attention pending. |
+| Terminal result | Delivery consumes its notices only after receipts are saved to the active parent branch. Uncertain submission stays `unknown` until reconciled or explicitly reread. |
 | Status query | Preserves attention; default waits/outstanding lists include active and undelivered runs. |
 | Retained result | Explicit run IDs support paging and rereading after delivery. |
 | Uncertain mutation | Saved operation identity and normalized arguments are reused for identical retransmission; no automatic new work. |
 
 Name-based wait locks concrete run IDs. Answers are bound to a delivered question, run and worker generation under the agent lock. Expired UI answers return `input_not_found` without waking work; invalid local cwd returns `invalid_cwd` before launch. `send_message` stores a note, while `followup_task` starts work.
 
-Results ready during a tool turn enter the next request before the final reply; later completions wake an idle parent. `completed` means normal model stop, not successful acceptance. Inspection token counters are cumulative per run; `last_message_output` and `max_message_output` describe individual responses.
+Saved results recovered on reopening are displayed without waking the model. Ordinary results ready during a tool turn enter the next request before the final reply; later completions wake an idle parent. Unconfirmed delivery is shown separately and is not acknowledged by opening the saved transcript. `completed` means normal model stop, not successful acceptance. Inspection token counters are cumulative per run; `last_message_output` and `max_message_output` describe individual responses.
 
 ## Streaming and maintenance
 

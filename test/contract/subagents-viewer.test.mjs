@@ -44,7 +44,7 @@ function popup(t, options = {}) {
       calls.push({ agentId, after, signal });
       return inspect(agentId, after, signal);
     },
-    undefined, agents,
+    undefined, agents, options.live,
   );
   t.after(() => viewer.dispose());
   const rows = (width = 90) => viewer.render(width).map(stripVTControlCharacters);
@@ -419,16 +419,28 @@ test("finished tabs disappear, selection moves to an active agent, and an empty 
   assert.equal(calls.length, stoppedCalls, "empty active lists cannot rearm polling");
 });
 
-test("an initially empty active list closes without inspecting retained history", async t => {
-  const { viewer, rows, calls, closes } = popup(t, {
-    agents: () => [{ id: "reader", name: "reader", state: "dormant" }],
-  });
+test("saved sessions remain readable without live polling; empty live lists still close", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const agents = () => [{ id: "reader", name: "reader", state: "dormant" }];
+  const { viewer, rows, calls, closes } = popup(t, { agents });
   await nextTurn();
   assert.deepEqual(calls, []);
   assert.deepEqual(closes, [undefined]);
   assert.deepEqual(rows(), []);
   viewer.handleInput("\t");
   assert.deepEqual(closes, [undefined], "an empty viewer cannot be reopened by cycling");
+  const saved = popup(t, { agents, live: false, inspect: async (_id, after) => inspection("reader",
+    [textMessage(after === 0 ? "SAVED_FIRST_PAGE" : "SAVED_LAST_PAGE")], {
+      agent: agents()[0], next_cursor: after + 1, has_more: after === 0,
+    }) });
+  await nextTurn();
+  t.mock.timers.tick(50); await nextTurn();
+  assert.ok(saved.rows().some(row => row.includes("SAVED_FIRST_PAGE")));
+  assert.ok(saved.rows().some(row => row.includes("SAVED_LAST_PAGE")));
+  assert.deepEqual(saved.closes, []);
+  assert.equal(saved.calls.length, 2, "all saved pages are readable");
+  t.mock.timers.tick(2_000); await nextTurn();
+  assert.equal(saved.calls.length, 2, "a saved transcript does not keep waking the backend");
 });
 
 test("overflow arrows navigate tabs and keyboard selection remains visible", async t => {

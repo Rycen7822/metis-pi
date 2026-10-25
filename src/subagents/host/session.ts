@@ -92,6 +92,7 @@ export class SubagentSession {
   private samplingClaim?: Claim;
   private releaseSampling?: () => void;
   private notifiedQuestions = new Set<string>();
+  private unconfirmed = 0;
 
   constructor(
     pi: ExtensionAPI,
@@ -136,7 +137,7 @@ export class SubagentSession {
     } catch (error) {
       this.ctx.ui.notify(String(error), "warning");
     }
-    this.startWatching();
+    this.startWatching(!!scope);
   }
   update(ctx: ExtensionContext) {
     if (ctx.sessionManager.getSessionId() === this.sessionId) {
@@ -187,9 +188,9 @@ export class SubagentSession {
     this.widgetTimer = setInterval(() => this.widgetRefresh?.(), animate ? WIDGET_FRAME_MS : 1000);
     this.widgetTimer.unref();
   }
-  private async openViewer(agentId: string) {
+  private async openViewer(agentId: string, saved?: WidgetAgent) {
     if (!this.valid() || this.ctx.mode !== "tui" || this.viewerAbort) return;
-    if (!activeAgents(this.agents).some(agent => agent.id === agentId)) {
+    if (!saved && !activeAgents(this.agents).some(agent => agent.id === agentId)) {
       this.ctx.ui.notify("Subagent is not running", "info");
       return;
     }
@@ -213,7 +214,8 @@ export class SubagentSession {
                 signal,
               )) as unknown as AgentInspection,
             this.readAppearance().thinking,
-            () => this.agents,
+            () => saved ? [saved] : this.agents,
+            !saved,
           )),
         { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } },
       );
@@ -316,11 +318,14 @@ export class SubagentSession {
       try { return await fn(); } catch (error) { this.synchronizationFailed(error, activity); }
     });
   }
-  private startWatching() {
+  private startWatching(recovering = false) {
     if (this.watching || !this.canSynchronize()) return;
     this.watching = (async () => {
       let cursor: unknown, activity = this.activity;
       try {
+        // Only a saved scope gets one active read. It can wake an idle daemon,
+        // but never a worker or model turn; subsequent watches remain passive.
+        if (recovering) await this.client.call("subagents_list_agents", {}, this.watchAbort.signal, { consume: false, passive: false });
         await this.synchronize(() => this.reconcile());
         while (this.canSynchronize()) {
           activity = this.activity;
@@ -329,12 +334,19 @@ export class SubagentSession {
           cursor = result.cursor; this.agents = result.agents as typeof this.agents;
           const notifications = result.notifications as Attention[];
           this.attentionPending = notifications.length > 0;
+          const unconfirmed = (result.parent_notifications as { failed?: number } | undefined)?.failed ?? 0;
+          if (unconfirmed !== this.unconfirmed) {
+            this.unconfirmed = unconfirmed;
+            this.ctx.ui.setStatus("metis-subagent-recovery", unconfirmed ? `${unconfirmed} subagent deliveries unconfirmed · /subagents` : undefined);
+            if (unconfirmed) this.ctx.ui.notify(`${unconfirmed} subagent deliveries unconfirmed; use /subagents to read saved sessions. Reading does not acknowledge delivery.`, "warning");
+          }
+          if (!notifications.length) recovering = false;
           for (const notice of notifications) if (notice.event === "question" && !this.notifiedQuestions.has(notice.notification_id)) {
             this.notifiedQuestions.add(notice.notification_id);
             this.ctx.ui.notify(`Subagent ${cleanName(notice.name)} needs input`, "info");
           }
           this.renderWidget();
-          if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.synchronize(() => this.deliverIdle());
+          if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.synchronize(() => this.deliverIdle(!recovering));
         }
       } catch (error) { this.synchronizationFailed(error, activity); }
       finally {
@@ -385,7 +397,7 @@ export class SubagentSession {
       },
     };
   }
-  private async deliverIdle() {
+  private async deliverIdle(triggerTurn = true) {
     if (!this.valid() || !this.ctx.isIdle() || this.ctx.hasPendingMessages()) return;
     const claim = await this.claim();
     if (!claim) return;
@@ -395,7 +407,7 @@ export class SubagentSession {
       return;
     }
     try {
-      this.pi.sendMessage(this.message(claim), { triggerTurn: true });
+      this.pi.sendMessage(this.message(claim), { triggerTurn });
     } catch (error) {
       await this.client.call("pi_uncertain", { receipt: claim.receipt });
       this.claims.delete(claim.receipt);
@@ -760,13 +772,16 @@ export class SubagentSession {
     const snapshot = await this.client.call("subagents_list_agents", {}, undefined, { consume: false });
     this.resume(true);
     if (!this.valid()) return;
-    const agents = snapshot.agents as typeof this.agents;
+    const agents = snapshot.agents as Array<WidgetAgent & { agent_status?: string }>;
     if (!agents.length) { ctx.ui.notify("No subagents in this session", "info"); return; }
-    const entries = agents.map(agent => `${cleanName(agent.name)} · ${agent.state} · ${agent.id}`);
+    const entries = agents.map(agent => {
+      const state = agent.agent_status && agent.agent_status !== agent.state ? `${agent.state} / ${agent.agent_status}` : agent.state;
+      return `${cleanName(agent.name)} · ${state} · ${agent.id}`;
+    });
     if (ctx.mode !== "tui") { ctx.ui.notify(entries.join("\n"), "info"); return; }
     const selected = await ctx.ui.select(`Subagents · ${snapshot.total}${snapshot.omitted ? ` · ${snapshot.omitted} more not shown` : ""}`, entries);
     const agent = agents[entries.indexOf(selected ?? "")];
-    if (agent) await this.openViewer(agent.id);
+    if (agent) await this.openViewer(agent.id, activeAgents([agent]).length ? undefined : agent);
   }
   async close() {
     if (this.closed) return;
@@ -775,6 +790,7 @@ export class SubagentSession {
     this.widgetTimer = undefined; this.widgetRefresh = undefined;
     this.viewerAbort?.abort();
     if (this.ctx.mode === "tui") this.ctx.ui.setWidget("metis-subagents", undefined);
+    this.ctx.ui.setStatus("metis-subagent-recovery", undefined);
     await this.client.close(); await this.watching;
   }
 }

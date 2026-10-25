@@ -80,6 +80,7 @@ export class SubagentViewer implements Component {
   private readonly inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>;
   private readonly thinking: AppearanceConfig["thinking"];
   private readonly agentSource: () => ViewerAgent[];
+  private readonly live: boolean;
 
   constructor(
     agentId: string,
@@ -91,10 +92,11 @@ export class SubagentViewer implements Component {
     inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>,
     thinking: AppearanceConfig["thinking"] = DEFAULT_CONFIG.thinking,
     agentSource: () => ViewerAgent[],
+    live = true,
   ) {
     this.agentId = agentId; this.theme = theme; this.tui = tui; this.keys = keys;
     this.done = done; this.abort = abort; this.inspect = inspect;
-    this.thinking = thinking; this.agentSource = agentSource;
+    this.thinking = thinking; this.agentSource = agentSource; this.live = live;
     this.cacheView(agentId);
     this.onAbort = () => this.close();
     abort.signal.addEventListener("abort", this.onAbort, { once: true });
@@ -104,18 +106,19 @@ export class SubagentViewer implements Component {
 
   private syncAgents(): boolean {
     if (this.disposed) return false;
-    const active = new Map(activeAgents(this.agentSource()).map(agent => [agent.id, agent]));
-    const changed = active.size !== this.agents.size || [...active.keys()].some(id => !this.agents.has(id));
-    this.agents = active;
+    const source = this.agentSource();
+    const visible = new Map((this.live ? activeAgents(source) : source).map(agent => [agent.id, agent]));
+    const changed = visible.size !== this.agents.size || [...visible.keys()].some(id => !this.agents.has(id));
+    this.agents = visible;
     for (const [id, view] of this.views) {
-      if (!active.has(id)) { disposeView(view); this.views.delete(id); }
+      if (!visible.has(id)) { disposeView(view); this.views.delete(id); }
     }
-    if (!active.size) { this.close(); return false; }
+    if (!visible.size) { this.close(); return false; }
     if (changed) {
       this.targets = []; this.renderedHeight = 0; this.revealSelected = true;
       this.tui.requestRender();
     }
-    if (!active.has(this.agentId)) this.selectAgent(active.keys().next().value!);
+    if (!visible.has(this.agentId)) this.selectAgent(visible.keys().next().value!);
     return true;
   }
 
@@ -189,7 +192,7 @@ export class SubagentViewer implements Component {
     } finally {
       if (current()) {
         this.tui.requestRender();
-        this.timer = setTimeout(() => void this.refresh(view, controller), more ? 50 : 1000);
+        if (more || this.live) this.timer = setTimeout(() => void this.refresh(view, controller), more ? 50 : 1000);
       }
     }
   }

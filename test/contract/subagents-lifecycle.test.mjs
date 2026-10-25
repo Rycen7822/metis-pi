@@ -46,7 +46,8 @@ function fixture(t, call, agentDir = "/unused-test-agent-dir") {
   const warnings = [],
     operations = [];
   t.mock.method(SubagentClient.prototype, "call", async function (op, params, signal, extra) {
-    operations.push({ op, extra });
+    operations.push({ op, params, extra });
+    if (op === "subagents_list_agents" && extra?.consume === false && extra.passive === false) return { agents: [] };
     return call(op, params, signal, extra);
   });
   const branch = [
@@ -174,7 +175,7 @@ for (const error of [
       assert.equal(f.warnings[0].level, "warning");
       assert.deepEqual(
         f.operations.map((row) => row.op),
-        ["pi_watch"],
+        ["subagents_list_agents", "pi_watch"],
       );
       if (error instanceof RuntimeError) {
         const result = await f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx);
@@ -206,7 +207,7 @@ test("a boundary failure shares the same degraded state as a concurrent watch fa
   assert.equal(f.warnings.length, 1);
   assert.deepEqual(
     f.operations.map((row) => row.op),
-    ["pi_watch", "pi_claim"],
+    ["subagents_list_agents", "pi_watch", "pi_claim"],
   );
 });
 
@@ -224,7 +225,7 @@ test("a successful in-flight watch reply cannot resume synchronization after a b
   resolveWatch({ cursor: "old", notifications: [], agents: [] });
   await until(() => !f.owner.watching);
   assert.equal(f.warnings.length, 1); assert.equal(f.owner.syncState, "failed");
-  assert.deepEqual(f.operations.map(row => row.op), ["pi_watch", "pi_claim"]);
+  assert.deepEqual(f.operations.map(row => row.op), ["subagents_list_agents", "pi_watch", "pi_claim"]);
 });
 
 test("an empty in-flight claim cannot clear a concurrent watch failure", async t => {
@@ -237,7 +238,7 @@ test("an empty in-flight claim cannot clear a concurrent watch failure", async t
   rejectWatch(new Error("watch failed first")); await until(() => f.warnings.length === 1);
   resolveClaim({ events: [] }); await boundary; await until(() => !f.owner.watching);
   assert.equal(f.owner.syncState, "failed"); assert.equal(f.warnings.length, 1);
-  assert.deepEqual(f.operations.map(row => row.op), ["pi_watch", "pi_claim"]);
+  assert.deepEqual(f.operations.map(row => row.op), ["subagents_list_agents", "pi_watch", "pi_claim"]);
 });
 
 test("a claim persisted after daemon parking still reconciles its receipt before being forgotten", async t => {
@@ -268,7 +269,7 @@ test("an unpersisted automatic claim becomes uncertain at final settlement inste
     if (op === "pi_claim") return { id: "delivery_unsaved", events: [{ notification_id: "notice", run_id: "run_done" }], runs: [], questions: [] };
     assert.equal(op, "pi_uncertain"); assert.equal(params.receipt, "delivery_unsaved"); uncertain++; return {};
   });
-  await until(() => f.operations.length);
+  await until(() => f.operations.some(row => row.op === "pi_watch"));
   await f.boundary("turn_end"); assert.equal(f.owner.claims.size, 1);
   await f.owner.settled(f.ctx, true);
   assert.equal(uncertain, 1); assert.equal(f.owner.claims.size, 0); assert.deepEqual(f.warnings, []);
@@ -416,7 +417,7 @@ test("a stale boundary idle reply cannot park newer explicit work", async t => {
     if (op === "pi_claim") return new Promise((_, reject) => { rejectClaim = reject; });
     return { agents: [] };
   });
-  await until(() => f.operations.length);
+  await until(() => f.operations.some(row => row.op === "pi_watch"));
   const boundary = f.boundary("turn_end"); await until(() => rejectClaim);
   await f.owner.execute("subagents_list_agents", {}, "new-foreground", f.ctx);
   rejectClaim(new RuntimeError({ code: "daemon_idle", message: "old boundary" })); await boundary;
@@ -431,7 +432,7 @@ test("a successful explicit answer resumes the same synchronization policy as ot
     return {};
   });
   f.ctx.hasUI = true; f.ctx.ui.select = async () => "yes";
-  await until(() => f.operations.length);
+  await until(() => f.operations.some(row => row.op === "pi_watch"));
   f.owner.synchronizationFailed(new Error("previous synchronization failure"));
   await f.owner.command("answer agent", f.ctx);
   assert.equal(f.owner.syncState, "active"); assert.equal(f.warnings.length, 1);
@@ -451,7 +452,7 @@ test("watch delivery queued behind a failing boundary cannot bypass the automati
   rejectClaim(new Error("boundary failure after watch delivery was queued"));
   await boundary; await until(() => !f.owner.watching);
   assert.equal(f.owner.syncState, "failed"); assert.equal(f.warnings.length, 1);
-  assert.deepEqual(f.operations.map(row => row.op), ["pi_watch", "pi_claim"]);
+  assert.deepEqual(f.operations.map(row => row.op), ["subagents_list_agents", "pi_watch", "pi_claim"]);
 });
 
 test("helper parking errors warn once and still clear the watcher", async t => {
@@ -464,23 +465,45 @@ test("helper parking errors warn once and still clear the watcher", async t => {
   assert.equal(f.operations.length, count);
 });
 
-test("normal parking is silent and only foreground activity resumes a passive watch", async t => {
+test("reopened sessions recover quietly once, expose uncertain delivery, then keep idle watches passive", async t => {
   let watches = 0;
+  const notice = { notification_id: "saved", agent_id: "agent_saved", run_id: "run_saved", name: "saved", event: "terminal", state: "completed" };
   const f = fixture(t, async (op, _params, signal, extra) => {
     if (op === "pi_watch") {
       assert.equal(extra.passive, true);
-      if (++watches === 1) throw new RuntimeError({ code: "daemon_idle", message: "parked" });
+      if (++watches === 1) return { cursor: 1, agents: [], notifications: [notice], parent_notifications: { failed: 1 } };
+      if (watches === 2) throw new RuntimeError({ code: "daemon_idle", message: "parked" });
       return heldWatch(signal);
     }
+    if (op === "pi_claim") return { id: "delivery_saved", events: [notice], runs: [{ id: "run_saved", state: "completed", output: "saved result" }], questions: [] };
+    if (op === "pi_observe") return {};
     assert.equal(op, "subagents_list_agents"); return { agents: [] };
   });
+  const sent = [], statuses = [];
+  f.ctx.isIdle = () => true;
+  f.ctx.ui.setStatus = (_key, text) => statuses.push(text);
+  t.mock.method(f.owner.pi, "sendMessage", (message, options) => {
+    sent.push({ message, options }); f.branch.push({ type: "custom_message", ...message });
+  });
   await until(() => f.owner.syncState === "parked" && !f.owner.watching);
+  const startupReads = f.operations.filter(row => row.op === "subagents_list_agents");
+  assert.equal(startupReads.length, 1);
+  assert.equal(startupReads[0].extra.passive, false);
+  assert.equal(startupReads[0].extra.consume, false);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].options.triggerTurn, false, "restoring a result must not start another model turn");
+  assert.match(sent[0].message.content, /saved result/);
+  assert.deepEqual(f.operations.filter(row => row.op === "pi_observe").map(row => row.params.receipt), ["delivery_saved"]);
+  assert.match(statuses.at(-1), /1.*unconfirmed.*\/subagents/);
+  assert.equal(f.warnings.length, 1); assert.match(f.warnings[0].text, /unconfirmed/);
+  const count = f.operations.length;
   await f.boundary("turn_end"); await f.owner.settled(f.ctx, true);
-  assert.equal(f.operations.length, 1); assert.deepEqual(f.warnings, []);
+  assert.equal(f.operations.length, count, "automatic boundaries do not restart the idle daemon");
   const result = await f.owner.execute("subagents_list_agents", {}, "test-call", f.ctx);
   assert.equal(result.isError, false);
-  await until(() => watches === 2);
-  assert.deepEqual(f.warnings, []);
+  await until(() => watches === 3);
+  assert.equal(f.warnings.length, 1);
+  await f.owner.close(); assert.equal(statuses.at(-1), undefined);
 });
 
 test("an old idle-watch response cannot park newer foreground work", async t => {

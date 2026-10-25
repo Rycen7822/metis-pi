@@ -34,7 +34,9 @@ Use non-overlapping declared cwd subtrees for concurrent writers and explicit fi
 
 Accepted input is not necessarily consumed input; normal completion is not acceptance of the artifacts. Inspect results and read all pages when `has_more=true`. Retry an operation ID only for the identical uncertain request, never to replay work automatically.
 
-Click an active agent in fullscreen to open its read-only transcript. Tabs retain scroll position; scrollbar, wheel and navigation keys affect viewing only, not result acknowledgement.
+Click an active agent in fullscreen for its live, read-only transcript. `/subagents` also lists retained agents with their worker and latest task states; selecting an inactive agent opens its saved transcript, reads the available pages and stops polling. Tabs, scrollbar, wheel and navigation keys affect viewing only, not result acknowledgement.
+
+Reopening a bound parent session restores saved results without starting a model turn or replaying tasks. Unconfirmed deliveries show a warning and status indicator. Use `/subagents` to inspect saved sessions; to deliver a retained result to the parent conversation, use `subagents_wait_agent` or `subagents_agent_result` with explicit run IDs. Native parent receipts confirm delivery.
 
 ## State and ownership
 
