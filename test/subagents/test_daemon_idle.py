@@ -122,7 +122,8 @@ with fixture_launch([sys.executable,str(paths.TEST_ROOT/'fake_pi.py')]):
         # another process: no replacement may be spawned until the lock is free.
         with (self.home/'daemon.lock').open('a+b') as lock:
             self.assertTrue(locks.try_lock(lock.fileno()))
-            pending=asyncio.create_task(self.request('ping',{},timeout=5))
+            # Check lock ordering, not cold-start speed; keep the normal client budget.
+            pending=asyncio.create_task(self.request('ping',{}))
             await asyncio.sleep(.2)
             self.assertFalse(pending.done()); self.assertEqual(self.daemons,[])
             locks.unlock(lock.fileno())
