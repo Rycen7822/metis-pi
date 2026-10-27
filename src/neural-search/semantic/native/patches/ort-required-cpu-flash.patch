@@ -1,0 +1,217 @@
+diff --git a/cmake/onnxruntime.cmake b/cmake/onnxruntime.cmake
+index a977141..8b9a520 100644
+--- a/cmake/onnxruntime.cmake
++++ b/cmake/onnxruntime.cmake
+@@ -79,10 +79,16 @@ if(onnxruntime_BUILD_SHARED_LIB)
+     set(ANDROID_TELEMETRY_SYMBOL_ARGS --extra_symbol_file "${ANDROID_TELEMETRY_SYMBOL_FILE}")
+   endif()
+ 
++  # SGREP diagnostics are private extension exports, not new OrtApi entries.
++  if(onnxruntime_EXTRA_SYMBOL_FILE)
++    list(APPEND SYMBOL_FILES "${onnxruntime_EXTRA_SYMBOL_FILE}")
++    set(ORT_EXTRA_SYMBOL_ARGS --extra_symbol_file "${onnxruntime_EXTRA_SYMBOL_FILE}")
++  endif()
++
+   add_custom_command(OUTPUT ${SYMBOL_FILE} ${CMAKE_CURRENT_BINARY_DIR}/generated_source.c
+     COMMAND ${Python_EXECUTABLE} "${REPO_ROOT}/tools/ci_build/gen_def.py"
+       --version_file "${ONNXRUNTIME_ROOT}/../VERSION_NUMBER" --src_root "${ONNXRUNTIME_ROOT}"
+-      --config ${ONNXRUNTIME_PROVIDER_NAMES} ${ANDROID_TELEMETRY_SYMBOL_ARGS}
++      --config ${ONNXRUNTIME_PROVIDER_NAMES} ${ANDROID_TELEMETRY_SYMBOL_ARGS} ${ORT_EXTRA_SYMBOL_ARGS}
+       --style=${OUTPUT_STYLE} --output ${SYMBOL_FILE}
+       --output_source ${CMAKE_CURRENT_BINARY_DIR}/generated_source.c
+     DEPENDS ${SYMBOL_FILES}
+diff --git a/onnxruntime/contrib_ops/cpu/bert/multihead_attention.cc b/onnxruntime/contrib_ops/cpu/bert/multihead_attention.cc
+index 0f982a1..47ebbab 100644
+--- a/onnxruntime/contrib_ops/cpu/bert/multihead_attention.cc
++++ b/onnxruntime/contrib_ops/cpu/bert/multihead_attention.cc
+@@ -16,10 +16,38 @@
+ #include "core/mlas/inc/mlas.h"
+ 
+ #include <algorithm>
++#include <atomic>
++#include "core/session/onnxruntime_c_api.h"
+ #include <type_traits>
+ #include <unsupported/Eigen/SpecialFunctions>
+ #include <vector>
+ 
++// SGREP: fail-closed and observed dispatch for the fixed single-session CPU CLI.
++// Disabled for unrelated ORT consumers; enabled explicitly by libsgrep_cpu.
++namespace {
++std::atomic<bool> sgrep_require_flash{false};
++std::atomic<uint64_t> sgrep_flash_calls{0}, sgrep_peak_scratch{0}, sgrep_fallback_attempts{0};
++void SgrepRejectMhaFallback() {
++  if (sgrep_require_flash.load(std::memory_order_relaxed)) {
++    sgrep_fallback_attempts.fetch_add(1, std::memory_order_relaxed);
++    ORT_THROW("SGREP: required CPU MHA Flash dispatch guard was not satisfied");
++  }
++}
++}  // namespace
++
++extern "C" ORT_EXPORT void ORT_API_CALL OrtSgrepConfigureGlobalAttention(int require_flash) {
++  sgrep_flash_calls.store(0);
++  sgrep_peak_scratch.store(0);
++  sgrep_fallback_attempts.store(0);
++  sgrep_require_flash.store(require_flash != 0);
++}
++extern "C" ORT_EXPORT void ORT_API_CALL OrtSgrepGetGlobalAttentionStats(
++    uint64_t* calls, uint64_t* scratch, uint64_t* fallbacks) {
++  if (calls) *calls = sgrep_flash_calls.load();
++  if (scratch) *scratch = sgrep_peak_scratch.load();
++  if (fallbacks) *fallbacks = sgrep_fallback_attempts.load();
++}
++
+ using onnxruntime::concurrency::ThreadPool;
+ 
+ namespace onnxruntime {
+@@ -177,6 +205,7 @@ Status MultiHeadAttention<T>::Compute(OpKernelContext* context) const {
+       context, allocator, batch_size, num_heads_, q_sequence_length, qk_head_size, query, bias, q_bias_offset, Q));
+ 
+   if (parameters.qkv_format == AttentionQkvFormat::Q_K_V_BSNH_BNSH_BNSH) {
++    SgrepRejectMhaFallback();
+     // For cross attention with k and v in BNSH format, we assume that bias for key and value are zeros.
+     // So we don't need to add bias for key and value here.
+     assert(past_key == nullptr);
+@@ -270,9 +299,13 @@ Status MultiHeadAttention<T>::Compute(OpKernelContext* context) const {
+     args.output = output->MutableData<float>();
+ 
+     MlasFlashAttention(&args, tp);
++    sgrep_flash_calls.fetch_add(1, std::memory_order_relaxed);
++    uint64_t peak = sgrep_peak_scratch.load(std::memory_order_relaxed);
++    while (peak < buffer_bytes && !sgrep_peak_scratch.compare_exchange_weak(peak, buffer_bytes)) {}
+     return Status::OK();
+   }
+ 
++  SgrepRejectMhaFallback();
+   if (parameters.past_present_share_buffer) {
+     // No production use-case will incur this copy cost as the implementation of
+     // shared-buffer attention requires the past and present buffers to be bound to the same memory.
+diff --git a/onnxruntime/core/framework/bfc_arena.cc b/onnxruntime/core/framework/bfc_arena.cc
+index 8185f26..166e185 100644
+--- a/onnxruntime/core/framework/bfc_arena.cc
++++ b/onnxruntime/core/framework/bfc_arena.cc
+@@ -5,6 +5,57 @@
+ #include "core/framework/allocator.h"
+ #include "core/framework/bfc_arena.h"
+ #include <type_traits>
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <mutex>
++
++namespace {
++// Explicit development trace only. Never stores tokens, text or tensor data.
++// The sequential CPU graph has one active node; its workers share this tag.
++struct SgrepAllocationTrace {
++  FILE* file = nullptr;
++  std::mutex mutex;
++  int64_t node = -1;
++  uint64_t sequence = 0;
++  SgrepAllocationTrace() {
++    if (const char* path = std::getenv("SGREP_ALLOCATION_TRACE")) {
++      file = std::fopen(path, "w");
++      if (!file) std::fprintf(stderr, "SGREP: cannot open requested allocation trace\n");
++    }
++  }
++  ~SgrepAllocationTrace() { if (file) std::fclose(file); }
++  void SetNode(int64_t next) {
++    if (!file) return;
++    std::lock_guard<std::mutex> guard(mutex);
++    const int64_t previous = node;
++    node = next;
++    std::fprintf(file, "{\"seq\":%llu,\"kind\":\"node_%s\",\"node\":%lld}\n",
++                 static_cast<unsigned long long>(++sequence), next < 0 ? "end" : "begin",
++                 static_cast<long long>(next < 0 ? previous : next));
++  }
++  void Mark(const char* name, uint64_t value) {
++    if (!file) return;
++    std::lock_guard<std::mutex> guard(mutex);
++    // name is a fixed literal from our adapter, not user/model input.
++    std::fprintf(file, "{\"seq\":%llu,\"kind\":\"marker\",\"name\":\"%s\",\"value\":%llu,\"node\":%lld}\n",
++                 static_cast<unsigned long long>(++sequence), name, static_cast<unsigned long long>(value), static_cast<long long>(node));
++  }
++  void Allocation(const char* kind, const void* arena, const void* ptr,
++                  size_t requested, size_t allocated, int64_t used, int64_t held) {
++    if (!file) return;
++    std::lock_guard<std::mutex> guard(mutex);
++    std::fprintf(file, "{\"seq\":%llu,\"kind\":\"%s\",\"arena\":\"%p\",\"ptr\":\"%p\","
++                 "\"node\":%lld,\"requested\":%llu,\"allocated\":%llu,\"in_use\":%lld,\"held\":%lld}\n",
++                 static_cast<unsigned long long>(++sequence), kind, arena, ptr, static_cast<long long>(node),
++                 static_cast<unsigned long long>(requested), static_cast<unsigned long long>(allocated),
++                 static_cast<long long>(used), static_cast<long long>(held));
++  }
++};
++SgrepAllocationTrace& SgrepTrace() { static SgrepAllocationTrace trace; return trace; }
++}  // namespace
++extern "C" void OrtSgrepTraceNode(int64_t node) { SgrepTrace().SetNode(node); }
++extern "C" void OrtSgrepTraceMarker(const char* name, uint64_t value) { SgrepTrace().Mark(name, value); }
+ 
+ namespace onnxruntime {
+ BFCArena::BFCArena(std::unique_ptr<IAllocator> resource_allocator,
+@@ -96,7 +147,10 @@ BFCArena::Chunk* BFCArena::ChunkFromHandle(ChunkHandle h) {
+ }
+ 
+ Status BFCArena::Extend(size_t rounded_bytes) {
+-  size_t available_bytes = memory_limit_ - static_cast<size_t>(stats_.total_allocated_bytes);
++  // SGREP: Reserve() may already exceed the limit before arena allocations.
++  // Saturate instead of wrapping size_t and turning a small cap into no cap.
++  const size_t allocated_bytes = static_cast<size_t>(stats_.total_allocated_bytes);
++  size_t available_bytes = allocated_bytes >= memory_limit_ ? 0 : memory_limit_ - allocated_bytes;
+   // Rounds available_bytes down to the nearest multiple of kMinAllocationSize.
+   available_bytes = (available_bytes / kMinAllocationSize) * kMinAllocationSize;
+ 
+@@ -290,6 +344,7 @@ void* BFCArena::Reserve(size_t size) {
+   stats_.max_alloc_size = std::max<size_t>(static_cast<size_t>(stats_.max_alloc_size), size);
+   stats_.max_bytes_in_use = std::max<int64_t>(static_cast<int64_t>(stats_.max_bytes_in_use), stats_.bytes_in_use);
+   stats_.total_allocated_bytes += size;
++  SgrepTrace().Allocation("reserve", this, ptr, size, size, stats_.bytes_in_use, stats_.total_allocated_bytes);
+   return ptr;
+ }
+ 
+@@ -395,6 +450,7 @@ BFCArena::Chunk* BFCArena::SplitFreeChunkFromBin(BFCArena::Bin::FreeChunkSet* fr
+       std::max(stats_.max_bytes_in_use, stats_.bytes_in_use);
+   stats_.max_alloc_size =
+       std::max<int64_t>(stats_.max_alloc_size, static_cast<int64_t>(chunk->size));
++  SgrepTrace().Allocation("alloc", this, chunk->ptr, num_bytes, chunk->size, stats_.bytes_in_use, stats_.total_allocated_bytes);
+   return chunk;
+ }
+ 
+@@ -483,6 +539,7 @@ void BFCArena::Free(void* p) {
+     stats_.bytes_in_use -= it->second;
+     stats_.bytes_requested_in_use -= it->second;
+     stats_.total_allocated_bytes -= it->second;
++    SgrepTrace().Allocation("free", this, p, it->second, it->second, stats_.bytes_in_use, stats_.total_allocated_bytes);
+     reserved_chunks_.erase(it);
+   } else {
+     DeallocateRawInternal(p);
+@@ -640,6 +697,7 @@ void BFCArena::FreeAndMaybeCoalesce(BFCArena::ChunkHandle h) {
+   // Updates the stats.
+   stats_.bytes_in_use -= c->size;
+   stats_.bytes_requested_in_use -= c->requested_size;
++  SgrepTrace().Allocation("free", this, c->ptr, c->requested_size, c->size, stats_.bytes_in_use, stats_.total_allocated_bytes);
+ 
+   // This chunk is no longer in-use, consider coalescing the chunk
+   // with adjacent chunks.
+diff --git a/onnxruntime/core/framework/sequential_executor.cc b/onnxruntime/core/framework/sequential_executor.cc
+index 68964bf..f232ff6 100644
+--- a/onnxruntime/core/framework/sequential_executor.cc
++++ b/onnxruntime/core/framework/sequential_executor.cc
+@@ -3,6 +3,8 @@
+ 
+ #include "core/framework/sequential_executor.h"
+ 
++extern "C" void OrtSgrepTraceNode(int64_t);
++
+ #include <chrono>
+ #include <thread>
+ #include <vector>
+@@ -530,6 +532,10 @@ onnxruntime::Status ExecuteKernel(StreamExecutionContext& ctx,
+                                   const bool& terminate_flag,
+                                   SessionScope& session_scope) {
+   auto* p_kernel = ctx.GetSessionState().GetKernel(idx);
++  struct AllocationTraceScope {
++    explicit AllocationTraceScope(int64_t index) { OrtSgrepTraceNode(index); }
++    ~AllocationTraceScope() { OrtSgrepTraceNode(-1); }
++  } allocation_trace_scope(static_cast<int64_t>(idx));
+   if (p_kernel->KernelDef().OpName() == "YieldOp") {
+     // Do not execute YieldOp (it is an no-op anyways).
+     // Decrement the reference count of tensors that are not needed beyond this point.

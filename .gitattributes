@@ -6,3 +6,5 @@
 *.wasm binary
 # Preserve generated third-party legal text and its manifest-recorded bytes.
 src/neural-search/assets/*NOTICES* -text -whitespace
+# Unified patch blank context lines contain a required single space.
+src/neural-search/semantic/native/patches/*.patch whitespace=-blank-at-eol

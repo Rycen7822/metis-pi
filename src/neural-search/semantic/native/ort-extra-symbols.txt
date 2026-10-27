@@ -1,0 +1,4 @@
+OrtSgrepConfigureGlobalAttention
+OrtSgrepGetGlobalAttentionStats
+OrtSgrepTraceNode
+OrtSgrepTraceMarker

@@ -99,6 +99,7 @@
     "extensions",
     "src",
     "!src/neural-search/engine/**",
+    "!src/neural-search/semantic/**",
     "!src/**/test/**",
     "!src/**/*.test.*",
     "!src/**/test-fixtures.ts",

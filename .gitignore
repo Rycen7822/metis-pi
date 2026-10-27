@@ -10,6 +10,7 @@ coverage/
 /BITTER_LESSONS.md
 CODEX_STATE.md
 /references/
+/external/
 
 # Project-local Pi state and configuration.
 .pi/
@@ -19,6 +20,7 @@ CODEX_STATE.md
 # Local native build outputs; packaged binaries stay tracked with their component.
 native/tools/target/
 src/neural-search/engine/target/
+src/neural-search/semantic/target/
 
 # Condense retains its public entry; runtime sources are TS.
 
