@@ -9,6 +9,7 @@ import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
 import type { SearchLease, SearchRuntime } from "../session.ts";
+import { createSemanticAction } from "./semantic.ts";
 
 const DEFAULT_GREP_LIMIT = 20;
 const DEFAULT_FIND_LIMIT = 30;
@@ -247,7 +248,7 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
     },
     renderResult: renderTextResult,
   };
-  return new Map<string, ActionTool>([["find", find], ["grep", grep], ["multi_grep", multi]]);
+  return new Map<string, ActionTool>([["find", find], ["grep", grep], ["multi_grep", multi], ["semantic", createSemanticAction(runtime, toolName)]]);
 }
 
 function searchNotices(lease: SearchLease): string[] {

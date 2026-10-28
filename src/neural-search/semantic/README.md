@@ -41,8 +41,11 @@ Metis owns configuration parsing. Its internal `SGREP_CACHE_POLICY_REQUEST` JSON
 bridge carries the selected tier, absolute config source and exact device/inode/
 size/mtime/ctime snapshot (decimal strings preserve Node bigint precision).
 The core rejects stale or conflicting selections without granting another
-quota. User-facing TOML/action wiring belongs to the parent component and has
-not yet been delivered. A short policy lock records changes even during a long
+quota. User-facing TOML/action wiring belongs to the parent component. Its
+versioned host protocol is opt-in via `--json --metis-protocol 1`; it returns
+`{protocol:1,results:[...]}` and leaves ordinary CLI JSON unchanged. An older
+CLI rejects the host flag instead of silently ignoring the shared budget. A
+short policy lock records changes even during a long
 index writer; pending downgrades block new allocations/publication until actual
 reader/writer responsibility can fit. Upgrades preserve valid index identities.
 Neither tier changes nor mmap waive the independent memory/CPU limits.

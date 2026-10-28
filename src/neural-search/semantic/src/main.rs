@@ -69,6 +69,9 @@ struct Args {
     /// Include lexical, semantic and fused scores in JSON output.
     #[arg(long, requires = "json")]
     explain: bool,
+    /// Opt in to the Metis host wire contract; unsupported versions fail closed.
+    #[arg(long, requires = "json", value_parser = clap::value_parser!(u8).range(1..=1))]
+    metis_protocol: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -518,7 +521,23 @@ fn run() -> Result<ExitCode> {
     let args = Args::parse();
     let results = search(&args)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
-    if args.json {
+    if let Some(protocol) = args.metis_protocol {
+        #[derive(Serialize)]
+        struct HostOutput<'a> {
+            protocol: u8,
+            results: &'a [Chunk],
+        }
+        // Serialize borrowed records directly; do not duplicate the result text
+        // into an intermediate JSON Value or a second complete output string.
+        serde_json::to_writer(
+            &mut out,
+            &HostOutput {
+                protocol,
+                results: &results,
+            },
+        )?;
+        writeln!(out)?;
+    } else if args.json {
         writeln!(out, "{}", serde_json::to_string(&results)?)?;
     } else {
         for c in &results {

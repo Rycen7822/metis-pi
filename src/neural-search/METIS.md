@@ -14,7 +14,7 @@ All engine implementation and delivery files are maintained under `src/neural-se
 No upstream FFF npm package or binary download remains. The engine is a Metis-specialized Rust fork of 0.11.0, with the original zlob semantics and existing LMDB format.
 It retains AI search/ranking and live indexing, not upstream editor/SDK compatibility. Delivery targets Linux x64 glibc >=2.31 and Windows x64, using bundled native libraries.
 See the repository's [engine maintenance guide](https://github.com/Rycen7822/metis-pi/blob/main/src/neural-search/engine/README.md) for builds and redistribution.
-The product name does not imply embeddings, vector indexing or model-assisted semantic search; searches run locally.
+`find/grep/multi_grep` retain FFF path/content and frecency behavior. `semantic` instead invokes the separate CPU sgrep core in `semantic/`, with Bekko128 for text and LateOn token48 for code; it uses complete-scope scoring and the core's original ranking, without FFF prefiltering or frecency. Both run locally. The semantic runtime currently targets Linux x64 and must be prepared separately; missing or incompatible runtimes fail explicitly.
 
 ## Architecture
 
@@ -26,6 +26,7 @@ cursors.ts        Bounded continuation state and checked action/request identity
 native/           Finder/pool, path/filter codec, content protocol/pages
 native/binding/   Owned Linux C-ABI types, ffi-rs decoding and finder operations
 tools/            Pi action schemas, execution/query orchestration and returned text
+  semantic.ts     Versioned CLI/JSON boundary, bounded output, owned process-group cancellation
 ui/               Autocomplete adaptation and native fallback widgets
 ```
 
@@ -39,7 +40,9 @@ SDK cache policy, database fallback/scan cancellation, auxiliary leases/eviction
 
 ## Local contracts
 
-- One public, deferred `neural_search` entry, using the existing Metis `action` / `params` / `describe` envelope. File lookup, single-pattern grep and literal multi-pattern grep are inner actions, not separately registered tools.
+- One public, deferred `neural_search` entry, using the existing Metis `action` / `params` / `describe` envelope. File lookup, single-pattern grep, literal multi-pattern grep and semantic search are inner actions, not separately registered tools.
+- Semantic execution binds the existing session/cwd lifetime without acquiring a FFF finder. It launches the owned absolute `bin/sgrep` with argument arrays and Metis JSON protocol1, never a shell/PATH lookup or query-time build. Session change, cancellation and timeout terminate the whole process group and confirm no live members before settling; protocol/model/source errors cannot become empty results or another action. Ordinary CLI JSON remains unchanged unless the host protocol is requested.
+- The existing global configuration owner binds each semantic budget selection to a stable config-file stat snapshot. Integer tiers256/512/1024 (default512) share one HOME ledger. The requested tier is not a claim that a pending downgrade has taken effect. Only complete ranked-prefix records are retained under the host display budget; no incompatible cursors or FFF filters are accepted.
 - A short `metis_neural_search` prompt directory advertises the capability without its argument schemas. Pi's native `tool_search` can activate the entry for direct calls; codemode remains optional. Discovery must never auto-activate `neural_search` on every session or turn.
 - Global `[neuralSearch]` in `metis-pi.toml` is the only preference source. No legacy JSON/env/flags, native tool-name override modes or old active aliases. `mentions` controls editor completion independently.
 - State defaults to `<agentDir>/metis/neural-search/{frecency,history}`. Never automatically read, move, delete or migrate old plugin/editor databases. Explicit configured database paths are honored; initialization can fall back without persistence when database access fails. Oversized databases are preserved and rejected, not automatically erased. The low-level reader-capacity override is `METIS_NEURAL_SEARCH_LMDB_MAX_READERS` (default 1024, valid >=126); the old FFF name is not an alias. It does not import preferences or introduce a second TOML schema.

@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { createDeferredActionTool } from "../src/deferred-action-tool.ts";
 import createNeuralSearch, { SEARCH_TOOL_NAME as name } from "../src/neural-search/index.ts";
 const ownerPath = fileURLToPath(import.meta.url);
-const description = "Local fuzzy file/path and content search, with git-aware frecency ranking.";
+const description = "Local file/path and exact content search with git-aware frecency, plus full-scope CPU semantic search without frecency reranking.";
 
 export default function neuralSearch(pi: ExtensionAPI): void {
   const available = () => !pi.getAllTools().some(tool => tool.name === name && tool.sourceInfo.path !== ownerPath);
