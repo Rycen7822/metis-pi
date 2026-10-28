@@ -17,7 +17,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-pub const MAX_BYTES: u64 = 256 << 20;
+mod policy;
+pub use policy::MAX_BYTES;
 const QUANTUM: u64 = 64 << 10;
 const CONTROL_RESERVE: u64 = 64 << 10;
 const MAX_ENTRIES: usize = 128;
@@ -114,6 +115,7 @@ pub struct IndexCache {
     pub directory: PathBuf,
     ledger: PathBuf,
     pub max_bytes: u64,
+    selection: Option<policy::Selection>,
 }
 impl IndexCache {
     /// The ledger is fixed under HOME, not --cache-dir, SGREP_CACHE_DIR or XDG.
@@ -126,8 +128,9 @@ impl IndexCache {
             .map_err(|_| "SGREP_CACHE_MAX_BYTES must be a non-negative integer")?
             .unwrap_or(MAX_BYTES);
         if max_bytes > MAX_BYTES {
-            return Err("SGREP_CACHE_MAX_BYTES must not exceed 268435456 (256MiB)".into());
+            return Err("SGREP_CACHE_MAX_BYTES must not exceed 1073741824 (1024MiB)".into());
         }
+        let selection = policy::Selection::from_env()?;
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
             return Ok(None);
         };
@@ -140,7 +143,11 @@ impl IndexCache {
             directory,
             ledger: home.join(".cache/sgrep-cpu-quota"),
             max_bytes,
+            selection,
         }))
+    }
+    fn select_policy(&self) -> Result<()> {
+        policy::Locked::open(&self.ledger)?.select(self.selection.as_ref())
     }
     pub fn source_filter(&self) -> SourceFilter {
         let mut roots = read_roots(&self.ledger).unwrap_or_default();
@@ -174,12 +181,19 @@ impl IndexCache {
         self.directory.join(format!("index-{id}.bin"))
     }
     pub fn read(&self, target: &Path) -> Result<IndexLease> {
+        if self.max_bytes < CONTROL_RESERVE {
+            return Err(unavailable("budget too small for reader/policy metadata").into());
+        }
+        self.select_policy()?;
         // Brief exclusive admission registers a durable reader lease. There is
         // no need to inspect unrelated same-UID services or their private FDs.
         let maintenance = open(&self.ledger.join("quota.lock"), false, true)?;
         maintenance.try_lock()?;
         supported(&maintenance)?;
         let roots = read_roots(&self.ledger)?;
+        let mut policy = policy::Locked::open(&self.ledger)?;
+        policy.settle(&roots)?;
+        let cap = policy.state.limit(self.max_bytes)?;
         let directory = self.directory.canonicalize()?;
         if !roots.contains(&directory) {
             return Err("unregistered cache root".into());
@@ -188,8 +202,11 @@ impl IndexCache {
         let file = open(target, false, false)?;
         supported(&file)?;
         file.try_lock_shared()?;
+        // LRU means last leased, not merely last written. Payload bytes and
+        // the immutable inode stay unchanged while its access age is refreshed.
+        file.set_modified(SystemTime::now())?;
         let metadata = file.metadata()?;
-        if measure(&roots, &self.ledger)? > self.max_bytes.saturating_sub(CONTROL_RESERVE) {
+        if measure(&roots, &self.ledger)? > cap.saturating_sub(CONTROL_RESERVE) {
             return Err(unavailable("reader lease metadata does not fit the shared budget").into());
         }
         let mut lease = tempfile::Builder::new()
@@ -220,7 +237,7 @@ impl IndexCache {
         if self.max_bytes < CONTROL_RESERVE {
             return Err(unavailable("budget too small for transaction metadata").into());
         }
-        std::fs::create_dir_all(&self.ledger)?;
+        self.select_policy()?;
         let maintenance = open(&self.ledger.join("quota.lock"), true, true)?;
         maintenance.try_lock()?;
         supported(&maintenance)?;
@@ -266,14 +283,17 @@ impl IndexCache {
             CONTROL_RESERVE
         };
         cleanup(&roots, &target)?;
+        let mut policy = policy::Locked::open(&self.ledger)?;
+        policy.settle(&roots)?;
+        let cap = policy.state.limit(self.max_bytes)?;
         prune(
             &roots,
             &self.ledger,
             &target,
-            self.max_bytes.saturating_sub(registry_reserve),
+            cap.saturating_sub(registry_reserve),
         )?;
         let before = measure(&roots, &self.ledger)?;
-        if before > self.max_bytes.saturating_sub(registry_reserve) {
+        if before > cap.saturating_sub(registry_reserve) {
             return Err(
                 unavailable("unreclaimable readers leave no safe transaction reserve").into(),
             );
@@ -309,7 +329,8 @@ impl IndexCache {
             _maintenance: maintenance,
             roots,
             ledger: self.ledger.clone(),
-            cap: self.max_bytes,
+            cap,
+            local_limit: self.max_bytes,
             base,
             reserved_end: 0,
             logical_end: 0,
@@ -388,7 +409,13 @@ fn prune(roots: &[PathBuf], ledger: &Path, replacing: &Path, limit: u64) -> Resu
     Ok(())
 }
 fn measure(roots: &[PathBuf], ledger: &Path) -> Result<u64> {
+    measure_except(roots, ledger, None)
+}
+fn measure_except(roots: &[PathBuf], ledger: &Path, exclude: Option<(u64, u64)>) -> Result<u64> {
     let mut seen = HashSet::new();
+    if let Some(inode) = exclude {
+        seen.insert(inode);
+    }
     let mut total = 0u64;
     let mut charge = |metadata: std::fs::Metadata| -> Result<()> {
         if seen.insert((metadata.dev(), metadata.ino())) {
@@ -398,6 +425,14 @@ fn measure(roots: &[PathBuf], ledger: &Path) -> Result<u64> {
         }
         Ok(())
     };
+    charge(std::fs::metadata(ledger)?)?;
+    for root in roots {
+        match std::fs::metadata(root) {
+            Ok(metadata) => charge(metadata)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     for (_, path, _) in entries(roots)? {
         charge(regular(&path)?)?;
     }
@@ -517,6 +552,7 @@ pub struct BudgetFile {
     roots: Vec<PathBuf>,
     ledger: PathBuf,
     cap: u64,
+    local_limit: u64,
     base: u64,
     reserved_end: u64,
     logical_end: u64,
@@ -530,9 +566,23 @@ impl BudgetFile {
         if end <= self.reserved_end {
             return Ok(());
         }
+        // Keep this guard until fallocate finishes: a configuration change may
+        // not slip between checking the current policy and acquiring blocks.
+        let policy = policy::Locked::open(&self.ledger).map_err(policy::into_io)?;
+        self.cap = policy
+            .state
+            .limit(self.local_limit)
+            .map_err(policy::into_io)?;
+        let metadata = self.file.as_ref().unwrap().metadata()?;
+        self.base = measure_except(
+            &self.roots,
+            &self.ledger,
+            Some((metadata.dev(), metadata.ino())),
+        )
+        .map_err(policy::into_io)?;
         let next = rounded(end)?;
         let growth = next - self.reserved_end;
-        let current = allocated(&self.file.as_ref().unwrap().metadata()?);
+        let current = allocated(&metadata);
         // Conservative transient charge for new data blocks and extent metadata.
         // Release unused reservation only after fstat establishes actual blocks.
         let upper = self
@@ -566,6 +616,14 @@ impl BudgetFile {
         Ok(())
     }
     pub fn publish(mut self) -> Result<()> {
+        let policy = policy::Locked::open(&self.ledger)?;
+        self.cap = policy.state.limit(self.local_limit)?;
+        if measure(&self.roots, &self.ledger)? > self.cap.saturating_sub(CONTROL_RESERVE) {
+            return Err(unavailable(
+                "complete index/update peak exceeds the current shared budget",
+            )
+            .into());
+        }
         self.file().sync_all()?;
         let directory = self.target.parent().unwrap();
         // Keep old readers charged through an owned hardlink after replace.
@@ -624,9 +682,16 @@ impl Drop for BudgetFile {
             let _ = std::fs::remove_file(&self.temp);
         }
         if let Some(path) = std::env::var_os("SGREP_CACHE_DIAGNOSTICS_PATH") {
+            let state = policy::Locked::open(&self.ledger)
+                .ok()
+                .map(|p| p.state.clone());
             let data = serde_json::json!({"kind":"actual_cache_writer_blocks_and_reservation","published":self.published,
                 "allocated_peak_bytes":self.peak,"reservation_peak_bytes":self.reservation_peak,
-                "cap_bytes":self.cap,"roots":self.roots.len(),"reason":self.reason});
+                "cap_bytes":self.cap,"roots":self.roots.len(),"reason":self.reason,
+                "cache_budget_mib":state.as_ref().map(|p|p.active_mib),
+                "cache_target_budget_mib":state.as_ref().map(|p|p.target_mib),
+                "cache_budget_pending":state.as_ref().map(|p|p.pending()),
+                "cache_budget_generation":state.as_ref().map(|p|p.generation)});
             if let Err(error) = std::fs::write(path, format!("{data}\n")) {
                 eprintln!("sgrep: requested cache diagnostics failed: {error}");
             }

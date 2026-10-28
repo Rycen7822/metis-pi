@@ -26,15 +26,30 @@ changes cause at most one complete request retry, never partial results.
 
 The shared corpus-cache ledger lives at `$HOME/.cache/sgrep-cpu-quota`. Changing
 `--cache-dir`, `SGREP_CACHE_DIR` or `XDG_CACHE_HOME` selects a registered storage
-root, not another budget. `SGREP_CACHE_MAX_BYTES` can reduce admission below the
-256MiB hard maximum, never raise it. Model assets and the separate FFF indexes
-are outside this corpus-cache budget.
+root, not another budget. The shared policy supports 256, 512 and 1024MiB tiers,
+defaulting to 512MiB when no policy exists. A standalone CLI inherits the recorded
+policy. `SGREP_CACHE_MAX_BYTES` is only a stricter per-request byte ceiling; it
+cannot select a larger tier. Model assets and separate FFF indexes are outside
+this corpus-cache budget.
 
-Admission accounts actual file blocks, in-flight reservations, old generations
+Metis owns configuration parsing. Its internal `SGREP_CACHE_POLICY_REQUEST` JSON
+bridge carries the selected tier, absolute config source and exact device/inode/
+size/mtime/ctime snapshot (decimal strings preserve Node bigint precision).
+The core rejects stale or conflicting selections without granting another
+quota. User-facing TOML/action wiring belongs to the parent component and has
+not yet been delivered. A short policy lock records changes even during a long
+index writer; pending downgrades block new allocations/publication until actual
+reader/writer responsibility can fit. Upgrades preserve valid index identities.
+Neither tier changes nor mmap waive the independent memory/CPU limits.
+
+Admission accounts actual file/directory blocks, in-flight reservations, old generations
 and durable reader leases. The qualified allocation backends are ext4 and tmpfs;
 unsupported allocation, contention, permissions or insufficient update peak
 space disable that cache attempt while complete search continues. Failed refresh
-retains the prior immutable target. Private indexes/ledger records use mode 0600.
+retains the prior immutable target; explicit budget-shrink LRU eviction is a
+separate operation. Last leases refresh eviction age without changing payload
+bytes. Interrupted policy transaction files are reclaimed only under the short
+policy lock; symlinks are preserved. Private indexes/ledger records use mode 0600.
 
 ## Prepared asset acquisition
 
