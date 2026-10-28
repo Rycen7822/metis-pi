@@ -281,9 +281,9 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         && let (Some(config), Some(manifest)) = (&index_cache, &manifest)
     {
         let target = config.target(&path, args.model);
-        match scope_index::ScopeIndex::open(config, &target, manifest, &cache, args.model) {
+        match scope_index::ScopeIndex::open(config, &target, manifest, &cache, args.model, &terms) {
             Ok(index) => {
-                let (results, work) = index.search(args, &cache, &terms, trace.as_mut())?;
+                let (results, work) = index.search(args, &cache, trace.as_mut())?;
                 diagnostics::check_scope(work, index.len(), 0)?;
                 manifest.verify(&path, &filter)?;
                 if let Some(trace) = trace {

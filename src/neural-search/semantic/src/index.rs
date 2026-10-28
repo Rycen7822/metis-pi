@@ -220,6 +220,9 @@ impl<'a> Record<'a> {
             return Err(invalid("invalid chunk range/size"));
         }
         metadata.counts.values().try_fold(0usize, |sum, n| {
+            if *n == 0 {
+                return Err(invalid("zero lexical frequency"));
+            }
             sum.checked_add(*n)
                 .ok_or_else(|| invalid("lexical length overflow"))
         })?;

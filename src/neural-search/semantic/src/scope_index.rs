@@ -8,6 +8,7 @@ use crate::{
     storage::{BudgetFile, IndexCache, IndexLease, MAX_BYTES},
 };
 use memmap2::Mmap;
+mod pages;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -18,7 +19,10 @@ use std::{
     path::{Path, PathBuf},
 };
 const HEADER: usize = 128;
-const MAGIC: &[u8; 8] = b"SGREPS07";
+const MAGIC: &[u8; 8] = b"SGREPS08";
+const LEGACY_MAGIC: &[u8; 8] = b"SGREPS07";
+const CONTRACT: &str = "cpu-semantic-scope-v3-counts-v1-query-policy-v1";
+const LEGACY_CONTRACT: &str = "cpu-semantic-record-v2-lossless-v1-query-policy-v1";
 
 pub(crate) fn file_digest(path: &Path) -> Result<[u8; 32]> {
     let mut file = File::open(path)?;
@@ -104,7 +108,7 @@ fn artifact(assets: &Cache, kind: Kind) -> Result<serde_json::Value> {
         Kind::Code => "lateon-edge",
     };
     Ok(
-        serde_json::json!({"contract":"cpu-semantic-record-v2-lossless-v1-query-policy-v1","source_policy":"lf-crlf-cr-v1","scope_codec":"zstd-v1",
+        serde_json::json!({"contract":CONTRACT,"source_policy":"lf-crlf-cr-v1","scope_codec":"zstd-v1",
         "manifest":serde_json::from_reader::<_,serde_json::Value>(File::open(assets.model_directory(model)?.join("manifest.json"))?)?}),
     )
 }
@@ -138,10 +142,8 @@ fn recoverable(error: &(dyn std::error::Error + 'static)) -> bool {
 pub struct Builder {
     output: Option<BudgetFile>,
     offsets: Vec<(u64, u64)>,
-    terms: BTreeMap<String, Vec<[usize; 3]>>,
     metadata: Metadata,
     total_length: usize,
-    metadata_ram: usize,
 }
 impl Builder {
     pub fn begin(
@@ -157,7 +159,6 @@ impl Builder {
         Ok(Self {
             output: Some(output),
             offsets: Vec::new(),
-            terms: BTreeMap::new(),
             metadata: Metadata {
                 manifest,
                 artifact: artifact(assets, kind)?,
@@ -165,43 +166,14 @@ impl Builder {
                 prose_only,
             },
             total_length: 0,
-            metadata_ram: 0,
         })
-    }
-    fn stop(&mut self, error: &dyn std::fmt::Display) {
-        if let Some(mut file) = self.output.take() {
-            file.failure(error);
-            drop(file);
-            eprintln!("sgrep: cache unavailable; continuing complete search: {error}");
-        }
-        self.terms.clear();
-        self.offsets.clear();
     }
     pub fn encode(&mut self, scorer: &mut Scorer, chunk: &Chunk) -> Result<f64> {
         if self.output.is_none() {
             return scorer.score_document(&chunk.path, &chunk.content);
         }
-        // The query-independent lexical dictionary is resident, but bounded.
-        // Exceeding its RAM admission stops caching, never scope evaluation.
-        let projected = chunk
-            .counts
-            .iter()
-            .map(|(word, _)| {
-                // The dictionary key/B-tree allowance is owned once per term,
-                // not once per posting. Keep the conservative 2x posting charge
-                // for Vec growth; a new key's allowance also covers tiny Vecs.
-                let key = if self.terms.contains_key(word) {
-                    0
-                } else {
-                    word.len() + 256
-                };
-                key + std::mem::size_of::<[usize; 3]>() * 2
-            })
-            .sum::<usize>();
-        if self.metadata_ram.saturating_add(projected) > 64 << 20 {
-            self.stop(&"lexical index RAM admission exhausted");
-            return scorer.score_document(&chunk.path, &chunk.content);
-        }
+        // Each record already owns its full query-independent word counts.
+        // Do not retain a second corpus-wide dictionary/posting representation.
         let mut output = self.output.take().unwrap();
         let mut writer = match RecordWriter::begin(&mut output, chunk, scorer.kind()) {
             Ok(writer) => writer,
@@ -211,7 +183,6 @@ impl Builder {
                 }
                 output.failure(&error);
                 drop(output);
-                self.terms.clear();
                 self.offsets.clear();
                 eprintln!("sgrep: cache write disabled: {error}");
                 return scorer.score_document(&chunk.path, &chunk.content);
@@ -233,7 +204,6 @@ impl Builder {
             drop(writer);
             output.failure(&error);
             drop(output);
-            self.terms.clear();
             self.offsets.clear();
             eprintln!("sgrep: cache write disabled; remaining scope still evaluated: {error}");
             return Ok(score);
@@ -246,27 +216,18 @@ impl Builder {
                 }
                 output.failure(&error);
                 drop(output);
-                self.terms.clear();
                 self.offsets.clear();
                 eprintln!("sgrep: cache finish disabled: {error}");
                 return Ok(score);
             }
         };
         self.output = Some(output);
-        let id = self.offsets.len();
         let length = chunk.counts.values().sum::<usize>();
         self.offsets.push(location);
         self.total_length = self
             .total_length
             .checked_add(length)
             .ok_or("corpus length overflow")?;
-        for (word, &frequency) in &chunk.counts {
-            self.terms
-                .entry(word.clone())
-                .or_default()
-                .push([id, frequency, length]);
-        }
-        self.metadata_ram += projected;
         Ok(score)
     }
     pub fn finish(mut self) -> Result<()> {
@@ -279,18 +240,7 @@ impl Builder {
                 output.write_all(&start.to_le_bytes())?;
                 output.write_all(&length.to_le_bytes())?;
             }
-            let mut term_offsets = Vec::with_capacity(self.terms.len());
-            for (term, postings) in &self.terms {
-                term_offsets.push(output.stream_position()?);
-                let (raw_bytes, encoded) =
-                    crate::index::codec::pack_metadata(serde_json::to_vec(&(term, postings))?)?;
-                output.write_all(&(raw_bytes as u64).to_le_bytes())?;
-                output.write_all(&encoded)?;
-            }
             let terms = output.stream_position()?;
-            for offset in term_offsets {
-                output.write_all(&offset.to_le_bytes())?;
-            }
             let metadata_start = output.stream_position()?;
             let metadata_raw_bytes =
                 crate::index::codec::write_scope_metadata(&mut output, &self.metadata)?;
@@ -301,7 +251,7 @@ impl Builder {
                 end - metadata_start,
                 records,
                 terms,
-                self.terms.len() as u64,
+                0, // No duplicate lexical section: counts belong to records.
                 self.total_length as u64,
                 end,
                 1,
@@ -348,6 +298,7 @@ pub struct ScopeIndex {
     term_table: usize,
     terms: usize,
     total_length: usize,
+    query_idf: BTreeMap<String, f64>,
 }
 impl ScopeIndex {
     pub fn len(&self) -> usize {
@@ -359,6 +310,7 @@ impl ScopeIndex {
         manifest: &Manifest,
         assets: &Cache,
         choice: ModelChoice,
+        query_words: &[String],
     ) -> Result<Self> {
         let file = cache.read(target)?;
         let size = file.metadata()?.len();
@@ -366,7 +318,11 @@ impl ScopeIndex {
             return Err("invalid scope index length".into());
         }
         let map = unsafe { Mmap::map(&*file)? };
-        if map.get(..8) != Some(MAGIC) || number(&map, 72)? != 1 || number(&map, 80)? != 1 {
+        let legacy = map.get(..8) == Some(LEGACY_MAGIC);
+        if (!legacy && map.get(..8) != Some(MAGIC))
+            || number(&map, 72)? != 1
+            || number(&map, 80)? != 1
+        {
             return Err("old/incomplete scope index".into());
         }
         let count = number(&map, 8)?;
@@ -385,17 +341,19 @@ impl ScopeIndex {
                 .is_none_or(|n| n > term_table)
             || term_table.checked_add(terms.checked_mul(8).ok_or("term count overflow")?)
                 != Some(metadata_start)
+            || (!legacy && (terms != 0 || record_table + count * 16 != term_table))
         {
             return Err("invalid scope index sections".into());
         }
         let expected = u32::from_le_bytes(map[end..].try_into()?);
-        if crc32fast::hash(&map[..end]) != expected {
+        if pages::checksum(&map, end)? != expected {
             return Err("scope index CRC mismatch".into());
         }
         let decoded_metadata =
             crate::index::codec::scope_metadata(&map[metadata_start..end], number(&map, 88)?)?;
         let metadata: Metadata = serde_json::from_slice(&decoded_metadata)?;
         drop(decoded_metadata);
+        pages::release(&map, metadata_start, end)?;
         let kind = from_tag(metadata.kind)?;
         let selected = if choice == ModelChoice::Text
             || (choice == ModelChoice::Auto && metadata.prose_only)
@@ -404,13 +362,17 @@ impl ScopeIndex {
         } else {
             Kind::Code
         };
+        let mut expected_artifact = artifact(assets, kind)?;
+        if legacy {
+            expected_artifact["contract"] = LEGACY_CONTRACT.into();
+        }
         if metadata.manifest != *manifest
             || kind != selected
-            || metadata.artifact != artifact(assets, kind)?
+            || metadata.artifact != expected_artifact
         {
             return Err("stale scope/model/preprocessing manifest".into());
         }
-        let index = Self {
+        let mut index = Self {
             map,
             _lease: file,
             metadata,
@@ -419,7 +381,12 @@ impl ScopeIndex {
             term_table,
             terms,
             total_length,
+            query_idf: BTreeMap::new(),
         };
+        let mut query_df: BTreeMap<_, usize> =
+            query_words.iter().cloned().map(|word| (word, 0)).collect();
+        let mut lexical_length = 0usize;
+        let mut released = 0;
         let mut next = HEADER;
         for i in 0..count {
             let at = number(&index.map, record_table + i * 16)?;
@@ -435,14 +402,35 @@ impl ScopeIndex {
                 return Err("record/scope model mismatch".into());
             }
             record.visit(&mut |_| Ok(()))?;
+            lexical_length = lexical_length
+                .checked_add(record.chunk.counts.values().sum::<usize>())
+                .ok_or("corpus length overflow")?;
+            // This is the existing full-record validation pass, not another
+            // corpus traversal. Only current-query DF survives the pass.
+            if query_df.len() <= record.chunk.counts.len() {
+                for (word, df) in &mut query_df {
+                    if record.chunk.counts.contains_key(word) {
+                        *df += 1;
+                    }
+                }
+            } else {
+                for word in record.chunk.counts.keys() {
+                    if let Some(df) = query_df.get_mut(word) {
+                        *df += 1;
+                    }
+                }
+            }
             next = at + bytes;
+            drop(record);
+            pages::consumed(&index.map, &mut released, next)?;
         }
-        if next != record_table {
-            return Err("non-contiguous scope records".into());
+        if next != record_table || lexical_length != total_length {
+            return Err("non-contiguous records or inconsistent corpus length".into());
         }
         let mut previous = None;
+        released = record_table + count * 16;
         for i in 0..terms {
-            let (term, postings) = index.term(i)?;
+            let (term, postings) = index.legacy_term(i)?;
             if previous.as_ref().is_some_and(|p: &String| p >= &term) {
                 return Err("unsorted lexical dictionary".into());
             }
@@ -458,7 +446,22 @@ impl ScopeIndex {
                 last = Some(id);
             }
             previous = Some(term);
+            let consumed = if i + 1 == terms {
+                term_table
+            } else {
+                number(&index.map, term_table + (i + 1) * 8)?
+            };
+            pages::consumed(&index.map, &mut released, consumed)?;
         }
+        pages::release(&index.map, 0, index.map.len())?;
+        index.query_idf = query_df
+            .into_iter()
+            .filter(|(_, df)| *df > 0)
+            .map(|(word, df)| {
+                let df = df as f64;
+                (word, (1.0 + (count as f64 - df + 0.5) / (df + 0.5)).ln())
+            })
+            .collect();
         Ok(index)
     }
     fn record(&self, id: usize) -> Result<Record<'_>> {
@@ -468,7 +471,8 @@ impl ScopeIndex {
         let at = number(&self.map, self.record_table + id * 16)?;
         Record::open(&self.map[..self.record_table], at)
     }
-    fn term(&self, id: usize) -> Result<(String, Vec<[usize; 3]>)> {
+    // Retained for format07 validation; new indexes have no postings section.
+    fn legacy_term(&self, id: usize) -> Result<(String, Vec<[usize; 3]>)> {
         let start = number(&self.map, self.term_table + id * 8)?;
         let end = if id + 1 < self.terms {
             number(&self.map, self.term_table + (id + 1) * 8)?
@@ -487,54 +491,63 @@ impl ScopeIndex {
         let decoded = crate::index::codec::metadata(encoded, raw_length)?;
         Ok(serde_json::from_slice(&decoded)?)
     }
+    fn lexical_score(&self, chunk: &Chunk, avg: f64) -> f64 {
+        let length = chunk.counts.values().sum();
+        if self.query_idf.len() <= chunk.counts.len() {
+            self.query_idf
+                .iter()
+                .filter_map(|(word, &idf)| {
+                    chunk
+                        .counts
+                        .get(word)
+                        .map(|&tf| crate::term_score(idf, tf, length, avg))
+                })
+                .sum()
+        } else {
+            // A very wide Bekko query must not turn every document into a
+            // full-query scan. Sort only present terms to preserve FP64 order.
+            let mut present: Vec<_> = chunk
+                .counts
+                .iter()
+                .filter_map(|(word, &tf)| self.query_idf.get(word).map(|&idf| (word, tf, idf)))
+                .collect();
+            present.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            present
+                .into_iter()
+                .map(|(_, tf, idf)| crate::term_score(idf, tf, length, avg))
+                .sum()
+        }
+    }
     pub fn search(
         &self,
         args: &Args,
         assets: &Cache,
-        terms: &[String],
         trace: Option<&mut crate::diagnostics::RetrievalTrace>,
     ) -> Result<(Vec<Chunk>, crate::semantic::Work)> {
         // Match Sum<f64>'s identity in the streaming BM25 path, including the
         // observable sign of zero when a document has no matching postings.
         let mut lexical = vec![-0.0; self.count];
         let avg = (self.total_length as f64 / self.count.max(1) as f64).max(1.0);
-        for word in terms {
-            let (mut low, mut high) = (0, self.terms);
-            while low < high {
-                let middle = (low + high) / 2;
-                let (term, _) = self.term(middle)?;
-                if term.as_str() < word.as_str() {
-                    low = middle + 1;
-                } else {
-                    high = middle;
-                }
-            }
-            if low == self.terms {
-                continue;
-            }
-            let (term, postings) = self.term(low)?;
-            if term != *word {
-                continue;
-            }
-            let df = postings.len() as f64;
-            let idf = (1.0 + (self.count as f64 - df + 0.5) / (df + 0.5)).ln();
-            for [id, count, length] in postings {
-                lexical[id] += crate::term_score(idf, count, length, avg);
-            }
-        }
         let mut scorer = Scorer::open(args.model, self.metadata.prose_only, &args.query, assets)?;
         let exact_pattern = crate::identifier_pattern(&args.query)?;
         let mut exact = HashSet::new();
+        let mut released = 0;
         let similarities = scorer.score_scope(self.count, |i, sink| {
             let record = self.record(i)?;
+            lexical[i] = self.lexical_score(&record.chunk, avg);
             if exact_pattern
                 .as_ref()
                 .is_some_and(|p| p.0.is_match(&record.chunk.content))
             {
                 exact.insert(i);
             }
-            record.visit(sink)
+            record.visit(sink)?;
+            drop(record);
+            let at = self.record_table + i * 16;
+            let consumed = number(&self.map, at)? + number(&self.map, at + 8)?;
+            pages::consumed(&self.map, &mut released, consumed)
         })?;
+        pages::release(&self.map, 0, self.map.len())?;
         let result = crate::rank(
             args,
             self.count,
@@ -542,7 +555,15 @@ impl ScopeIndex {
             &similarities,
             Vec::new(),
             &exact,
-            |i| Ok(self.record(i)?.chunk),
+            |i| {
+                let chunk = self.record(i)?.chunk;
+                // Ranking owns the decoded chunk now; diagnostic all-candidate
+                // lookups must not repopulate the whole mapped index either.
+                let at = self.record_table + i * 16;
+                let start = number(&self.map, at)?;
+                pages::release(&self.map, start, start + number(&self.map, at + 8)?)?;
+                Ok(chunk)
+            },
             trace,
         )?;
         let _ = self._lease.set_modified(std::time::SystemTime::now());

@@ -19,10 +19,15 @@ parent neural-search component, not to this Rust/C++ implementation.
 
 ## Corpus cache
 
-Complete indexes retain original chunk ranges, text, lexical postings and tagged
-FP16 representations. Hits require matching source bytes and model/preprocessing
-identity; incomplete, stale, old-format or corrupt files are recomputed. Source
-changes cause at most one complete request retry, never partial results.
+Complete indexes retain original chunk ranges, text, full word counts and tagged
+FP16 representations. Format08 stores lexical counts once in each record rather
+than a second corpus-wide dictionary/postings copy. The existing full-record
+validation pass derives only the current query's DF; BM25 contributions retain
+lexical query order and the empty-sum sign. Format07 remains readable and its old
+postings are validated, not silently ignored. Hits require matching source bytes
+and model/preprocessing identity; incomplete, stale, unsupported or corrupt files
+are recomputed. Source changes cause at most one complete retry, never partial
+results.
 
 The shared corpus-cache ledger lives at `$HOME/.cache/sgrep-cpu-quota`. Changing
 `--cache-dir`, `SGREP_CACHE_DIR` or `XDG_CACHE_HOME` selects a registered storage
@@ -50,6 +55,12 @@ retains the prior immutable target; explicit budget-shrink LRU eviction is a
 separate operation. Last leases refresh eviction age without changing payload
 bytes. Interrupted policy transaction files are reclaimed only under the short
 policy lock; symlinks are preserved. Private indexes/ledger records use mode 0600.
+
+CRC, record validation and scoring consume mapped files in bounded resident
+windows; owned ranking/trace chunks release their consumed view as well. Only
+this read-only immutable-inode mapping's PTEs are released, never model arenas or
+another reader's view. This does not evict shared file-cache pages or excuse them
+from cgroup accounting, and does not establish a cold-page/resource gate.
 
 ## Prepared asset acquisition
 
