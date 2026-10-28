@@ -190,6 +190,7 @@ impl IndexCache {
         let maintenance = open(&self.ledger.join("quota.lock"), false, true)?;
         maintenance.try_lock()?;
         supported(&maintenance)?;
+        cleanup_reader_stages(&self.ledger)?;
         let roots = read_roots(&self.ledger)?;
         let mut policy = policy::Locked::open(&self.ledger)?;
         policy.settle(&roots)?;
@@ -209,23 +210,36 @@ impl IndexCache {
         if measure(&roots, &self.ledger)? > cap.saturating_sub(CONTROL_RESERVE) {
             return Err(unavailable("reader lease metadata does not fit the shared budget").into());
         }
+        let process = std::process::id();
+        let start_time = process_state(process)?.1;
+        // An interrupted serialization must never appear as a published lease:
+        // its missing owner/debt would otherwise poison every registered root.
         let mut lease = tempfile::Builder::new()
-            .prefix("lease-")
-            .suffix(".json")
+            .prefix(&format!(".reader-v1-{process}-{start_time}-"))
+            .suffix(".tmp")
+            .rand_bytes(16)
             .tempfile_in(&self.ledger)?;
+        lease.as_file().try_lock()?;
         serde_json::to_writer(
             &mut lease,
             &ReaderCharge {
                 device: metadata.dev(),
                 inode: metadata.ino(),
                 bytes: allocated(&metadata),
-                process: std::process::id(),
-                start_time: process_state(std::process::id())?.1,
+                process,
+                start_time,
             },
         )?;
         lease.as_file().sync_all()?;
-        lease.as_file().try_lock()?;
-        let (control, path) = lease.keep()?;
+        let stem = lease
+            .path()
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix('.'))
+            .ok_or("invalid reader staging filename")?;
+        let path = self.ledger.join(format!("lease-{stem}.json"));
+        // persist retains the locked descriptor across the atomic rename.
+        let control = lease.persist_noclobber(&path)?;
         drop(maintenance);
         Ok(IndexLease {
             file: Some(file),
@@ -241,6 +255,7 @@ impl IndexCache {
         let maintenance = open(&self.ledger.join("quota.lock"), true, true)?;
         maintenance.try_lock()?;
         supported(&maintenance)?;
+        cleanup_reader_stages(&self.ledger)?;
         let registry = self.ledger.join("roots.json");
         let mut roots: Vec<PathBuf> = if registry.exists() {
             regular(&registry)?;
@@ -483,10 +498,13 @@ struct ReaderCharge {
 }
 impl ReaderCharge {
     fn owner_gone(&self) -> bool {
-        match process_state(self.process) {
-            Ok((state, start)) => start != self.start_time || matches!(state, b'Z' | b'X'),
-            Err(error) => error.kind() == io::ErrorKind::NotFound,
-        }
+        process_gone(self.process, self.start_time)
+    }
+}
+fn process_gone(process: u32, start_time: u64) -> bool {
+    match process_state(process) {
+        Ok((state, start)) => start != start_time || matches!(state, b'Z' | b'X'),
+        Err(error) => error.kind() == io::ErrorKind::NotFound,
     }
 }
 fn process_state(pid: u32) -> io::Result<(u8, u64)> {
@@ -505,6 +523,64 @@ fn process_state(pid: u32) -> io::Result<(u8, u64)> {
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing process start time"))?;
     Ok((state, start))
+}
+
+// Called only under quota.lock. A live creator holds that same lock until its
+// complete lease is published. All staging bytes, including unknown records,
+// remain in measure(); recovery never invents credit for deleted data inodes.
+fn cleanup_reader_stages(ledger: &Path) -> Result<()> {
+    let owner = std::fs::metadata(ledger)?.uid();
+    for entry in std::fs::read_dir(ledger)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue; // In particular, never follow a staging-name symlink.
+        }
+        let name = entry.file_name();
+        let Some(identity) = name
+            .to_str()
+            .and_then(|s| s.strip_prefix(".reader-v1-"))
+            .and_then(|s| s.strip_suffix(".tmp"))
+        else {
+            continue;
+        };
+        let fields: Vec<_> = identity.split('-').collect();
+        if fields.len() != 3
+            || fields[2].len() != 16
+            || !fields[2].bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        let (Ok(process), Ok(start)) = (fields[0].parse::<u32>(), fields[1].parse::<u64>()) else {
+            continue;
+        };
+        if process == 0 || start == 0 || !process_gone(process, start) {
+            continue;
+        }
+        let metadata = regular(&entry.path())?;
+        if metadata.uid() != owner || metadata.nlink() != 1 || metadata.len() > 4096 {
+            continue;
+        }
+        let control = open(&entry.path(), false, true)?;
+        match control.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => continue,
+            Err(error) => return Err(error.into()),
+        }
+        let mut bytes = Vec::new();
+        (&control).take(4097).read_to_end(&mut bytes)?;
+        let owned = match serde_json::from_slice::<ReaderCharge>(&bytes) {
+            Ok(record) => record.process == process && record.start_time == start,
+            Err(error) if error.is_eof() => {
+                b"{\"device\":".starts_with(&bytes) || bytes.starts_with(b"{\"device\":")
+            }
+            Err(_) => false,
+        };
+        if owned {
+            drop(control);
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn read_roots(ledger: &Path) -> Result<Vec<PathBuf>> {

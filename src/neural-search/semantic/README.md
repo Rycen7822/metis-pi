@@ -58,6 +58,12 @@ retains the prior immutable target; explicit budget-shrink LRU eviction is a
 separate operation. Last leases refresh eviction age without changing payload
 bytes. Interrupted policy transaction files are reclaimed only under the short
 policy lock; symlinks are preserved. Private indexes/ledger records use mode 0600.
+Reader leases are locked and fully serialized in PID/start-time-identified staging
+files before atomic publication. Under the quota lock, recovery removes only
+recognized stages whose exact owner has exited and whose kernel lock is free;
+live owners, unknown payloads and symlinks remain preserved and charged. An
+unverifiable malformed legacy lease fails closed to complete uncached search,
+not unsafe deletion of potentially live reader responsibility.
 
 CRC, record validation and scoring consume mapped files in bounded resident
 windows; owned ranking/trace chunks release their consumed view as well. Only
