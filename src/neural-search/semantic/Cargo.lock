@@ -1583,6 +1583,7 @@ dependencies = [
  "tokenizers",
  "tree-sitter",
  "tree-sitter-language-pack",
+ "zstd",
 ]
 
 [[package]]

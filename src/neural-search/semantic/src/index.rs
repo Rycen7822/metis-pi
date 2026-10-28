@@ -11,7 +11,9 @@ use std::{
     io::{Error, ErrorKind, Seek, SeekFrom, Write},
 };
 
-const MAGIC: &[u8; 8] = b"SGRPDOC1";
+pub(crate) mod codec;
+
+const MAGIC: &[u8; 8] = b"SGRPDOC2";
 const HEADER: usize = 64;
 
 fn invalid(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
@@ -48,6 +50,7 @@ pub struct RecordWriter<'a, W: Write + Seek> {
     output: &'a mut W,
     start: u64,
     metadata_bytes: u64,
+    metadata_raw_bytes: u64,
     semantic_start: u64,
     source: &'a str,
     kind: Kind,
@@ -56,23 +59,23 @@ pub struct RecordWriter<'a, W: Write + Seek> {
 }
 impl<'a, W: Write + Seek> RecordWriter<'a, W> {
     pub fn begin(output: &'a mut W, chunk: &'a Chunk, kind: Kind) -> Result<Self> {
+        let (metadata_raw_bytes, metadata) =
+            codec::pack_metadata(serde_json::to_vec(&MetadataRef {
+                chunk,
+                counts: &chunk.counts,
+            })?)?;
         let start = output.stream_position()?;
         let mut header = [0u8; HEADER];
         header[..8].copy_from_slice(MAGIC);
         // Length remains zero until all original source bytes have been encoded.
         output.write_all(&header)?;
-        serde_json::to_writer(
-            &mut *output,
-            &MetadataRef {
-                chunk,
-                counts: &chunk.counts,
-            },
-        )?;
+        output.write_all(&metadata)?;
         let semantic_start = output.stream_position()?;
         Ok(Self {
             output,
             start,
             metadata_bytes: semantic_start - start - HEADER as u64,
+            metadata_raw_bytes: metadata_raw_bytes as u64,
             semantic_start,
             source: &chunk.content,
             kind,
@@ -125,9 +128,16 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
                     .write_all(&(input_tokens as u32).to_le_bytes())?;
                 self.output
                     .write_all(&((values.len() / 48) as u32).to_le_bytes())?;
+                let encoded = codec::pack_code(values)?;
+                let bytes = encoded.as_ref().map_or(values.len() * 2, Vec::len);
+                self.output.write_all(&(bytes as u32).to_le_bytes())?;
                 self.output
-                    .write_all(&((values.len() * 2) as u64).to_le_bytes())?;
-                half_bytes(values, self.output)?;
+                    .write_all(&u32::from(encoded.is_some()).to_le_bytes())?;
+                if let Some(encoded) = encoded {
+                    self.output.write_all(&encoded)?;
+                } else {
+                    half_bytes(values, self.output)?;
+                }
                 self.next_source = source.end;
             }
         }
@@ -149,7 +159,7 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
             self.blocks as u64,
             end - self.semantic_start,
             self.source.len() as u64,
-            0,
+            self.metadata_raw_bytes,
         ];
         self.output.seek(SeekFrom::Start(self.start + 8))?;
         for field in fields {
@@ -190,8 +200,7 @@ impl<'a> Record<'a> {
             _ => return Err(invalid("unknown representation")),
         };
         let blocks = number(data, 32)?;
-        if number(data, 56)? != 0
-            || semantic > data.len()
+        if semantic > data.len()
             || number(data, 40)? != data.len() - semantic
             || blocks == 0
             || (kind == Kind::Text && (blocks != 1 || data.len() - semantic != 260))
@@ -202,7 +211,8 @@ impl<'a> Record<'a> {
         {
             return Err(invalid("invalid record boundaries"));
         }
-        let mut metadata: Metadata = serde_json::from_slice(&data[HEADER..semantic])?;
+        let decoded = codec::metadata(&data[HEADER..semantic], number(data, 56)?)?;
+        let mut metadata: Metadata = serde_json::from_slice(&decoded)?;
         if number(data, 48)? != metadata.chunk.content.len()
             || metadata.chunk.start == 0
             || metadata.chunk.end < metadata.chunk.start
@@ -252,7 +262,12 @@ impl<'a> Record<'a> {
                 .ok_or_else(|| invalid("truncated window"))?;
             let input_tokens = u32::from_le_bytes(pair[..4].try_into()?) as usize;
             let rows = u32::from_le_bytes(pair[4..].try_into()?) as usize;
-            let bytes = number(self.data, at + 24)?;
+            let encoding = self
+                .data
+                .get(at + 24..at + 32)
+                .ok_or_else(|| invalid("truncated codec"))?;
+            let bytes = u32::from_le_bytes(encoding[..4].try_into()?) as usize;
+            let codec = u32::from_le_bytes(encoding[4..].try_into()?);
             if start != next
                 || end > self.chunk.content.len()
                 || !self.chunk.content.is_char_boundary(start)
@@ -267,14 +282,23 @@ impl<'a> Record<'a> {
                 || input_tokens > 2048
                 || rows == 0
                 || rows > input_tokens
-                || bytes != rows * 48 * 2
             {
                 return Err(invalid("invalid cached window"));
             }
             at = at
                 .checked_add(32)
                 .ok_or_else(|| invalid("window overflow"))?;
-            let values = self.decode(at, rows * 48)?;
+            let end_at = at
+                .checked_add(bytes)
+                .ok_or_else(|| invalid("payload overflow"))?;
+            let payload = self
+                .data
+                .get(at..end_at)
+                .ok_or_else(|| invalid("partial window payload"))?;
+            let values = codec::code(payload, codec, rows * 48)?;
+            if values.iter().any(|v| !v.is_finite()) {
+                return Err(invalid("non-finite cached vector"));
+            }
             sink(DocumentBlock::Code {
                 source: start..end,
                 input_tokens,

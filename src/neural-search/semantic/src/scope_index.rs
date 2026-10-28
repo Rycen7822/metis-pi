@@ -18,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
 };
 const HEADER: usize = 128;
-const MAGIC: &[u8; 8] = b"SGREPS05";
+const MAGIC: &[u8; 8] = b"SGREPS07";
 
 pub(crate) fn file_digest(path: &Path) -> Result<[u8; 32]> {
     let mut file = File::open(path)?;
@@ -104,7 +104,7 @@ fn artifact(assets: &Cache, kind: Kind) -> Result<serde_json::Value> {
         Kind::Code => "lateon-edge",
     };
     Ok(
-        serde_json::json!({"contract":"cpu-semantic-record-v1-query-policy-v1","source_policy":"lf-crlf-cr-v1",
+        serde_json::json!({"contract":"cpu-semantic-record-v2-lossless-v1-query-policy-v1","source_policy":"lf-crlf-cr-v1","scope_codec":"zstd-v1",
         "manifest":serde_json::from_reader::<_,serde_json::Value>(File::open(assets.model_directory(model)?.join("manifest.json"))?)?}),
     )
 }
@@ -282,14 +282,18 @@ impl Builder {
             let mut term_offsets = Vec::with_capacity(self.terms.len());
             for (term, postings) in &self.terms {
                 term_offsets.push(output.stream_position()?);
-                serde_json::to_writer(&mut output, &(term, postings))?;
+                let (raw_bytes, encoded) =
+                    crate::index::codec::pack_metadata(serde_json::to_vec(&(term, postings))?)?;
+                output.write_all(&(raw_bytes as u64).to_le_bytes())?;
+                output.write_all(&encoded)?;
             }
             let terms = output.stream_position()?;
             for offset in term_offsets {
                 output.write_all(&offset.to_le_bytes())?;
             }
             let metadata_start = output.stream_position()?;
-            serde_json::to_writer(&mut output, &self.metadata)?;
+            let metadata_raw_bytes =
+                crate::index::codec::write_scope_metadata(&mut output, &self.metadata)?;
             let end = output.stream_position()?;
             let values = [
                 self.offsets.len() as u64,
@@ -302,6 +306,7 @@ impl Builder {
                 end,
                 1,
                 1,
+                metadata_raw_bytes as u64,
             ];
             output.seek(SeekFrom::Start(0))?;
             output.write_all(MAGIC)?;
@@ -387,7 +392,10 @@ impl ScopeIndex {
         if crc32fast::hash(&map[..end]) != expected {
             return Err("scope index CRC mismatch".into());
         }
-        let metadata: Metadata = serde_json::from_slice(&map[metadata_start..end])?;
+        let decoded_metadata =
+            crate::index::codec::scope_metadata(&map[metadata_start..end], number(&map, 88)?)?;
+        let metadata: Metadata = serde_json::from_slice(&decoded_metadata)?;
+        drop(decoded_metadata);
         let kind = from_tag(metadata.kind)?;
         let selected = if choice == ModelChoice::Text
             || (choice == ModelChoice::Auto && metadata.prose_only)
@@ -471,7 +479,13 @@ impl ScopeIndex {
         if start < minimum || start >= end || end > self.term_table {
             return Err("invalid lexical boundary table".into());
         }
-        Ok(serde_json::from_slice(&self.map[start..end])?)
+        let raw_length = number(&self.map[..end], start)?;
+        let encoded = self
+            .map
+            .get(start + 8..end)
+            .ok_or("truncated lexical frame")?;
+        let decoded = crate::index::codec::metadata(encoded, raw_length)?;
+        Ok(serde_json::from_slice(&decoded)?)
     }
     pub fn search(
         &self,
