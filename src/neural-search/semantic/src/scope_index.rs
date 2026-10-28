@@ -186,7 +186,17 @@ impl Builder {
         let projected = chunk
             .counts
             .iter()
-            .map(|(word, _)| word.len() + 256 + std::mem::size_of::<[usize; 3]>() * 2)
+            .map(|(word, _)| {
+                // The dictionary key/B-tree allowance is owned once per term,
+                // not once per posting. Keep the conservative 2x posting charge
+                // for Vec growth; a new key's allowance also covers tiny Vecs.
+                let key = if self.terms.contains_key(word) {
+                    0
+                } else {
+                    word.len() + 256
+                };
+                key + std::mem::size_of::<[usize; 3]>() * 2
+            })
             .sum::<usize>();
         if self.metadata_ram.saturating_add(projected) > 64 << 20 {
             self.stop(&"lexical index RAM admission exhausted");
@@ -470,7 +480,9 @@ impl ScopeIndex {
         terms: &[String],
         trace: Option<&mut crate::diagnostics::RetrievalTrace>,
     ) -> Result<(Vec<Chunk>, crate::semantic::Work)> {
-        let mut lexical = vec![0.0; self.count];
+        // Match Sum<f64>'s identity in the streaming BM25 path, including the
+        // observable sign of zero when a document has no matching postings.
+        let mut lexical = vec![-0.0; self.count];
         let avg = (self.total_length as f64 / self.count.max(1) as f64).max(1.0);
         for word in terms {
             let (mut low, mut high) = (0, self.terms);
