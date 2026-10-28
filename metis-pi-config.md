@@ -78,6 +78,17 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 
 ## `[neuralSearch]`
 
+语义模式的完整索引缓存使用同一 HOME 共享的磁盘峰值预算：
+
+```toml
+[neuralSearch.semantic]
+cacheBudgetMiB = 512
+```
+
+只接受 TOML 整数 `256`、`512`、`1024`，省略时默认 `512MiB`；`512.0`、字符串及其它档位会显式报错。所有缓存根共用一档，临时文件、新旧代和活跃读者责任都计入。降档未释放足够空间时为 pending，不自动升档、不截断搜索，也不放宽 RAM、线程或 cgroup 限制。
+
+当前源代码已接通配置快照与核心预算 bridge；semantic action 宿主注册仍在开发，不能据此认为当前已安装会话已经支持该模式。
+
 Neural Search 只读全局 TOML；缺省值来自包内模板。修改后 `/reload` 或重启。启用时提供一个 `deferred` 工具 `neural_search`，原生 `tool_search` 发现并激活后直接调用；不要求 codemode，也不替换 Pi 的内置 `find` / `grep`。
 
 | 字段 | 默认值 | 含义 |

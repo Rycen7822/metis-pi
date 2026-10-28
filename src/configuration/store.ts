@@ -1,5 +1,5 @@
-import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parse, stringify } from "smol-toml";
 import { lockSync } from "proper-lockfile";
@@ -96,6 +96,48 @@ export function readMetisConfig(
     config: text === undefined ? defaultMetisConfig() : mergeMetisConfig(defaultMetisConfig(), parseMetisConfig(text, path)),
     present: text !== undefined,
   };
+}
+
+export interface MetisConfigStamp {
+  device: string;
+  inode: string;
+  length: string;
+  modified_ns: string;
+  changed_ns: string;
+}
+export interface MetisConfigSnapshot {
+  config: MetisConfig;
+  present: boolean;
+  path: string;
+  text: string | undefined;
+  stamp: MetisConfigStamp | null;
+}
+function configStamp(path: string): MetisConfigStamp | null {
+  try {
+    const stat = statSync(path, { bigint: true });
+    return { device: String(stat.dev), inode: String(stat.ino), length: String(stat.size),
+      modified_ns: String(stat.mtimeNs), changed_ns: String(stat.ctimeNs) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new MetisConfigError(path, (error as NodeJS.ErrnoException).code ?? String(error));
+  }
+}
+/** One owner/read for a parsed config and the exact source version sent to a
+ * child. Retry a concurrent replacement once; never bind old values to new stat.
+ * Decimal strings retain nanosecond/inode precision across JSON and Rust. */
+export function readMetisConfigSnapshot(agentDir: string): MetisConfigSnapshot {
+  const path = resolve(metisConfigPath(agentDir));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const before = configStamp(path);
+    const text = readMetisConfigText(agentDir);
+    const stamp = configStamp(path);
+    if (JSON.stringify(before) !== JSON.stringify(stamp) || (text === undefined) !== (stamp === null)) continue;
+    return {
+      config: text === undefined ? defaultMetisConfig() : mergeMetisConfig(defaultMetisConfig(), parseMetisConfig(text, path)),
+      present: text !== undefined, path, text, stamp,
+    };
+  }
+  throw new MetisConfigError(path, "configuration changed while reading; retry the request");
 }
 
 function installGuide(agentDir: string): void {
