@@ -18,3 +18,5 @@ target_include_directories(sgrep_cpu PRIVATE "${ORT_SOURCE}/include/onnxruntime/
 target_link_libraries(sgrep_cpu PRIVATE "${ORT_BUILD}/libonnxruntime.so")
 target_link_options(sgrep_cpu PRIVATE -Wl,--no-undefined)
 set_target_properties(sgrep_cpu PROPERTIES BUILD_RPATH "$ORIGIN;${ORT_BUILD}" INSTALL_RPATH "$ORIGIN")
+# Stage through CMake so installed libraries cannot fall back to the build tree.
+install(TARGETS sgrep_cpu LIBRARY DESTINATION lib)

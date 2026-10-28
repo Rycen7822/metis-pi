@@ -147,6 +147,7 @@ CARGO_TARGET_DIR="$BUILD_ROOT/rust" cargo build --release --locked --manifest-pa
 cmake -S native -B "$BUILD_ROOT/native" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DORT_SOURCE="$ORT_SOURCE" -DORT_BUILD="$ORT_BUILD"
 cmake --build "$BUILD_ROOT/native" --parallel 4
+cmake --install "$BUILD_ROOT/native" --prefix "$BUILD_ROOT/runtime-stage"
 ```
 
 `ORT_SOURCE` is the pinned `402979ac1bef89dcd55add41eaa7277c407599eb` checkout,
@@ -154,6 +155,13 @@ with the owned patch applied. `ORT_BUILD` is its reduced non-minimal CPU `Releas
 configuration with telemetry disabled, exporting the private symbols in
 `native/ort-extra-symbols.txt`.
 An arbitrary system ORT is not interchangeable with this backend.
+
+Stage the native library through CMake rather than copying its build-tree `.so`:
+installation rewrites its dependency search path to `$ORIGIN` only, removing the
+development ORT fallback. The command above stages only the native library inside
+the build area; it does not install or activate Metis. The runtime bundle also needs
+the pinned reduced ORT library and its SONAME symlinks beside it, the CLI and model
+assets. A missing sibling ORT must not silently load one from the development tree.
 
 Runtime uses `assets.json`, `bin/sgrep`, `lib/libsgrep_cpu.so`, its sibling ORT library and prepared
 `models/bekko128` / `models/lateon-edge` assets. `SGREP_RUNTIME_DIR` selects that
