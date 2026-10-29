@@ -661,10 +661,30 @@ impl BudgetFile {
         let current = allocated(&metadata);
         // Conservative transient charge for new data blocks and extent metadata.
         // Release unused reservation only after fstat establishes actual blocks.
+        let reserve = growth
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(CONTROL_RESERVE))
+            .ok_or_else(|| unavailable("cache reservation overflow"))?;
+        let ceiling = self
+            .cap
+            .checked_sub(reserve)
+            .ok_or_else(|| unavailable("complete index/update peak exceeds shared cache budget"))?;
+        // The transaction-start prune only reserves control space. As the
+        // payload grows, reclaim idle complete indexes under the same policy
+        // and maintenance guards before giving up on caching this scope.
+        if self.base.saturating_add(current) > ceiling && current <= ceiling {
+            prune(&self.roots, &self.ledger, &self.target, ceiling).map_err(policy::into_io)?;
+            self.base = measure_except(
+                &self.roots,
+                &self.ledger,
+                Some((metadata.dev(), metadata.ino())),
+            )
+            .map_err(policy::into_io)?;
+        }
         let upper = self
             .base
             .checked_add(current)
-            .and_then(|n| n.checked_add(growth * 2 + CONTROL_RESERVE))
+            .and_then(|n| n.checked_add(reserve))
             .ok_or_else(|| unavailable("cache reservation overflow"))?;
         if upper > self.cap {
             return Err(unavailable(

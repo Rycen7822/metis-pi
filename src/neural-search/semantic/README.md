@@ -53,7 +53,9 @@ Neither tier changes nor mmap waive the independent memory/CPU limits.
 Admission accounts actual file/directory blocks, in-flight reservations, old generations
 and durable reader leases. The qualified allocation backends are ext4 and tmpfs;
 unsupported allocation, contention, permissions or insufficient update peak
-space disable that cache attempt while complete search continues. Failed refresh
+space disable that cache attempt while complete search continues. Growing writers
+reclaim idle complete indexes in LRU order before declining a reservation;
+locked readers and the target being replaced remain protected. Failed refresh
 retains the prior immutable target; explicit budget-shrink LRU eviction is a
 separate operation. Last leases refresh eviction age without changing payload
 bytes. Interrupted policy transaction files are reclaimed only under the short
