@@ -80,6 +80,14 @@ from the model server. Bundle updates use a new runtime/catalog; the catalog is
 not a floating model selector. No Python, compiler or model conversion runs in a
 query.
 
+The qualified development bundle uses verified local prepared payloads. Its
+catalog is still an unpublished development fixture, not a working public
+download origin. Public distribution requires a real prepared-artifact revision;
+that release operation is separate from local CPU/host qualification. Conversion-
+time status markers in the original model manifests are retained for provenance
+and cache identity; final numerical admission is recorded in the runtime's
+`manifests/runtime.lock.json` and `manifests/quality-gates.json`.
+
 `HF_HUB_OFFLINE` values `1`, `true`, `YES` and `On` prohibit acquisition. Missing
 or damaged offline assets fail explicitly. Online acquisition uses the existing
 HF client and `HF_ENDPOINT`, validates each approved prepared file and publishes
@@ -103,7 +111,13 @@ Cache misses retain compact scope metadata, then rehydrate one source file at a
 time for full scoring; supplied ripgrep groups use the same bounded source view.
 Miss/no-cache paths do not heap-retain a full-corpus text or embedding matrix.
 Hits mmap the complete immutable index; resident mapped pages still count toward
-PSS. The complete PSS/cgroup acceptance matrix has not yet passed.
+PSS. The v4.1 development candidate passed actual 512MiB high / 768MiB max /
+zero-swap cgroup checks for text, code and whole-scope auto at 1k/10k/100k chunks,
+plus a complete 778MiB index scan. The nine core cases each have 500 independent
+page-hot, new-CLI measurements; boundary lengths and actual ENOSPC recovery were
+checked separately. This qualifies the pinned candidate on the measured host,
+not every machine, physical-host cold I/O or a reliable P99 at fewer than 1000
+samples. Disk tiers do not increase the independent memory or thread ceilings.
 
 Cached Bekko scores use a 1024-row scratch block, tiled into eight independent
 document lanes. Guarded AVX2/F16C and scalar paths preserve the original FP32
