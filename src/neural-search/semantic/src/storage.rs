@@ -220,16 +220,16 @@ impl IndexCache {
             .rand_bytes(16)
             .tempfile_in(&self.ledger)?;
         lease.as_file().try_lock()?;
-        serde_json::to_writer(
-            &mut lease,
-            &ReaderCharge {
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                bytes: allocated(&metadata),
-                process,
-                start_time,
-            },
-        )?;
+        // Fixed integer fields bound this buffer; avoid one syscall per JSON
+        // fragment without changing the locked staging/sync/publish boundary.
+        let charge = serde_json::to_vec(&ReaderCharge {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            bytes: allocated(&metadata),
+            process,
+            start_time,
+        })?;
+        lease.write_all(&charge)?;
         lease.as_file().sync_all()?;
         let stem = lease
             .path()

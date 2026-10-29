@@ -25,11 +25,14 @@ const CONTRACT: &str = "cpu-semantic-scope-v3-counts-v1-query-policy-v1";
 const LEGACY_CONTRACT: &str = "cpu-semantic-record-v2-lossless-v1-query-policy-v1";
 
 pub(crate) fn file_digest(path: &Path) -> Result<[u8; 32]> {
+    file_digest_with_buffer(path, &mut [0u8; 65536])
+}
+
+fn file_digest_with_buffer(path: &Path, block: &mut [u8; 65536]) -> Result<[u8; 32]> {
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
-    let mut block = [0u8; 65536];
     loop {
-        let read = file.read(&mut block)?;
+        let read = file.read(block)?;
         if read == 0 {
             break;
         }
@@ -60,8 +63,10 @@ impl Manifest {
     pub fn capture(scope: &Path, filter: &crate::storage::SourceFilter) -> Result<Self> {
         let (root, files) = crate::source_files(scope, filter)?;
         let mut stamps = Vec::with_capacity(files.len());
+        // Reuse I/O scratch only; each file still has its own fresh digest.
+        let mut block = [0u8; 65536];
         for path in files {
-            let digest = file_digest(&root.join(&path))?;
+            let digest = file_digest_with_buffer(&root.join(&path), &mut block)?;
             stamps.push(Stamp {
                 path: path.as_os_str().as_bytes().to_vec(),
                 digest,

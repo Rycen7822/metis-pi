@@ -26,8 +26,9 @@ validation pass derives only the current query's DF; BM25 contributions retain
 lexical query order and the empty-sum sign. Format07 remains readable and its old
 postings are validated, not silently ignored. Hits require matching source bytes
 and model/preprocessing identity; incomplete, stale, unsupported or corrupt files
-are recomputed. Source changes cause at most one complete retry, never partial
-results.
+are recomputed. Each source snapshot reuses one bounded read buffer across files,
+without sharing hash state or skipping either complete content check. Source
+changes cause at most one complete retry, never partial results.
 
 The shared corpus-cache ledger lives at `$HOME/.cache/sgrep-cpu-quota`. Changing
 `--cache-dir`, `SGREP_CACHE_DIR` or `XDG_CACHE_HOME` selects a registered storage
@@ -61,8 +62,10 @@ separate operation. Last leases refresh eviction age without changing payload
 bytes. Interrupted policy transaction files are reclaimed only under the short
 policy lock; symlinks are preserved. Private indexes/ledger records use mode 0600.
 Reader leases are locked and fully serialized in PID/start-time-identified staging
-files before atomic publication. Under the quota lock, recovery removes only
-recognized stages whose exact owner has exited and whose kernel lock is free;
+files before atomic publication. Their fixed integer fields are serialized into a
+small buffer and written with `write_all` before the unchanged sync/publication
+boundary. Under the quota lock, recovery removes only recognized stages whose
+exact owner has exited and whose kernel lock is free;
 live owners, unknown payloads and symlinks remain preserved and charged. An
 unverifiable malformed legacy lease fails closed to complete uncached search,
 not unsafe deletion of potentially live reader responsibility.
