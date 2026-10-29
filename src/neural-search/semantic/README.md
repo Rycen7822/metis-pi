@@ -67,8 +67,13 @@ live owners, unknown payloads and symlinks remain preserved and charged. An
 unverifiable malformed legacy lease fails closed to complete uncached search,
 not unsafe deletion of potentially live reader responsibility.
 
-CRC, record validation and scoring consume mapped files in bounded resident
-windows; owned ranking/trace chunks release their consumed view as well. Only
+CRC and record metadata are checked when opening an index. Vector payloads are
+decoded and validated once, while the complete scoring scan consumes them;
+corrupt stored bytes discard the provisional attempt and rebuild using the same
+query encoder. Model/runtime errors are not reclassified as cache corruption.
+Discarded cached scoring work is reported separately from successful scope work.
+Validation and scoring consume mapped files in bounded resident windows; owned
+ranking/trace chunks release their consumed view as well. Only
 this read-only immutable-inode mapping's PTEs are released, never model arenas or
 another reader's view. This does not evict shared file-cache pages or excuse them
 from cgroup accounting, and does not establish a cold-page/resource gate.

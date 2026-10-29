@@ -269,16 +269,19 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         .as_ref()
         .map(storage::IndexCache::source_filter)
         .unwrap_or_default();
+    let manifest_started = std::time::Instant::now();
     let manifest = if args.stdin {
         None
     } else {
         Some(scope_index::Manifest::capture(&path, &filter)?)
     };
+    let manifest_capture_us = manifest_started.elapsed().as_micros();
     let cache_allowed = !args.no_cache
         && !args.fresh_assets
         && !args.stdin
         && args.rg_json.is_none()
         && index_cache.as_ref().is_some_and(|c| c.max_bytes > 0);
+    let mut cached_scorer = None;
     if cache_allowed
         && !args.refresh_cache
         && let (Some(config), Some(manifest)) = (&index_cache, &manifest)
@@ -286,24 +289,40 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         let target = config.target(&path, args.model);
         match scope_index::ScopeIndex::open(config, &target, manifest, &cache, args.model, &terms) {
             Ok(index) => {
-                let (results, work) = index.search(args, &cache, trace.as_mut())?;
-                diagnostics::check_scope(work, index.len(), 0)?;
-                manifest.verify(&path, &filter)?;
-                if let Some(trace) = trace {
-                    trace.commit(work, index.len(), 0, true)?;
+                match index.search(args, &cache, &mut cached_scorer, trace.as_mut()) {
+                    Ok((results, work, phases)) => {
+                        diagnostics::check_scope(work, index.len(), 0)?;
+                        let verify_started = std::time::Instant::now();
+                        manifest.verify(&path, &filter)?;
+                        let source_verify_us = verify_started.elapsed().as_micros();
+                        if let Some(trace) = trace {
+                            trace.commit(work, index.len(), 0, true)?;
+                        }
+                        diagnostics::stages(
+                            || {
+                                serde_json::json!({
+                                    "kind":"development_cli_stages_not_quality_or_cold_page_acceptance",
+                                    "cache_hit":true,"chunks":index.len(),
+                                    "manifest_capture_us":manifest_capture_us,"cache_phases":phases,
+                                    "source_verify_us":source_verify_us,"search_total_us":started.elapsed().as_micros()
+                                })
+                            },
+                            work,
+                            index.len(),
+                            0,
+                        )?;
+                        return Ok(results);
+                    }
+                    Err(error) if error.is::<index::Corrupt>() => {
+                        eprintln!("sgrep: cache miss during score consumption: {error}");
+                        if let Some(scorer) = &mut cached_scorer {
+                            scorer.discard_cached_scores();
+                        }
+                        // A failed diagnostic capture is provisional too.
+                        trace = diagnostics::RetrievalTrace::from_env(args)?;
+                    }
+                    Err(error) => return Err(error),
                 }
-                diagnostics::stages(
-                    || {
-                        serde_json::json!({
-                            "kind":"development_cli_stages_not_quality_or_cold_page_acceptance",
-                            "cache_hit":true,"chunks":index.len(),"search_total_us":started.elapsed().as_micros()
-                        })
-                    },
-                    work,
-                    index.len(),
-                    0,
-                )?;
-                return Ok(results);
             }
             Err(error) if target.exists() => eprintln!("sgrep: cache miss: {error}"),
             Err(_) => {}
@@ -330,7 +349,14 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     let extra_chunks = corpus.len() - scope_chunks;
     let lexical = corpus.lexical(terms.len());
     let source_ready = std::time::Instant::now();
-    let mut scorer = semantic::Scorer::open(args.model, corpus.prose_only, &args.query, &cache)?;
+    let mut scorer = match cached_scorer {
+        Some(scorer)
+            if scorer.kind() == semantic::Kind::for_scope(args.model, corpus.prose_only) =>
+        {
+            scorer
+        }
+        _ => semantic::Scorer::open(args.model, corpus.prose_only, &args.query, &cache)?,
+    };
     let model_ready = std::time::Instant::now();
     let mut builder = if cache_allowed
         && let (Some(config), Some(manifest)) = (&index_cache, &manifest)

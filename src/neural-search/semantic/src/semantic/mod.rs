@@ -14,6 +14,15 @@ pub enum Kind {
     Text,
     Code,
 }
+impl Kind {
+    pub fn for_scope(choice: ModelChoice, prose_only: bool) -> Self {
+        if choice == ModelChoice::Text || (choice == ModelChoice::Auto && prose_only) {
+            Self::Text
+        } else {
+            Self::Code
+        }
+    }
+}
 
 /// Borrowed output of ONE encode. Consumers must write/score it before return;
 /// they cannot retain a whole corpus (or unbounded long-document token matrix).
@@ -44,6 +53,8 @@ pub struct Work {
     pub actual_encoded_windows: usize,
     pub actual_encoded_tokens: usize,
     pub scored_document_tokens: usize,
+    pub discarded_cached_chunks: usize,
+    pub discarded_cached_document_tokens: usize,
 }
 
 pub enum Scorer {
@@ -65,7 +76,7 @@ impl Scorer {
         query: &str,
         assets: &Cache,
     ) -> Result<Self> {
-        if choice == ModelChoice::Text || (choice == ModelChoice::Auto && prose_only) {
+        if Kind::for_scope(choice, prose_only) == Kind::Text {
             let encoder = bekko::Encoder::open(&assets.model_directory("bekko128")?)?;
             let (query, tokens) = encoder.encode(query)?;
             Ok(Self::Bekko {
@@ -109,6 +120,17 @@ impl Scorer {
         match self {
             Self::Bekko { work, .. } | Self::LateOn { work, .. } => *work,
         }
+    }
+    /// A corrupt cached attempt contributes real discarded work, but must not
+    /// inflate the successful complete-scope counters during uncached recovery.
+    pub fn discard_cached_scores(&mut self) {
+        let work = match self {
+            Self::Bekko { work, .. } | Self::LateOn { work, .. } => work,
+        };
+        work.discarded_cached_chunks += work.semantic_scored_chunks;
+        work.discarded_cached_document_tokens += work.scored_document_tokens;
+        work.semantic_scored_chunks = 0;
+        work.scored_document_tokens = 0;
     }
     pub fn score_document(&mut self, path: &str, content: &str) -> Result<f64> {
         self.score_document_to(path, content, &mut |_| Ok(()))

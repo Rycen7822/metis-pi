@@ -289,7 +289,18 @@ impl Builder {
     }
 }
 
+#[derive(Clone, Copy, Default, Serialize)]
+pub struct HitTimings {
+    read_crc_us: u128,
+    metadata_us: u128,
+    record_validation_us: u128,
+    model_query_init_us: u128,
+    semantic_lexical_us: u128,
+    rank_us: u128,
+}
+
 pub struct ScopeIndex {
+    timings: HitTimings,
     map: Mmap,
     _lease: IndexLease,
     metadata: Metadata,
@@ -312,6 +323,7 @@ impl ScopeIndex {
         choice: ModelChoice,
         query_words: &[String],
     ) -> Result<Self> {
+        let started = std::time::Instant::now();
         let file = cache.read(target)?;
         let size = file.metadata()?.len();
         if size < (HEADER + 4) as u64 || size > MAX_BYTES {
@@ -349,19 +361,14 @@ impl ScopeIndex {
         if pages::checksum(&map, end)? != expected {
             return Err("scope index CRC mismatch".into());
         }
+        let crc_ready = std::time::Instant::now();
         let decoded_metadata =
             crate::index::codec::scope_metadata(&map[metadata_start..end], number(&map, 88)?)?;
         let metadata: Metadata = serde_json::from_slice(&decoded_metadata)?;
         drop(decoded_metadata);
         pages::release(&map, metadata_start, end)?;
         let kind = from_tag(metadata.kind)?;
-        let selected = if choice == ModelChoice::Text
-            || (choice == ModelChoice::Auto && metadata.prose_only)
-        {
-            Kind::Text
-        } else {
-            Kind::Code
-        };
+        let selected = Kind::for_scope(choice, metadata.prose_only);
         let mut expected_artifact = artifact(assets, kind)?;
         if legacy {
             expected_artifact["contract"] = LEGACY_CONTRACT.into();
@@ -372,7 +379,13 @@ impl ScopeIndex {
         {
             return Err("stale scope/model/preprocessing manifest".into());
         }
+        let metadata_ready = std::time::Instant::now();
         let mut index = Self {
+            timings: HitTimings {
+                read_crc_us: crc_ready.duration_since(started).as_micros(),
+                metadata_us: metadata_ready.duration_since(crc_ready).as_micros(),
+                ..HitTimings::default()
+            },
             map,
             _lease: file,
             metadata,
@@ -401,12 +414,11 @@ impl ScopeIndex {
             if record.kind() != kind {
                 return Err("record/scope model mismatch".into());
             }
-            record.visit(&mut |_| Ok(()))?;
             lexical_length = lexical_length
                 .checked_add(record.chunk.counts.values().sum::<usize>())
                 .ok_or("corpus length overflow")?;
-            // This is the existing full-record validation pass, not another
-            // corpus traversal. Only current-query DF survives the pass.
+            // Validate metadata and derive query DF without decoding vectors.
+            // Every vector is validated while consumed by the full score scan.
             if query_df.len() <= record.chunk.counts.len() {
                 for (word, df) in &mut query_df {
                     if record.chunk.counts.contains_key(word) {
@@ -462,6 +474,7 @@ impl ScopeIndex {
                 (word, (1.0 + (count as f64 - df + 0.5) / (df + 0.5)).ln())
             })
             .collect();
+        index.timings.record_validation_us = metadata_ready.elapsed().as_micros();
         Ok(index)
     }
     fn record(&self, id: usize) -> Result<Record<'_>> {
@@ -469,7 +482,7 @@ impl ScopeIndex {
             return Err("record ID outside scope".into());
         }
         let at = number(&self.map, self.record_table + id * 16)?;
-        Record::open(&self.map[..self.record_table], at)
+        Record::open(&self.map[..self.record_table], at).map_err(crate::index::Corrupt::wrap)
     }
     // Retained for format07 validation; new indexes have no postings section.
     fn legacy_term(&self, id: usize) -> Result<(String, Vec<[usize; 3]>)> {
@@ -522,13 +535,26 @@ impl ScopeIndex {
         &self,
         args: &Args,
         assets: &Cache,
+        request_scorer: &mut Option<Scorer>,
         trace: Option<&mut crate::diagnostics::RetrievalTrace>,
-    ) -> Result<(Vec<Chunk>, crate::semantic::Work)> {
+    ) -> Result<(Vec<Chunk>, crate::semantic::Work, HitTimings)> {
         // Match Sum<f64>'s identity in the streaming BM25 path, including the
         // observable sign of zero when a document has no matching postings.
         let mut lexical = vec![-0.0; self.count];
         let avg = (self.total_length as f64 / self.count.max(1) as f64).max(1.0);
-        let mut scorer = Scorer::open(args.model, self.metadata.prose_only, &args.query, assets)?;
+        let mut timings = self.timings;
+        let query_started = std::time::Instant::now();
+        if request_scorer.is_none() {
+            *request_scorer = Some(Scorer::open(
+                args.model,
+                self.metadata.prose_only,
+                &args.query,
+                assets,
+            )?);
+        }
+        let scorer = request_scorer.as_mut().unwrap();
+        timings.model_query_init_us = query_started.elapsed().as_micros();
+        let scan_started = std::time::Instant::now();
         let exact_pattern = crate::identifier_pattern(&args.query)?;
         let mut exact = HashSet::new();
         let mut released = 0;
@@ -548,6 +574,8 @@ impl ScopeIndex {
             pages::consumed(&self.map, &mut released, consumed)
         })?;
         pages::release(&self.map, 0, self.map.len())?;
+        timings.semantic_lexical_us = scan_started.elapsed().as_micros();
+        let rank_started = std::time::Instant::now();
         let result = crate::rank(
             args,
             self.count,
@@ -567,6 +595,7 @@ impl ScopeIndex {
             trace,
         )?;
         let _ = self._lease.set_modified(std::time::SystemTime::now());
-        Ok((result, scorer.work()))
+        timings.rank_us = rank_started.elapsed().as_micros();
+        Ok((result, scorer.work(), timings))
     }
 }

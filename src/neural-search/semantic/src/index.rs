@@ -16,8 +16,32 @@ pub(crate) mod codec;
 const MAGIC: &[u8; 8] = b"SGRPDOC2";
 const HEADER: usize = 64;
 
+/// Errors originating in stored bytes, never errors returned by a score sink.
+#[derive(Debug)]
+pub struct Corrupt(pub Box<dyn std::error::Error + Send + Sync>);
+impl std::fmt::Display for Corrupt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid cached record: {}", self.0)
+    }
+}
+impl std::error::Error for Corrupt {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+impl Corrupt {
+    pub fn wrap(
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        if error.is::<Self>() {
+            error
+        } else {
+            Box::new(Self(error))
+        }
+    }
+}
 fn invalid(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
-    Error::new(ErrorKind::InvalidData, message).into()
+    Corrupt::wrap(Error::new(ErrorKind::InvalidData, message).into())
 }
 fn number(data: &[u8], at: usize) -> Result<usize> {
     let bytes = data
@@ -298,7 +322,7 @@ impl<'a> Record<'a> {
                 .data
                 .get(at..end_at)
                 .ok_or_else(|| invalid("partial window payload"))?;
-            let values = codec::code(payload, codec, rows * 48)?;
+            let values = codec::code(payload, codec, rows * 48).map_err(Corrupt::wrap)?;
             if values.iter().any(|v| !v.is_finite()) {
                 return Err(invalid("non-finite cached vector"));
             }
