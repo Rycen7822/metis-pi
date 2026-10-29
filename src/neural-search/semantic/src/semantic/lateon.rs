@@ -7,7 +7,15 @@ use std::{
     fs::File,
     path::{Path, PathBuf},
 };
-use tokenizers::Tokenizer;
+// This prepared asset is BPE. Avoid ModelWrapper's dynamic JSON dispatch while
+// retaining the same normalizer, added tokens, processors and BPE implementation.
+type Tokenizer = tokenizers::TokenizerImpl<
+    tokenizers::models::bpe::BPE,
+    tokenizers::normalizers::NormalizerWrapper,
+    tokenizers::pre_tokenizers::PreTokenizerWrapper,
+    tokenizers::processors::PostProcessorWrapper,
+    tokenizers::decoders::DecoderWrapper,
+>;
 
 #[derive(Deserialize)]
 struct Manifest {
