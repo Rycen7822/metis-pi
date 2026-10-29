@@ -203,7 +203,7 @@ pub struct Record<'a> {
     semantic: usize,
 }
 impl<'a> Record<'a> {
-    pub fn open(data: &'a [u8], offset: usize) -> Result<Self> {
+    pub fn open(data: &'a [u8], offset: usize, decoder: &mut codec::Decoder) -> Result<Self> {
         let data = data
             .get(offset..)
             .ok_or_else(|| invalid("invalid record offset"))?;
@@ -235,7 +235,7 @@ impl<'a> Record<'a> {
         {
             return Err(invalid("invalid record boundaries"));
         }
-        let decoded = codec::metadata(&data[HEADER..semantic], number(data, 56)?)?;
+        let decoded = codec::metadata(&data[HEADER..semantic], number(data, 56)?, decoder)?;
         let mut metadata: Metadata = serde_json::from_slice(&decoded)?;
         if number(data, 48)? != metadata.chunk.content.len()
             || metadata.chunk.start == 0
@@ -263,7 +263,7 @@ impl<'a> Record<'a> {
     pub fn kind(&self) -> Kind {
         self.kind
     }
-    pub fn visit(&self, sink: &mut BlockSink<'_>) -> Result<()> {
+    pub fn visit(&self, decoder: &mut codec::Decoder, sink: &mut BlockSink<'_>) -> Result<()> {
         let mut at = self.semantic;
         if self.kind == Kind::Text {
             let values: [f16; 128] = self
@@ -322,7 +322,7 @@ impl<'a> Record<'a> {
                 .data
                 .get(at..end_at)
                 .ok_or_else(|| invalid("partial window payload"))?;
-            let values = codec::code(payload, codec, rows * 48).map_err(Corrupt::wrap)?;
+            let values = codec::code(payload, codec, rows * 48, decoder).map_err(Corrupt::wrap)?;
             if values.iter().any(|v| !v.is_finite()) {
                 return Err(invalid("non-finite cached vector"));
             }

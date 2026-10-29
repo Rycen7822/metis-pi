@@ -72,6 +72,11 @@ decoded and validated once, while the complete scoring scan consumes them;
 corrupt stored bytes discard the provisional attempt and rebuild using the same
 query encoder. Model/runtime errors are not reclassified as cache corruption.
 Discarded cached scoring work is reported separately from successful scope work.
+Each metadata/scoring pass owns one Zstd decoder context reused across records;
+FP16 codec1 groups are unpacked exactly eight values at a time without changing
+format or precision. No global decoder or decompressed corpus is retained.
+LateOn loads its fixed BPE asset directly with the same tokenization processors,
+role IDs, masks and length limits rather than dynamic model-wrapper dispatch.
 Validation and scoring consume mapped files in bounded resident windows; owned
 ranking/trace chunks release their consumed view as well. Only
 this read-only immutable-inode mapping's PTEs are released, never model arenas or

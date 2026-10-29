@@ -396,6 +396,7 @@ impl ScopeIndex {
             total_length,
             query_idf: BTreeMap::new(),
         };
+        let mut decoder = crate::index::codec::Decoder::new()?;
         let mut query_df: BTreeMap<_, usize> =
             query_words.iter().cloned().map(|word| (word, 0)).collect();
         let mut lexical_length = 0usize;
@@ -410,7 +411,7 @@ impl ScopeIndex {
             if number(&index.map, at + 8)? != bytes {
                 return Err("record length disagrees with scope table".into());
             }
-            let record = index.record(i)?;
+            let record = index.record(i, &mut decoder)?;
             if record.kind() != kind {
                 return Err("record/scope model mismatch".into());
             }
@@ -442,7 +443,7 @@ impl ScopeIndex {
         let mut previous = None;
         released = record_table + count * 16;
         for i in 0..terms {
-            let (term, postings) = index.legacy_term(i)?;
+            let (term, postings) = index.legacy_term(i, &mut decoder)?;
             if previous.as_ref().is_some_and(|p: &String| p >= &term) {
                 return Err("unsorted lexical dictionary".into());
             }
@@ -477,15 +478,20 @@ impl ScopeIndex {
         index.timings.record_validation_us = metadata_ready.elapsed().as_micros();
         Ok(index)
     }
-    fn record(&self, id: usize) -> Result<Record<'_>> {
+    fn record(&self, id: usize, decoder: &mut crate::index::codec::Decoder) -> Result<Record<'_>> {
         if id >= self.count {
             return Err("record ID outside scope".into());
         }
         let at = number(&self.map, self.record_table + id * 16)?;
-        Record::open(&self.map[..self.record_table], at).map_err(crate::index::Corrupt::wrap)
+        Record::open(&self.map[..self.record_table], at, decoder)
+            .map_err(crate::index::Corrupt::wrap)
     }
     // Retained for format07 validation; new indexes have no postings section.
-    fn legacy_term(&self, id: usize) -> Result<(String, Vec<[usize; 3]>)> {
+    fn legacy_term(
+        &self,
+        id: usize,
+        decoder: &mut crate::index::codec::Decoder,
+    ) -> Result<(String, Vec<[usize; 3]>)> {
         let start = number(&self.map, self.term_table + id * 8)?;
         let end = if id + 1 < self.terms {
             number(&self.map, self.term_table + (id + 1) * 8)?
@@ -501,7 +507,7 @@ impl ScopeIndex {
             .map
             .get(start + 8..end)
             .ok_or("truncated lexical frame")?;
-        let decoded = crate::index::codec::metadata(encoded, raw_length)?;
+        let decoded = crate::index::codec::metadata(encoded, raw_length, decoder)?;
         Ok(serde_json::from_slice(&decoded)?)
     }
     fn lexical_score(&self, chunk: &Chunk, avg: f64) -> f64 {
@@ -555,11 +561,12 @@ impl ScopeIndex {
         let scorer = request_scorer.as_mut().unwrap();
         timings.model_query_init_us = query_started.elapsed().as_micros();
         let scan_started = std::time::Instant::now();
+        let mut decoder = crate::index::codec::Decoder::new()?;
         let exact_pattern = crate::identifier_pattern(&args.query)?;
         let mut exact = HashSet::new();
         let mut released = 0;
         let similarities = scorer.score_scope(self.count, |i, sink| {
-            let record = self.record(i)?;
+            let record = self.record(i, &mut decoder)?;
             lexical[i] = self.lexical_score(&record.chunk, avg);
             if exact_pattern
                 .as_ref()
@@ -567,7 +574,7 @@ impl ScopeIndex {
             {
                 exact.insert(i);
             }
-            record.visit(sink)?;
+            record.visit(&mut decoder, sink)?;
             drop(record);
             let at = self.record_table + i * 16;
             let consumed = number(&self.map, at)? + number(&self.map, at + 8)?;
@@ -584,7 +591,7 @@ impl ScopeIndex {
             Vec::new(),
             &exact,
             |i| {
-                let chunk = self.record(i)?.chunk;
+                let chunk = self.record(i, &mut decoder)?.chunk;
                 // Ranking owns the decoded chunk now; diagnostic all-candidate
                 // lookups must not repopulate the whole mapped index either.
                 let at = self.record_table + i * 16;
