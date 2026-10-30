@@ -9,6 +9,7 @@ use crate::{
 };
 use memmap2::Mmap;
 mod pages;
+mod parallel;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -302,6 +303,8 @@ pub struct HitTimings {
     model_query_init_us: u128,
     semantic_lexical_us: u128,
     rank_us: u128,
+    scan_worker_limit: usize,
+    scan_batches: usize,
 }
 
 pub struct ScopeIndex {
@@ -566,25 +569,51 @@ impl ScopeIndex {
         let scorer = request_scorer.as_mut().unwrap();
         timings.model_query_init_us = query_started.elapsed().as_micros();
         let scan_started = std::time::Instant::now();
+        timings.scan_worker_limit = 1;
+        timings.scan_batches = usize::from(self.count > 0);
         let mut decoder = crate::index::codec::Decoder::new()?;
         let exact_pattern = crate::identifier_pattern(&args.query)?;
         let mut exact = HashSet::new();
         let mut released = 0;
-        let similarities = scorer.score_scope(self.count, |i, sink| {
-            let record = self.record(i, &mut decoder)?;
-            lexical[i] = self.lexical_score(&record.chunk, avg);
-            if exact_pattern
-                .as_ref()
-                .is_some_and(|p| p.0.is_match(&record.chunk.content))
-            {
-                exact.insert(i);
-            }
-            record.visit(&mut decoder, sink)?;
-            drop(record);
-            let at = self.record_table + i * 16;
-            let consumed = number(&self.map, at)? + number(&self.map, at + 8)?;
-            pages::consumed(&self.map, &mut released, consumed)
-        })?;
+        let similarities = if scorer.kind() == Kind::Code
+            && parallel::workers(
+                self.count,
+                self.record_table - HEADER,
+                crate::semantic::computing_threads(),
+            ) > 1
+        {
+            let code = scorer
+                .code_scan()?
+                .ok_or("missing code scoring capability")?;
+            let outcome = self.parallel_code_scan(
+                &code,
+                avg,
+                exact_pattern.as_ref().map(|p| &p.0),
+                &mut lexical,
+                &mut exact,
+                crate::semantic::computing_threads(),
+            );
+            timings.scan_worker_limit = outcome.worker_limit;
+            timings.scan_batches = outcome.batches;
+            scorer.merge_cached_work(outcome.work);
+            outcome.result.map_err(|error| scorer.cached_error(error))?
+        } else {
+            scorer.score_scope(self.count, |i, sink| {
+                let record = self.record(i, &mut decoder)?;
+                lexical[i] = self.lexical_score(&record.chunk, avg);
+                if exact_pattern
+                    .as_ref()
+                    .is_some_and(|p| p.0.is_match(&record.chunk.content))
+                {
+                    exact.insert(i);
+                }
+                record.visit(&mut decoder, sink)?;
+                drop(record);
+                let at = self.record_table + i * 16;
+                let consumed = number(&self.map, at)? + number(&self.map, at + 8)?;
+                pages::consumed(&self.map, &mut released, consumed)
+            })?
+        };
         pages::release(&self.map, 0, self.map.len())?;
         timings.semantic_lexical_us = scan_started.elapsed().as_micros();
         let rank_started = std::time::Instant::now();

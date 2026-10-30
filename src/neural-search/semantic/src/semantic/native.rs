@@ -38,6 +38,55 @@ type Destroy = unsafe extern "C" fn(*mut c_void);
 type Diagnostics = unsafe extern "C" fn(*mut c_void, *mut c_char, usize, *mut usize) -> c_int;
 type MaxSim = unsafe extern "C" fn(*const f32, usize, *const u16, usize, *mut f32) -> c_int;
 
+pub(crate) fn computing_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(4))
+        .unwrap_or(1)
+}
+
+/// Stateless scoring only: no encoder handle, request counter or ORT Run access.
+/// The borrow keeps the loaded function alive until all scoped workers join.
+#[derive(Clone, Copy)]
+pub(super) struct ScoringKernel<'a> {
+    update: MaxSim,
+    _library: &'a Library,
+}
+#[derive(Debug)]
+struct ScoringFailure(c_int);
+impl std::fmt::Display for ScoringFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "native MaxSim status {}", self.0)
+    }
+}
+impl std::error::Error for ScoringFailure {}
+impl ScoringKernel<'_> {
+    pub(super) fn update(&self, query: &[f32], document: &[f16], maxima: &mut [f32]) -> Result<()> {
+        if query.is_empty()
+            || document.is_empty()
+            || query.len() % 48 != 0
+            || document.len() % 48 != 0
+            || maxima.len() != query.len() / 48
+        {
+            return Err("invalid MaxSim shape".into());
+        }
+        // SAFETY: validated slice geometry; the fixed native entry point is
+        // stateless and writes only this task's maxima. Library remains borrowed.
+        let status = unsafe {
+            (self.update)(
+                query.as_ptr(),
+                query.len() / 48,
+                document.as_ptr().cast(),
+                document.len() / 48,
+                maxima.as_mut_ptr(),
+            )
+        };
+        if status != 0 {
+            return Err(Box::new(ScoringFailure(status)));
+        }
+        Ok(())
+    }
+}
+
 pub struct Runtime {
     handle: *mut c_void,
     encode_fn: Encode,
@@ -77,9 +126,7 @@ impl Runtime {
                 .to_str()
                 .ok_or("model manifest path must be UTF-8")?,
         )?;
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(4))
-            .unwrap_or(1);
+        let threads = computing_threads();
         let options = Options {
             abi_version: 1,
             manifest: manifest.as_ptr(),
@@ -134,28 +181,25 @@ impl Runtime {
         }
         Ok(vectors)
     }
+    pub(super) fn scoring_kernel(&self) -> ScoringKernel<'_> {
+        ScoringKernel {
+            update: self.maxsim_fn,
+            _library: &self._library,
+        }
+    }
+    pub(super) fn scoring_error(
+        &self,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        match error.downcast_ref::<ScoringFailure>() {
+            Some(failure) => self.failure(failure.0),
+            None => error,
+        }
+    }
     pub fn update_maxima(&self, query: &[f32], document: &[f16], maxima: &mut [f32]) -> Result<()> {
-        if query.is_empty()
-            || document.is_empty()
-            || query.len() % 48 != 0
-            || document.len() % 48 != 0
-            || maxima.len() != query.len() / 48
-        {
-            return Err("invalid MaxSim shape".into());
-        }
-        let status = unsafe {
-            (self.maxsim_fn)(
-                query.as_ptr(),
-                query.len() / 48,
-                document.as_ptr().cast(),
-                document.len() / 48,
-                maxima.as_mut_ptr(),
-            )
-        };
-        if status != 0 {
-            return Err(self.failure(status));
-        }
-        Ok(())
+        self.scoring_kernel()
+            .update(query, document, maxima)
+            .map_err(|error| self.scoring_error(error))
     }
     pub(super) fn diagnostics(&self) -> Result<String> {
         let mut required = 0;

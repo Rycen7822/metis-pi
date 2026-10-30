@@ -75,7 +75,7 @@ decoded and validated once, while the complete scoring scan consumes them;
 corrupt stored bytes discard the provisional attempt and rebuild using the same
 query encoder. Model/runtime errors are not reclassified as cache corruption.
 Discarded cached scoring work is reported separately from successful scope work.
-Each metadata/scoring pass owns one Zstd decoder context reused across records;
+Each metadata pass or bounded scoring task owns one Zstd decoder context reused across records;
 FP16 codec1 groups are unpacked exactly eight values at a time without changing
 format or precision. No global decoder or decompressed corpus is retained.
 LateOn loads its fixed BPE asset directly with the same tokenization processors,
@@ -138,6 +138,21 @@ Cached Bekko scores use a 1024-row scratch block, tiled into eight independent
 document lanes. Guarded AVX2/F16C and scalar paths preserve the original FP32
 sum order and the stored FP16 norm; full blocks and tails have identical scores.
 LateOn consumes all token windows with Q4/D64 MaxSim. There is no ANN/prefilter.
+
+Cached code scans use request-local, scoped CPU tasks after synchronous query
+encoding has returned. The caller plus at most three workers share the existing
+four-computing-thread ceiling; no worker can access an encoder handle. Each task
+consumes a whole record in window order, and scalar results merge by record ID.
+Admission uses record count and stored bytes, never repository/query identities:
+small batches stay serial. Contiguous batches are bounded to 8MiB of mapped data
+and 1MiB of raw metadata input; a larger single record runs alone. These bound
+additional in-flight work, not total process memory or JSON expansion. Only the
+coordinator releases mapped prefixes after all tasks and borrowed records join.
+Stored-data failures cancel new work; all tasks join before typed recovery reuses
+the existing query. Observed model/resource errors cannot be hidden by a peer's
+cache-corruption error. Encoding, scanning, ranking and source verification do
+not overlap their compute pools. Bekko and uncached document encoding retain
+their existing paths; no async runtime, persistent pool or larger budget is added.
 
 The fixed native pool uses at most four computing threads including the caller,
 inter-op=1 and no spinning. Owned `rg --files` discovery is explicitly serial,

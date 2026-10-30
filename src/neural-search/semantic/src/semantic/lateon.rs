@@ -144,13 +144,21 @@ impl Encoder {
     pub fn score(&mut self, query: &[f32], path: &str, content: &str) -> Result<f64> {
         self.score_to(query, path, content, &mut |_| Ok(()))
     }
-    pub fn update_maxima(
-        &mut self,
-        query: &[f32],
-        values: &[f16],
-        maxima: &mut [f32],
-    ) -> Result<()> {
-        self.runtime()?.update_maxima(query, values, maxima)
+    pub(super) fn scoring_kernel(&self) -> Result<super::native::ScoringKernel<'_>> {
+        Ok(self
+            .runtime
+            .as_ref()
+            .ok_or("query runtime not initialized")?
+            .scoring_kernel())
+    }
+    pub(super) fn scoring_error(
+        &self,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        match &self.runtime {
+            Some(runtime) => runtime.scoring_error(error),
+            None => error,
+        }
     }
     pub fn score_to(
         &mut self,

@@ -57,6 +57,38 @@ pub struct Work {
     pub discarded_cached_document_tokens: usize,
 }
 
+pub(crate) use native::computing_threads;
+
+/// Immutable, encoder-free capability for one request's cached code scan.
+/// All windows of a record remain ordered within the task that owns its maxima.
+pub(crate) struct CodeScan<'a> {
+    query: &'a [f32],
+    kernel: native::ScoringKernel<'a>,
+}
+impl CodeScan<'_> {
+    pub(crate) fn score_blocks(
+        &self,
+        visit: impl FnOnce(&mut BlockSink<'_>) -> Result<()>,
+        work: &mut Work,
+    ) -> Result<f64> {
+        let mut maxima = vec![f32::NEG_INFINITY; self.query.len() / 48];
+        visit(&mut |block| {
+            let DocumentBlock::Code { values, .. } = block else {
+                return Err("index model representation mismatch".into());
+            };
+            self.kernel.update(self.query, values, &mut maxima)?;
+            work.scored_document_tokens += values.len() / 48;
+            Ok(())
+        })?;
+        let score = maxima.into_iter().sum::<f32>();
+        if !score.is_finite() {
+            return Err("non-finite cached MaxSim".into());
+        }
+        work.semantic_scored_chunks += 1;
+        Ok(score as f64)
+    }
+}
+
 pub enum Scorer {
     Bekko {
         encoder: bekko::Encoder,
@@ -119,6 +151,31 @@ impl Scorer {
     pub fn work(&self) -> Work {
         match self {
             Self::Bekko { work, .. } | Self::LateOn { work, .. } => *work,
+        }
+    }
+    pub(crate) fn code_scan(&self) -> Result<Option<CodeScan<'_>>> {
+        match self {
+            Self::LateOn { encoder, query, .. } => Ok(Some(CodeScan {
+                query,
+                kernel: encoder.scoring_kernel()?,
+            })),
+            Self::Bekko { .. } => Ok(None),
+        }
+    }
+    pub(crate) fn merge_cached_work(&mut self, other: Work) {
+        let work = match self {
+            Self::LateOn { work, .. } | Self::Bekko { work, .. } => work,
+        };
+        work.semantic_scored_chunks += other.semantic_scored_chunks;
+        work.scored_document_tokens += other.scored_document_tokens;
+    }
+    pub(crate) fn cached_error(
+        &self,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        match self {
+            Self::LateOn { encoder, .. } => encoder.scoring_error(error),
+            Self::Bekko { .. } => error,
         }
     }
     /// A corrupt cached attempt contributes real discarded work, but must not
@@ -232,23 +289,12 @@ impl Scorer {
                 encoder,
                 query,
                 work,
-            } => {
-                let mut maxima = vec![f32::NEG_INFINITY; query.len() / 48];
-                visit(&mut |block| {
-                    let DocumentBlock::Code { values, .. } = block else {
-                        return Err("index model representation mismatch".into());
-                    };
-                    encoder.update_maxima(query, values, &mut maxima)?;
-                    work.scored_document_tokens += values.len() / 48;
-                    Ok(())
-                })?;
-                let score = maxima.into_iter().sum::<f32>();
-                if !score.is_finite() {
-                    return Err("non-finite cached MaxSim".into());
-                }
-                work.semantic_scored_chunks += 1;
-                Ok(score as f64)
+            } => CodeScan {
+                query,
+                kernel: encoder.scoring_kernel()?,
             }
+            .score_blocks(visit, work)
+            .map_err(|error| encoder.scoring_error(error)),
         }
     }
 }
