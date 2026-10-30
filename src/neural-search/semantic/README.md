@@ -215,6 +215,13 @@ cache-corruption error. Validation, encoding, scanning, ranking and source verif
 not overlap their compute pools. Bekko and uncached document encoding retain
 their existing paths; no async runtime, persistent pool or larger budget is added.
 
+Local attention uses AVX2 across independent value dimensions when available,
+keeping accumulators in registers across keys. Each dimension retains the
+original key-wise accumulation and final division; dot-product reduction,
+softmax and attention windows are unchanged. The native build disables fused
+multiply-add contraction and fast-math, and the original value loop remains the
+fallback without AVX2. This does not add a Session, scratch matrix or compute pool.
+
 The fixed native pool uses at most four computing threads including the caller,
 inter-op=1 and no spinning. Owned `rg --files` discovery is explicitly serial,
 so it does not silently add ripgrep's default worker pool; native workers are

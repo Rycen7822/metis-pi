@@ -58,6 +58,23 @@ float dot64(const float* a, const float* b) {
 #endif
   return dot64_scalar(a, b);
 }
+#if defined(__x86_64__)
+__attribute__((target("avx2"), noinline))
+void local_pv_avx2(const float* values, const float* weights, size_t low,
+                  size_t high, size_t head, float denominator, float* out) {
+  __m256 sums[8];
+  for (auto& sum : sums) sum = _mm256_setzero_ps();
+  for (size_t j = low; j < high; ++j) {
+    const __m256 p = _mm256_set1_ps(weights[j-low]);
+    const float* row = values+j*256+head*64;
+    for (size_t d = 0; d < 8; ++d)
+      sums[d] = _mm256_add_ps(sums[d], _mm256_mul_ps(p, _mm256_loadu_ps(row+d*8)));
+  }
+  const __m256 scale = _mm256_set1_ps(denominator);
+  for (size_t d = 0; d < 8; ++d)
+    _mm256_storeu_ps(out+d*8, _mm256_div_ps(sums[d],scale));
+}
+#endif
 void normalize256(const float* input, const float* gamma, float* output) {
   float mean = 0;
   for (size_t d = 0; d < 256; ++d) mean += input[d];
@@ -146,10 +163,17 @@ struct Kernel {
         float denominator = 0;
         for (size_t j=low; j<high; ++j) { row_scores[j-low]=std::exp(row_scores[j-low]-maximum); denominator+=row_scores[j-low]; }
         float* result=out+row*256+head*64;
-        std::fill(result,result+64,0.0f);
-        for (size_t j=low; j<high; ++j)
-          for (size_t d=0; d<64; ++d) result[d]+=row_scores[j-low]*v[j*256+head*64+d];
-        for (size_t d=0; d<64; ++d) result[d]/=denominator;
+#if defined(__x86_64__)
+        if (__builtin_cpu_supports("avx2")) {
+          local_pv_avx2(v,row_scores,low,high,head,denominator,result);
+        } else
+#endif
+        {
+          std::fill(result,result+64,0.0f);
+          for (size_t j=low; j<high; ++j)
+            for (size_t d=0; d<64; ++d) result[d]+=row_scores[j-low]*v[j*256+head*64+d];
+          for (size_t d=0; d<64; ++d) result[d]/=denominator;
+        }
       }
     });
     state->local_calls.fetch_add(1);
