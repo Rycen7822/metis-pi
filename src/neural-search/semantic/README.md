@@ -176,6 +176,16 @@ document lanes. Guarded AVX2/F16C and scalar paths preserve the original FP32
 sum order and the stored FP16 norm; full blocks and tails have identical scores.
 LateOn consumes all token windows with Q4/D64 MaxSim. There is no ANN/prefilter.
 
+Complete-record metadata/DF validation remains a separate pass before query
+encoding and scoring. Its bounded batches use the caller plus at most three
+scoped workers, admitted by raw metadata bytes and record count. Small inputs
+stay serial. Borrowed query keys and concurrent integer DF arrays are capped at
+1MiB; wide queries reduce parallelism instead of creating N×Q state. All workers
+join before page release, integer totals merge before the original ordered IDF
+calculation, and Format07 postings validation remains intact. No parsed corpus
+or reader lease becomes process-resident. Diagnostic fields
+`validation_worker_limit` and `validation_batches` describe this pass.
+
 Cached code scans use request-local, scoped CPU tasks after synchronous query
 encoding has returned. The caller plus at most three workers share the existing
 four-computing-thread ceiling; no worker can access an encoder handle. Each task
@@ -187,14 +197,18 @@ additional in-flight work, not total process memory or JSON expansion. Only the
 coordinator releases mapped prefixes after all tasks and borrowed records join.
 Stored-data failures cancel new work; all tasks join before typed recovery reuses
 the existing query. Observed model/resource errors cannot be hidden by a peer's
-cache-corruption error. Encoding, scanning, ranking and source verification do
+cache-corruption error. Validation, encoding, scanning, ranking and source verification do
 not overlap their compute pools. Bekko and uncached document encoding retain
 their existing paths; no async runtime, persistent pool or larger budget is added.
 
 The fixed native pool uses at most four computing threads including the caller,
 inter-op=1 and no spinning. Owned `rg --files` discovery is explicitly serial,
 so it does not silently add ripgrep's default worker pool; native workers are
-asleep during source verification. ORT must be built with
+asleep during source verification. Shared discovery waits on stdout/stderr and,
+on supported Linux kernels, the owned child pidfd; cancellation checks remain
+bounded to 5ms. The listener waits for socket/state readiness and the actual idle
+deadline rather than fixed polling ticks. Neither path creates a compute pool.
+ORT must be built with
 `onnxruntime_USE_TELEMETRY=OFF`; the default OneDS telemetry backend creates an
 unneeded process-lifetime SDK worker independently of the computing pool.
 

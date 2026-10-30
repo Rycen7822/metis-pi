@@ -10,6 +10,7 @@ use crate::{
 use memmap2::Mmap;
 mod pages;
 mod parallel;
+mod validation;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -305,6 +306,8 @@ pub struct HitTimings {
     read_crc_us: u128,
     metadata_us: u128,
     record_validation_us: u128,
+    validation_worker_limit: usize,
+    validation_batches: usize,
     model_query_init_us: u128,
     semantic_lexical_us: u128,
     rank_us: u128,
@@ -412,48 +415,11 @@ impl ScopeIndex {
         let mut decoder = crate::index::codec::Decoder::new()?;
         let mut query_df: BTreeMap<_, usize> =
             query_words.iter().cloned().map(|word| (word, 0)).collect();
-        let mut lexical_length = 0usize;
-        let mut released = 0;
-        let mut next = HEADER;
-        for i in 0..count {
-            crate::request::check()?;
-            let at = number(&index.map, record_table + i * 16)?;
-            let bytes = number(&index.map, record_table + i * 16 + 8)?;
-            if at != next || at.checked_add(bytes).is_none_or(|n| n > record_table) {
-                return Err("invalid record boundary table".into());
-            }
-            if number(&index.map, at + 8)? != bytes {
-                return Err("record length disagrees with scope table".into());
-            }
-            let record = index.record(i, &mut decoder)?;
-            if record.kind() != kind {
-                return Err("record/scope model mismatch".into());
-            }
-            lexical_length = lexical_length
-                .checked_add(record.chunk.counts.values().sum::<usize>())
-                .ok_or("corpus length overflow")?;
-            // Validate metadata and derive query DF without decoding vectors.
-            // Every vector is validated while consumed by the full score scan.
-            if query_df.len() <= record.chunk.counts.len() {
-                for (word, df) in &mut query_df {
-                    if record.chunk.counts.contains_key(word) {
-                        *df += 1;
-                    }
-                }
-            } else {
-                for word in record.chunk.counts.keys() {
-                    if let Some(df) = query_df.get_mut(word) {
-                        *df += 1;
-                    }
-                }
-            }
-            next = at + bytes;
-            drop(record);
-            pages::consumed(&index.map, &mut released, next)?;
+        let lexical_length = index.validate_records(kind, &mut query_df)?;
+        if lexical_length != total_length {
+            return Err("inconsistent corpus length".into());
         }
-        if next != record_table || lexical_length != total_length {
-            return Err("non-contiguous records or inconsistent corpus length".into());
-        }
+        let mut released;
         let mut previous = None;
         released = record_table + count * 16;
         for i in 0..terms {

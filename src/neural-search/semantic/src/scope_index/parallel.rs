@@ -41,28 +41,40 @@ pub(super) struct ScanOutcome {
     pub batches: usize,
 }
 impl ScopeIndex {
-    fn batch_end(&self, start: usize) -> Result<(usize, usize)> {
+    pub(super) fn batch_end(&self, start: usize) -> Result<(usize, usize, usize)> {
         let mut end = start;
-        let mut stored = 0;
-        let mut metadata = 0;
+        let mut stored = 0usize;
+        let mut metadata = 0usize;
         while end < self.count {
             let table = self.record_table + end * 16;
             let at = number(&self.map, table)?;
             let bytes = number(&self.map, table + 8)?;
+            if at < HEADER
+                || bytes < 64
+                || at.checked_add(bytes).is_none_or(|n| n > self.record_table)
+            {
+                return Err("invalid record boundary table".into());
+            }
             let raw = number(&self.map, at + 56)?;
             let raw = if raw == 0 {
                 number(&self.map, at + 16)?
             } else {
                 raw
             };
-            if end > start && (stored + bytes > MAPPED_BATCH || metadata + raw > METADATA_BATCH) {
+            let next_stored = stored
+                .checked_add(bytes)
+                .ok_or("record batch size overflow")?;
+            let next_metadata = metadata
+                .checked_add(raw)
+                .ok_or("metadata batch size overflow")?;
+            if end > start && (next_stored > MAPPED_BATCH || next_metadata > METADATA_BATCH) {
                 break;
             }
-            stored += bytes;
-            metadata += raw;
+            stored = next_stored;
+            metadata = next_metadata;
             end += 1;
         }
-        Ok((end, stored))
+        Ok((end, stored, metadata))
     }
     fn scan_part(
         &self,
@@ -126,7 +138,7 @@ impl ScopeIndex {
             let mut similarities = vec![0.0; self.count];
             let mut start = 0;
             while start < self.count {
-                let (end, bytes) = self.batch_end(start).map_err(Corrupt::wrap)?;
+                let (end, bytes, _) = self.batch_end(start).map_err(Corrupt::wrap)?;
                 let count = workers(end - start, bytes, limit);
                 outcome.worker_limit = outcome.worker_limit.max(count);
                 outcome.batches += 1;
