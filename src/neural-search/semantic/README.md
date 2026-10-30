@@ -17,6 +17,43 @@ This core is separate: it does not add FFF frecency or a candidate prefilter to
 semantic ranking. Host action registration and CLI/JSON adaptation belong to the
 parent neural-search component, not to this Rust/C++ implementation.
 
+## Shared model service
+
+Metis uses `--shared-service`: one private Unix-socket service per UID and
+canonical HOME, shared across workspaces and Pi sessions. LateOn and Bekko each
+load lazily at most once per compatible asset generation; they may both remain
+resident. The original standalone CLI remains available explicitly without the
+flag. A different executable/runtime environment is rejected, not silently
+served by old code or replaced with a second model process. Use
+`sgrep --service-control status` and `sgrep --service-control stop` to inspect or
+drain it. There is no system service installation or public TCP listener.
+
+At most three searches execute; each uses the existing at-most-four-thread
+compute budget. Additional requests enter a bounded FIFO with connection
+backpressure. Single-session LateOn encoding is serialized on its owning thread;
+window delivery rendezvouses with its sink, so encoder and sink do not create a
+fifth computing lane. Stateless cached scans may overlap across three requests.
+OS task counts also include sleeping encoder and IPC control threads.
+
+The service exits after no running or queued work remains for
+`[neuralSearch.semantic].idleTimeoutSeconds` (default300, integer1–86400).
+Status checks do not extend the timeout. Request Query/work/scratch/mmap/reader
+leases are released after each search; only model resources remain warm. Each
+request retains its own current cache-policy snapshot and diagnostics, without
+process-wide cwd/env mutation. Disconnect/timeout cancels only that request;
+scoped workers and owned discovery are collected before its execution slot is
+released. Native cancellation is the only cross-thread encoder capability; the
+full ORT handle never becomes Send/Sync. Cache admission may wait cancellably in
+the service instead of re-encoding on short lock contention; eviction probes
+remain nonblocking and never wait for active readers.
+
+`SGREP_SERVICE_INFO_PATH` optionally records request queue/execution time,
+service PID and model-load/native-completion counters. It is diagnostic output,
+not the normal host protocol. Shared mode rejects stdin, rg-json, fresh-assets
+and explicit cache-dir modes; those keep their original standalone behavior.
+Single-CLI resource evidence below does not automatically qualify three active
+requests or long-lived model memory; shared-service evidence is separate.
+
 ## Corpus cache
 
 Complete indexes retain original chunk ranges, text, full word counts and tagged

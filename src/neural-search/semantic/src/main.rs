@@ -3,9 +3,11 @@ mod codechunker;
 mod corpus;
 mod diagnostics;
 mod index;
+mod request;
 mod rg_input;
 mod scope_index;
 mod semantic;
+mod service;
 mod splitter;
 mod storage;
 
@@ -41,6 +43,15 @@ struct Args {
     /// Store models, parsers and search indexes under this directory.
     #[arg(long, value_name = "DIR")]
     cache_dir: Option<PathBuf>,
+    /// Use the same-user model service; at most three requests run at once.
+    #[arg(long)]
+    shared_service: bool,
+    /// Service idle shutdown, measured after all running/queued work finishes.
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=86400))]
+    idle_timeout_seconds: u64,
+    /// Shared request deadline, including queue time.
+    #[arg(long, default_value_t = 1800, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    service_timeout_seconds: u64,
     /// Recompute and replace this corpus's search index before searching.
     #[arg(long, conflicts_with = "no_cache")]
     refresh_cache: bool,
@@ -163,11 +174,7 @@ fn source_files<'a>(
     } else {
         Path::new(path.file_name().unwrap())
     };
-    let result = command
-        .arg("--")
-        .arg(target)
-        .current_dir(root)
-        .output()
+    let result = request::output(command.arg("--").arg(target).current_dir(root))
         .map_err(|e| format!("ripgrep is required: {e}"))?;
     if !matches!(result.status.code(), Some(0 | 1)) {
         return Err(String::from_utf8_lossy(&result.stderr).into_owned().into());
@@ -242,7 +249,9 @@ fn search(args: &Args) -> Result<Vec<Chunk>> {
                     && attempt == 0
                     && !args.stdin =>
             {
-                eprintln!("sgrep: source changed; retrying the complete request once")
+                crate::request::diagnostic(format_args!(
+                    "sgrep: source changed; retrying the complete request once"
+                ))
             }
             result => return result,
         }
@@ -314,7 +323,9 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                         return Ok(results);
                     }
                     Err(error) if error.is::<index::Corrupt>() => {
-                        eprintln!("sgrep: cache miss during score consumption: {error}");
+                        crate::request::diagnostic(format_args!(
+                            "sgrep: cache miss during score consumption: {error}"
+                        ));
                         if let Some(scorer) = &mut cached_scorer {
                             scorer.discard_cached_scores();
                         }
@@ -324,7 +335,9 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                     Err(error) => return Err(error),
                 }
             }
-            Err(error) if target.exists() => eprintln!("sgrep: cache miss: {error}"),
+            Err(error) if target.exists() => {
+                crate::request::diagnostic(format_args!("sgrep: cache miss: {error}"))
+            }
             Err(_) => {}
         }
     }
@@ -358,26 +371,27 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         _ => semantic::Scorer::open(args.model, corpus.prose_only, &args.query, &cache)?,
     };
     let model_ready = std::time::Instant::now();
-    let mut builder = if cache_allowed
-        && let (Some(config), Some(manifest)) = (&index_cache, &manifest)
-    {
-        match scope_index::Builder::begin(
-            config,
-            &config.target(&path, args.model),
-            manifest.clone(),
-            &cache,
-            scorer.kind(),
-            corpus.prose_only,
-        ) {
-            Ok(builder) => Some(builder),
-            Err(error) => {
-                eprintln!("sgrep: cache admission unavailable; evaluating complete scope: {error}");
-                None
+    let mut builder =
+        if cache_allowed && let (Some(config), Some(manifest)) = (&index_cache, &manifest) {
+            match scope_index::Builder::begin(
+                config,
+                &config.target(&path, args.model),
+                manifest.clone(),
+                &cache,
+                scorer.kind(),
+                corpus.prose_only,
+            ) {
+                Ok(builder) => Some(builder),
+                Err(error) => {
+                    crate::request::diagnostic(format_args!(
+                        "sgrep: cache admission unavailable; evaluating complete scope: {error}"
+                    ));
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     let mut similarities = Vec::with_capacity(corpus.len());
     let scoring_source_peak = corpus.visit(|chunk| {
         let score = match builder.as_mut() {
@@ -410,7 +424,9 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     }
     if let Some(builder) = builder {
         if let Err(error) = builder.finish() {
-            eprintln!("sgrep: complete index not published; search result retained: {error}");
+            crate::request::diagnostic(format_args!(
+                "sgrep: complete index not published; search result retained: {error}"
+            ));
         }
     }
     if let Some(trace) = trace {
@@ -544,9 +560,27 @@ fn rank(
 }
 
 fn run() -> Result<ExitCode> {
+    if std::env::args().nth(1).as_deref() == Some("--service-control") {
+        service::control()?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let args = Args::parse();
+    if args.shared_service {
+        let (stdout, stderr, exit) = service::client(&args)?;
+        io::stdout().lock().write_all(stdout.as_bytes())?;
+        io::stderr().lock().write_all(stderr.as_bytes())?;
+        return Ok(ExitCode::from(exit));
+    }
     let results = search(&args)?;
-    let mut out = io::BufWriter::new(io::stdout().lock());
+    write_results(
+        &args,
+        &results,
+        &mut io::BufWriter::new(io::stdout().lock()),
+    )?;
+    Ok(ExitCode::from(if results.is_empty() { 1 } else { 0 }))
+}
+
+fn write_results(args: &Args, results: &[Chunk], mut out: impl Write) -> Result<()> {
     if let Some(protocol) = args.metis_protocol {
         #[derive(Serialize)]
         struct HostOutput<'a> {
@@ -566,7 +600,7 @@ fn run() -> Result<ExitCode> {
     } else if args.json {
         writeln!(out, "{}", serde_json::to_string(&results)?)?;
     } else {
-        for c in &results {
+        for c in results {
             writeln!(
                 out,
                 "{}:{}-{}\n{}\n",
@@ -578,7 +612,33 @@ fn run() -> Result<ExitCode> {
         }
     }
     out.flush()?;
-    Ok(ExitCode::from(if results.is_empty() { 1 } else { 0 }))
+    Ok(())
+}
+
+fn format_results(args: &Args, results: &[Chunk]) -> Result<String> {
+    struct Bounded(Vec<u8>);
+    impl Write for Bounded {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self
+                .0
+                .len()
+                .checked_add(bytes.len())
+                .is_none_or(|n| n > 16 << 20)
+            {
+                return Err(io::Error::other(
+                    "RAM_BUDGET: shared result exceeds16MiB; no partial output returned",
+                ));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut out = Bounded(Vec::new());
+    write_results(args, results, &mut out)?;
+    Ok(String::from_utf8(out.0)?)
 }
 
 fn main() -> ExitCode {
@@ -590,7 +650,7 @@ fn main() -> ExitCode {
             {
                 return ExitCode::SUCCESS;
             }
-            eprintln!("sgrep: {e}");
+            crate::request::diagnostic(format_args!("sgrep: {e}"));
             ExitCode::from(2)
         }
     }

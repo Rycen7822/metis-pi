@@ -9,7 +9,7 @@ const DATABASES = { frecencyDbPath: "frecency", historyDbPath: "history" } as co
 const KEYS = new Set<string>([...BOOLEAN_KEYS, ...Object.keys(DATABASES), "semantic"]);
 export type CacheBudgetMiB = 256 | 512 | 1024;
 export type NeuralSearchConfig = Record<typeof BOOLEAN_KEYS[number], boolean> & Record<keyof typeof DATABASES, string> & {
-  semantic: { cacheBudgetMiB: CacheBudgetMiB };
+  semantic: { cacheBudgetMiB: CacheBudgetMiB; idleTimeoutSeconds: number };
 };
 export interface SemanticBudgetSelection {
   budget_mib: CacheBudgetMiB;
@@ -26,6 +26,12 @@ export function loadSemanticBudgetSelection(agentDir = getAgentDir()): SemanticB
   const { config, source } = readNeuralSnapshot(agentDir);
   return { budget_mib: config.semantic.cacheBudgetMiB, source: source.path, stamp: source.stamp };
 }
+/** One fresh snapshot owns both service lifetime and corpus policy. */
+export function loadSemanticRequestSettings(agentDir = getAgentDir()) {
+  const { config, source } = readNeuralSnapshot(agentDir);
+  return { selection: { budget_mib: config.semantic.cacheBudgetMiB, source: source.path, stamp: source.stamp } satisfies SemanticBudgetSelection,
+    idleTimeoutSeconds: config.semantic.idleTimeoutSeconds };
+}
 function readNeuralSnapshot(agentDir: string) {
   const source = readMetisConfigSnapshot(agentDir);
   const value = source.config.neuralSearch;
@@ -40,11 +46,15 @@ function readNeuralSnapshot(agentDir: string) {
   const semantic = value.semantic;
   if (!isMetisConfigTable(semantic)) throw new Error(`${label}.semantic must be a table.`);
   for (const key of Object.keys(semantic)) {
-    if (key !== "cacheBudgetMiB") throw new Error(`${label}.semantic: unknown option "${key}".`);
+    if (key !== "cacheBudgetMiB" && key !== "idleTimeoutSeconds") throw new Error(`${label}.semantic: unknown option "${key}".`);
   }
   const budget = semantic.cacheBudgetMiB;
   if (budget !== 256 && budget !== 512 && budget !== 1024) {
     throw new Error(`${label}.semantic.cacheBudgetMiB must be an integer: 256, 512 or 1024.`);
+  }
+  const idle = semantic.idleTimeoutSeconds;
+  if (typeof idle !== "number" || !Number.isInteger(idle) || idle < 1 || idle > 86_400) {
+    throw new Error(`${label}.semantic.idleTimeoutSeconds must be an integer from 1 to 86400 seconds.`);
   }
   // JS Number loses the distinction between TOML 512 and 512.0. Reparse the
   // same immutable source text with bigint integers, never read another file.
@@ -54,9 +64,13 @@ function readNeuralSnapshot(agentDir: string) {
       && literal.semantic.cacheBudgetMiB !== undefined && typeof literal.semantic.cacheBudgetMiB !== "bigint") {
       throw new Error(`${label}.semantic.cacheBudgetMiB must be a TOML integer, not a float or string.`);
     }
+    if (isMetisConfigTable(literal) && isMetisConfigTable(literal.semantic)
+      && literal.semantic.idleTimeoutSeconds !== undefined && typeof literal.semantic.idleTimeoutSeconds !== "bigint") {
+      throw new Error(`${label}.semantic.idleTimeoutSeconds must be a TOML integer, not a float or string.`);
+    }
   }
   // Boolean fields and semantic budget were validated; database fields follow.
-  const config = { ...value, semantic: { cacheBudgetMiB: budget } } as NeuralSearchConfig;
+  const config = { ...value, semantic: { cacheBudgetMiB: budget, idleTimeoutSeconds: idle } } as NeuralSearchConfig;
   for (const key of Object.keys(DATABASES) as (keyof typeof DATABASES)[]) {
     const raw = value[key] ?? path.join("metis", "neural-search", DATABASES[key]);
     if (typeof raw !== "string" || !raw.trim() || raw.includes("\0")) {

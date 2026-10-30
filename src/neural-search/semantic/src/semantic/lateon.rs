@@ -144,7 +144,7 @@ impl Encoder {
     pub fn score(&mut self, query: &[f32], path: &str, content: &str) -> Result<f64> {
         self.score_to(query, path, content, &mut |_| Ok(()))
     }
-    pub(super) fn scoring_kernel(&self) -> Result<super::native::ScoringKernel<'_>> {
+    pub(super) fn scoring_kernel(&self) -> Result<super::native::ScoringKernel> {
         Ok(self
             .runtime
             .as_ref()
@@ -174,6 +174,7 @@ impl Encoder {
         let mut maxima = vec![f32::NEG_INFINITY; query.len() / 48];
         let mut start = 0;
         loop {
+            crate::request::check()?;
             let (end, ids, mask) = self.window(&prefix, content, start)?;
             let encoded = self.runtime()?.encode(&ids, &mask, false)?;
             let rounded: Vec<f16> = encoded.into_iter().map(f16::from_f32).collect();

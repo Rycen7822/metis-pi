@@ -5,6 +5,7 @@ use std::{
     ffi::{CString, c_char, c_int, c_void},
     path::Path,
     ptr,
+    sync::Arc,
 };
 
 #[repr(C)]
@@ -35,6 +36,7 @@ struct Output {
 type Create = unsafe extern "C" fn(*const Options, *mut *mut c_void) -> c_int;
 type Encode = unsafe extern "C" fn(*mut c_void, *const Input, *mut Output) -> c_int;
 type Destroy = unsafe extern "C" fn(*mut c_void);
+type Cancel = unsafe extern "C" fn(*mut c_void, u64) -> c_int;
 type Diagnostics = unsafe extern "C" fn(*mut c_void, *mut c_char, usize, *mut usize) -> c_int;
 type MaxSim = unsafe extern "C" fn(*const f32, usize, *const u16, usize, *mut f32) -> c_int;
 
@@ -45,11 +47,11 @@ pub(crate) fn computing_threads() -> usize {
 }
 
 /// Stateless scoring only: no encoder handle, request counter or ORT Run access.
-/// The borrow keeps the loaded function alive until all scoped workers join.
-#[derive(Clone, Copy)]
-pub(super) struct ScoringKernel<'a> {
+/// An owned library reference keeps the entry point alive across requests.
+#[derive(Clone)]
+pub(super) struct ScoringKernel {
     update: MaxSim,
-    _library: &'a Library,
+    _library: Arc<Library>,
 }
 #[derive(Debug)]
 struct ScoringFailure(c_int);
@@ -59,7 +61,7 @@ impl std::fmt::Display for ScoringFailure {
     }
 }
 impl std::error::Error for ScoringFailure {}
-impl ScoringKernel<'_> {
+impl ScoringKernel {
     pub(super) fn update(&self, query: &[f32], document: &[f16], maxima: &mut [f32]) -> Result<()> {
         if query.is_empty()
             || document.is_empty()
@@ -91,11 +93,12 @@ pub struct Runtime {
     handle: *mut c_void,
     encode_fn: Encode,
     destroy_fn: Destroy,
+    cancel_fn: Cancel,
     diagnostics_fn: Diagnostics,
     maxsim_fn: MaxSim,
     next_request: u64,
     // Function pointers and the native handle must never outlive this library.
-    _library: Library,
+    _library: Arc<Library>,
 }
 impl Runtime {
     pub fn open(library: &Path, manifest: &Path) -> Result<Self> {
@@ -106,16 +109,18 @@ impl Runtime {
             )
             .into());
         }
-        let library = unsafe { Library::new(library)? };
+        let library = Arc::new(unsafe { Library::new(library)? });
         let create: Create = unsafe { *library.get(b"sgrep_runtime_create\0")? };
         let encode_fn = unsafe { *library.get(b"sgrep_runtime_encode\0")? };
         let destroy_fn = unsafe { *library.get(b"sgrep_runtime_destroy\0")? };
+        let cancel_fn = unsafe { *library.get(b"sgrep_runtime_cancel\0")? };
         let diagnostics_fn = unsafe { *library.get(b"sgrep_runtime_diagnostics\0")? };
         let maxsim_fn = unsafe { *library.get(b"sgrep_maxsim_update\0")? };
         let mut runtime = Self {
             handle: ptr::null_mut(),
             encode_fn,
             destroy_fn,
+            cancel_fn,
             diagnostics_fn,
             maxsim_fn,
             next_request: 1,
@@ -140,6 +145,9 @@ impl Runtime {
         }
         if runtime.handle.is_null() {
             return Err("UNVERIFIED_BACKEND: native create returned a null handle".into());
+        }
+        if let Some(context) = crate::request::current() {
+            context.models.runtime_created();
         }
         Ok(runtime)
     }
@@ -168,7 +176,17 @@ impl Runtime {
             required: 0,
             dimensions: 0,
         };
+        crate::request::check()?;
+        // The guard clears the cancellation capability before this mutable
+        // runtime borrow ends. Only synchronized native cancellation is shared.
+        let _registration = unsafe {
+            crate::request::register_native(self.handle, self.cancel_fn, input.request_id)
+        };
         let status = unsafe { (self.encode_fn)(self.handle, &input, &mut output) };
+        if status == 0 {
+            crate::request::encoded(query);
+        }
+        crate::request::check()?;
         if status != 0 {
             return Err(self.failure(status));
         }
@@ -181,10 +199,10 @@ impl Runtime {
         }
         Ok(vectors)
     }
-    pub(super) fn scoring_kernel(&self) -> ScoringKernel<'_> {
+    pub(super) fn scoring_kernel(&self) -> ScoringKernel {
         ScoringKernel {
             update: self.maxsim_fn,
-            _library: &self._library,
+            _library: self._library.clone(),
         }
     }
     pub(super) fn scoring_error(

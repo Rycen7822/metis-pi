@@ -56,7 +56,7 @@ pub struct Selection {
 }
 impl Selection {
     pub fn from_env() -> Result<Option<Self>> {
-        let Some(raw) = std::env::var_os("SGREP_CACHE_POLICY_REQUEST") else {
+        let Some(raw) = crate::request::var_os("SGREP_CACHE_POLICY_REQUEST") else {
             return Ok(None);
         };
         let raw = raw
@@ -72,7 +72,7 @@ impl Selection {
         }
         Ok(Some(value))
     }
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         bytes(self.budget_mib)?;
         if !self.source.is_absolute() || ConfigStamp::capture(&self.source)? != self.stamp {
             return Err(
@@ -127,7 +127,7 @@ impl Locked {
     pub fn open(ledger: &Path) -> Result<Self> {
         std::fs::create_dir_all(ledger)?;
         let lock = open(&ledger.join("policy.lock"), true, true)?;
-        lock.try_lock()?;
+        crate::request::lock_exclusive(&lock)?;
         supported(&lock)?;
         // SIGKILL skips NamedTempFile::drop. This namespace is private and all
         // budget transactions share policy.lock, so a regular budget-*.tmp

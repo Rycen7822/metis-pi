@@ -24,6 +24,13 @@ const CONTROL_RESERVE: u64 = 64 << 10;
 const MAX_ENTRIES: usize = 128;
 const MAX_AGE: Duration = Duration::from_secs(30 * 86400);
 
+pub(crate) fn policy_check() -> Result<()> {
+    if let Some(selection) = policy::Selection::from_env()? {
+        selection.validate()?;
+    }
+    Ok(())
+}
+
 fn unavailable(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::StorageFull, message)
 }
@@ -121,7 +128,7 @@ impl IndexCache {
     /// The ledger is fixed under HOME, not --cache-dir, SGREP_CACHE_DIR or XDG.
     /// Tests use a disposable HOME; changing corpus roots never creates credits.
     pub fn new(directory: Option<&Path>) -> Result<Option<Self>> {
-        let max_bytes = std::env::var("SGREP_CACHE_MAX_BYTES")
+        let max_bytes = crate::request::var("SGREP_CACHE_MAX_BYTES")
             .ok()
             .map(|v| v.parse::<u64>())
             .transpose()
@@ -131,13 +138,15 @@ impl IndexCache {
             return Err("SGREP_CACHE_MAX_BYTES must not exceed 1073741824 (1024MiB)".into());
         }
         let selection = policy::Selection::from_env()?;
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = crate::request::var_os("HOME").map(PathBuf::from) else {
             return Ok(None);
         };
         let directory = directory
             .map(|p| p.join("index"))
-            .or_else(|| std::env::var_os("SGREP_CACHE_DIR").map(PathBuf::from))
-            .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(|p| PathBuf::from(p).join("sgrep")))
+            .or_else(|| crate::request::var_os("SGREP_CACHE_DIR").map(PathBuf::from))
+            .or_else(|| {
+                crate::request::var_os("XDG_CACHE_HOME").map(|p| PathBuf::from(p).join("sgrep"))
+            })
             .unwrap_or_else(|| home.join(".cache/sgrep"));
         Ok(Some(Self {
             directory,
@@ -188,7 +197,7 @@ impl IndexCache {
         // Brief exclusive admission registers a durable reader lease. There is
         // no need to inspect unrelated same-UID services or their private FDs.
         let maintenance = open(&self.ledger.join("quota.lock"), false, true)?;
-        maintenance.try_lock()?;
+        crate::request::lock_exclusive(&maintenance)?;
         supported(&maintenance)?;
         cleanup_reader_stages(&self.ledger)?;
         let roots = read_roots(&self.ledger)?;
@@ -253,7 +262,7 @@ impl IndexCache {
         }
         self.select_policy()?;
         let maintenance = open(&self.ledger.join("quota.lock"), true, true)?;
-        maintenance.try_lock()?;
+        crate::request::lock_exclusive(&maintenance)?;
         supported(&maintenance)?;
         cleanup_reader_stages(&self.ledger)?;
         let registry = self.ledger.join("roots.json");
@@ -777,7 +786,7 @@ impl Drop for BudgetFile {
         if !self.published {
             let _ = std::fs::remove_file(&self.temp);
         }
-        if let Some(path) = std::env::var_os("SGREP_CACHE_DIAGNOSTICS_PATH") {
+        if let Some(path) = crate::request::var_os("SGREP_CACHE_DIAGNOSTICS_PATH") {
             let state = policy::Locked::open(&self.ledger)
                 .ok()
                 .map(|p| p.state.clone());
@@ -789,7 +798,9 @@ impl Drop for BudgetFile {
                 "cache_budget_pending":state.as_ref().map(|p|p.pending()),
                 "cache_budget_generation":state.as_ref().map(|p|p.generation)});
             if let Err(error) = std::fs::write(path, format!("{data}\n")) {
-                eprintln!("sgrep: requested cache diagnostics failed: {error}");
+                crate::request::diagnostic(format_args!(
+                    "sgrep: requested cache diagnostics failed: {error}"
+                ));
             }
         }
     }

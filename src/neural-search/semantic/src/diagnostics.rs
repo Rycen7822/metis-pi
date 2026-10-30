@@ -24,7 +24,10 @@ pub fn stages(
     scope: usize,
     extra: usize,
 ) -> Result<()> {
-    if let Some(path) = std::env::var_os("SGREP_STAGE_TIMINGS_PATH") {
+    if let Some(context) = crate::request::current() {
+        context.control.work(serde_json::to_value(work)?);
+    }
+    if let Some(path) = crate::request::var_os("SGREP_STAGE_TIMINGS_PATH") {
         let mut value = value();
         let object = value
             .as_object_mut()
@@ -69,7 +72,7 @@ struct Candidate<'a> {
 
 impl RetrievalTrace {
     pub fn from_env(args: &Args) -> Result<Option<Self>> {
-        let Some(path) = std::env::var_os("SGREP_RETRIEVAL_TRACE_PATH") else {
+        let Some(path) = crate::request::var_os("SGREP_RETRIEVAL_TRACE_PATH") else {
             return Ok(None);
         };
         let destination = PathBuf::from(path);

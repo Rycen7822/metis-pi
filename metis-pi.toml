@@ -45,6 +45,8 @@ followSymlinks = true
 # 同一 HOME 的所有语义缓存根共享磁盘峰值预算；只接受整数 256、512、1024。
 # 不放宽 RAM/线程限制；降档责任未释放时为 pending，不影响完整搜索。
 cacheBudgetMiB = 512
+# Same-user shared models: shut down after all running/queued work is idle.
+idleTimeoutSeconds = 300
 
 # =============================================================================
 # LSP / 语言服务器

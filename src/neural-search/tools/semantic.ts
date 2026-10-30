@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadSemanticBudgetSelection } from "../config.ts";
+import { loadSemanticRequestSettings } from "../config.ts";
 import { HOME_DIR, scanOptOutReason } from "../native/paths.ts";
 import type { SearchRuntime } from "../session.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
@@ -18,7 +18,7 @@ export const semanticSchema = Type.Object({
   path: Type.Optional(Type.String({ minLength: 1, description: "Existing file or directory, relative to cwd or absolute (default cwd). ~/ is supported. This is a literal scope, not a filename glob or FFF filter; every chunk in it is scored." })),
   model: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("text"), Type.Literal("code")], { description: "Default auto: text only for prose-only scope, otherwise code for the entire scope." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Maximum ranked results (default5, maximum100). Does not prefilter candidates. No pagination cursor." })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600, description: "Whole CLI deadline including initialization and complete scoring (default1800 seconds). Timeout is an error, not partial results." })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600, description: "Whole request deadline including service startup, queue waiting and complete scoring (default1800 seconds). Timeout is an error, not partial results." })),
 }, { additionalProperties: false });
 
 type SemanticScores = {
@@ -50,10 +50,10 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
       if (!stat.isFile() && !stat.isDirectory()) throw new Error("Semantic scope must be an existing regular file or directory.");
       const refusal = scanOptOutReason(root, runtime.config);
       if (refusal) throw new Error(refusal);
-      const selection = loadSemanticBudgetSelection();
+      const { selection, idleTimeoutSeconds } = loadSemanticRequestSettings();
       const model = params.model ?? "auto", limit = params.limit ?? 5;
       const wire = await runSemanticCli(root, scope.cwd, params.query, model, limit,
-        params.timeoutSeconds ?? 1800, JSON.stringify(selection), combined);
+        params.timeoutSeconds ?? 1800, JSON.stringify(selection), idleTimeoutSeconds, combined);
       runtime.assertCurrent(scope);
       combined.throwIfAborted();
       const chunks = parseChunks(wire.stdout, limit);
@@ -87,10 +87,10 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
   };
 }
 
-/** One owned process group, no shell/PATH lookup/build/fallback. Cancellation
- * settles only after close, so no CLI/rg descendant can outlive the request. */
+/** Own only the IPC client's process group. Its disconnect cancels its request;
+ * the detached same-user service and other clients are never killed here. */
 function runSemanticCli(root: string, cwd: string, query: string, model: string, limit: number,
-  timeoutSeconds: number, policy: string, signal: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+  timeoutSeconds: number, policy: string, idleTimeoutSeconds: number, signal: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   signal.throwIfAborted();
   if (process.platform !== "linux" || process.arch !== "x64") throw new Error("The semantic CPU runtime currently requires Linux x64; no alternate backend is selected.");
   const runtimeDir = process.env.SGREP_RUNTIME_DIR
@@ -98,7 +98,7 @@ function runSemanticCli(root: string, cwd: string, query: string, model: string,
     : fileURLToPath(new URL("../assets/semantic/linux-x64/", import.meta.url));
   const binary = path.join(runtimeDir, "bin", "sgrep");
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, ["--json", "--explain", "--metis-protocol", "1", "--model", model, "-n", String(limit), "--", query, root], {
+    const child = spawn(binary, ["--shared-service", "--idle-timeout-seconds", String(idleTimeoutSeconds), "--service-timeout-seconds", String(timeoutSeconds), "--json", "--explain", "--metis-protocol", "1", "--model", model, "-n", String(limit), "--", query, root], {
       cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, SGREP_RUNTIME_DIR: runtimeDir, SGREP_CACHE_POLICY_REQUEST: policy },
     });

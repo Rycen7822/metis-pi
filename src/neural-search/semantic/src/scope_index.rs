@@ -33,6 +33,7 @@ fn file_digest_with_buffer(path: &Path, block: &mut [u8; 65536]) -> Result<[u8; 
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
     loop {
+        crate::request::check()?;
         let read = file.read(block)?;
         if read == 0 {
             break;
@@ -67,6 +68,7 @@ impl Manifest {
         // Reuse I/O scratch only; each file still has its own fresh digest.
         let mut block = [0u8; 65536];
         for path in files {
+            crate::request::check()?;
             let digest = file_digest_with_buffer(&root.join(&path), &mut block)?;
             stamps.push(Stamp {
                 path: path.as_os_str().as_bytes().to_vec(),
@@ -88,6 +90,7 @@ impl Manifest {
             .collect()
     }
     pub fn verify(&self, scope: &Path, filter: &crate::storage::SourceFilter) -> Result<()> {
+        crate::request::check()?;
         if Self::capture(scope, filter).is_ok_and(|now| now == *self) {
             Ok(())
         } else {
@@ -190,7 +193,7 @@ impl Builder {
                 output.failure(&error);
                 drop(output);
                 self.offsets.clear();
-                eprintln!("sgrep: cache write disabled: {error}");
+                crate::request::diagnostic(format_args!("sgrep: cache write disabled: {error}"));
                 return scorer.score_document(&chunk.path, &chunk.content);
             }
         };
@@ -211,7 +214,9 @@ impl Builder {
             output.failure(&error);
             drop(output);
             self.offsets.clear();
-            eprintln!("sgrep: cache write disabled; remaining scope still evaluated: {error}");
+            crate::request::diagnostic(format_args!(
+                "sgrep: cache write disabled; remaining scope still evaluated: {error}"
+            ));
             return Ok(score);
         }
         let location = match writer.finish() {
@@ -223,7 +228,7 @@ impl Builder {
                 output.failure(&error);
                 drop(output);
                 self.offsets.clear();
-                eprintln!("sgrep: cache finish disabled: {error}");
+                crate::request::diagnostic(format_args!("sgrep: cache finish disabled: {error}"));
                 return Ok(score);
             }
         };
@@ -411,6 +416,7 @@ impl ScopeIndex {
         let mut released = 0;
         let mut next = HEADER;
         for i in 0..count {
+            crate::request::check()?;
             let at = number(&index.map, record_table + i * 16)?;
             let bytes = number(&index.map, record_table + i * 16 + 8)?;
             if at != next || at.checked_add(bytes).is_none_or(|n| n > record_table) {
@@ -451,6 +457,7 @@ impl ScopeIndex {
         let mut previous = None;
         released = record_table + count * 16;
         for i in 0..terms {
+            crate::request::check()?;
             let (term, postings) = index.legacy_term(i, &mut decoder)?;
             if previous.as_ref().is_some_and(|p: &String| p >= &term) {
                 return Err("unsorted lexical dictionary".into());

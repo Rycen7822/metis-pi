@@ -3,10 +3,11 @@
 mod bekko;
 mod lateon;
 mod native;
+pub(crate) mod shared;
 
 use crate::{ModelChoice, Result, cache::Cache};
 use half::f16;
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,7 +64,8 @@ pub(crate) use native::computing_threads;
 /// All windows of a record remain ordered within the task that owns its maxima.
 pub(crate) struct CodeScan<'a> {
     query: &'a [f32],
-    kernel: native::ScoringKernel<'a>,
+    kernel: native::ScoringKernel,
+    cancellation: Option<Arc<crate::request::Context>>,
 }
 impl CodeScan<'_> {
     pub(crate) fn score_blocks(
@@ -73,6 +75,9 @@ impl CodeScan<'_> {
     ) -> Result<f64> {
         let mut maxima = vec![f32::NEG_INFINITY; self.query.len() / 48];
         visit(&mut |block| {
+            if let Some(context) = &self.cancellation {
+                context.control.check()?;
+            }
             let DocumentBlock::Code { values, .. } = block else {
                 return Err("index model representation mismatch".into());
             };
@@ -91,12 +96,12 @@ impl CodeScan<'_> {
 
 pub enum Scorer {
     Bekko {
-        encoder: bekko::Encoder,
+        encoder: Arc<bekko::Encoder>,
         query: [f32; bekko::DIM],
         work: Work,
     },
     LateOn {
-        encoder: lateon::Encoder,
+        encoder: shared::CodeEncoder,
         query: Vec<f32>,
         work: Work,
     },
@@ -109,7 +114,11 @@ impl Scorer {
         assets: &Cache,
     ) -> Result<Self> {
         if Kind::for_scope(choice, prose_only) == Kind::Text {
-            let encoder = bekko::Encoder::open(&assets.model_directory("bekko128")?)?;
+            crate::request::check()?;
+            let encoder = match crate::request::current() {
+                Some(context) => context.models.text(assets)?,
+                None => Arc::new(bekko::Encoder::open(&assets.model_directory("bekko128")?)?),
+            };
             let (query, tokens) = encoder.encode(query)?;
             Ok(Self::Bekko {
                 encoder,
@@ -123,11 +132,20 @@ impl Scorer {
                 },
             })
         } else {
-            let mut encoder = lateon::Encoder::open(
-                &assets.model_directory("lateon-edge")?,
-                &assets.native_library(),
-            )?;
-            let (query, tokens) = encoder.query(query)?;
+            let (encoder, query, tokens) = match crate::request::current() {
+                Some(context) => {
+                    let (encoder, query, tokens) = context.models.code(assets, query)?;
+                    (shared::CodeEncoder::Shared(encoder), query, tokens)
+                }
+                None => {
+                    let mut encoder = lateon::Encoder::open(
+                        &assets.model_directory("lateon-edge")?,
+                        &assets.native_library(),
+                    )?;
+                    let (query, tokens) = encoder.query(query)?;
+                    (shared::CodeEncoder::Local(encoder), query, tokens)
+                }
+            };
             let rows = query.len() / 48;
             Ok(Self::LateOn {
                 encoder,
@@ -158,6 +176,7 @@ impl Scorer {
             Self::LateOn { encoder, query, .. } => Ok(Some(CodeScan {
                 query,
                 kernel: encoder.scoring_kernel()?,
+                cancellation: crate::request::current(),
             })),
             Self::Bekko { .. } => Ok(None),
         }
@@ -201,6 +220,7 @@ impl Scorer {
         content: &str,
         sink: &mut BlockSink<'_>,
     ) -> Result<f64> {
+        crate::request::check()?;
         match self {
             Self::Bekko {
                 encoder,
@@ -257,6 +277,7 @@ impl Scorer {
             Self::Bekko { query, work, .. } => {
                 let mut scan = bekko::TextScan::new(query, count);
                 for i in 0..count {
+                    crate::request::check()?;
                     scan.push(text_document(|sink| visit(i, sink))?)?;
                     work.semantic_scored_chunks += 1;
                     work.scored_document_tokens += 1;
@@ -292,6 +313,7 @@ impl Scorer {
             } => CodeScan {
                 query,
                 kernel: encoder.scoring_kernel()?,
+                cancellation: crate::request::current(),
             }
             .score_blocks(visit, work)
             .map_err(|error| encoder.scoring_error(error)),
