@@ -1,5 +1,6 @@
 #include "include/sgrep_runtime.h"
 #include "custom_ops.h"
+#include "half.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -68,6 +69,7 @@ struct sgrep_runtime {
   Ort::Env env{nullptr};
   Ort::MemoryInfo memory=Ort::MemoryInfo::CreateCpu(OrtArenaAllocator,OrtMemTypeDefault);
   Mapping table,graph;
+  sgrep::HalfDecoder decode_embedding=sgrep::half_decoder();
   Ort::SessionOptions options;
   Ort::Session session{nullptr};
   Ort::RunOptions run_options;
@@ -87,10 +89,10 @@ struct sgrep_runtime {
     std::ifstream stream(manifest_path);
     if(!stream) throw std::runtime_error("cannot open LateOn manifest");
     const json manifest=json::parse(stream);
-    require(manifest.at("format_version")==1 && manifest.at("model")=="lateon_code_edge" &&
+    require(manifest.at("format_version")==2 && manifest.at("model")=="lateon_code_edge" &&
       manifest.at("revision")=="4bcdf5ed93f791259eb130b577a240f753d68dd8" &&
       manifest.at("rows")==50370 && manifest.at("hidden")==256 && manifest.at("dimensions")==48 &&
-      manifest.at("embedding_dtype")=="float32" && manifest.at("backbone_dtype")=="float32" &&
+      manifest.at("embedding_dtype")=="float16" && manifest.at("backbone_dtype")=="float32" &&
       manifest.at("require_global_flash")==true,"unsupported LateOn artifact contract");
     graph_format=manifest.at("graph_format").get<std::string>();
     debug_names=manifest.value("debug_outputs",std::vector<std::string>{});
@@ -100,13 +102,13 @@ struct sgrep_runtime {
     const std::string graph_file=manifest.at("graph_file");
     require((graph_format=="onnx" && graph_file=="backbone.onnx") ||
             (graph_format=="ort" && graph_file=="backbone.ort"),"invalid graph file/format");
-    require(manifest.at("embedding_file")=="embedding_preln_f32.pack","invalid embedding file");
+    require(manifest.at("embedding_file")=="embedding_preln_f16.pack","invalid embedding file");
     const auto root=manifest_path.parent_path();
-    table.open(root/"embedding_preln_f32.pack");graph.open(root/graph_file);
+    table.open(root/"embedding_preln_f16.pack");graph.open(root/graph_file);
     OrtSgrepTraceMarker("preln_mapped_bytes",table.bytes);
     OrtSgrepTraceMarker("graph_mapped_bytes",graph.bytes);
-    require(table.bytes==64+50370ULL*256*4,"invalid pre-LN table size");
-    require(std::memcmp(table.data,"SGRPLN32",8)==0 && u32(table,8)==1 && u32(table,12)==50370 &&
+    require(table.bytes==64+50370ULL*256*2,"invalid pre-LN table size");
+    require(std::memcmp(table.data,"SGRPLN16",8)==0 && u32(table,8)==1 && u32(table,12)==50370 &&
       u32(table,16)==256 && u32(table,20)==0 && u64(table,24)==64 && u64(table,32)==0 &&
       u64(table,40)==table.bytes,"invalid pre-LN table header");
     threading.SetGlobalIntraOpNumThreads(settings.threads).SetGlobalInterOpNumThreads(1).SetGlobalSpinControl(0);
@@ -153,7 +155,8 @@ struct sgrep_runtime {
       {"device","cpu"},{"threads",state.threads},
       {"query_forward_count",query_forwards.load()},{"document_forward_count",document_forwards.load()},
       {"query_tokens",query_tokens.load()},{"document_tokens",document_tokens.load()},
-      {"graph_format",graph_format},{"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},
+      {"graph_format",graph_format},{"embedding_storage_dtype","float16"},
+      {"embedding_compute_dtype","float32"},{"embedding_mapped_bytes",table.bytes},{"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},
       {"forward_count",forward_count.load()},{"max_input_tokens",longest_input.load()},
       {"global_flash_calls",calls},{"global_flash_scratch_peak_bytes",scratch},
       {"global_fallback_attempts",fallbacks},{"local_attention_calls",state.local_calls.load()},
@@ -172,7 +175,7 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_create(const sgrep_options* setti
   *output=nullptr;
   if(!settings || settings->abi_version!=SGREP_RUNTIME_ABI_VERSION || !settings->artifact_manifest_utf8 ||
      settings->threads<1 || settings->threads>4 || settings->temp_bytes_cap==0 ||
-     settings->temp_bytes_cap>(128ULL<<20) || settings->strict_source_contract!=1) {
+     settings->temp_bytes_cap>(128ULL<<20) || settings->strict_artifact_contract!=1) {
     creation_error="invalid CPU ABI version/options";return SG_INVALID;
   }
   try {
@@ -221,7 +224,7 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,con
     Ort::Allocator allocator(runtime->session,runtime->memory);
     auto allocation=allocator.GetAllocation(input->token_count*256*sizeof(float));
     auto* embeddings=static_cast<float*>(allocation.get());
-    const float* table=reinterpret_cast<const float*>(static_cast<const char*>(runtime->table.data)+64);
+    const auto* table=reinterpret_cast<const uint16_t*>(static_cast<const char*>(runtime->table.data)+64);
     // Runtime-owned row-selection scratch belongs to the same hard arena as
     // activations/custom kernels, not an unaccounted std::vector allocation.
     auto row_indices=allocator.GetAllocation(rows*sizeof(int64_t));
@@ -230,7 +233,7 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,con
     OrtSgrepTraceMarker("selected_rows_bytes",rows*sizeof(int64_t));
     for(size_t i=0;i<input->token_count;++i) {
       if(runtime->state.cancelled.load()) break;
-      std::memcpy(embeddings+i*256,table+input->token_ids[i]*256,256*sizeof(float));
+      runtime->decode_embedding(table+input->token_ids[i]*256,embeddings+i*256,256);
       if(input->output_mask[i]) selected[selected_count++]=static_cast<int64_t>(i);
     }
     if(runtime->state.cancelled.load()) throw std::runtime_error("cancelled");

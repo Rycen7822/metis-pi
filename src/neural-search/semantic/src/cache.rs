@@ -20,7 +20,7 @@ const TEXT_FILES: &[&str] = &["manifest.json", "tokenizer.json", "bekko128.pack"
 const CODE_FILES: &[&str] = &[
     "manifest.json",
     "tokenizer.json",
-    "embedding_preln_f32.pack",
+    "embedding_preln_f16.pack",
     "backbone.ort",
 ];
 

@@ -66,7 +66,8 @@ Prepared tokenizers use their fixed model types (LateOn BPE, Bekko WordPiece)
 without changing normalization, pre/post-processing, decoding or special-token
 behavior. Catalog, receipt and manifest JSON reads are buffered; existing size
 limits, asset validation and receipt recovery remain in force. This does not
-introduce prewarming, another Session or a new model/index format.
+introduce prewarming or another Session. The FP16 pre-LN asset revision below
+is a separate format change; corpus-record encoding remains Format08.
 
 ## Corpus cache
 
@@ -173,11 +174,33 @@ locations; it cannot silently borrow a missing model from another store.
 
 ## CPU execution
 
+LateOn stores its precomputed pre-LN table as IEEE FP16: `embedding_preln_f16.pack`,
+magic `SGRPLN16`, pack-layout version1, 50370×256 values and a 64-byte header
+(25,789,504 bytes). It maps the table read-only and expands only requested token
+rows into the existing bounded FP32 input arena. F16C is used with AVX2 when
+available, otherwise the shared scalar half decoder is used. There is no full
+FP32 table copy. Backbone weights, activations, Query vectors, normalization and
+score accumulation stay FP32; document representations were already FP16.
+
+Native ABI2 requires `strict_artifact_contract=1`; the prepared LateOn manifest
+uses `format_version=2`, `embedding_dtype=float16`, `backbone_dtype=float32` and
+the new filename. ABI1 callers and FP32-table assets fail closed: update the
+CLI, native library and prepared bundle together. Full-manifest index identity
+rejects older FP32/experimental indexes and rebuilds them; Format08 and Bekko's
+asset/precision contracts are unchanged. Only the existing trusted catalog's
+integrity checks are used, not an extra pre-LN hash chain.
+
+This is intentional quantization, not a lossless FP32-source optimization. The
+accepted paired 600-question RepoQA / 500-question CoSQA evaluation preserved
+full8000 / Hit@10, but CoSQA Hit@5 fell from 389/500 to 388/500 and MRR declined
+slightly. Formal integration preserves the tested gather outputs; it does not
+claim zero quality loss or a new full performance/resource qualification.
+
 Cache misses retain compact scope metadata, then rehydrate one source file at a
 time for full scoring; supplied ripgrep groups use the same bounded source view.
 Miss/no-cache paths do not heap-retain a full-corpus text or embedding matrix.
 Hits mmap the complete immutable index; resident mapped pages still count toward
-PSS. The v4.1 development candidate passed actual 512MiB high / 768MiB max /
+PSS. The earlier FP32-table development candidate passed actual 512MiB high / 768MiB max /
 zero-swap cgroup checks for text, code and whole-scope auto at 1k/10k/100k chunks,
 plus a complete 778MiB index scan. The nine core cases each have 500 independent
 page-hot, new-CLI measurements; boundary lengths and actual ENOSPC recovery were
@@ -278,6 +301,11 @@ development ORT fallback. The command above stages only the native library insid
 the build area; it does not install or activate Metis. The runtime bundle also needs
 the pinned reduced ORT library and its SONAME symlinks beside it, the CLI and model
 assets. A missing sibling ORT must not silently load one from the development tree.
+
+Stage ABI2 and the manifest2 FP16 table as one prepared bundle; an older installed
+bundle is not upgraded by changing a filename or reinterpreting FP32 bytes.
+Preparation remains offline; no converter or extra Python dependency runs in
+queries. Original downloads and prior prepared assets remain immutable.
 
 Runtime uses `assets.json`, `bin/sgrep`, `lib/libsgrep_cpu.so`, its sibling ORT library and prepared
 `models/bekko128` / `models/lateon-edge` assets. `SGREP_RUNTIME_DIR` selects that

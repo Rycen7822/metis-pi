@@ -1,7 +1,8 @@
 #ifndef SGREP_RUNTIME_ABI_H
 #define SGREP_RUNTIME_ABI_H
-/* v4.1 in-process CPU ABI. Rust owns tokenization/window mapping.
- * Buffers remain caller-owned; destroy only after encode returns. */
+/* CPU ABI v2: FP16 pre-LN storage, FP32 model inputs and output buffers.
+ * Rust owns tokenization/window mapping. Buffers remain caller-owned;
+ * destroy only after encode returns. ABI v1 assets/callers are rejected. */
 #include <stddef.h>
 #include <stdint.h>
 #if defined(_WIN32)
@@ -12,13 +13,15 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define SGREP_RUNTIME_ABI_VERSION 1u
+#define SGREP_RUNTIME_ABI_VERSION 2u
 typedef struct sgrep_runtime sgrep_runtime;
 typedef enum {SG_OK=0,SG_INVALID=1,SG_BUFFER_TOO_SMALL=2,SG_CANCELLED=3,
  SG_ASSET_MISMATCH=4,SG_BUDGET_EXCEEDED=5,SG_UNVERIFIED=6} sgrep_error;
 typedef enum {SG_QUERY=0,SG_DOCUMENT=1} sgrep_role;
+/* strict_artifact_contract must be 1; it selects the supported asset format,
+ * not numerical identity with the original FP32 pre-LN source. */
 typedef struct {uint32_t abi_version;const char *artifact_manifest_utf8;
- uint32_t threads;uint64_t temp_bytes_cap;uint32_t strict_source_contract;} sgrep_options;
+ uint32_t threads;uint64_t temp_bytes_cap;uint32_t strict_artifact_contract;} sgrep_options;
 typedef struct {const uint32_t *token_ids;size_t token_count;sgrep_role role;
  const uint8_t *output_mask;size_t mask_count;uint64_t request_id;} sgrep_encoded_input;
 typedef struct {float *vectors;size_t float_capacity;size_t rows_written;

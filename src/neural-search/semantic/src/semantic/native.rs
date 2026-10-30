@@ -14,7 +14,7 @@ struct Options {
     manifest: *const c_char,
     threads: u32,
     temp_cap: u64,
-    strict: u32,
+    strict_artifact_contract: u32,
 }
 #[repr(C)]
 struct Input {
@@ -133,11 +133,11 @@ impl Runtime {
         )?;
         let threads = computing_threads();
         let options = Options {
-            abi_version: 1,
+            abi_version: 2,
             manifest: manifest.as_ptr(),
             threads: threads as u32,
             temp_cap: 128 << 20,
-            strict: 1,
+            strict_artifact_contract: 1,
         };
         let status = unsafe { create(&options, &mut runtime.handle) };
         if status != 0 {
