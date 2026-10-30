@@ -230,13 +230,39 @@ impl Drop for CancelOnDisconnect<'_> {
         }
     }
 }
+struct Connection {
+    done: Arc<std::sync::atomic::AtomicBool>,
+    handle: thread::JoinHandle<()>,
+}
+struct ConnectionDone {
+    server: Arc<Server>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Drop for ConnectionDone {
+    fn drop(&mut self) {
+        // Publish capacity even when handling the peer unwinds.
+        self.done.store(true, std::sync::atomic::Ordering::Release);
+        self.server.notify();
+    }
+}
 struct Server {
+    wake: UnixStream,
     state: Mutex<State>,
     changed: Condvar,
     models: Arc<Models>,
     identity: Identity,
 }
 impl Server {
+    fn notify(&self) {
+        self.changed.notify_all();
+        // One byte suffices; a full nonblocking pipe already guarantees a wake.
+        let mut wake = &self.wake;
+        if let Err(error) = wake.write_all(&[1]) {
+            if error.kind() != std::io::ErrorKind::WouldBlock {
+                request::diagnostic(format_args!("sgrep: service wake failed: {error}"));
+            }
+        }
+    }
     fn cancel_request(&self, control: &Arc<Control>) {
         control.cancel();
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -248,7 +274,7 @@ impl Server {
             s.finished += removed;
             s.cancelled += removed;
             s.last = Instant::now();
-            self.changed.notify_all();
+            self.notify();
         }
     }
     fn stats(&self) -> serde_json::Value {
@@ -261,7 +287,7 @@ impl Server {
                 let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 loop {
                     if let Some(job) = s.queue.pop_front() {
-                        self.changed.notify_all();
+                        self.notify();
                         if job.context.control.check().is_err() {
                             s.cancelled += 1;
                             s.finished += 1;
@@ -332,7 +358,7 @@ impl Server {
                 s.cancelled += 1;
             }
             s.last = Instant::now();
-            self.changed.notify_all();
+            self.notify();
         }
     }
     fn connection(&self, mut stream: UnixStream) -> Result<()> {
@@ -361,7 +387,7 @@ impl Server {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .draining = true;
-                self.changed.notify_all();
+                self.notify();
                 Response {
                     service: self.stats(),
                     ..Response::default()
@@ -453,7 +479,7 @@ impl Server {
                         if s.queue.len() < QUEUED {
                             s.idle = Duration::from_secs(idle_seconds);
                             s.queue.push_back(job.take().expect("not queued"));
-                            self.changed.notify_all();
+                            self.notify();
                             break;
                         }
                     }
@@ -533,7 +559,11 @@ fn serve() -> Result<()> {
     let listener = UnixListener::bind(&paths.socket)?;
     std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
+    let (wake_read, wake_write) = UnixStream::pair()?;
+    wake_read.set_nonblocking(true)?;
+    wake_write.set_nonblocking(true)?;
     let server = Arc::new(Server {
+        wake: wake_write,
         identity: Identity::current()?,
         models: Arc::new(Models::new()?),
         changed: Condvar::new(),
@@ -557,21 +587,24 @@ fn serve() -> Result<()> {
                 .spawn(move || s.worker())?,
         );
     }
-    let mut connections: Vec<thread::JoinHandle<()>> = Vec::new();
+    let mut connections: Vec<Connection> = Vec::new();
     loop {
         {
             let mut s = server.state.lock().unwrap_or_else(|e| e.into_inner());
             if s.active == 0 && s.queue.is_empty() && (s.draining || s.last.elapsed() >= s.idle) {
                 s.draining = true;
-                server.changed.notify_all();
+                server.notify();
                 break;
             }
         }
         let mut i = 0;
         while i < connections.len() {
-            if connections[i].is_finished() {
-                let h = connections.swap_remove(i);
-                let _ = h.join();
+            if connections[i]
+                .done
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                let connection = connections.swap_remove(i);
+                let _ = connection.handle.join();
             } else {
                 i += 1;
             }
@@ -580,30 +613,53 @@ fn serve() -> Result<()> {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let s = server.clone();
-                    connections.push(
-                        thread::Builder::new()
-                            .name("semantic-client".into())
-                            .spawn(move || {
-                                let fallback = stream.try_clone().ok();
-                                if let Err(e) = s.connection(stream) {
-                                    if let Some(mut f) = fallback {
-                                        let _ = write_frame(&mut f, &error(e), RESPONSE_BYTES);
-                                    }
+                    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let finished = done.clone();
+                    let handle = thread::Builder::new()
+                        .name("semantic-client".into())
+                        .spawn(move || {
+                            let _done = ConnectionDone {
+                                server: s.clone(),
+                                done: finished,
+                            };
+                            let fallback = stream.try_clone().ok();
+                            if let Err(e) = s.connection(stream) {
+                                if let Some(mut f) = fallback {
+                                    let _ = write_frame(&mut f, &error(e), RESPONSE_BYTES);
                                 }
-                            })?,
-                    );
+                            }
+                        })?;
+                    connections.push(Connection { done, handle });
+                    continue;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10))
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(e.into()),
             }
-        } else {
-            thread::sleep(Duration::from_millis(10));
+        }
+        let timeout = {
+            let state = server.state.lock().unwrap_or_else(|e| e.into_inner());
+            (state.active == 0 && state.queue.is_empty())
+                .then(|| state.idle.saturating_sub(state.last.elapsed()))
+        };
+        let mut fds = vec![wake_read.as_raw_fd()];
+        if connections.len() < ACTIVE + QUEUED + 4 {
+            fds.push(listener.as_raw_fd());
+        }
+        crate::readiness::wait(&fds, timeout)?;
+        let mut wake = &wake_read;
+        let mut bytes = [0u8; 256];
+        loop {
+            match wake.read(&mut bytes) {
+                Ok(0) => return Err("service wake pipe closed".into()),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            }
         }
     }
-    for h in connections {
-        let _ = h.join();
+    for connection in connections {
+        let _ = connection.handle.join();
     }
     for h in workers {
         h.join()

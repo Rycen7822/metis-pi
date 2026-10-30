@@ -3,6 +3,7 @@ mod codechunker;
 mod corpus;
 mod diagnostics;
 mod index;
+mod readiness;
 mod request;
 mod rg_input;
 mod scope_index;

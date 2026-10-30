@@ -226,7 +226,10 @@ pub(crate) fn output(command: &mut Command) -> std::io::Result<Output> {
     if current().is_none() {
         return command.output();
     }
-    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+    use std::os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::process::CommandExt,
+    };
     struct Child(std::process::Child);
     impl Drop for Child {
         fn drop(&mut self) {
@@ -253,6 +256,19 @@ pub(crate) fn output(command: &mut Command) -> std::io::Result<Output> {
             return Err(std::io::Error::last_os_error());
         }
     }
+    // A child may close both pipes before exiting. pidfd avoids spinning on
+    // their EOF or adding a timer tick to the common short-lived rg path.
+    // SAFETY: pid is our live/reapable child; the returned fd is owned here.
+    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child.0.id(), 0) };
+    let pidfd = if pidfd >= 0 {
+        Some(unsafe { OwnedFd::from_raw_fd(pidfd as i32) })
+    } else {
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ENOSYS | libc::EINVAL | libc::EPERM) => None,
+            _ => return Err(error),
+        }
+    };
     let mut a = Vec::new();
     let mut b = Vec::new();
     let mut closed = [false; 2];
@@ -282,6 +298,7 @@ pub(crate) fn output(command: &mut Command) -> std::io::Result<Output> {
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) => return Err(e),
                 }
             }
@@ -298,6 +315,19 @@ pub(crate) fn output(command: &mut Command) -> std::io::Result<Output> {
                 });
             }
         }
-        std::thread::sleep(Duration::from_millis(5));
+        let mut fds = Vec::with_capacity(3);
+        for (closed, fd) in closed.iter().zip([stdout.as_raw_fd(), stderr.as_raw_fd()]) {
+            if !closed {
+                fds.push(fd);
+            }
+        }
+        if status.is_none() {
+            if let Some(fd) = &pidfd {
+                fds.push(fd.as_raw_fd());
+            }
+        }
+        // Cancellation still has the old at-most5ms observation interval. If
+        // pidfd is unavailable, this also bounds waiting after both pipe EOFs.
+        crate::readiness::wait(&fds, Some(Duration::from_millis(5)))?;
     }
 }
