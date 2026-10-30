@@ -1,285 +1,158 @@
 # CPU semantic search core
 
-Metis-owned fork of [sgrep](https://github.com/context-dot-dev/sgrep), based on
-`dec6122c05be553c5a60bd647d1350b221b7b9c3`. Upstream and ported-component MIT
-copyrights and terms remain in `LICENSE` and the source files.
+Metis-owned [sgrep](https://github.com/context-dot-dev/sgrep) fork, based on
+`dec6122c05be553c5a60bd647d1350b221b7b9c3`. MIT notices remain in [LICENSE](LICENSE)
+and the ported source files. The semantic runtime targets Linux x64.
 
-## Ownership
+## Ownership and search behavior
 
-- `src/`: Rust CLI, file/chunk discovery, lexical ranking, model-specific encoding,
-  FP16 representations and complete-index record handling.
-- `native/`: in-process CPU C ABI, fixed ORT/MLAS integration, fused operators,
-  bounded attention and MaxSim. `native/patches/` owns the required ORT changes.
-- `Cargo.toml` / `Cargo.lock`: reproducible Rust dependency inputs.
+| Owner | Responsibility |
+| --- | --- |
+| `src/` | Rust CLI, discovery/chunking, lexical ranking, encoding and complete corpus indexes |
+| `native/` | In-process CPU C ABI, ORT/MLAS operators, bounded attention and MaxSim |
+| `native/patches/` | Required changes to the pinned ORT source |
+| `Cargo.toml` / `Cargo.lock` | Rust toolchain requirements and dependency inputs |
+| [Parent component](../METIS.md) | Pi action, TOML configuration, CLI/JSON adaptation and cancellation |
 
-The existing sibling `../engine/` remains the FFF engine for path/content search.
-This core is separate: it does not add FFF frecency or a candidate prefilter to
-semantic ranking. Host action registration and CLI/JSON adaptation belong to the
-parent neural-search component, not to this Rust/C++ implementation.
+`--model auto` selects Bekko128 for prose-only candidates and LateOn-Code-edge
+for code/mixed scopes. Complete-scope scoring retains sgrep's 75/25 fusion,
+exact-match priority and stable ordering; LateOn consumes all token windows with
+Q4/D64 MaxSim. There is no ANN, FFF prefilter or frecency adjustment. The sibling
+`../engine/` separately owns FFF path/content search.
 
-## Shared model service
+## CLI and shared service
 
-Metis uses `--shared-service`: one private Unix-socket service per UID and
-canonical HOME, shared across workspaces and Pi sessions. LateOn and Bekko each
-load lazily at most once per compatible asset generation; they may both remain
-resident. The original standalone CLI remains available explicitly without the
-flag. A different executable/runtime environment is rejected, not silently
-served by old code or replaced with a second model process. Use
-`sgrep --service-control status` and `sgrep --service-control stop` to inspect or
-drain it. There is no system service installation or public TCP listener.
+Use a prepared runtime, not the original model downloads:
 
-A client that spawns the service waits on a one-shot inherited Unix stream,
-then still verifies the ordinary peer and Ready greeting before submitting a
-search. The notification means the listener and workers are ready, not that
-models have been preloaded. Its descriptor is restored to close-on-exec and
-closed after delivery; control-channel errors are not treated as successful
-stdout consumer exits. Startup-lock contention and independently started or
-draining owners retain bounded retry waits.
+```sh
+export SGREP_RUNTIME_DIR=/absolute/path/to/runtime
+"$SGREP_RUNTIME_DIR/bin/sgrep" --shared-service --json "query" /path/to/repository
+"$SGREP_RUNTIME_DIR/bin/sgrep" --service-control status
+"$SGREP_RUNTIME_DIR/bin/sgrep" --service-control stop
+```
 
-At most three searches execute; each uses the existing at-most-four-thread
-compute budget. Additional requests enter a bounded FIFO with connection
-backpressure. Single-session LateOn encoding is serialized on its owning thread;
-window delivery rendezvouses with its sink, so encoder and sink do not create a
-fifth computing lane. Stateless cached scans may overlap across three requests.
-OS task counts also include sleeping encoder and IPC control threads.
+Metis uses shared mode; omit `--shared-service` for a standalone CLI. Shared mode
+rejects stdin, rg-json, fresh-assets and explicit cache-dir modes. CLI options
+are listed by `sgrep --help` and defined in [src/main.rs](src/main.rs). Host output requires
+`--json --metis-protocol 1` and returns `{protocol:1,results:[...]}` without
+changing ordinary CLI JSON.
 
-The service exits after no running or queued work remains for
-`[neuralSearch.semantic].idleTimeoutSeconds` (default300, integer1–86400).
-Status checks do not extend the timeout. Request Query/work/scratch/mmap/reader
-leases are released after each search; only model resources remain warm. Each
-request retains its own current cache-policy snapshot and diagnostics, without
-process-wide cwd/env mutation. Disconnect/timeout cancels only that request;
-scoped workers and owned discovery are collected before its execution slot is
-released. Native cancellation is the only cross-thread encoder capability; the
-full ORT handle never becomes Send/Sync. Cache admission may wait cancellably in
-the service instead of re-encoding on short lock contention; eviction probes
-remain nonblocking and never wait for active readers.
-
-`SGREP_SERVICE_INFO_PATH` optionally records request queue/execution time,
-service PID and model-load/native-completion counters. It is diagnostic output,
-not the normal host protocol. Shared mode rejects stdin, rg-json, fresh-assets
-and explicit cache-dir modes; those keep their original standalone behavior.
-Single-CLI resource evidence below does not automatically qualify three active
-requests or long-lived model memory; shared-service evidence is separate.
-
-Prepared tokenizers use their fixed model types (LateOn BPE, Bekko WordPiece)
-without changing normalization, pre/post-processing, decoding or special-token
-behavior. Catalog, receipt and manifest JSON reads are buffered; existing size
-limits, asset validation and receipt recovery remain in force. This does not
-introduce prewarming or another Session. The FP16 pre-LN asset revision below
-is a separate format change; corpus-record encoding remains Format08.
+- One private Unix-socket service per UID/canonical HOME serves workspaces and
+  Pi sessions. No system service or public TCP listener is installed. Runtime
+  incompatibility fails explicitly rather than loading a second model process.
+- LateOn and Bekko load lazily, each at most once per compatible asset generation;
+  both may remain resident. Listener readiness does not preload either model.
+- At most **3 searches × 4 computing threads** execute; excess work waits in a
+  bounded FIFO with backpressure. LateOn encoding is serialized on its owning
+  thread; cached scans can overlap. Sleeping/control threads are not compute lanes.
+- Idle shutdown starts after running/queued work finishes. Metis's
+  `[neuralSearch.semantic].idleTimeoutSeconds` defaults to 300 (integer 1–86400);
+  status checks do not extend it. `stop` drains the service.
+- Only models stay warm. Each request owns its cache-policy snapshot, query,
+  scratch, mappings, reader leases and diagnostics. Disconnect/timeout cancels
+  that request; its workers/discovery are collected before releasing the slot.
+  Native cancel is thread-safe; the ORT handle remains on its owner thread.
 
 ## Corpus cache
 
-Complete indexes retain original chunk ranges, text, full word counts and tagged
-FP16 representations. Format08 stores lexical counts once in each record rather
-than a second corpus-wide dictionary/postings copy. The existing full-record
-validation pass derives only the current query's DF; BM25 contributions retain
-lexical query order and the empty-sum sign. Format07 remains readable and its old
-postings are validated, not silently ignored. Hits require matching source bytes
-and model/preprocessing identity; incomplete, stale, unsupported or corrupt files
-are recomputed. Each source snapshot reuses one bounded read buffer across files,
-without sharing hash state or skipping either complete content check. Source
-changes cause at most one complete retry, never partial results.
+Complete indexes store chunk ranges/text, word counts and tagged FP16
+representations. Format08 stores counts once and derives the current query's DF;
+Format07 remains readable with postings validation. Hits require matching source
+bytes and model/preprocessing identity. Stale, incomplete or corrupt indexes are
+recomputed. Source verification permits at most one complete retry, never partial
+results. The FP16 asset revision below invalidates old FP32/experimental indexes
+through full-manifest identity, without changing the corpus-record format.
 
-The shared corpus-cache ledger lives at `$HOME/.cache/sgrep-cpu-quota`. Changing
-`--cache-dir`, `SGREP_CACHE_DIR` or `XDG_CACHE_HOME` selects a registered storage
-root, not another budget. The shared policy supports 256, 512 and 1024MiB tiers,
-defaulting to 512MiB when no policy exists. A standalone CLI inherits the recorded
-policy. `SGREP_CACHE_MAX_BYTES` is only a stricter per-request byte ceiling; it
-cannot select a larger tier. Model assets and separate FFF indexes are outside
-this corpus-cache budget.
+### Budget and eviction
 
-Metis owns configuration parsing. Its internal `SGREP_CACHE_POLICY_REQUEST` JSON
-bridge carries the selected tier, absolute config source and exact device/inode/
-size/mtime/ctime snapshot (decimal strings preserve Node bigint precision).
-The core rejects stale or conflicting selections without granting another
-quota. User-facing TOML/action wiring belongs to the parent component. Its
-versioned host protocol is opt-in via `--json --metis-protocol 1`; it returns
-`{protocol:1,results:[...]}` and leaves ordinary CLI JSON unchanged. An older
-CLI rejects the host flag instead of silently ignoring the shared budget. A
-short policy lock records changes even during a long
-index writer; pending downgrades block new allocations/publication until actual
-reader/writer responsibility can fit. Upgrades preserve valid index identities.
-Neither tier changes nor mmap waive the independent memory/CPU limits.
+- `[neuralSearch.semantic].cacheBudgetMiB` accepts **256, 512 or 1024**, default 512.
+  One ledger at `$HOME/.cache/sgrep-cpu-quota` covers all registered cache roots;
+  `--cache-dir`, `SGREP_CACHE_DIR` and `XDG_CACHE_HOME` do not create extra quotas.
+  Model assets and FFF indexes are outside this budget.
+- Standalone CLI calls inherit the recorded policy. `SGREP_CACHE_MAX_BYTES` can
+  only impose a stricter request ceiling. Metis sends stat-bound policy selections
+  through internal `SGREP_CACHE_POLICY_REQUEST`; stale/conflicting selections
+  are rejected. Pending downgrades block growth/publication until responsibility
+  fits; upgrades preserve valid indexes.
+- Admission counts allocated blocks, in-flight reservations, old generations and
+  reader leases. Growing writers reclaim idle indexes in LRU order, protecting
+  active readers and the target being replaced. Failed refresh preserves the old
+  target; explicit budget-shrink eviction is separate. Last-reader release updates
+  LRU age without changing payload bytes.
+- Allocation is qualified on ext4/tmpfs. Unsupported allocation, permissions,
+  insufficient peak space or unavailable locks fall back to complete uncached
+  search. Shared admission can wait cancellably on writer contention; eviction
+  never waits for active readers.
 
-Admission accounts actual file/directory blocks, in-flight reservations, old generations
-and durable reader leases. The qualified allocation backends are ext4 and tmpfs;
-unsupported allocation, contention, permissions or insufficient update peak
-space disable that cache attempt while complete search continues. Growing writers
-reclaim idle complete indexes in LRU order before declining a reservation;
-locked readers and the target being replaced remain protected. Failed refresh
-retains the prior immutable target; explicit budget-shrink LRU eviction is a
-separate operation. Last leases refresh eviction age without changing payload
-bytes. Interrupted policy transaction files are reclaimed only under the short
-policy lock; symlinks are preserved. Private indexes/ledger records use mode 0600.
-Reader leases are locked and fully serialized in PID/start-time-identified staging
-files before atomic publication. Their fixed integer fields are serialized into a
-small buffer and written with `write_all` before the unchanged sync/publication
-boundary. Under the quota lock, recovery removes only recognized stages whose
-exact owner has exited and whose kernel lock is free;
-live owners, unknown payloads and symlinks remain preserved and charged. An
-unverifiable malformed legacy lease fails closed to complete uncached search,
-not unsafe deletion of potentially live reader responsibility.
+### Integrity and lifetime
 
-CRC and record metadata are checked when opening an index. Vector payloads are
-decoded and validated once, while the complete scoring scan consumes them;
-corrupt stored bytes discard the provisional attempt and rebuild using the same
-query encoder. Model/runtime errors are not reclassified as cache corruption.
-Discarded cached scoring work is reported separately from successful scope work.
-Each metadata pass or bounded scoring task owns one Zstd decoder context reused across records;
-FP16 codec1 groups are unpacked exactly eight values at a time without changing
-format or precision. No global decoder or decompressed corpus is retained.
-LateOn loads its fixed BPE asset directly with the same tokenization processors,
-role IDs, masks and length limits rather than dynamic model-wrapper dispatch.
-Validation and scoring consume mapped files in bounded resident windows; owned
-ranking/trace chunks release their consumed view as well. Only
-this read-only immutable-inode mapping's PTEs are released, never model arenas or
-another reader's view. This does not evict shared file-cache pages or excuse them
-from cgroup accounting, and does not establish a cold-page/resource gate.
+Private index/ledger records use mode 0600. Immutable payloads and locked reader
+leases are published atomically; recovery removes only recognized abandoned
+stages with an exited owner and a free kernel lock. Unknown/live objects and
+symlinks remain preserved and charged; unverifiable leases disable caching.
+CRC/metadata are checked at open, vectors during the complete scoring scan.
+Corruption discards provisional scores and rebuilds with the existing query
+encoder; model/runtime failures are not disguised as cache corruption. Discarded
+work is reported separately. Bounded tasks reuse local Zstd contexts, never a
+process-resident decompressed corpus.
 
-## Prepared asset acquisition
+## Prepared assets and precision
 
-The runtime bundle must include `assets.json`, a trusted catalog of the prepared
-artifact repository, immutable commit, pinned source-model revisions and exact
-file sizes/SHA256 values. The catalog ships with the runtime, not with a response
-from the model server. Bundle updates use a new runtime/catalog; the catalog is
-not a floating model selector. No Python, compiler or model conversion runs in a
-query.
+`SGREP_RUNTIME_DIR` selects a bundle containing `assets.json`, `bin/sgrep`,
+`lib/libsgrep_cpu.so`, sibling ORT libraries/SONAME symlinks, and prepared
+`models/bekko128` / `models/lateon-edge` directories. The trusted catalog pins an
+immutable prepared-artifact revision, source models and exact file sizes/SHA256;
+it ships with the runtime, not a model-server response. Updates replace the
+runtime/catalog together. No query-time Python, compiler or conversion runs.
 
-The qualified development bundle uses verified local prepared payloads. Its
-catalog is still an unpublished development fixture, not a working public
-download origin. Public distribution requires a real prepared-artifact revision;
-that release operation is separate from local CPU/host qualification. Conversion-
-time status markers in the original model manifests are retained for provenance
-and cache identity; final numerical admission is recorded in the runtime's
-`manifests/runtime.lock.json` and `manifests/quality-gates.json`.
+- Online acquisition uses the HF client and `HF_ENDPOINT`, verifies approved
+  files, then replaces them atomically without truncating mapped inodes. Warm
+  verification receipts bind device/inode/size/mtime/ctime; changed files require
+  full verification. Read-only installations can verify without writing receipts.
+- `HF_HUB_OFFLINE` values `1`, `true`, `YES` or `On` prohibit acquisition; missing
+  or damaged assets fail explicitly. A `--cache-dir` override isolates models,
+  parsers and indexes and cannot borrow assets from another store.
+- `--fresh-assets` rejects offline mode, downloads models/parsers privately,
+  bypasses all corpus-index reads/writes and cleans up on normal success/failure.
+  Later invocations reclaim only marked directories whose PID/start-time owner
+  exited, never live/unmarked objects or symlink targets. Installed assets stay intact.
 
-`HF_HUB_OFFLINE` values `1`, `true`, `YES` and `On` prohibit acquisition. Missing
-or damaged offline assets fail explicitly. Online acquisition uses the existing
-HF client and `HF_ENDPOINT`, validates each approved prepared file and publishes
-by atomic replacement rather than truncating a live mapped inode. A warm query
-uses an offline verification receipt bound to device/inode/size/mtime/ctime;
-changed files require full verification, not blind reuse. Read-only installations
-can reverify without writing a receipt.
+LateOn's pre-LN table is **FP16 storage → per-row FP32 input**; backbone weights,
+activations, normalization, query vectors and score accumulation remain FP32.
+AVX2/F16C or scalar decoding fills the existing bounded arena, never a full FP32
+table copy. Document representations remain FP16; Bekko's contract is unchanged.
 
-`--fresh-assets` rejects offline mode, acquires the selected model and required
-parsers in a private temporary namespace, bypasses all corpus-index reads and
-writes, and removes the namespace on normal success/failure. Marked directories
-record PID/start-time so a subsequent invocation can reclaim a killed owner's
-assets without deleting live directories, unmarked payload or symlink targets. It does not
-modify the normal installed model store. A
-`--cache-dir` override isolates its prepared model store as well as parser/index
-locations; it cannot silently borrow a missing model from another store.
+The supported bundle requires native **ABI2**, `strict_artifact_contract=1` and
+LateOn manifest2 (`embedding_dtype=float16`, `backbone_dtype=float32`). Its table
+is `embedding_preln_f16.pack`: magic `SGRPLN16`, pack-layout version1, a 64-byte
+header and 50370×256 half values (25,789,504 bytes). Update CLI/native/assets as
+one bundle: ABI1 callers and FP32 tables fail closed, not by filename reinterpretation.
+The [C header](native/include/sgrep_runtime.h) defines buffer ownership and errors.
+FP16 storage is intentionally lossy relative to the FP32 source; valid asset
+integrity does not imply zero numerical or retrieval-quality loss.
 
-## CPU execution
+## CPU and memory bounds
 
-LateOn stores its precomputed pre-LN table as IEEE FP16: `embedding_preln_f16.pack`,
-magic `SGRPLN16`, pack-layout version1, 50370×256 values and a 64-byte header
-(25,789,504 bytes). It maps the table read-only and expands only requested token
-rows into the existing bounded FP32 input arena. F16C is used with AVX2 when
-available, otherwise the shared scalar half decoder is used. There is no full
-FP32 table copy. Backbone weights, activations, Query vectors, normalization and
-score accumulation stay FP32; document representations were already FP16.
+- Each request uses at most four computing threads including the caller;
+  inter-op=1, no spinning. Validation, encoding, scanning/ranking and source
+  verification do not overlap their compute pools. Owned `rg --files` is serial.
+- Metadata/DF and cached-code scans use scoped tasks within that ceiling, with
+  serial small batches. Code batches admit at most 8MiB mapped data / 1MiB raw
+  metadata; a larger record runs alone. These are work-admission bounds, not RSS
+  limits. Workers join before mapped views are released or recovery begins.
+- Native temporary allocations use a hard arena cap of 128MiB, not a whole-process
+  memory limit. Misses/no-cache rehydrate one source file at a time; hits consume
+  immutable mappings in bounded resident windows. Releasing this reader's PTEs
+  does not evict shared file-cache pages or remove their cgroup/PSS charge.
+- Attention/scoring use guarded SIMD and scalar fallbacks. Native builds disable
+  fast-math and FMA contraction; neither larger disk tiers nor shared service
+  increase a request's compute/arena ceiling. Shared resident-model memory and
+  three active requests require their own resource qualification.
 
-Native ABI2 requires `strict_artifact_contract=1`; the prepared LateOn manifest
-uses `format_version=2`, `embedding_dtype=float16`, `backbone_dtype=float32` and
-the new filename. ABI1 callers and FP32-table assets fail closed: update the
-CLI, native library and prepared bundle together. Full-manifest index identity
-rejects older FP32/experimental indexes and rebuilds them; Format08 and Bekko's
-asset/precision contracts are unchanged. Only the existing trusted catalog's
-integrity checks are used, not an extra pre-LN hash chain.
+## Build and staging
 
-This is intentional quantization, not a lossless FP32-source optimization. The
-accepted paired 600-question RepoQA / 500-question CoSQA evaluation preserved
-full8000 / Hit@10, but CoSQA Hit@5 fell from 389/500 to 388/500 and MRR declined
-slightly. Formal integration preserves the tested gather outputs; it does not
-claim zero quality loss or a new full performance/resource qualification.
-
-Cache misses retain compact scope metadata, then rehydrate one source file at a
-time for full scoring; supplied ripgrep groups use the same bounded source view.
-Miss/no-cache paths do not heap-retain a full-corpus text or embedding matrix.
-Hits mmap the complete immutable index; resident mapped pages still count toward
-PSS. The earlier FP32-table development candidate passed actual 512MiB high / 768MiB max /
-zero-swap cgroup checks for text, code and whole-scope auto at 1k/10k/100k chunks,
-plus a complete 778MiB index scan. The nine core cases each have 500 independent
-page-hot, new-CLI measurements; boundary lengths and actual ENOSPC recovery were
-checked separately. This qualifies the pinned candidate on the measured host,
-not every machine, physical-host cold I/O or a reliable P99 at fewer than 1000
-samples. Disk tiers do not increase the independent memory or thread ceilings.
-
-Cached Bekko scores use a 1024-row scratch block, tiled into eight independent
-document lanes. Guarded AVX2/F16C and scalar paths preserve the original FP32
-sum order and the stored FP16 norm; full blocks and tails have identical scores.
-LateOn consumes all token windows with Q4/D64 MaxSim. There is no ANN/prefilter.
-
-Complete-record metadata/DF validation remains a separate pass before query
-encoding and scoring. Its bounded batches use the caller plus at most three
-scoped workers, admitted by raw metadata bytes and record count. Small inputs
-stay serial. Borrowed query keys and concurrent integer DF arrays are capped at
-1MiB; wide queries reduce parallelism instead of creating N×Q state. All workers
-join before page release, integer totals merge before the original ordered IDF
-calculation, and Format07 postings validation remains intact. No parsed corpus
-or reader lease becomes process-resident. Diagnostic fields
-`validation_worker_limit` and `validation_batches` describe this pass.
-
-Cached code scans use request-local, scoped CPU tasks after synchronous query
-encoding has returned. The caller plus at most three workers share the existing
-four-computing-thread ceiling; no worker can access an encoder handle. Each task
-consumes a whole record in window order, and scalar results merge by record ID.
-Admission uses record count and stored bytes, never repository/query identities:
-small batches stay serial. Contiguous batches are bounded to 8MiB of mapped data
-and 1MiB of raw metadata input; a larger single record runs alone. These bound
-additional in-flight work, not total process memory or JSON expansion. Only the
-coordinator releases mapped prefixes after all tasks and borrowed records join.
-Stored-data failures cancel new work; all tasks join before typed recovery reuses
-the existing query. Observed model/resource errors cannot be hidden by a peer's
-cache-corruption error. Validation, encoding, scanning, ranking and source verification do
-not overlap their compute pools. Bekko and uncached document encoding retain
-their existing paths; no async runtime, persistent pool or larger budget is added.
-
-Local attention uses AVX2 across independent value dimensions when available,
-keeping accumulators in registers across keys. Each dimension retains the
-original key-wise accumulation and final division; dot-product reduction,
-softmax and attention windows are unchanged. The native build disables fused
-multiply-add contraction and fast-math, and the original value loop remains the
-fallback without AVX2. This does not add a Session, scratch matrix or compute pool.
-
-The fixed native pool uses at most four computing threads including the caller,
-inter-op=1 and no spinning. Owned `rg --files` discovery is explicitly serial,
-so it does not silently add ripgrep's default worker pool; native workers are
-asleep during source verification. Shared discovery waits on stdout/stderr and,
-on supported Linux kernels, the owned child pidfd; cancellation checks remain
-bounded to 5ms. The listener waits for socket/state readiness and the actual idle
-deadline rather than fixed polling ticks. Neither path creates a compute pool.
-ORT must be built with
-`onnxruntime_USE_TELEMETRY=OFF`; the default OneDS telemetry backend creates an
-unneeded process-lifetime SDK worker independently of the computing pool.
-
-## Query diagnostics
-
-`SGREP_STAGE_TIMINGS_PATH` adds observed work counters to the existing stage
-report. Query calls/tokens are separate from document chunks/windows/input
-tokens. `scored_document_tokens` counts scored representation rows: one aggregate
-vector per Bekko chunk, selected 48D token rows for LateOn. A scope hit has zero
-document encodes but still counts every scored chunk/token row. Every successful
-search enforces `semantic_scored_chunks == scope_chunks + supplied_extra_chunks`.
-For pure stdin the base scope is zero and deduplicated inputs are the extra scope.
-
-`SGREP_RETRIEVAL_TRACE_PATH` is opt-in profiling output, not a latency oracle.
-It records raw scores/identities for all scored chunks, the base scope's actual
-BM25/semantic Top200, supplied/exact candidate additions, their union and the
-final result IDs. Stdin has no discovery lanes and its union is all input chunks.
-The original 75/25 fusion, exact prioritization, stable ordering and containment
-rules are unchanged. The trace streams identities without retaining source text
-and is atomically published only after source verification. Put diagnostics
-outside the searched scope; disable retrieval tracing for normal timing samples.
-These observations support evaluation but are not independent quality labels or
-proof that the complete P6 resource/quality gates have passed.
-
-## Build and runtime layout
-
-Rust requires the declared toolchain minimum in `Cargo.toml`. Direct build:
+From this directory, use the Rust toolchain declared in `Cargo.toml` and absolute
+`BUILD_ROOT`, `ORT_SOURCE` and `ORT_BUILD` paths:
 
 ```sh
 CARGO_TARGET_DIR="$BUILD_ROOT/rust" cargo build --release --locked --manifest-path Cargo.toml
@@ -289,26 +162,35 @@ cmake --build "$BUILD_ROOT/native" --parallel 4
 cmake --install "$BUILD_ROOT/native" --prefix "$BUILD_ROOT/runtime-stage"
 ```
 
-`ORT_SOURCE` is the pinned `402979ac1bef89dcd55add41eaa7277c407599eb` checkout,
-with the owned patch applied. `ORT_BUILD` is its reduced non-minimal CPU `Release`
-configuration with telemetry disabled, exporting the private symbols in
-`native/ort-extra-symbols.txt`.
-An arbitrary system ORT is not interchangeable with this backend.
+`ORT_SOURCE` must be commit `402979ac1bef89dcd55add41eaa7277c407599eb` with the
+owned patches applied. `ORT_BUILD` is its reduced non-minimal CPU `Release` build,
+with `onnxruntime_USE_TELEMETRY=OFF` and the exports in
+[native/ort-extra-symbols.txt](native/ort-extra-symbols.txt). A system ORT is not
+interchangeable; telemetry otherwise adds a process-lifetime SDK worker.
 
-Stage the native library through CMake rather than copying its build-tree `.so`:
-installation rewrites its dependency search path to `$ORIGIN` only, removing the
-development ORT fallback. The command above stages only the native library inside
-the build area; it does not install or activate Metis. The runtime bundle also needs
-the pinned reduced ORT library and its SONAME symlinks beside it, the CLI and model
-assets. A missing sibling ORT must not silently load one from the development tree.
+Stage native libraries through CMake: installation sets `$ORIGIN`-only RPATH,
+unlike copying the build-tree `.so`. Supply the CLI, pinned sibling ORT and assets
+separately to complete the bundle; missing siblings must not load development
+fallbacks. These commands stage a library, not install or activate Metis.
 
-Stage ABI2 and the manifest2 FP16 table as one prepared bundle; an older installed
-bundle is not upgraded by changing a filename or reinterpreting FP32 bytes.
-Preparation remains offline; no converter or extra Python dependency runs in
-queries. Original downloads and prior prepared assets remain immutable.
+## Diagnostics and evidence
 
-Runtime uses `assets.json`, `bin/sgrep`, `lib/libsgrep_cpu.so`, its sibling ORT library and prepared
-`models/bekko128` / `models/lateon-edge` assets. `SGREP_RUNTIME_DIR` selects that
-layout explicitly. Original model downloads are not directly runnable artifacts.
-No model weights, binaries, build outputs, Python reference environments,
-verification fixtures or comparison scripts are stored in this source directory.
+| Environment variable | Output |
+| --- | --- |
+| `SGREP_STAGE_TIMINGS_PATH` | Cache/phases and separate query/document/work counters |
+| `SGREP_SERVICE_INFO_PATH` | Queue/execution times, service PID and model/native counters |
+| `SGREP_RETRIEVAL_TRACE_PATH` | Raw identities/scores, BM25/semantic Top200, candidate union and final IDs |
+
+A cache hit has zero document encodes but still scores every scope chunk;
+`semantic_scored_chunks == scope_chunks + supplied_extra_chunks` (stdin's base
+scope is zero). Scored token rows mean one vector per Bekko chunk or selected
+48D LateOn rows. Traces publish only after source verification; keep diagnostics
+outside the searched scope and disable tracing for normal latency measurements.
+Counters/traces are not quality labels, cold-page evidence or memory qualification.
+
+Plans, benchmarks, raw results and comparison fixtures belong in repository
+`.work/`, not this source tree. Keep bundle identity/numerical admission in
+`manifests/runtime.lock.json` and `manifests/quality-gates.json` alongside the
+staged runtime. The development catalog is an unpublished fixture; public release
+requires a real prepared-artifact revision. Qualification applies to the pinned
+candidate, host and execution mode, not other bundles or concurrency.
