@@ -11,7 +11,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
     os::{
-        fd::AsRawFd,
+        fd::{AsRawFd, FromRawFd},
         unix::{
             fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
             net::{UnixListener, UnixStream},
@@ -546,7 +546,7 @@ fn disconnected(stream: &mut UnixStream) -> std::io::Result<bool> {
         Err(e) => Err(e),
     }
 }
-fn serve() -> Result<()> {
+fn serve(mut startup: Option<UnixStream>) -> Result<()> {
     let paths = Paths::new()?;
     let lock = paths.file("server.lock")?;
     lock.try_lock()?;
@@ -586,6 +586,15 @@ fn serve() -> Result<()> {
                 .name("semantic-request".into())
                 .spawn(move || s.worker())?,
         );
+    }
+    // The startup FD is a one-shot parent capability, not a replacement for the
+    // authenticated protocol2 greeting. Models remain lazy at this boundary.
+    if let Some(mut notification) = startup.take() {
+        // stdout BrokenPipe is a successful CLI consumer exit, but this control
+        // channel must remain a startup failure rather than using that mapping.
+        notification
+            .write_all(b"R")
+            .map_err(|e| format!("semantic startup notification failed: {e}"))?;
     }
     let mut connections: Vec<Connection> = Vec::new();
     loop {
@@ -704,6 +713,7 @@ fn connect(start: bool) -> Result<UnixStream> {
     }
     let lifetime = paths.file("server.lock")?;
     let mut child: Option<std::process::Child> = None;
+    let mut startup: Option<UnixStream> = None;
     loop {
         if let Ok(stream) = ready(&paths) {
             return Ok(stream);
@@ -718,9 +728,13 @@ fn connect(start: bool) -> Result<UnixStream> {
                         .mode(0o600)
                         .custom_flags(libc::O_NOFOLLOW)
                         .open(paths.root.join("service.log"))?;
+                    let (parent_ready, child_ready) = UnixStream::pair()?;
+                    parent_ready.set_nonblocking(true)?;
+                    let fd = child_ready.as_raw_fd();
                     let mut command = Command::new(std::env::current_exe()?);
                     command
-                        .args(["--service-control", "serve"])
+                        .args(["--service-control", "serve", "--notify-fd"])
+                        .arg(fd.to_string())
                         .stdin(Stdio::null())
                         .stdout(Stdio::null())
                         .stderr(log);
@@ -728,15 +742,22 @@ fn connect(start: bool) -> Result<UnixStream> {
                         command.env_remove(key);
                     }
                     unsafe {
-                        command.pre_exec(|| {
+                        command.pre_exec(move || {
                             if libc::setsid() < 0 {
-                                Err(std::io::Error::last_os_error())
-                            } else {
-                                Ok(())
+                                return Err(std::io::Error::last_os_error());
                             }
+                            let flags = libc::fcntl(fd, libc::F_GETFD);
+                            if flags < 0
+                                || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                            {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            Ok(())
                         });
                     }
                     child = Some(command.spawn()?);
+                    drop(child_ready);
+                    startup = Some(parent_ready);
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {}
                 Err(e) => return Err(e.into()),
@@ -753,7 +774,28 @@ fn connect(start: bool) -> Result<UnixStream> {
         if Instant::now() >= deadline {
             return Err("semantic service did not handshake; drain/restart an incompatible service; no second model process started".into());
         }
-        thread::sleep(Duration::from_millis(10));
+        if let Some(mut notification) = startup.take() {
+            loop {
+                crate::readiness::wait(
+                    &[notification.as_raw_fd()],
+                    Some(deadline.saturating_duration_since(Instant::now())),
+                )?;
+                if Instant::now() >= deadline {
+                    return Err("semantic startup notification deadline".into());
+                }
+                let mut byte = [0u8; 1];
+                match notification.read(&mut byte) {
+                    Ok(1) if byte[0] == b'R' => break,
+                    Ok(_) => return Err("semantic startup notification closed or invalid; inspect private service.log".into()),
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock) => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        } else {
+            // An independently started/draining owner still controls server.lock.
+            // This fallback never starts another Session or resends a search.
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 pub(crate) fn client(args: &Args) -> Result<(String, String, u8)> {
@@ -799,7 +841,33 @@ pub(crate) fn client(args: &Args) -> Result<(String, String, u8)> {
 }
 pub(crate) fn control() -> Result<()> {
     match std::env::args().nth(2).as_deref() {
-        Some("serve") => serve(),
+        Some("serve") => {
+            let notification = match (
+                std::env::args().nth(3),
+                std::env::args().nth(4),
+                std::env::args().nth(5),
+            ) {
+                (None, None, None) => None,
+                (Some(flag), Some(raw), None) if flag == "--notify-fd" => {
+                    let fd: i32 = raw.parse()?;
+                    if fd <= 2 {
+                        return Err("invalid startup notification descriptor".into());
+                    }
+                    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+                    if flags < 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                    let stream = unsafe { UnixStream::from_raw_fd(fd) };
+                    peer(&stream)?;
+                    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                    Some(stream)
+                }
+                _ => return Err("invalid private startup notification arguments".into()),
+            };
+            serve(notification)
+        }
         Some(command @ ("status" | "stop")) => {
             let mut stream = connect(false)?;
             stream.set_read_timeout(Some(Duration::from_secs(5)))?;

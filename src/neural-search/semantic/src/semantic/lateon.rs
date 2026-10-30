@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::{
     collections::HashSet,
     fs::File,
+    io::BufReader,
     path::{Path, PathBuf},
 };
 // This prepared asset is BPE. Avoid ModelWrapper's dynamic JSON dispatch while
@@ -43,7 +44,8 @@ pub struct Encoder {
 impl Encoder {
     pub fn open(model: &Path, library: &Path) -> Result<Self> {
         let manifest_path = model.join("manifest.json");
-        let config: Manifest = serde_json::from_reader(File::open(&manifest_path)?)?;
+        let config: Manifest =
+            serde_json::from_reader(BufReader::new(File::open(&manifest_path)?))?;
         if config.graph_format != "ort"
             || config.backbone_dtype != "float32"
             || config.embedding_dtype != "float32"

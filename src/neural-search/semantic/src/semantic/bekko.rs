@@ -2,8 +2,16 @@ use crate::Result;
 use half::f16;
 use memmap2::Mmap;
 use serde::Deserialize;
-use std::{fs::File, path::Path};
-use tokenizers::Tokenizer;
+use std::{fs::File, io::BufReader, path::Path};
+// This prepared vocabulary is WordPiece. Fixed dispatch avoids ModelWrapper's
+// intermediate JSON tree without changing the tokenizer's other components.
+type Tokenizer = tokenizers::TokenizerImpl<
+    tokenizers::models::wordpiece::WordPiece,
+    tokenizers::normalizers::NormalizerWrapper,
+    tokenizers::pre_tokenizers::PreTokenizerWrapper,
+    tokenizers::processors::PostProcessorWrapper,
+    tokenizers::decoders::DecoderWrapper,
+>;
 
 pub const DIM: usize = 128;
 const ROWS: usize = 200_000;
@@ -33,7 +41,7 @@ pub struct Encoder {
 impl Encoder {
     pub fn open(directory: &Path) -> Result<Self> {
         let manifest: Manifest =
-            serde_json::from_reader(File::open(directory.join("manifest.json"))?)?;
+            serde_json::from_reader(BufReader::new(File::open(directory.join("manifest.json"))?))?;
         if manifest.format_version != 1
             || manifest.model != "bekko_static_128"
             || manifest.revision != REVISION

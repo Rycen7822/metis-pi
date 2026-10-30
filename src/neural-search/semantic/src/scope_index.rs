@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, BufReader, Read, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
 };
@@ -119,7 +119,7 @@ fn artifact(assets: &Cache, kind: Kind) -> Result<serde_json::Value> {
     };
     Ok(
         serde_json::json!({"contract":CONTRACT,"source_policy":"lf-crlf-cr-v1","scope_codec":"zstd-v1",
-        "manifest":serde_json::from_reader::<_,serde_json::Value>(File::open(assets.model_directory(model)?.join("manifest.json"))?)?}),
+        "manifest":serde_json::from_reader::<_,serde_json::Value>(BufReader::new(File::open(assets.model_directory(model)?.join("manifest.json"))?))?}),
     )
 }
 #[derive(Serialize, Deserialize)]

@@ -28,6 +28,14 @@ served by old code or replaced with a second model process. Use
 `sgrep --service-control status` and `sgrep --service-control stop` to inspect or
 drain it. There is no system service installation or public TCP listener.
 
+A client that spawns the service waits on a one-shot inherited Unix stream,
+then still verifies the ordinary peer and Ready greeting before submitting a
+search. The notification means the listener and workers are ready, not that
+models have been preloaded. Its descriptor is restored to close-on-exec and
+closed after delivery; control-channel errors are not treated as successful
+stdout consumer exits. Startup-lock contention and independently started or
+draining owners retain bounded retry waits.
+
 At most three searches execute; each uses the existing at-most-four-thread
 compute budget. Additional requests enter a bounded FIFO with connection
 backpressure. Single-session LateOn encoding is serialized on its owning thread;
@@ -53,6 +61,12 @@ not the normal host protocol. Shared mode rejects stdin, rg-json, fresh-assets
 and explicit cache-dir modes; those keep their original standalone behavior.
 Single-CLI resource evidence below does not automatically qualify three active
 requests or long-lived model memory; shared-service evidence is separate.
+
+Prepared tokenizers use their fixed model types (LateOn BPE, Bekko WordPiece)
+without changing normalization, pre/post-processing, decoding or special-token
+behavior. Catalog, receipt and manifest JSON reads are buffered; existing size
+limits, asset validation and receipt recovery remain in force. This does not
+introduce prewarming, another Session or a new model/index format.
 
 ## Corpus cache
 

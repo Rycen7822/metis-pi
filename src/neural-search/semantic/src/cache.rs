@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -97,7 +97,7 @@ impl Catalog {
         if file.metadata()?.len() > 64 << 10 {
             return Err("ARTIFACT_MISMATCH: oversized asset catalog".into());
         }
-        let catalog: Self = serde_json::from_reader(file)?;
+        let catalog: Self = serde_json::from_reader(BufReader::new(file))?;
         let parts: Vec<_> = catalog.repository.split('/').collect();
         if catalog.format_version != 1
             || !hex(&catalog.revision, 40)
@@ -328,7 +328,9 @@ fn verified(directory: &Path, assets: &ModelAssets) -> Result<bool> {
     };
     let receipt = File::open(directory.join(".verified.json"))
         .ok()
-        .and_then(|file| serde_json::from_reader::<_, Receipt>(file.take(64 << 10)).ok());
+        .and_then(|file| {
+            serde_json::from_reader::<_, Receipt>(BufReader::new(file.take(64 << 10))).ok()
+        });
     if receipt.as_ref() == Some(&before) {
         return Ok(true);
     }
