@@ -24,7 +24,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-const PROTOCOL: u8 = 1;
+const PROTOCOL: u8 = 2;
 const ACTIVE: usize = 3;
 const QUEUED: usize = 32;
 const REQUEST_BYTES: usize = 1 << 20;
@@ -46,6 +46,13 @@ const AMBIENT: &[&str] = &[
     "RAYON_NUM_THREADS",
     "OMP_NUM_THREADS",
 ];
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Ready {
+    protocol: u8,
+    pid: u32,
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Identity {
@@ -77,8 +84,8 @@ enum Message {
         timeout_ms: u64,
         idle_seconds: u64,
     },
-    Status,
-    Stop,
+    Status {},
+    Stop {},
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -332,14 +339,24 @@ impl Server {
         peer(&stream)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        // A connected pathname is not proof that a crashed listener can serve.
+        // Greet before accepting any search so startup retries cannot replay work.
+        write_frame(
+            &mut stream,
+            &Ready {
+                protocol: PROTOCOL,
+                pid: std::process::id(),
+            },
+            256,
+        )?;
         let message: Message = read_frame(&mut stream, REQUEST_BYTES)?;
         let mut delivery = None;
         let reply = match message {
-            Message::Status => Response {
+            Message::Status {} => Response {
                 service: self.stats(),
                 ..Response::default()
             },
-            Message::Stop => {
+            Message::Stop {} => {
                 self.state
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -598,64 +615,79 @@ fn serve() -> Result<()> {
     drop(lock);
     Ok(())
 }
+fn ready(paths: &Paths) -> Result<UnixStream> {
+    let mut stream = UnixStream::connect(&paths.socket)?;
+    peer(&stream)?;
+    stream.set_read_timeout(Some(Duration::from_millis(250)))?;
+    let hello: Ready = read_frame(&mut stream, 256)?;
+    if hello.protocol != PROTOCOL || hello.pid == 0 {
+        return Err(
+            "SERVICE_VERSION_MISMATCH: invalid service greeting; drain the old service".into(),
+        );
+    }
+    Ok(stream)
+}
 fn connect(start: bool) -> Result<UnixStream> {
     let paths = Paths::new()?;
-    if let Ok(s) = UnixStream::connect(&paths.socket) {
-        peer(&s)?;
-        return Ok(s);
+    if let Ok(stream) = ready(&paths) {
+        return Ok(stream);
     }
     if !start {
-        return Err("semantic service is not running".into());
+        return Err("semantic service is not running or ready".into());
     }
-    let gate = paths.file("start.lock")?;
-    gate.lock()?;
-    if let Ok(s) = UnixStream::connect(&paths.socket) {
-        peer(&s)?;
-        return Ok(s);
-    }
-    // Check the real lifetime lock before spawning; a live but not-yet-listening
-    // daemon is never replaced by a second model process.
-    let lifetime = paths.file("server.lock")?;
-    let mut child = match lifetime.try_lock() {
-        Ok(()) => {
-            lifetime.unlock()?;
-            let log = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(paths.root.join("service.log"))?;
-            let mut command = Command::new(std::env::current_exe()?);
-            command
-                .args(["--service-control", "serve"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(log);
-            for &key in request::VARIABLES {
-                command.env_remove(key);
-            } // Never retain a request's output paths/policy.
-            unsafe {
-                command.pre_exec(|| {
-                    if libc::setsid() < 0 {
-                        Err(std::io::Error::last_os_error())
-                    } else {
-                        Ok(())
-                    }
-                });
-            }
-            Some(command.spawn()?)
-        }
-        Err(std::fs::TryLockError::WouldBlock) => None,
-        Err(e) => return Err(e.into()),
-    };
     let deadline = Instant::now() + Duration::from_secs(5);
+    let gate = paths.file("start.lock")?;
     loop {
-        if let Ok(s) = UnixStream::connect(&paths.socket) {
-            peer(&s)?;
-            return Ok(s);
+        match gate.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10))
+            }
+            Err(e) => return Err(e.into()),
         }
-        if let Some(child) = child.as_mut() {
-            if let Some(status) = child.try_wait()? {
+    }
+    let lifetime = paths.file("server.lock")?;
+    let mut child: Option<std::process::Child> = None;
+    loop {
+        if let Ok(stream) = ready(&paths) {
+            return Ok(stream);
+        }
+        if child.is_none() {
+            match lifetime.try_lock() {
+                Ok(()) => {
+                    lifetime.unlock()?;
+                    let log = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .mode(0o600)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(paths.root.join("service.log"))?;
+                    let mut command = Command::new(std::env::current_exe()?);
+                    command
+                        .args(["--service-control", "serve"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(log);
+                    for &key in request::VARIABLES {
+                        command.env_remove(key);
+                    }
+                    unsafe {
+                        command.pre_exec(|| {
+                            if libc::setsid() < 0 {
+                                Err(std::io::Error::last_os_error())
+                            } else {
+                                Ok(())
+                            }
+                        });
+                    }
+                    child = Some(command.spawn()?);
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if let Some(process) = child.as_mut() {
+            if let Some(status) = process.try_wait()? {
                 return Err(format!(
                     "semantic service startup failed ({status}); inspect private service.log"
                 )
@@ -663,9 +695,7 @@ fn connect(start: bool) -> Result<UnixStream> {
             }
         }
         if Instant::now() >= deadline {
-            return Err(
-                "semantic service did not become ready; no duplicate model process started".into(),
-            );
+            return Err("semantic service did not handshake; drain/restart an incompatible service; no second model process started".into());
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -720,9 +750,9 @@ pub(crate) fn control() -> Result<()> {
             write_frame(
                 &mut stream,
                 &if command == "status" {
-                    Message::Status
+                    Message::Status {}
                 } else {
-                    Message::Stop
+                    Message::Stop {}
                 },
                 REQUEST_BYTES,
             )?;
