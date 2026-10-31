@@ -14,10 +14,25 @@ and the ported source files. The semantic runtime targets Linux x64.
 | `Cargo.toml` / `Cargo.lock` | Rust toolchain requirements and dependency inputs |
 | [Parent component](../METIS.md) | Pi action, TOML configuration, CLI/JSON adaptation and cancellation |
 
+### Code boundaries
+
+- `paths.rs`: lossless filesystem byte identities, shared by discovery and storage.
+- `source_snapshot.rs`: discovery and complete content proofs; `corpus.rs` reconstructs source chunks.
+- `ranking.rs`: lexical terms, BM25, stable Top200-lane union and 25%/75% fusion.
+  The CLI translates its arguments into explicit `RankingOptions` at the boundary.
+- `record.rs` / `record/codec.rs`: one stored record, its byte layout and lossless FP16 codec.
+  `scope_index/` owns scope validation/scanning/reuse; `ScopeIndexWriter` owns admission and publication.
+- `semantic/`: inference contracts. LateOn vectors are 48-wide, with query/window
+  limits of 256/2048 tokens including specials; Bekko vectors are 128-wide.
+  Stable model tags, header layouts and separate budgets are documented beside their definitions.
+
+### Search behavior
+
 `--model auto` selects Bekko128 for prose-only candidates and LateOn-Code-edge
 for code/mixed scopes. Complete-scope scoring retains sgrep's 75/25 fusion,
 exact-match priority and stable ordering; LateOn consumes all token windows with
-Q4/D64 MaxSim. Shared encoding reuses the request query/asset descriptors; score-only
+tiled MaxSim. Native Q4/D64 names mean four query rows per tile and a 48-wide
+vector padded to 64 lanes, **not 4-bit precision**. Shared encoding reuses the request query/asset descriptors; score-only
 moves its source strings and emits no window payloads. A failed writer stops block
 delivery without stopping or replaying encoding. There is no ANN, FFF prefilter or frecency adjustment. The sibling
 `../engine/` separately owns FFF path/content search.

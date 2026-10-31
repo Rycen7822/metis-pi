@@ -2,7 +2,7 @@
 //! and query-relevant statistics, not corpus text, full word maps or embeddings.
 use crate::{
     Args, Chunk, Result,
-    scope_index::{Manifest, SourceChanged, Stamp},
+    source_snapshot::{SourceChanged, SourceFileDigest, SourceSnapshot},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -10,15 +10,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const METADATA_CAP: usize = 128 << 20;
+// Request-local corpus metadata, separate from result and disk-cache limits.
+const MAX_CORPUS_METADATA_BYTES: usize = 128 * 1024 * 1024;
+// Allow for allocator and lookup-map bookkeeping in addition to stored fields.
+const FILE_ENTRY_OVERHEAD_BYTES: usize = 128;
+const CHUNK_ENTRY_OVERHEAD_BYTES: usize = 96;
 
-pub struct Source {
+pub struct SourceContents {
     pub text: String,
     starts: Vec<usize>,
     pub digest: [u8; 32],
     pub binary: bool,
 }
-impl Source {
+impl SourceContents {
     pub fn read(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
         let digest = Sha256::digest(&bytes).into();
@@ -73,13 +77,13 @@ impl Source {
         self.text.capacity() + self.starts.capacity() * std::mem::size_of::<usize>()
     }
 }
-struct File {
+struct SourceFileEntry {
     path: PathBuf,
     display: String,
     digest: [u8; 32],
-    in_manifest: bool,
+    in_snapshot: bool,
 }
-struct Document {
+struct ChunkEntry {
     file: usize,
     start: usize,
     end: usize,
@@ -89,14 +93,14 @@ struct Document {
     exact: bool,
 }
 pub struct Corpus {
-    files: Vec<File>,
-    documents: Vec<Document>,
+    files: Vec<SourceFileEntry>,
+    documents: Vec<ChunkEntry>,
     pub corpus_len: usize,
     pub supplied: Vec<usize>,
     pub prose_only: bool,
     pub metadata_bytes: usize,
     pub source_peak_bytes: usize,
-    pub manifest: Option<Manifest>,
+    pub source_snapshot: Option<SourceSnapshot>,
 }
 impl Corpus {
     pub fn scan(
@@ -113,11 +117,11 @@ impl Corpus {
             prose_only: true,
             metadata_bytes: 0,
             source_peak_bytes: 0,
-            manifest: None,
+            source_snapshot: None,
         };
         let mut files = HashMap::new();
         let mut locations = HashMap::new();
-        let pattern = crate::identifier_pattern(&args.query)?;
+        let pattern = crate::ranking::exact_identifier_pattern(&args.query)?;
         if args.stdin {
             crate::rg_input::visit(Path::new("-"), scope, |path, digest, chunk| {
                 corpus.add(
@@ -135,26 +139,26 @@ impl Corpus {
             })?;
             corpus.corpus_len = corpus.documents.len();
         } else {
-            let (root, names) = crate::source_files(scope, filter)?;
-            let mut manifest = Manifest {
+            let (root, names) = crate::source_snapshot::discover_files(scope, filter)?;
+            let mut source_snapshot = SourceSnapshot {
                 scope: scope.as_os_str().as_encoded_bytes().to_vec(),
                 files: Vec::with_capacity(names.len()),
             };
             corpus.budget(
-                manifest.scope.capacity()
-                    + manifest.files.capacity() * std::mem::size_of::<Stamp>(),
+                source_snapshot.scope.capacity()
+                    + source_snapshot.files.capacity() * std::mem::size_of::<SourceFileDigest>(),
             )?;
             for name in names {
                 crate::request::check()?;
                 let relative = name.strip_prefix(".").unwrap_or(&name);
                 let path = root.join(relative);
-                let source = Source::read(&path).map_err(source_read_error)?;
-                let stamp = Stamp {
+                let source = SourceContents::read(&path).map_err(source_read_error)?;
+                let stamp = SourceFileDigest {
                     path: name.as_os_str().as_encoded_bytes().to_vec(),
                     digest: source.digest,
                 };
                 corpus.budget(stamp.path.capacity())?;
-                manifest.files.push(stamp);
+                source_snapshot.files.push(stamp);
                 if source.binary {
                     continue;
                 }
@@ -185,7 +189,7 @@ impl Corpus {
                     )?;
                 }
             }
-            corpus.manifest = Some(manifest);
+            corpus.source_snapshot = Some(source_snapshot);
             corpus.corpus_len = corpus.documents.len();
             if let Some(input) = &args.rg_json {
                 crate::rg_input::visit(input, scope, |path, digest, chunk| {
@@ -214,7 +218,7 @@ impl Corpus {
             .metadata_bytes
             .checked_add(bytes)
             .ok_or("RAM_BUDGET: source metadata overflow")?;
-        if self.metadata_bytes > METADATA_CAP {
+        if self.metadata_bytes > MAX_CORPUS_METADATA_BYTES {
             return Err(
                 "RAM_BUDGET: source metadata exceeds 128MiB; no partial scope returned".into(),
             );
@@ -226,7 +230,7 @@ impl Corpus {
         &mut self,
         path: PathBuf,
         digest: [u8; 32],
-        in_manifest: bool,
+        in_snapshot: bool,
         provided: bool,
         chunk: Chunk,
         supplied: bool,
@@ -239,18 +243,21 @@ impl Corpus {
             if self.files[id].digest != digest {
                 return Err(SourceChanged.into());
             }
-            self.files[id].in_manifest |= in_manifest;
+            self.files[id].in_snapshot |= in_snapshot;
             id
         } else {
             self.budget(
-                std::mem::size_of::<File>() + path.as_os_str().len() * 2 + chunk.path.len() + 128,
+                std::mem::size_of::<SourceFileEntry>()
+                    + path.as_os_str().len() * 2
+                    + chunk.path.len()
+                    + FILE_ENTRY_OVERHEAD_BYTES,
             )?;
             let id = self.files.len();
-            self.files.push(File {
+            self.files.push(SourceFileEntry {
                 path: path.clone(),
                 display: chunk.path.clone(),
                 digest,
-                in_manifest,
+                in_snapshot,
             });
             files.insert(path, id);
             id
@@ -269,16 +276,16 @@ impl Corpus {
             .filter_map(|(id, term)| chunk.counts.get(term).map(|&count| (id, count)))
             .collect();
         self.budget(
-            std::mem::size_of::<Document>()
+            std::mem::size_of::<ChunkEntry>()
                 + matches.capacity() * std::mem::size_of::<(usize, usize)>()
                 + chunk.path.len()
-                + 96,
+                + CHUNK_ENTRY_OVERHEAD_BYTES,
         )?;
         let exact = pattern
             .as_ref()
             .is_some_and(|(pattern, _)| pattern.is_match(&chunk.content));
         let document = self.documents.len();
-        self.documents.push(Document {
+        self.documents.push(ChunkEntry {
             file,
             start: chunk.start,
             end: chunk.end,
@@ -319,7 +326,7 @@ impl Corpus {
         let average = (total as f64 / self.corpus_len as f64).max(1.);
         let idf: Vec<_> = frequencies
             .iter()
-            .map(|&df| crate::inverse_document_frequency(self.corpus_len, df))
+            .map(|&df| crate::ranking::inverse_document_frequency(self.corpus_len, df))
             .collect();
         self.documents
             .iter()
@@ -327,21 +334,23 @@ impl Corpus {
                 row.matches
                     .iter()
                     .filter(|(term, _)| frequencies[*term] > 0)
-                    .map(|&(term, count)| crate::term_score(idf[term], count, row.length, average))
+                    .map(|&(term, count)| {
+                        crate::ranking::bm25_term_score(idf[term], count, row.length, average)
+                    })
                     .sum()
             })
             .collect()
     }
     pub fn visit(&self, mut consume: impl FnMut(Chunk) -> Result<()>) -> Result<usize> {
-        let mut reader = Reader::default();
+        let mut reader = ChunkReader::default();
         for i in 0..self.len() {
             consume(reader.chunk(self, i)?)?;
         }
         Ok(reader.peak)
     }
     pub fn verify_provided(&self) -> Result<()> {
-        for file in self.files.iter().filter(|f| !f.in_manifest) {
-            if crate::scope_index::file_digest(&file.path).map_or(true, |d| d != file.digest) {
+        for file in self.files.iter().filter(|f| !f.in_snapshot) {
+            if crate::source_snapshot::file_sha256(&file.path).map_or(true, |d| d != file.digest) {
                 return Err(SourceChanged.into());
             }
         }
@@ -359,11 +368,11 @@ fn source_read_error(error: crate::Error) -> crate::Error {
     }
 }
 #[derive(Default)]
-pub struct Reader {
-    view: Option<(usize, bool, Source)>,
+pub struct ChunkReader {
+    view: Option<(usize, bool, SourceContents)>,
     pub peak: usize,
 }
-impl Reader {
+impl ChunkReader {
     pub fn chunk(&mut self, corpus: &Corpus, index: usize) -> Result<Chunk> {
         let doc = corpus
             .documents
@@ -376,7 +385,7 @@ impl Reader {
             .is_some_and(|(id, provided, _)| *id == doc.file && *provided == doc.provided)
         {
             drop(self.view.take()); // never retain the previous file during load
-            let source = Source::read(&file.path).map_err(source_read_error)?;
+            let source = SourceContents::read(&file.path).map_err(source_read_error)?;
             if source.digest != file.digest || source.binary {
                 return Err(SourceChanged.into());
             }

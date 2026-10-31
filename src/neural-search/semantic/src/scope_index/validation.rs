@@ -1,6 +1,6 @@
 //! Layout validation and bounded metadata/DF fallback for legacy or wide scopes.
-use super::{HEADER, ScopeIndex, number, pages, parallel};
-use crate::{Result, index::codec::Decoder};
+use super::{RECORD_LOCATION_BYTES, SCOPE_HEADER_BYTES, ScopeIndex, pages, parallel, read_usize};
+use crate::{Result, record::codec::Decoder};
 use std::{
     collections::BTreeMap,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -16,15 +16,18 @@ struct Summary {
 }
 impl ScopeIndex {
     pub(super) fn validate_layout(&self) -> Result<()> {
-        let mut boundary = HEADER;
+        let mut boundary = SCOPE_HEADER_BYTES;
         for id in 0..self.count {
             crate::request::check()?;
-            let at = number(&self.map, self.record_table + id * 16)?;
-            let bytes = number(&self.map, self.record_table + id * 16 + 8)?;
+            let at = read_usize(&self.map, self.record_table + id * RECORD_LOCATION_BYTES)?;
+            let bytes = read_usize(
+                &self.map,
+                self.record_table + id * RECORD_LOCATION_BYTES + 8,
+            )?;
             if at != boundary || at.checked_add(bytes).is_none_or(|n| n > self.record_table) {
                 return Err("invalid record boundary table".into());
             }
-            if number(&self.map, at + 8)? != bytes {
+            if read_usize(&self.map, at + 8)? != bytes {
                 return Err("record length disagrees with scope table".into());
             }
             boundary = at + bytes;
@@ -96,7 +99,7 @@ impl ScopeIndex {
             let next_boundary = if end == self.count {
                 self.record_table
             } else {
-                number(&self.map, self.record_table + end * 16)?
+                read_usize(&self.map, self.record_table + end * RECORD_LOCATION_BYTES)?
             };
             let count = parallel::workers(
                 end - start,
@@ -189,7 +192,7 @@ impl ScopeIndex {
                         Err(next) => {
                             if error
                                 .as_ref()
-                                .is_none_or(|old| old.is::<crate::index::Corrupt>())
+                                .is_none_or(|old| old.is::<crate::record::CorruptRecord>())
                             {
                                 error = Some(next);
                             }
@@ -204,9 +207,9 @@ impl ScopeIndex {
             pages::release(
                 &self.map,
                 if start == 0 {
-                    HEADER
+                    SCOPE_HEADER_BYTES
                 } else {
-                    number(&self.map, self.record_table + start * 16)?
+                    read_usize(&self.map, self.record_table + start * RECORD_LOCATION_BYTES)?
                 },
                 next_boundary,
             )?;

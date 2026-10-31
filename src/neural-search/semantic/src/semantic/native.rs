@@ -1,3 +1,4 @@
+use super::CODE_EMBEDDING_DIMENSION;
 use crate::Result;
 use half::f16;
 use libloading::Library;
@@ -40,9 +41,16 @@ type Cancel = unsafe extern "C" fn(*mut c_void, u64) -> c_int;
 type Diagnostics = unsafe extern "C" fn(*mut c_void, *mut c_char, usize, *mut usize) -> c_int;
 type MaxSim = unsafe extern "C" fn(*const f32, usize, *const u16, usize, *mut f32) -> c_int;
 
+// Shared service admission is three searches, each with at most four compute lanes.
+const MAX_COMPUTING_THREADS: usize = 4;
+// Must match native/sgrep_cpu.h; model manifests require the strict ABI2 contract.
+const NATIVE_ABI_VERSION: u32 = 2;
+// Native execution scratch only, separate from the on-disk corpus cache budget.
+const NATIVE_SCRATCH_BYTES: u64 = 128 * 1024 * 1024;
+
 pub(crate) fn computing_threads() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get().min(4))
+        .map(|n| n.get().min(MAX_COMPUTING_THREADS))
         .unwrap_or(1)
 }
 
@@ -65,9 +73,9 @@ impl ScoringKernel {
     pub(super) fn update(&self, query: &[f32], document: &[f16], maxima: &mut [f32]) -> Result<()> {
         if query.is_empty()
             || document.is_empty()
-            || query.len() % 48 != 0
-            || document.len() % 48 != 0
-            || maxima.len() != query.len() / 48
+            || query.len() % CODE_EMBEDDING_DIMENSION != 0
+            || document.len() % CODE_EMBEDDING_DIMENSION != 0
+            || maxima.len() != query.len() / CODE_EMBEDDING_DIMENSION
         {
             return Err("invalid MaxSim shape".into());
         }
@@ -76,9 +84,9 @@ impl ScoringKernel {
         let status = unsafe {
             (self.update)(
                 query.as_ptr(),
-                query.len() / 48,
+                query.len() / CODE_EMBEDDING_DIMENSION,
                 document.as_ptr().cast(),
-                document.len() / 48,
+                document.len() / CODE_EMBEDDING_DIMENSION,
                 maxima.as_mut_ptr(),
             )
         };
@@ -133,10 +141,10 @@ impl Runtime {
         )?;
         let threads = computing_threads();
         let options = Options {
-            abi_version: 2,
+            abi_version: NATIVE_ABI_VERSION,
             manifest: manifest.as_ptr(),
             threads: threads as u32,
-            temp_cap: 128 << 20,
+            temp_cap: NATIVE_SCRATCH_BYTES,
             strict_artifact_contract: 1,
         };
         let status = unsafe { create(&options, &mut runtime.handle) };
@@ -156,7 +164,7 @@ impl Runtime {
             return Err("invalid encoder IDs/output mask".into());
         }
         let rows = mask.iter().filter(|m| **m != 0).count();
-        let mut vectors = vec![0.0; rows * 48];
+        let mut vectors = vec![0.0; rows * CODE_EMBEDDING_DIMENSION];
         let input = Input {
             ids: ids.as_ptr(),
             count: ids.len(),
@@ -191,7 +199,7 @@ impl Runtime {
             return Err(self.failure(status));
         }
         if output.rows != rows
-            || output.dimensions != 48
+            || output.dimensions != CODE_EMBEDDING_DIMENSION as u32
             || output.required != vectors.len()
             || vectors.iter().any(|v| !v.is_finite())
         {

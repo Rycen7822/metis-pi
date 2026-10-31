@@ -1,5 +1,5 @@
 //! Request-only query frequencies. Never retain decoded records or full counts.
-use crate::{Result, index::Record};
+use crate::{Result, record::Record};
 use std::collections::BTreeMap;
 
 const SCRATCH: usize = 1 << 20;
@@ -58,7 +58,7 @@ impl Statistics<'_> {
         let avg = (length as f64 / count.max(1) as f64).max(1.0);
         let idf: Vec<_> = df
             .into_iter()
-            .map(|df| crate::inverse_document_frequency(count, df))
+            .map(|df| crate::ranking::inverse_document_frequency(count, df))
             .collect();
         for (result, row) in output.iter_mut().zip(self.rows) {
             // Same sorted term order and Sum<f64> identity (including -0.0).
@@ -66,7 +66,7 @@ impl Statistics<'_> {
                 .iter()
                 .zip(&idf)
                 .filter(|(tf, _)| **tf > 0)
-                .map(|(&tf, &idf)| crate::term_score(idf, tf, row[0], avg))
+                .map(|(&tf, &idf)| crate::ranking::bm25_term_score(idf, tf, row[0], avg))
                 .sum();
         }
         Ok(())

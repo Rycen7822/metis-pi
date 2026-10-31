@@ -277,7 +277,7 @@ impl IndexCache {
             }
             serde_json::from_slice::<Vec<Vec<u8>>>(&bytes)?
                 .iter()
-                .map(|p| crate::filename(p))
+                .map(|p| crate::paths::path_from_bytes(p))
                 .collect()
         } else {
             Vec::new()
@@ -604,7 +604,7 @@ fn read_roots(ledger: &Path) -> Result<Vec<PathBuf>> {
     }
     Ok(serde_json::from_slice::<Vec<Vec<u8>>>(&bytes)?
         .iter()
-        .map(|p| crate::filename(p))
+        .map(|p| crate::paths::path_from_bytes(p))
         .collect())
 }
 

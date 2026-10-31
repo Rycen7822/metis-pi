@@ -1,12 +1,16 @@
 //! Lossless storage only. All sixteen FP16 bits survive; this is not quantization.
 //! A decoder owns at most one 2048x48 window and bounded metadata, never a scope.
-use crate::Result;
+use crate::{
+    Result,
+    semantic::{CODE_EMBEDDING_DIMENSION, MAX_CODE_WINDOW_TOKENS},
+};
 use half::f16;
 use std::{borrow::Cow, io};
 
-const MAX_METADATA: usize = 8 << 20;
-const MAX_VALUES: usize = 2048 * 48;
-const MAX_SCOPE_METADATA: usize = 128 << 20;
+// Separate bounds for one decoded record and the complete scope snapshot.
+const MAX_METADATA: usize = 8 * 1024 * 1024;
+const MAX_VALUES: usize = MAX_CODE_WINDOW_TOKENS * CODE_EMBEDDING_DIMENSION;
+const MAX_SCOPE_METADATA: usize = 128 * 1024 * 1024;
 
 /// Owned by one scope pass, not global or per-record. The buffers hold at most
 /// one validated window each (192 KiB of values, 96 KiB of exponent symbols),
@@ -85,8 +89,13 @@ pub(crate) fn metadata<'a>(
 
 /// Pack sign+mantissa as eleven exact bits; compress the five-bit exponent symbols.
 /// Row geometry makes the bitstream byte aligned. None means raw FP16 is smaller.
+// Lossless FP16: sign + ten fraction bits form an 11-bit symbol; the five
+// exponent bits are compressed separately. Eight symbols occupy 11 bytes.
 pub(crate) fn pack_code(values: &[f16]) -> Result<Option<Vec<u8>>> {
-    if values.is_empty() || values.len() > MAX_VALUES || values.len() % 48 != 0 {
+    if values.is_empty()
+        || values.len() > MAX_VALUES
+        || values.len() % CODE_EMBEDDING_DIMENSION != 0
+    {
         return Err(invalid("invalid lossless window geometry").into());
     }
     let mut packed = Vec::with_capacity(values.len() * 11 / 8);
@@ -121,7 +130,7 @@ pub(crate) fn code<'a>(
     count: usize,
     decoder: &'a mut Decoder,
 ) -> Result<&'a [f16]> {
-    if count == 0 || count > MAX_VALUES || count % 48 != 0 {
+    if count == 0 || count > MAX_VALUES || count % CODE_EMBEDDING_DIMENSION != 0 {
         return Err(invalid("invalid decoded window geometry").into());
     }
     if codec == 0 {

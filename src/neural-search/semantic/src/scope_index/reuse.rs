@@ -3,15 +3,15 @@
 use super::{MAGIC, Metadata, ScopeIndex};
 use crate::{
     Chunk, Result,
-    index::{Record, codec::Decoder},
-    semantic::Kind,
+    record::{Record, codec::Decoder},
+    semantic::ModelKind,
 };
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
 };
 
-pub(super) struct Reuse {
+pub(super) struct UnchangedRecords {
     previous: ScopeIndex,
     records: HashMap<String, Vec<(usize, usize, usize)>>,
     decoder: Decoder,
@@ -22,19 +22,19 @@ fn path_name(bytes: &[u8]) -> Option<&str> {
     path.strip_prefix(".").unwrap_or(path).to_str()
 }
 
-impl Reuse {
+impl UnchangedRecords {
     pub(super) fn new(previous: ScopeIndex, current: &Metadata) -> Result<Option<Self>> {
         if previous.map.get(..8) != Some(MAGIC)
-            || current.kind != super::kind_tag(Kind::Code)
+            || current.kind != ModelKind::Code.stored_tag()
             || previous.metadata.kind != current.kind
             || previous.metadata.artifact != current.artifact
-            || previous.metadata.manifest.scope != current.manifest.scope
+            || previous.metadata.source_snapshot.scope != current.source_snapshot.scope
         {
             return Ok(None);
         }
         let old: HashMap<_, _> = previous
             .metadata
-            .manifest
+            .source_snapshot
             .files
             .iter()
             .map(|stamp| (stamp.path.as_slice(), &stamp.digest))
@@ -42,8 +42,8 @@ impl Reuse {
         let mut names = HashMap::new();
         let mut eligible = HashSet::new();
         for (manifest, is_current) in [
-            (&previous.metadata.manifest, false),
-            (&current.manifest, true),
+            (&previous.metadata.source_snapshot, false),
+            (&current.source_snapshot, true),
         ] {
             let mut last = None;
             for stamp in &manifest.files {
@@ -76,7 +76,7 @@ impl Reuse {
             crate::request::check()?;
             let record = previous.record(id, &mut decoder)?;
             if eligible.contains(record.chunk.path.as_str()) {
-                if record.kind() != Kind::Code {
+                if record.kind() != ModelKind::Code {
                     return Ok(None);
                 }
                 records.entry(record.chunk.path).or_default().push((
@@ -107,7 +107,7 @@ impl Reuse {
             return Ok(None);
         };
         let record = self.previous.record(id, &mut self.decoder)?;
-        if record.kind() != Kind::Code || record.chunk.content != chunk.content {
+        if record.kind() != ModelKind::Code || record.chunk.content != chunk.content {
             return Ok(None);
         }
         Ok(Some((record, &mut self.decoder)))

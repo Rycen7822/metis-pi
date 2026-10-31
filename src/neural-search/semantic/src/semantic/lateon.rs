@@ -18,6 +18,12 @@ type Tokenizer = tokenizers::TokenizerImpl<
     tokenizers::decoders::DecoderWrapper,
 >;
 
+// LateOn-Code-edge exports 48-dimensional vectors for selected token rows.
+pub(crate) const TOKEN_EMBEDDING_DIMENSION: usize = 48;
+// Limits include the model's role/special tokens, not just source tokens.
+pub(crate) const MAX_QUERY_TOKENS: usize = 256;
+pub(crate) const MAX_WINDOW_TOKENS: usize = 2048;
+
 #[derive(Deserialize)]
 struct Manifest {
     format_version: u32,
@@ -56,8 +62,8 @@ impl Encoder {
             || config.backbone_dtype != "float32"
             || config.embedding_dtype != "float16"
             || config.embedding_file != "embedding_preln_f16.pack"
-            || config.query_length != 256
-            || config.document_length != 2048
+            || config.query_length != MAX_QUERY_TOKENS
+            || config.document_length != MAX_WINDOW_TOKENS
             || config.do_query_expansion
         {
             return Err(
@@ -118,7 +124,7 @@ impl Encoder {
     }
     pub fn query(&mut self, text: &str) -> Result<(Vec<f32>, usize)> {
         let (ids, mask) = self.tokenize(text, true)?;
-        if ids.len() > 256 {
+        if ids.len() > MAX_QUERY_TOKENS {
             return Err(super::QueryTooLong.into());
         }
         let values = self.runtime()?.encode(&ids, &mask, true)?;
@@ -134,7 +140,7 @@ impl Encoder {
         loop {
             let text = format!("{prefix}{}", &content[start..end]);
             let (ids, mask) = self.tokenize(&text, false)?;
-            if ids.len() <= 2048 {
+            if ids.len() <= MAX_WINDOW_TOKENS {
                 return Ok((end, ids, mask));
             }
             // Actual UTF-8 source ranges; no monotonic BPE-count assumption.
@@ -143,7 +149,7 @@ impl Encoder {
                 next -= 1;
             }
             if next == start {
-                if self.tokenize(prefix, false)?.0.len() > 2048 {
+                if self.tokenize(prefix, false)?.0.len() > MAX_WINDOW_TOKENS {
                     return Err(
                         "INVALID_INPUT: path/role prefix exceeds LateOn's document budget".into(),
                     );
@@ -154,11 +160,6 @@ impl Encoder {
             }
             end = next;
         }
-    }
-    #[cfg(test)]
-    pub fn score(&mut self, query: &[f32], path: &str, content: &str) -> Result<f64> {
-        self.score_to(query, path, content, None)
-            .map(|(score, _)| score)
     }
     pub(super) fn scoring_kernel(&self) -> Result<super::native::ScoringKernel> {
         Ok(self
@@ -184,7 +185,7 @@ impl Encoder {
         mut sink: Option<&mut super::EncodeSink<'_>>,
     ) -> Result<(f64, super::Work)> {
         let prefix = format!("{path}\n");
-        let mut maxima = vec![f32::NEG_INFINITY; query.len() / 48];
+        let mut maxima = vec![f32::NEG_INFINITY; query.len() / TOKEN_EMBEDDING_DIMENSION];
         let mut work = super::Work::default();
         let mut start = 0;
         loop {
@@ -196,7 +197,7 @@ impl Encoder {
                 .update_maxima(query, &rounded, &mut maxima)?;
             work.actual_encoded_windows += 1;
             work.actual_encoded_tokens += ids.len();
-            work.scored_document_tokens += rounded.len() / 48;
+            work.scored_document_tokens += rounded.len() / TOKEN_EMBEDDING_DIMENSION;
             if let Some(deliver) = sink.as_mut() {
                 if deliver(super::DocumentBlock::Code {
                     source: start..end,

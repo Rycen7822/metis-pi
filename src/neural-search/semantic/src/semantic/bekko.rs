@@ -13,7 +13,8 @@ type Tokenizer = tokenizers::TokenizerImpl<
     tokenizers::decoders::DecoderWrapper,
 >;
 
-pub const DIM: usize = 128;
+// Bekko-128 produces one fixed-width vector per text document or query.
+pub const EMBEDDING_DIMENSION: usize = 128;
 const ROWS: usize = 200_000;
 const REVISION: &str = "c18167b8f244c1bc6de21ce9b710bac8a29c4615";
 
@@ -46,7 +47,7 @@ impl Encoder {
             || manifest.model != "bekko_static_128"
             || manifest.revision != REVISION
             || manifest.rows != ROWS
-            || manifest.dimensions != DIM
+            || manifest.dimensions != EMBEDDING_DIMENSION
             || manifest.add_special_tokens
             || manifest.truncation
             || manifest.normalization_epsilon != 1e-12
@@ -54,7 +55,7 @@ impl Encoder {
             return Err("ARTIFACT_MISMATCH: unsupported Bekko manifest".into());
         }
         let file = File::open(directory.join("bekko128.pack"))?;
-        let expected_size = 64 + ROWS * DIM + ROWS * 4;
+        let expected_size = 64 + ROWS * EMBEDDING_DIMENSION + ROWS * 4;
         if file.metadata()?.len() != expected_size as u64 || manifest.pack_bytes != expected_size {
             return Err("ARTIFACT_MISMATCH: invalid Bekko pack size".into());
         }
@@ -63,11 +64,11 @@ impl Encoder {
         let map = unsafe { Mmap::map(&file)? };
         let u32_at = |at| u32::from_le_bytes(map[at..at + 4].try_into().unwrap());
         let u64_at = |at| u64::from_le_bytes(map[at..at + 8].try_into().unwrap());
-        let scales_offset = 64 + ROWS * DIM;
+        let scales_offset = 64 + ROWS * EMBEDDING_DIMENSION;
         if &map[..8] != b"SGRBK128"
             || u32_at(8) != 1
             || u32_at(12) != ROWS as u32
-            || u32_at(16) != DIM as u32
+            || u32_at(16) != EMBEDDING_DIMENSION as u32
             || u32_at(20) != 0
             || u64_at(24) != 64
             || u64_at(32) != scales_offset as u64
@@ -91,13 +92,17 @@ impl Encoder {
         })
     }
 
-    pub fn encode(&self, text: &str) -> Result<([f32; DIM], usize)> {
+    pub fn encode(&self, text: &str) -> Result<([f32; EMBEDDING_DIMENSION], usize)> {
         let ids = self.tokenizer.encode_fast(text, false)?;
         self.encode_ids(ids.get_ids(), self.use_avx2)
             .map(|(_, normalized)| (normalized, ids.len()))
     }
 
-    fn encode_ids(&self, ids: &[u32], use_avx2: bool) -> Result<([f32; DIM], [f32; DIM])> {
+    fn encode_ids(
+        &self,
+        ids: &[u32],
+        use_avx2: bool,
+    ) -> Result<([f32; EMBEDDING_DIMENSION], [f32; EMBEDDING_DIMENSION])> {
         let mut scales = Vec::with_capacity(ids.len());
         for &id in ids {
             if id as usize >= ROWS {
@@ -111,7 +116,7 @@ impl Encoder {
             scales.push(scale);
         }
         let table = &self.map[64..self.scales_offset];
-        let mut raw = [0.0; DIM];
+        let mut raw = [0.0; EMBEDDING_DIMENSION];
         #[cfg(target_arch = "x86_64")]
         if use_avx2 {
             // Rust's feature detector includes OSXSAVE/XCR0 validation.
@@ -143,9 +148,14 @@ impl Encoder {
     }
 }
 
-fn accumulate_scalar(table: &[u8], scales: &[f32], ids: &[u32], sum: &mut [f32; DIM]) {
+fn accumulate_scalar(
+    table: &[u8],
+    scales: &[f32],
+    ids: &[u32],
+    sum: &mut [f32; EMBEDDING_DIMENSION],
+) {
     for (&id, &scale) in ids.iter().zip(scales) {
-        let row = &table[id as usize * DIM..][..DIM];
+        let row = &table[id as usize * EMBEDDING_DIMENSION..][..EMBEDDING_DIMENSION];
         for (value, &weight) in sum.iter_mut().zip(row) {
             *value += (weight as i8 as f32) * scale;
         }
@@ -154,15 +164,22 @@ fn accumulate_scalar(table: &[u8], scales: &[f32], ids: &[u32], sum: &mut [f32; 
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn accumulate_avx2(table: &[u8], scales: &[f32], ids: &[u32], sum: &mut [f32; DIM]) {
+unsafe fn accumulate_avx2(
+    table: &[u8],
+    scales: &[f32],
+    ids: &[u32],
+    sum: &mut [f32; EMBEDDING_DIMENSION],
+) {
     use std::arch::x86_64::*;
     // Eight live YMM accumulators cover 64 dimensions. Each dimension retains
     // original token order; there is no FMA target or FP reassociation.
     unsafe {
-        for stripe in (0..DIM).step_by(64) {
+        for stripe in (0..EMBEDDING_DIMENSION).step_by(64) {
             let mut accumulators = [_mm256_setzero_ps(); 8];
             for (&id, &scale) in ids.iter().zip(scales) {
-                let row = table.as_ptr().add(id as usize * DIM + stripe);
+                let row = table
+                    .as_ptr()
+                    .add(id as usize * EMBEDDING_DIMENSION + stripe);
                 let scale = _mm256_set1_ps(scale);
                 for (i, accumulator) in accumulators.iter_mut().enumerate() {
                     let bytes = _mm_loadl_epi64(row.add(i * 8).cast());
@@ -178,19 +195,19 @@ unsafe fn accumulate_avx2(table: &[u8], scales: &[f32], ids: &[u32], sum: &mut [
 }
 
 pub struct Document {
-    values: [f16; DIM],
+    values: [f16; EMBEDDING_DIMENSION],
     inverse_norm: f32,
 }
 
 impl Document {
-    pub fn from_stored(values: &[f16; DIM], inverse_norm: f32) -> Self {
+    pub fn from_stored(values: &[f16; EMBEDDING_DIMENSION], inverse_norm: f32) -> Self {
         Self {
             values: *values,
             inverse_norm,
         }
     }
 
-    pub fn from_normalized(vector: &[f32; DIM]) -> Self {
+    pub fn from_normalized(vector: &[f32; EMBEDDING_DIMENSION]) -> Self {
         let values = vector.map(f16::from_f32);
         let norm = values
             .iter()
@@ -203,15 +220,19 @@ impl Document {
         }
     }
 
-    pub fn stored(&self) -> (&[f16; DIM], f32) {
+    pub fn stored(&self) -> (&[f16; EMBEDDING_DIMENSION], f32) {
         (&self.values, self.inverse_norm)
     }
 
-    pub fn score(&self, query: &[f32; DIM]) -> f64 {
+    pub fn score(&self, query: &[f32; EMBEDDING_DIMENSION]) -> f64 {
         Self::score_stored(&self.values, self.inverse_norm, query)
     }
 
-    pub fn score_stored(values: &[f16; DIM], inverse_norm: f32, query: &[f32; DIM]) -> f64 {
+    pub fn score_stored(
+        values: &[f16; EMBEDDING_DIMENSION],
+        inverse_norm: f32,
+        query: &[f32; EMBEDDING_DIMENSION],
+    ) -> f64 {
         let dot = values
             .iter()
             .zip(query)
@@ -231,7 +252,7 @@ const SCAN_ROWS: usize = 1024;
 pub(super) struct TextScan {
     values: Vec<f16>,
     inverse_norms: Vec<f32>,
-    query: [f32; DIM],
+    query: [f32; EMBEDDING_DIMENSION],
     rows: usize,
     scores: Vec<f64>,
     #[cfg(target_arch = "x86_64")]
@@ -239,9 +260,9 @@ pub(super) struct TextScan {
 }
 
 impl TextScan {
-    pub fn new(query: &[f32; DIM], count: usize) -> Self {
+    pub fn new(query: &[f32; EMBEDDING_DIMENSION], count: usize) -> Self {
         Self {
-            values: vec![f16::ZERO; SCAN_ROWS * DIM],
+            values: vec![f16::ZERO; SCAN_ROWS * EMBEDDING_DIMENSION],
             inverse_norms: vec![0.0; SCAN_ROWS],
             query: *query,
             rows: 0,
@@ -253,7 +274,7 @@ impl TextScan {
     }
 
     pub fn push(&mut self, document: Document) -> Result<()> {
-        let base = self.rows / 8 * DIM * 8;
+        let base = self.rows / 8 * EMBEDDING_DIMENSION * 8;
         let lane = self.rows % 8;
         for (dimension, value) in document.values.into_iter().enumerate() {
             self.values[base + dimension * 8 + lane] = value;
@@ -292,16 +313,26 @@ impl TextScan {
     }
 }
 
-fn scan_row(values: &[f16], inverse_norms: &[f32], query: &[f32; DIM], row: usize) -> f64 {
-    let base = row / 8 * DIM * 8;
+fn scan_row(
+    values: &[f16],
+    inverse_norms: &[f32],
+    query: &[f32; EMBEDDING_DIMENSION],
+    row: usize,
+) -> f64 {
+    let base = row / 8 * EMBEDDING_DIMENSION * 8;
     let lane = row % 8;
-    let dot = (0..DIM)
+    let dot = (0..EMBEDDING_DIMENSION)
         .map(|dimension| values[base + dimension * 8 + lane].to_f32() * query[dimension])
         .sum::<f32>();
     (dot * inverse_norms[row]) as f64
 }
 
-fn scan_scalar(values: &[f16], inverse_norms: &[f32], query: &[f32; DIM], output: &mut [f64]) {
+fn scan_scalar(
+    values: &[f16],
+    inverse_norms: &[f32],
+    query: &[f32; EMBEDDING_DIMENSION],
+    output: &mut [f64],
+) {
     for (row, score) in output.iter_mut().enumerate() {
         *score = scan_row(values, inverse_norms, query, row);
     }
@@ -309,7 +340,12 @@ fn scan_scalar(values: &[f16], inverse_norms: &[f32], query: &[f32; DIM], output
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,f16c")]
-unsafe fn scan_avx2(values: &[f16], inverse_norms: &[f32], query: &[f32; DIM], output: &mut [f64]) {
+unsafe fn scan_avx2(
+    values: &[f16],
+    inverse_norms: &[f32],
+    query: &[f32; EMBEDDING_DIMENSION],
+    output: &mut [f64],
+) {
     use std::arch::x86_64::*;
     let full_rows = output.len() / 8 * 8;
     unsafe {
@@ -317,7 +353,12 @@ unsafe fn scan_avx2(values: &[f16], inverse_norms: &[f32], query: &[f32; DIM], o
             // Sum<f32> uses -0.0 as its identity; preserve it for zero vectors.
             let mut dot = _mm256_set1_ps(-0.0);
             for (dimension, &q) in query.iter().enumerate() {
-                let half = _mm_loadu_si128(values.as_ptr().add(row * DIM + dimension * 8).cast());
+                let half = _mm_loadu_si128(
+                    values
+                        .as_ptr()
+                        .add(row * EMBEDDING_DIMENSION + dimension * 8)
+                        .cast(),
+                );
                 let document = _mm256_cvtph_ps(half);
                 dot = _mm256_add_ps(dot, _mm256_mul_ps(document, _mm256_set1_ps(q)));
             }

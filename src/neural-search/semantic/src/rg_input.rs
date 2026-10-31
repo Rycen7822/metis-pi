@@ -1,4 +1,4 @@
-use crate::{Chunk, Result, filename, make_chunk};
+use crate::{Chunk, Result, make_chunk, paths::path_from_bytes};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::Value;
@@ -47,7 +47,7 @@ pub fn visit(
         scope.parent().unwrap()
     };
     let mut pending: Option<Group> = None;
-    let mut source: Option<(PathBuf, crate::corpus::Source)> = None;
+    let mut source: Option<(PathBuf, crate::corpus::SourceContents)> = None;
     let mut path_cache: Option<(Vec<u8>, PathBuf)> = None;
     for line in reader.lines() {
         let event: Event = serde_json::from_str(&line?)?;
@@ -62,7 +62,7 @@ pub fn visit(
         {
             path.clone()
         } else {
-            let path = filename(&raw_path).canonicalize()?;
+            let path = path_from_bytes(&raw_path).canonicalize()?;
             path_cache = Some((raw_path, path.clone()));
             path
         };
@@ -96,7 +96,7 @@ pub fn visit(
         }
         if !source.as_ref().is_some_and(|(p, _)| p == &path) {
             drop(source.take());
-            source = Some((path.clone(), crate::corpus::Source::read(&path)?));
+            source = Some((path.clone(), crate::corpus::SourceContents::read(&path)?));
         }
         let view = &source.as_ref().unwrap().1;
         if view.binary {

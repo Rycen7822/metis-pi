@@ -1,8 +1,10 @@
 //! Request-local code scanning. No encoder handles or decoded corpus cross tasks.
-use super::{HEADER, ScopeIndex, lexical::Statistics, number, pages};
+use super::{
+    RECORD_LOCATION_BYTES, SCOPE_HEADER_BYTES, ScopeIndex, lexical::Statistics, pages, read_usize,
+};
 use crate::{
     Result,
-    index::{Corrupt, codec::Decoder},
+    record::{CorruptRecord, codec::Decoder},
     semantic::{CodeScan, Work},
 };
 use std::{
@@ -46,18 +48,18 @@ impl ScopeIndex {
         let mut stored = 0usize;
         let mut metadata = 0usize;
         while end < self.count {
-            let table = self.record_table + end * 16;
-            let at = number(&self.map, table)?;
-            let bytes = number(&self.map, table + 8)?;
-            if at < HEADER
-                || bytes < 64
+            let table = self.record_table + end * RECORD_LOCATION_BYTES;
+            let at = read_usize(&self.map, table)?;
+            let bytes = read_usize(&self.map, table + 8)?;
+            if at < SCOPE_HEADER_BYTES
+                || bytes < crate::record::HEADER_BYTES
                 || at.checked_add(bytes).is_none_or(|n| n > self.record_table)
             {
                 return Err("invalid record boundary table".into());
             }
-            let raw = number(&self.map, at + 56)?;
+            let raw = read_usize(&self.map, at + 56)?;
             let raw = if raw == 0 {
-                number(&self.map, at + 16)?
+                read_usize(&self.map, at + 16)?
             } else {
                 raw
             };
@@ -144,7 +146,7 @@ impl ScopeIndex {
             let mut similarities = vec![0.0; self.count];
             let mut start = 0;
             while start < self.count {
-                let (end, bytes, _) = self.batch_end(start).map_err(Corrupt::wrap)?;
+                let (end, bytes, _) = self.batch_end(start).map_err(CorruptRecord::wrap)?;
                 let count = workers(end - start, bytes, limit);
                 outcome.worker_limit = outcome.worker_limit.max(count);
                 outcome.batches += 1;
@@ -218,7 +220,7 @@ impl ScopeIndex {
                     if let Some(next) = part.error {
                         // An observed model/resource failure must not be hidden
                         // behind a recoverable stored-data error from a peer.
-                        if error.as_ref().is_none_or(|old| old.is::<Corrupt>()) {
+                        if error.as_ref().is_none_or(|old| old.is::<CorruptRecord>()) {
                             error = Some(next);
                         }
                     }
@@ -234,14 +236,14 @@ impl ScopeIndex {
                 let consumed = if end == self.count {
                     self.record_table
                 } else {
-                    number(&self.map, self.record_table + end * 16)?
+                    read_usize(&self.map, self.record_table + end * RECORD_LOCATION_BYTES)?
                 };
                 pages::release(
                     &self.map,
                     if start == 0 {
-                        HEADER
+                        SCOPE_HEADER_BYTES
                     } else {
-                        number(&self.map, self.record_table + start * 16)?
+                        read_usize(&self.map, self.record_table + start * RECORD_LOCATION_BYTES)?
                     },
                     consumed,
                 )?;

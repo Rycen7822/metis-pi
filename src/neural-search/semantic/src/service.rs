@@ -25,10 +25,12 @@ use std::{
     time::{Duration, Instant},
 };
 const PROTOCOL: u8 = 2;
-const ACTIVE: usize = 3;
-const QUEUED: usize = 32;
-const REQUEST_BYTES: usize = 1 << 20;
-const RESPONSE_BYTES: usize = 34 << 20;
+// At most 3 searches × 4 compute lanes; excess requests wait in FIFO.
+const MAX_ACTIVE_SEARCHES: usize = 3;
+const MAX_QUEUED_SEARCHES: usize = 32;
+// Private RPC framing limits, not document/model/cache memory budgets.
+const MAX_REQUEST_BYTES: usize = 1 << 20;
+const MAX_RESPONSE_BYTES: usize = 34 << 20;
 // These affect the process-owned model/parser/acquisition environment. They may
 // not silently change between clients. Corpus policy/diagnostics are per-request.
 const AMBIENT: &[&str] = &[
@@ -281,7 +283,7 @@ impl Server {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         serde_json::json!({
             "protocol": PROTOCOL, "pid": std::process::id(),
-            "active": s.active, "queued": s.queue.len(), "max_active": ACTIVE,
+            "active": s.active, "queued": s.queue.len(), "max_active": MAX_ACTIVE_SEARCHES,
             "computing_threads_per_request": crate::semantic::computing_threads(),
             "peak_active": s.peak, "completed": s.finished, "cancelled": s.cancelled,
             "idle_timeout_seconds": s.idle.as_secs(), "draining": s.draining,
@@ -386,7 +388,7 @@ impl Server {
             },
             256,
         )?;
-        let message: Message = read_frame(&mut stream, REQUEST_BYTES)?;
+        let message: Message = read_frame(&mut stream, MAX_REQUEST_BYTES)?;
         let mut delivery = None;
         let reply = match message {
             Message::Status {} => Response {
@@ -419,7 +421,7 @@ impl Server {
                             "SERVICE_VERSION_MISMATCH: drain with `sgrep --service-control stop` ",
                             "before changing runtime/environment; no second model process started"
                         )),
-                        RESPONSE_BYTES,
+                        MAX_RESPONSE_BYTES,
                     );
                 }
                 if !(1..=86400).contains(&idle_seconds)
@@ -434,12 +436,12 @@ impl Server {
                     return write_frame(
                         &mut stream,
                         &error("invalid shared semantic request settings"),
-                        RESPONSE_BYTES,
+                        MAX_RESPONSE_BYTES,
                     );
                 }
                 let mut args = match Args::try_parse_from(argv) {
                     Ok(a) => a,
-                    Err(e) => return write_frame(&mut stream, &error(e), RESPONSE_BYTES),
+                    Err(e) => return write_frame(&mut stream, &error(e), MAX_RESPONSE_BYTES),
                 };
                 if args.stdin
                     || args.rg_json.is_some()
@@ -451,7 +453,7 @@ impl Server {
                         &error(
                             "shared semantic does not accept stdin/rg-json/fresh-assets/cache-dir; use the explicit standalone CLI for those modes",
                         ),
-                        RESPONSE_BYTES,
+                        MAX_RESPONSE_BYTES,
                     );
                 }
                 if args.path.is_relative() {
@@ -485,10 +487,10 @@ impl Server {
                             return write_frame(
                                 &mut stream,
                                 &error("semantic service is draining; retry after shutdown"),
-                                RESPONSE_BYTES,
+                                MAX_RESPONSE_BYTES,
                             );
                         }
-                        if s.queue.len() < QUEUED {
+                        if s.queue.len() < MAX_QUEUED_SEARCHES {
                             s.idle = Duration::from_secs(idle_seconds);
                             s.queue.push_back(job.take().expect("not queued"));
                             self.notify();
@@ -528,7 +530,7 @@ impl Server {
             }
         };
         stream.set_nonblocking(false)?;
-        let result = write_frame(&mut stream, &reply, RESPONSE_BYTES);
+        let result = write_frame(&mut stream, &reply, MAX_RESPONSE_BYTES);
         drop(delivery);
         result
     }
@@ -591,7 +593,7 @@ fn serve(mut startup: Option<UnixStream>) -> Result<()> {
         }),
     });
     let mut workers = Vec::new();
-    for _ in 0..ACTIVE {
+    for _ in 0..MAX_ACTIVE_SEARCHES {
         let s = server.clone();
         workers.push(
             thread::Builder::new()
@@ -630,7 +632,7 @@ fn serve(mut startup: Option<UnixStream>) -> Result<()> {
                 i += 1;
             }
         }
-        if connections.len() < ACTIVE + QUEUED + 4 {
+        if connections.len() < MAX_ACTIVE_SEARCHES + MAX_QUEUED_SEARCHES + 4 {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let s = server.clone();
@@ -646,7 +648,7 @@ fn serve(mut startup: Option<UnixStream>) -> Result<()> {
                             let fallback = stream.try_clone().ok();
                             if let Err(e) = s.connection(stream) {
                                 if let Some(mut f) = fallback {
-                                    let _ = write_frame(&mut f, &error(e), RESPONSE_BYTES);
+                                    let _ = write_frame(&mut f, &error(e), MAX_RESPONSE_BYTES);
                                 }
                             }
                         })?;
@@ -663,7 +665,7 @@ fn serve(mut startup: Option<UnixStream>) -> Result<()> {
                 .then(|| state.idle.saturating_sub(state.last.elapsed()))
         };
         let mut fds = vec![wake_read.as_raw_fd()];
-        if connections.len() < ACTIVE + QUEUED + 4 {
+        if connections.len() < MAX_ACTIVE_SEARCHES + MAX_QUEUED_SEARCHES + 4 {
             fds.push(listener.as_raw_fd());
         }
         crate::readiness::wait(&fds, timeout)?;
@@ -844,8 +846,8 @@ pub(crate) fn client(args: &Args) -> Result<(String, String, u8)> {
     let mut stream = connect(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(args.service_timeout_seconds + 5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    write_frame(&mut stream, &message, REQUEST_BYTES)?;
-    let reply: Response = read_frame(&mut stream, RESPONSE_BYTES)?;
+    write_frame(&mut stream, &message, MAX_REQUEST_BYTES)?;
+    let reply: Response = read_frame(&mut stream, MAX_RESPONSE_BYTES)?;
     if let Some(path) = std::env::var_os("SGREP_SERVICE_INFO_PATH") {
         std::fs::write(path, format!("{}\n", reply.service))?;
     }
@@ -890,9 +892,9 @@ pub(crate) fn control() -> Result<()> {
                 } else {
                     Message::Stop {}
                 },
-                REQUEST_BYTES,
+                MAX_REQUEST_BYTES,
             )?;
-            let r: Response = read_frame(&mut stream, RESPONSE_BYTES)?;
+            let r: Response = read_frame(&mut stream, MAX_RESPONSE_BYTES)?;
             if r.exit != 0 {
                 return Err(r.stderr.into());
             }

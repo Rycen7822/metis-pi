@@ -4,6 +4,11 @@ mod bekko;
 mod lateon;
 mod native;
 pub(crate) mod shared;
+pub(crate) use bekko::EMBEDDING_DIMENSION as TEXT_EMBEDDING_DIMENSION;
+pub(crate) use lateon::{
+    MAX_WINDOW_TOKENS as MAX_CODE_WINDOW_TOKENS,
+    TOKEN_EMBEDDING_DIMENSION as CODE_EMBEDDING_DIMENSION,
+};
 
 use crate::{ModelChoice, Result, cache::Cache};
 use half::f16;
@@ -11,11 +16,25 @@ use std::{ops::Range, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Kind {
+pub enum ModelKind {
     Text,
     Code,
 }
-impl Kind {
+impl ModelKind {
+    // Stable on-disk tags shared by record/scope headers, not enum ordinals.
+    pub(crate) fn stored_tag(self) -> u8 {
+        match self {
+            Self::Text => 1,
+            Self::Code => 2,
+        }
+    }
+    pub(crate) fn from_stored_tag(tag: usize) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Text),
+            2 => Some(Self::Code),
+            _ => None,
+        }
+    }
     pub fn for_scope(choice: ModelChoice, prose_only: bool) -> Self {
         if choice == ModelChoice::Text || (choice == ModelChoice::Auto && prose_only) {
             Self::Text
@@ -29,7 +48,7 @@ impl Kind {
 /// they cannot retain a whole corpus (or unbounded long-document token matrix).
 pub enum DocumentBlock<'a> {
     Text {
-        values: &'a [f16; 128],
+        values: &'a [f16; TEXT_EMBEDDING_DIMENSION],
         inverse_norm: f32,
     },
     Code {
@@ -53,7 +72,7 @@ pub type EncodeSink<'a> = dyn FnMut(DocumentBlock<'_>) -> Result<Delivery> + 'a;
 /// for LateOn it is a selected 48D token row (including every internal window).
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct Work {
-    pub model: Option<Kind>,
+    pub model: Option<ModelKind>,
     pub query_encoder_calls: usize,
     pub query_encoded_tokens: usize,
     pub query_scored_rows: usize,
@@ -92,7 +111,7 @@ impl CodeScan<'_> {
         visit: impl FnOnce(&mut BlockSink<'_>) -> Result<()>,
         work: &mut Work,
     ) -> Result<f64> {
-        let mut maxima = vec![f32::NEG_INFINITY; self.query.len() / 48];
+        let mut maxima = vec![f32::NEG_INFINITY; self.query.len() / CODE_EMBEDDING_DIMENSION];
         visit(&mut |block| {
             if let Some(context) = &self.cancellation {
                 context.control.check()?;
@@ -101,7 +120,7 @@ impl CodeScan<'_> {
                 return Err("index model representation mismatch".into());
             };
             self.kernel.update(self.query, values, &mut maxima)?;
-            work.scored_document_tokens += values.len() / 48;
+            work.scored_document_tokens += values.len() / CODE_EMBEDDING_DIMENSION;
             Ok(())
         })?;
         let score = maxima.into_iter().sum::<f32>();
@@ -116,7 +135,7 @@ impl CodeScan<'_> {
 pub enum Scorer {
     Bekko {
         encoder: Arc<bekko::Encoder>,
-        query: [f32; bekko::DIM],
+        query: [f32; TEXT_EMBEDDING_DIMENSION],
         work: Work,
     },
     LateOn {
@@ -132,7 +151,7 @@ impl Scorer {
         query: &str,
         assets: &Cache,
     ) -> Result<Self> {
-        if Kind::for_scope(choice, prose_only) == Kind::Text {
+        if ModelKind::for_scope(choice, prose_only) == ModelKind::Text {
             crate::request::check()?;
             let encoder = match crate::request::current() {
                 Some(context) => context.models.text(assets)?,
@@ -143,7 +162,7 @@ impl Scorer {
                 encoder,
                 query,
                 work: Work {
-                    model: Some(Kind::Text),
+                    model: Some(ModelKind::Text),
                     query_encoder_calls: 1,
                     query_encoded_tokens: tokens,
                     query_scored_rows: 1,
@@ -165,12 +184,12 @@ impl Scorer {
                     (shared::CodeEncoder::Local(encoder), query, tokens)
                 }
             };
-            let rows = query.len() / 48;
+            let rows = query.len() / CODE_EMBEDDING_DIMENSION;
             Ok(Self::LateOn {
                 encoder,
                 query: Arc::new(query),
                 work: Work {
-                    model: Some(Kind::Code),
+                    model: Some(ModelKind::Code),
                     query_encoder_calls: 1,
                     query_encoded_tokens: tokens,
                     query_scored_rows: rows,
@@ -179,10 +198,10 @@ impl Scorer {
             })
         }
     }
-    pub fn kind(&self) -> Kind {
+    pub fn kind(&self) -> ModelKind {
         match self {
-            Self::Bekko { .. } => Kind::Text,
-            Self::LateOn { .. } => Kind::Code,
+            Self::Bekko { .. } => ModelKind::Text,
+            Self::LateOn { .. } => ModelKind::Code,
         }
     }
     pub fn work(&self) -> Work {
