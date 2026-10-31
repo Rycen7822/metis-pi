@@ -107,7 +107,7 @@ process-resident decompressed corpus.
 ## Prepared assets and precision
 
 `SGREP_RUNTIME_DIR` selects a bundle containing `assets.json`, `bin/sgrep`,
-`lib/libsgrep_cpu.so`, sibling ORT libraries/SONAME symlinks, and prepared
+`lib/libsgrep_cpu.so`, sibling ORT libraries/SONAME-named regular copies, and prepared
 `models/bekko128` / `models/lateon-edge` directories. The trusted catalog pins an
 immutable prepared-artifact revision, source models and exact file sizes/SHA256;
 it ships with the runtime, not a model-server response. Updates replace the
