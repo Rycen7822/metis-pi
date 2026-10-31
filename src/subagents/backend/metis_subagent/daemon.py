@@ -33,6 +33,13 @@ async def serve(home: Path):
         runtime = Runtime(home)
         notifications = runtime.parent_notifications  # One idle-drain fact for admission and watchers.
 
+        def begin_shutdown():
+            # Synchronous: callers must close admission before yielding their idle snapshot.
+            notifications.draining = True
+            server.close()
+            runtime.notify()
+            runtime.shutdown_requested.set()
+
         async def handle(reader, writer):
             nonlocal idle_since
             current = asyncio.current_task()
@@ -88,10 +95,7 @@ async def serve(home: Path):
                             raise AgentError("daemon_busy", "Owned work or an admitted operation prevents idle handoff")
                         # No await between checking owned work and closing admission.
                         # Unknown detached writers remain quarantined, not reaped.
-                        notifications.draining = True
-                        server.close()
-                        runtime.notify()
-                        runtime.shutdown_requested.set()
+                        begin_shutdown()
                         return {"shutdown": "requested", "pid": os.getpid()}
 
                     job = asyncio.create_task(execute())
@@ -174,10 +178,7 @@ async def serve(home: Path):
                     continue
                 # No await between the final check and closing admission: a
                 # newly admitted mutation can never race a zero-work snapshot.
-                notifications.draining = True
-                server.close()
-                runtime.notify()  # Wake passive watches with a normal idle signal.
-                runtime.shutdown_requested.set()
+                begin_shutdown()
                 return
 
         watchdog = asyncio.create_task(monitor())

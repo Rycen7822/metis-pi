@@ -38,8 +38,6 @@ async def serve_pi(home):
         )
 
     async def backend(op, p, *, passive=False, source=None, on_result=None):
-        if op in DIAGNOSTICS:
-            return await request(home, op, p, autostart=False)
         for attempt in range(2):
             try:
                 ping = await request(home, "ping", {}, autostart=not passive)
@@ -48,22 +46,21 @@ async def serve_pi(home):
                         "version_mismatch", "Running daemon lacks Pi host support; drain and restart it explicitly"
                     )
                 if ping.get("runtime_revision") != RUNTIME_REVISION:
-                    if not passive and attempt == 0 and ping.get("idle_shutdown") == 1:
-                        try:
-                            await request(home, "shutdown", {
-                                "if_idle": True, "expected_pid": ping["pid"],
-                                "runtime_revision": ping["runtime_revision"],
-                            }, autostart=False)
-                        except AgentError as error:
-                            if error.code == "daemon_busy":
-                                raise await mismatch(ping, "Safe idle handoff refused: work or another admitted operation remains.") from error
-                            raise
-                        continue
-                    reason = ("Daemon lacks safe idle handoff; a controlled one-time restart is required. "
-                              "Reload alone cannot replace it.") if ping.get("idle_shutdown") != 1 else (
-                                  "No idle handoff from passive watch, or handoff already attempted."
-                              )
-                    raise await mismatch(ping, reason)
+                    if ping.get("idle_shutdown") != 1:
+                        raise await mismatch(ping, "Daemon lacks safe idle handoff; a controlled one-time restart is required. "
+                                                   "Reload alone cannot replace it.")
+                    if passive or attempt:
+                        raise await mismatch(ping, "No idle handoff from passive watch, or handoff already attempted.")
+                    try:
+                        await request(home, "shutdown", {
+                            "if_idle": True, "expected_pid": ping["pid"],
+                            "runtime_revision": ping["runtime_revision"],
+                        }, autostart=False)
+                    except AgentError as error:
+                        if error.code == "daemon_busy":
+                            raise await mismatch(ping, "Safe idle handoff refused: work or another admitted operation remains.") from error
+                        raise
+                    continue
                 return await request(
                     home, op, p, timeout=call_timeout(op, p, home), autostart=False, source=source, on_result=on_result
                 )
@@ -92,7 +89,7 @@ async def serve_pi(home):
                 raise AgentError("invalid_argument", "passive must be a boolean")
             if op in DIAGNOSTICS:
                 validate_op(op, p)
-                result = await backend(op, p, passive=True)
+                result = await request(home, op, p, autostart=False)
             elif op == "initialize":
                 if source is not None:
                     raise AgentError("already_initialized", "Pi bridge is already bound")
