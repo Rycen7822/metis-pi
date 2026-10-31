@@ -155,13 +155,46 @@ pub(crate) fn code<'a>(
         return Err(invalid("invalid exponent symbols").into());
     }
     let values = scratch(values, count);
-    // Valid geometry is a multiple of 48, so groups of eight values occupy
-    // exactly eleven bytes. Reassemble all sixteen bits without FP arithmetic.
-    for (group_values, (bytes, symbols)) in values.chunks_exact_mut(8).zip(
-        stored[..packed_length]
-            .chunks_exact(11)
-            .zip(exponents.chunks_exact(8)),
-    ) {
+    unpack(&stored[..packed_length], exponents, values);
+    Ok(values)
+}
+
+/// Rebuild validated FP16 words without floating-point arithmetic.
+/// The runtime-dispatched prefix leaves the last group for the scalar tail.
+fn unpack(packed: &[u8], exponents: &[u8], values: &mut [f16]) {
+    debug_assert_eq!(values.len(), exponents.len());
+    debug_assert_eq!(packed.len(), values.len() / 8 * 11);
+    let done = vector_prefix(packed, exponents, values);
+    unpack_scalar(
+        &packed[done / 8 * 11..],
+        &exponents[done..],
+        &mut values[done..],
+    );
+}
+
+/// Values rebuilt by the vector kernel: a multiple of eight, or zero when the
+/// kernel is unavailable and the scalar helper must do every group.
+#[cfg(target_arch = "x86_64")]
+fn vector_prefix(packed: &[u8], exponents: &[u8], values: &mut [f16]) -> usize {
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: runtime feature detection; every access is bounded by slices.
+        unsafe { unpack_avx2(packed, exponents, values) }
+    } else {
+        0
+    }
+}
+#[cfg(not(target_arch = "x86_64"))]
+fn vector_prefix(_packed: &[u8], _exponents: &[u8], _values: &mut [f16]) -> usize {
+    0
+}
+
+/// Groups of eight values occupy exactly eleven bytes. Reassemble all sixteen
+/// bits without FP arithmetic; this is also the tail of the vector path.
+fn unpack_scalar(packed: &[u8], exponents: &[u8], values: &mut [f16]) {
+    for (group_values, (bytes, symbols)) in values
+        .chunks_exact_mut(8)
+        .zip(packed.chunks_exact(11).zip(exponents.chunks_exact(8)))
+    {
         let mut group = [0u8; 16];
         group[..11].copy_from_slice(bytes);
         let bits = u128::from_le_bytes(group);
@@ -172,7 +205,58 @@ pub(crate) fn code<'a>(
             );
         }
     }
-    Ok(values)
+}
+
+/// Rebuild eight values per step from one eleven-byte group. The 16-byte load
+/// takes the five following bytes as slack, so a step needs one whole further
+/// group and the last group always stays with the scalar helper.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn unpack_avx2(packed: &[u8], exponents: &[u8], values: &mut [f16]) -> usize {
+    use std::arch::x86_64::*;
+    // Field k starts at bit 11k, i.e. inside bytes 11k/8 and 11k/8+1; -1 clears
+    // the bits belonging to its neighbours.
+    const FIELD_BYTES: [i8; 32] = [
+        0, 1, -1, -1, 1, 2, -1, -1, 2, 3, 4, -1, 4, 5, -1, -1, 5, 6, -1, -1, 6, 7, 8, -1, 8, 9, -1,
+        -1, 9, 10, -1, -1,
+    ];
+    // Field k sits eleven bits into its lane and is shifted down by 11k mod 8,
+    // which clears the slack bits the byte shuffle copied around it.
+    let shifts = _mm256_setr_epi32(0, 3, 6, 1, 4, 7, 2, 5);
+    // The prefix stops one group short, so both loads and the store stay inside
+    // the slices even when the caller's lengths were not what the header claims.
+    let usable = (values.len() / 8)
+        .min(packed.len() / 11)
+        .min(exponents.len() / 8);
+    let steps = usable.saturating_sub(1);
+    if steps == 0 {
+        return 0;
+    }
+    let mantissa = _mm256_set1_epi32(0x3ff);
+    let sign = _mm256_set1_epi32(0x400);
+    unsafe {
+        let shuffle = _mm256_loadu_si256(FIELD_BYTES.as_ptr().cast());
+        for step in 0..steps {
+            let at = step * 8;
+            let bytes = _mm_loadu_si128(packed.as_ptr().add(step * 11).cast());
+            let fields = _mm256_shuffle_epi8(_mm256_broadcastsi128_si256(bytes), shuffle);
+            let fields = _mm256_srlv_epi32(fields, shifts);
+            let symbols = _mm_loadl_epi64(exponents.as_ptr().add(at).cast());
+            let symbols = _mm256_slli_epi32(_mm256_cvtepu8_epi32(symbols), 10);
+            let signs = _mm256_slli_epi32(_mm256_and_si256(fields, sign), 5);
+            let words = _mm256_or_si256(
+                _mm256_and_si256(fields, mantissa),
+                _mm256_or_si256(signs, symbols),
+            );
+            // Every lane holds at most 0xffff, so the unsigned pack is exact.
+            let halves = _mm_packus_epi32(
+                _mm256_castsi256_si128(words),
+                _mm256_extracti128_si256(words, 1),
+            );
+            _mm_storeu_si128(values.as_mut_ptr().add(at).cast(), halves);
+        }
+    }
+    steps * 8
 }
 
 /// Stream the potentially large source manifest; never materialize its JSON.
