@@ -8,17 +8,18 @@ use crate::{
     storage::{BudgetFile, IndexCache, IndexLease, MAX_BYTES},
 };
 use memmap2::Mmap;
+mod lexical;
 mod pages;
 mod parallel;
 mod validation;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fs::File,
     io::{self, BufReader, Read, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
-    path::{Path, PathBuf},
+    path::Path,
 };
 const HEADER: usize = 128;
 const MAGIC: &[u8; 8] = b"SGREPS08";
@@ -81,21 +82,19 @@ impl Manifest {
             files: stamps,
         })
     }
-    pub(crate) fn stamps(&self) -> &[Stamp] {
-        &self.files
-    }
-    pub fn expected(&self) -> HashMap<PathBuf, [u8; 32]> {
-        self.files
-            .iter()
-            .map(|s| (crate::filename(&s.path), s.digest))
-            .collect()
-    }
     pub fn verify(&self, scope: &Path, filter: &crate::storage::SourceFilter) -> Result<()> {
         crate::request::check()?;
-        if Self::capture(scope, filter).is_ok_and(|now| now == *self) {
-            Ok(())
-        } else {
-            Err(SourceChanged.into())
+        match Self::capture(scope, filter) {
+            Ok(now) if now == *self => Ok(()),
+            Ok(_) => Err(SourceChanged.into()),
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|e| e.kind() == io::ErrorKind::NotFound) =>
+            {
+                Err(SourceChanged.into())
+            }
+            Err(error) => Err(error),
         }
     }
 }
@@ -117,10 +116,12 @@ fn artifact(assets: &Cache, kind: Kind) -> Result<serde_json::Value> {
         Kind::Text => "bekko128",
         Kind::Code => "lateon-edge",
     };
-    Ok(
-        serde_json::json!({"contract":CONTRACT,"source_policy":"lf-crlf-cr-v1","scope_codec":"zstd-v1",
-        "manifest":serde_json::from_reader::<_,serde_json::Value>(BufReader::new(File::open(assets.model_directory(model)?.join("manifest.json"))?))?}),
-    )
+    let manifest = serde_json::from_reader::<_, serde_json::Value>(BufReader::new(File::open(
+        assets.model_directory(model)?.join("manifest.json"),
+    )?))?;
+    Ok(serde_json::json!({
+        "contract": CONTRACT, "source_policy": "lf-crlf-cr-v1", "scope_codec": "zstd-v1", "manifest": manifest
+    }))
 }
 #[derive(Serialize, Deserialize)]
 struct Metadata {
@@ -128,9 +129,6 @@ struct Metadata {
     artifact: serde_json::Value,
     kind: u8,
     prose_only: bool,
-}
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
 }
 fn number(data: &[u8], at: usize) -> Result<usize> {
     let bytes = data
@@ -178,14 +176,15 @@ impl Builder {
             total_length: 0,
         })
     }
-    pub fn encode(&mut self, scorer: &mut Scorer, chunk: &Chunk) -> Result<f64> {
+    pub fn encode(&mut self, scorer: &mut Scorer, mut chunk: Chunk) -> Result<f64> {
         if self.output.is_none() {
-            return scorer.score_document(&chunk.path, &chunk.content);
+            return scorer.score_document(chunk.path, chunk.content);
         }
+        chunk.counts = crate::chunk_counts(&chunk.path, &chunk.content);
         // Each record already owns its full query-independent word counts.
         // Do not retain a second corpus-wide dictionary/posting representation.
         let mut output = self.output.take().unwrap();
-        let mut writer = match RecordWriter::begin(&mut output, chunk, scorer.kind()) {
+        let mut writer = match RecordWriter::begin(&mut output, &chunk, scorer.kind()) {
             Ok(writer) => writer,
             Err(error) => {
                 if !recoverable(error.as_ref()) {
@@ -195,21 +194,31 @@ impl Builder {
                 drop(output);
                 self.offsets.clear();
                 crate::request::diagnostic(format_args!("sgrep: cache write disabled: {error}"));
-                return scorer.score_document(&chunk.path, &chunk.content);
+                return scorer.score_document(chunk.path, chunk.content);
             }
         };
         let mut write_error = None;
-        let score = scorer.score_document_to(&chunk.path, &chunk.content, &mut |block| {
-            if write_error.is_none() {
-                if let Err(error) = writer.push(block) {
-                    if !recoverable(error.as_ref()) {
-                        return Err(error);
+        // Only a live writer still needs the original text for UTF-8/window
+        // validation. Score-only paths transfer their strings without a copy.
+        let score = scorer.score_document_to(
+            chunk.path.clone(),
+            chunk.content.clone(),
+            Some(&mut |block| {
+                if write_error.is_none() {
+                    if let Err(error) = writer.push(block) {
+                        if !recoverable(error.as_ref()) {
+                            return Err(error);
+                        }
+                        write_error = Some(error);
                     }
-                    write_error = Some(error);
                 }
-            }
-            Ok(())
-        })?;
+                Ok(if write_error.is_some() {
+                    crate::semantic::Delivery::ScoreOnly
+                } else {
+                    crate::semantic::Delivery::Blocks
+                })
+            }),
+        )?;
         if let Some(error) = write_error {
             drop(writer);
             output.failure(&error);
@@ -306,6 +315,7 @@ pub struct HitTimings {
     read_crc_us: u128,
     metadata_us: u128,
     record_validation_us: u128,
+    metadata_passes: usize,
     validation_worker_limit: usize,
     validation_batches: usize,
     model_query_init_us: u128,
@@ -326,15 +336,19 @@ pub struct ScopeIndex {
     terms: usize,
     total_length: usize,
     query_idf: BTreeMap<String, f64>,
+    fused_words: Option<Vec<String>>,
 }
 impl ScopeIndex {
     pub fn len(&self) -> usize {
         self.count
     }
+    pub fn verify_source(&self, scope: &Path, filter: &crate::storage::SourceFilter) -> Result<()> {
+        self.metadata.manifest.verify(scope, filter)
+    }
     pub fn open(
         cache: &IndexCache,
         target: &Path,
-        manifest: &Manifest,
+        scope: &Path,
         assets: &Cache,
         choice: ModelChoice,
         query_words: &[String],
@@ -373,11 +387,7 @@ impl ScopeIndex {
         {
             return Err("invalid scope index sections".into());
         }
-        let expected = u32::from_le_bytes(map[end..].try_into()?);
-        if pages::checksum(&map, end)? != expected {
-            return Err("scope index CRC mismatch".into());
-        }
-        let crc_ready = std::time::Instant::now();
+        let read_ready = std::time::Instant::now();
         let decoded_metadata =
             crate::index::codec::scope_metadata(&map[metadata_start..end], number(&map, 88)?)?;
         let metadata: Metadata = serde_json::from_slice(&decoded_metadata)?;
@@ -389,17 +399,23 @@ impl ScopeIndex {
         if legacy {
             expected_artifact["contract"] = LEGACY_CONTRACT.into();
         }
-        if metadata.manifest != *manifest
+        if metadata.manifest.scope != scope.as_os_str().as_bytes()
             || kind != selected
             || metadata.artifact != expected_artifact
         {
             return Err("stale scope/model/preprocessing manifest".into());
         }
         let metadata_ready = std::time::Instant::now();
+        let expected = u32::from_le_bytes(map[end..].try_into()?);
+        if pages::checksum(&map, end)? != expected {
+            return Err("scope index CRC mismatch".into());
+        }
+        let crc_ready = std::time::Instant::now();
         let mut index = Self {
             timings: HitTimings {
-                read_crc_us: crc_ready.duration_since(started).as_micros(),
-                metadata_us: metadata_ready.duration_since(crc_ready).as_micros(),
+                read_crc_us: read_ready.duration_since(started).as_micros()
+                    + crc_ready.duration_since(metadata_ready).as_micros(),
+                metadata_us: metadata_ready.duration_since(read_ready).as_micros(),
                 ..HitTimings::default()
             },
             map,
@@ -411,13 +427,21 @@ impl ScopeIndex {
             terms,
             total_length,
             query_idf: BTreeMap::new(),
+            fused_words: None,
         };
         let mut decoder = crate::index::codec::Decoder::new()?;
         let mut query_df: BTreeMap<_, usize> =
             query_words.iter().cloned().map(|word| (word, 0)).collect();
-        let lexical_length = index.validate_records(kind, &mut query_df)?;
-        if lexical_length != total_length {
-            return Err("inconsistent corpus length".into());
+        index.validate_layout()?;
+        if !legacy && lexical::Statistics::fits(count, &query_df) {
+            index.fused_words = Some(std::mem::take(&mut query_df).into_keys().collect());
+            index.timings.metadata_passes = 1;
+        } else {
+            let lexical_length = index.validate_records(&mut query_df)?;
+            if lexical_length != total_length {
+                return Err("inconsistent corpus length".into());
+            }
+            index.timings.metadata_passes = 2;
         }
         let mut released;
         let mut previous = None;
@@ -456,7 +480,7 @@ impl ScopeIndex {
                 (word, (1.0 + (count as f64 - df + 0.5) / (df + 0.5)).ln())
             })
             .collect();
-        index.timings.record_validation_us = metadata_ready.elapsed().as_micros();
+        index.timings.record_validation_us = crc_ready.elapsed().as_micros();
         Ok(index)
     }
     fn record(&self, id: usize, decoder: &mut crate::index::codec::Decoder) -> Result<Record<'_>> {
@@ -464,8 +488,33 @@ impl ScopeIndex {
             return Err("record ID outside scope".into());
         }
         let at = number(&self.map, self.record_table + id * 16)?;
-        Record::open(&self.map[..self.record_table], at, decoder)
-            .map_err(crate::index::Corrupt::wrap)
+        let record = Record::open(&self.map[..self.record_table], at, decoder)
+            .map_err(crate::index::Corrupt::wrap)?;
+        if kind_tag(record.kind()) != self.metadata.kind {
+            return Err(crate::index::Corrupt::wrap(
+                "record/scope model mismatch".into(),
+            ));
+        }
+        Ok(record)
+    }
+    // Every record was checked in the full immutable scan. Ranking needs text,
+    // not another allocated lexical dictionary, including all-candidate traces.
+    fn ranked_chunk(&self, id: usize, decoder: &mut crate::index::codec::Decoder) -> Result<Chunk> {
+        #[derive(Deserialize)]
+        struct Ranked {
+            chunk: Chunk,
+        }
+        let at = number(&self.map, self.record_table + id * 16)?;
+        let end = at
+            .checked_add(64)
+            .and_then(|n| n.checked_add(number(&self.map, at + 16).ok()?))
+            .ok_or("metadata offset overflow")?;
+        let encoded = self
+            .map
+            .get(at + 64..end)
+            .ok_or("truncated ranked metadata")?;
+        let decoded = crate::index::codec::metadata(encoded, number(&self.map, at + 56)?, decoder)?;
+        Ok(serde_json::from_slice::<Ranked>(&decoded)?.chunk)
     }
     // Retained for format07 validation; new indexes have no postings section.
     fn legacy_term(
@@ -491,8 +540,9 @@ impl ScopeIndex {
         let decoded = crate::index::codec::metadata(encoded, raw_length, decoder)?;
         Ok(serde_json::from_slice(&decoded)?)
     }
-    fn lexical_score(&self, chunk: &Chunk, avg: f64) -> f64 {
-        let length = chunk.counts.values().sum();
+    fn lexical_score(&self, record: &Record<'_>, avg: f64) -> f64 {
+        let chunk = &record.chunk;
+        let length = record.length;
         if self.query_idf.len() <= chunk.counts.len() {
             self.query_idf
                 .iter()
@@ -545,6 +595,13 @@ impl ScopeIndex {
         timings.scan_worker_limit = 1;
         timings.scan_batches = usize::from(self.count > 0);
         let mut decoder = crate::index::codec::Decoder::new()?;
+        let mut statistics = self
+            .fused_words
+            .as_deref()
+            .map(|words| lexical::Statistics {
+                words,
+                rows: vec![Vec::new(); self.count],
+            });
         let exact_pattern = crate::identifier_pattern(&args.query)?;
         let mut exact = HashSet::new();
         let mut released = 0;
@@ -564,6 +621,7 @@ impl ScopeIndex {
                 exact_pattern.as_ref().map(|p| &p.0),
                 &mut lexical,
                 &mut exact,
+                statistics.as_mut(),
                 crate::semantic::computing_threads(),
             );
             timings.scan_worker_limit = outcome.worker_limit;
@@ -573,7 +631,11 @@ impl ScopeIndex {
         } else {
             scorer.score_scope(self.count, |i, sink| {
                 let record = self.record(i, &mut decoder)?;
-                lexical[i] = self.lexical_score(&record.chunk, avg);
+                if let Some(statistics) = &mut statistics {
+                    statistics.rows[i] = lexical::Statistics::row(&record, statistics.words);
+                } else {
+                    lexical[i] = self.lexical_score(&record, avg);
+                }
                 if exact_pattern
                     .as_ref()
                     .is_some_and(|p| p.0.is_match(&record.chunk.content))
@@ -587,6 +649,11 @@ impl ScopeIndex {
                 pages::consumed(&self.map, &mut released, consumed)
             })?
         };
+        if let Some(statistics) = statistics {
+            statistics
+                .finish(self.total_length, &mut lexical)
+                .map_err(crate::index::Corrupt::wrap)?;
+        }
         pages::release(&self.map, 0, self.map.len())?;
         timings.semantic_lexical_us = scan_started.elapsed().as_micros();
         let rank_started = std::time::Instant::now();
@@ -598,7 +665,9 @@ impl ScopeIndex {
             Vec::new(),
             &exact,
             |i| {
-                let chunk = self.record(i, &mut decoder)?.chunk;
+                let chunk = self
+                    .ranked_chunk(i, &mut decoder)
+                    .map_err(crate::index::Corrupt::wrap)?;
                 // Ranking owns the decoded chunk now; diagnostic all-candidate
                 // lookups must not repopulate the whole mapped index either.
                 let at = self.record_table + i * 16;
@@ -608,7 +677,6 @@ impl ScopeIndex {
             },
             trace,
         )?;
-        let _ = self._lease.set_modified(std::time::SystemTime::now());
         timings.rank_us = rank_started.elapsed().as_micros();
         Ok((result, scorer.work(), timings))
     }

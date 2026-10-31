@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use super::Result;
 mod temporary;
@@ -54,6 +55,10 @@ struct Asset {
     bytes: u64,
     sha256: String,
 }
+
+// Only the read-only fallback is process-owned; normal installations use the
+// existing disk receipt. Two model proofs, bounded, with no new fingerprint key.
+static READ_ONLY_PROOFS: Mutex<Vec<Receipt>> = Mutex::new(Vec::new());
 
 #[derive(Serialize, Deserialize, PartialEq)]
 struct Receipt {
@@ -206,7 +211,10 @@ impl Cache {
             return Ok(directory.canonicalize()?);
         }
         if offline() {
-            return Err(format!("ASSET_MISSING_OR_CORRUPT: prepared {model} at {} is not cached or failed integrity verification; offline acquisition is disabled", directory.display()).into());
+            return Err(format!(
+                "ASSET_MISSING_OR_CORRUPT: prepared {model} at {} is not cached or failed integrity verification; \
+                 offline acquisition is disabled", directory.display()
+            ).into());
         }
         fs::create_dir_all(&self.models)?;
         let lock = File::options()
@@ -331,7 +339,12 @@ fn verified(directory: &Path, assets: &ModelAssets) -> Result<bool> {
         .and_then(|file| {
             serde_json::from_reader::<_, Receipt>(BufReader::new(file.take(64 << 10))).ok()
         });
-    if receipt.as_ref() == Some(&before) {
+    if receipt.as_ref() == Some(&before)
+        || READ_ONLY_PROOFS
+            .lock()
+            .map_err(|_| "asset proof lock poisoned")?
+            .contains(&before)
+    {
         return Ok(true);
     }
     for (name, asset) in &assets.files {
@@ -342,9 +355,17 @@ fn verified(directory: &Path, assets: &ModelAssets) -> Result<bool> {
     if snapshot(directory, assets)?.as_ref() != Some(&before) {
         return Err("ASSET_CHANGED: prepared assets changed during integrity verification".into());
     }
-    // Receipt caching is optional on read-only installations. Verified bytes
-    // remain usable, but missing receipts mean revalidation next invocation.
-    let _ = write_receipt(directory, &before);
+    if write_receipt(directory, &before).is_err() {
+        let mut proofs = READ_ONLY_PROOFS
+            .lock()
+            .map_err(|_| "asset proof lock poisoned")?;
+        if !proofs.contains(&before) {
+            if proofs.len() == 2 {
+                proofs.remove(0);
+            }
+            proofs.push(before);
+        }
+    }
     Ok(true)
 }
 

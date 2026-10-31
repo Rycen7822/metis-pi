@@ -27,7 +27,7 @@ fn language(path: &Path) -> Option<&'static str> {
     )
 }
 
-pub fn byte_ranges(source: &str, path: &Path) -> super::Result<Vec<(usize, usize)>> {
+pub fn byte_ranges(source: &String, path: &Path) -> super::Result<Vec<(usize, usize)>> {
     if let Some(language) = language(path) {
         // Chonkie 1.7.0 CodeChunker.chunk(), character tokenizer. Python's strip()
         // additionally treats the ASCII information separators as whitespace.
@@ -75,7 +75,7 @@ pub fn byte_ranges(source: &str, path: &Path) -> super::Result<Vec<(usize, usize
             RecursiveChunker::new(CharacterTokenizer::new(), SIZE, RecursiveRules::new(levels));
         let mut covered = 0;
         let mut ranges = Vec::new();
-        for chunk in chunker.chunk(&source.to_owned()) {
+        for chunk in chunker.chunk(source) {
             if chunk.start_index != covered
                 || source.get(chunk.start_index..chunk.end_index) != Some(chunk.text.as_str())
             {
@@ -91,9 +91,11 @@ pub fn byte_ranges(source: &str, path: &Path) -> super::Result<Vec<(usize, usize
     }
 }
 
-pub fn ranges(source: &str, path: &Path) -> super::Result<Vec<(usize, usize)>> {
-    let mut starts = vec![0];
-    starts.extend(source.match_indices('\n').map(|(i, _)| i + 1));
+pub fn ranges(
+    source: &String,
+    path: &Path,
+    starts: &[usize],
+) -> super::Result<Vec<(usize, usize)>> {
     let mut ranges: Vec<_> = byte_ranges(source, path)?
         .into_iter()
         .filter(|(start, end)| end > start)

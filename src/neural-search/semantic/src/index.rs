@@ -171,7 +171,7 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
             .ok_or_else(|| invalid("window count overflow"))?;
         Ok(())
     }
-    pub fn finish(mut self) -> Result<(u64, u64)> {
+    pub fn finish(self) -> Result<(u64, u64)> {
         if self.blocks == 0 || (self.kind == Kind::Code && self.next_source != self.source.len()) {
             return Err(invalid("incomplete document representation"));
         }
@@ -198,6 +198,7 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
 pub struct Record<'a> {
     data: &'a [u8],
     pub chunk: Chunk,
+    pub length: usize,
     kind: Kind,
     blocks: usize,
     semantic: usize,
@@ -243,7 +244,7 @@ impl<'a> Record<'a> {
         {
             return Err(invalid("invalid chunk range/size"));
         }
-        metadata.counts.values().try_fold(0usize, |sum, n| {
+        let length = metadata.counts.values().try_fold(0usize, |sum, n| {
             if *n == 0 {
                 return Err(invalid("zero lexical frequency"));
             }
@@ -255,6 +256,7 @@ impl<'a> Record<'a> {
         Ok(Self {
             data,
             chunk: metadata.chunk,
+            length,
             kind,
             blocks,
             semantic,
@@ -266,10 +268,16 @@ impl<'a> Record<'a> {
     pub fn visit(&self, decoder: &mut codec::Decoder, sink: &mut BlockSink<'_>) -> Result<()> {
         let mut at = self.semantic;
         if self.kind == Kind::Text {
-            let values: [f16; 128] = self
-                .decode(at, 128)?
-                .try_into()
-                .map_err(|_| invalid("invalid text dimension"))?;
+            let mut values = [f16::ZERO; 128];
+            for (value, bytes) in values
+                .iter_mut()
+                .zip(self.data[at..at + 256].chunks_exact(2))
+            {
+                *value = f16::from_le_bytes(bytes.try_into()?);
+                if !value.is_finite() {
+                    return Err(invalid("non-finite cached vector"));
+                }
+            }
             let inverse_norm = f32::from_le_bytes(self.data[at + 256..at + 260].try_into()?);
             if !inverse_norm.is_finite() || inverse_norm < 0.0 {
                 return Err(invalid("invalid inverse norm"));
@@ -340,26 +348,5 @@ impl<'a> Record<'a> {
             return Err(invalid("partial/trailing representation"));
         }
         Ok(())
-    }
-    fn decode(&self, at: usize, count: usize) -> Result<Vec<f16>> {
-        let end = at
-            .checked_add(
-                count
-                    .checked_mul(2)
-                    .ok_or_else(|| invalid("vector length overflow"))?,
-            )
-            .ok_or_else(|| invalid("vector offset overflow"))?;
-        let bytes = self
-            .data
-            .get(at..end)
-            .ok_or_else(|| invalid("truncated vector"))?;
-        let values: Vec<_> = bytes
-            .chunks_exact(2)
-            .map(|v| f16::from_bits(u16::from_le_bytes([v[0], v[1]])))
-            .collect();
-        if values.iter().any(|v| !v.is_finite()) {
-            return Err(invalid("non-finite cached vector"));
-        }
-        Ok(values)
     }
 }

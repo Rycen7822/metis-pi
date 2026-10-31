@@ -40,6 +40,14 @@ pub enum DocumentBlock<'a> {
 }
 pub type BlockSink<'a> = dyn FnMut(DocumentBlock<'_>) -> Result<()> + 'a;
 
+/// Stop delivering representations, not encoding/scoring the remaining windows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Blocks,
+    ScoreOnly,
+}
+pub type EncodeSink<'a> = dyn FnMut(DocumentBlock<'_>) -> Result<Delivery> + 'a;
+
 /// Observations at successful encode/score consumption points, not requested
 /// scope sizes. For Bekko a scored row is its one aggregated document vector;
 /// for LateOn it is a selected 48D token row (including every internal window).
@@ -57,6 +65,17 @@ pub struct Work {
     pub discarded_cached_chunks: usize,
     pub discarded_cached_document_tokens: usize,
 }
+
+#[derive(Debug)]
+pub(crate) struct QueryTooLong;
+impl std::fmt::Display for QueryTooLong {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "INVALID_INPUT: query exceeds LateOn's 256-token limit (including role/special tokens)",
+        )
+    }
+}
+impl std::error::Error for QueryTooLong {}
 
 pub(crate) use native::computing_threads;
 
@@ -102,7 +121,7 @@ pub enum Scorer {
     },
     LateOn {
         encoder: shared::CodeEncoder,
-        query: Vec<f32>,
+        query: Arc<Vec<f32>>,
         work: Work,
     },
 }
@@ -149,7 +168,7 @@ impl Scorer {
             let rows = query.len() / 48;
             Ok(Self::LateOn {
                 encoder,
-                query,
+                query: Arc::new(query),
                 work: Work {
                     model: Some(Kind::Code),
                     query_encoder_calls: 1,
@@ -208,17 +227,17 @@ impl Scorer {
         work.semantic_scored_chunks = 0;
         work.scored_document_tokens = 0;
     }
-    pub fn score_document(&mut self, path: &str, content: &str) -> Result<f64> {
-        self.score_document_to(path, content, &mut |_| Ok(()))
+    pub fn score_document(&mut self, path: String, content: String) -> Result<f64> {
+        self.score_document_to(path, content, None)
     }
     /// The index writer observes the SAME rounded output that determines score.
     /// A caller handling recoverable cache I/O must drop that writer and return
-    /// Ok from its sink, so search continues without replaying any encode.
+    /// ScoreOnly from its sink, so search continues without replaying any encode.
     pub fn score_document_to(
         &mut self,
-        path: &str,
-        content: &str,
-        sink: &mut BlockSink<'_>,
+        path: String,
+        content: String,
+        mut sink: Option<&mut EncodeSink<'_>>,
     ) -> Result<f64> {
         crate::request::check()?;
         match self {
@@ -232,10 +251,12 @@ impl Scorer {
                 work.actual_encoded_tokens += tokens;
                 let document = bekko::Document::from_normalized(&vector);
                 let (values, inverse_norm) = document.stored();
-                sink(DocumentBlock::Text {
-                    values,
-                    inverse_norm,
-                })?;
+                if let Some(sink) = sink.as_mut() {
+                    sink(DocumentBlock::Text {
+                        values,
+                        inverse_norm,
+                    })?;
+                }
                 work.actual_encoded_chunks += 1;
                 work.semantic_scored_chunks += 1;
                 work.scored_document_tokens += 1;
@@ -246,19 +267,10 @@ impl Scorer {
                 query,
                 work,
             } => {
-                let score = encoder.score_to(query, path, content, &mut |block| {
-                    if let DocumentBlock::Code {
-                        input_tokens,
-                        values,
-                        ..
-                    } = &block
-                    {
-                        work.actual_encoded_windows += 1;
-                        work.actual_encoded_tokens += input_tokens;
-                        work.scored_document_tokens += values.len() / 48;
-                    }
-                    sink(block)
-                })?;
+                let (score, encoded) = encoder.score_to(query, path, content, sink)?;
+                work.actual_encoded_windows += encoded.actual_encoded_windows;
+                work.actual_encoded_tokens += encoded.actual_encoded_tokens;
+                work.scored_document_tokens += encoded.scored_document_tokens;
                 work.actual_encoded_chunks += 1;
                 work.semantic_scored_chunks += 1;
                 Ok(score)

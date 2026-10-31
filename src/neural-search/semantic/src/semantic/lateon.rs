@@ -116,7 +116,7 @@ impl Encoder {
     pub fn query(&mut self, text: &str) -> Result<(Vec<f32>, usize)> {
         let (ids, mask) = self.tokenize(text, true)?;
         if ids.len() > 256 {
-            return Err("INVALID_INPUT: query exceeds LateOn's 256-token limit (including role/special tokens)".into());
+            return Err(super::QueryTooLong.into());
         }
         let values = self.runtime()?.encode(&ids, &mask, true)?;
         Ok((values, ids.len()))
@@ -140,6 +140,11 @@ impl Encoder {
                 next -= 1;
             }
             if next == start {
+                if self.tokenize(prefix, false)?.0.len() > 2048 {
+                    return Err(
+                        "INVALID_INPUT: path/role prefix exceeds LateOn's document budget".into(),
+                    );
+                }
                 return Err(
                     "INVALID_INPUT: path prefix leaves no room for one source character".into(),
                 );
@@ -147,8 +152,10 @@ impl Encoder {
             end = next;
         }
     }
+    #[cfg(test)]
     pub fn score(&mut self, query: &[f32], path: &str, content: &str) -> Result<f64> {
-        self.score_to(query, path, content, &mut |_| Ok(()))
+        self.score_to(query, path, content, None)
+            .map(|(score, _)| score)
     }
     pub(super) fn scoring_kernel(&self) -> Result<super::native::ScoringKernel> {
         Ok(self
@@ -171,13 +178,11 @@ impl Encoder {
         query: &[f32],
         path: &str,
         content: &str,
-        sink: &mut super::BlockSink<'_>,
-    ) -> Result<f64> {
+        mut sink: Option<&mut super::EncodeSink<'_>>,
+    ) -> Result<(f64, super::Work)> {
         let prefix = format!("{path}\n");
-        if self.tokenize(&prefix, false)?.0.len() > 2048 {
-            return Err("INVALID_INPUT: path/role prefix exceeds LateOn's document budget".into());
-        }
         let mut maxima = vec![f32::NEG_INFINITY; query.len() / 48];
+        let mut work = super::Work::default();
         let mut start = 0;
         loop {
             crate::request::check()?;
@@ -186,11 +191,19 @@ impl Encoder {
             let rounded: Vec<f16> = encoded.into_iter().map(f16::from_f32).collect();
             self.runtime()?
                 .update_maxima(query, &rounded, &mut maxima)?;
-            sink(super::DocumentBlock::Code {
-                source: start..end,
-                input_tokens: ids.len(),
-                values: &rounded,
-            })?;
+            work.actual_encoded_windows += 1;
+            work.actual_encoded_tokens += ids.len();
+            work.scored_document_tokens += rounded.len() / 48;
+            if let Some(deliver) = sink.as_mut() {
+                if deliver(super::DocumentBlock::Code {
+                    source: start..end,
+                    input_tokens: ids.len(),
+                    values: &rounded,
+                })? == super::Delivery::ScoreOnly
+                {
+                    sink = None;
+                }
+            }
             if end == content.len() {
                 break;
             }
@@ -200,6 +213,6 @@ impl Encoder {
         if !score.is_finite() {
             return Err("UNVERIFIED_BACKEND: non-finite MaxSim".into());
         }
-        Ok(score as f64)
+        Ok((score as f64, work))
     }
 }

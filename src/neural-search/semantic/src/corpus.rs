@@ -2,7 +2,7 @@
 //! and query-relevant statistics, not corpus text, full word maps or embeddings.
 use crate::{
     Args, Chunk, Result,
-    scope_index::{Manifest, SourceChanged},
+    scope_index::{Manifest, SourceChanged, Stamp},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -23,12 +23,29 @@ impl Source {
         let bytes = std::fs::read(path)?;
         let digest = Sha256::digest(&bytes).into();
         let binary = bytes.contains(&0);
-        let mut text = if binary {
+        let text = if binary {
             String::new()
         } else {
-            String::from_utf8_lossy(&bytes).replace("\r\n", "\n")
+            String::from_utf8(bytes)
+                .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
         };
-        text = text.replace('\r', "\n");
+        let text = if text.as_bytes().contains(&b'\r') {
+            let mut normalized = String::with_capacity(text.len());
+            let mut chars = text.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\r' {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    normalized.push('\n');
+                } else {
+                    normalized.push(c);
+                }
+            }
+            normalized
+        } else {
+            text
+        };
         let mut starts = vec![0];
         for (at, _) in text.match_indices('\n') {
             starts.push(at + 1);
@@ -79,12 +96,13 @@ pub struct Corpus {
     pub prose_only: bool,
     pub metadata_bytes: usize,
     pub source_peak_bytes: usize,
+    pub manifest: Option<Manifest>,
 }
 impl Corpus {
     pub fn scan(
         args: &Args,
         scope: &Path,
-        manifest: Option<&Manifest>,
+        filter: &crate::storage::SourceFilter,
         terms: &[String],
     ) -> Result<Self> {
         let mut corpus = Self {
@@ -95,18 +113,8 @@ impl Corpus {
             prose_only: true,
             metadata_bytes: 0,
             source_peak_bytes: 0,
+            manifest: None,
         };
-        if let Some(manifest) = manifest {
-            corpus.budget(
-                manifest.files.capacity() * std::mem::size_of::<crate::scope_index::Stamp>()
-                    + manifest
-                        .files
-                        .iter()
-                        .map(|s| s.path.capacity())
-                        .sum::<usize>()
-                    + manifest.scope.capacity(),
-            )?;
-        }
         let mut files = HashMap::new();
         let mut locations = HashMap::new();
         let pattern = crate::identifier_pattern(&args.query)?;
@@ -127,25 +135,31 @@ impl Corpus {
             })?;
             corpus.corpus_len = corpus.documents.len();
         } else {
-            let manifest = manifest.ok_or("missing source manifest")?;
-            let root = if scope.is_dir() {
-                scope
-            } else {
-                scope.parent().unwrap()
+            let (root, names) = crate::source_files(scope, filter)?;
+            let mut manifest = Manifest {
+                scope: scope.as_os_str().as_encoded_bytes().to_vec(),
+                files: Vec::with_capacity(names.len()),
             };
-            for stamp in manifest.stamps() {
-                let name = crate::filename(&stamp.path);
+            corpus.budget(
+                manifest.scope.capacity()
+                    + manifest.files.capacity() * std::mem::size_of::<Stamp>(),
+            )?;
+            for name in names {
+                crate::request::check()?;
                 let relative = name.strip_prefix(".").unwrap_or(&name);
                 let path = root.join(relative);
                 let source = Source::read(&path).map_err(source_read_error)?;
-                if source.digest != stamp.digest {
-                    return Err(SourceChanged.into());
-                }
+                let stamp = Stamp {
+                    path: name.as_os_str().as_encoded_bytes().to_vec(),
+                    digest: source.digest,
+                };
+                corpus.budget(stamp.path.capacity())?;
+                manifest.files.push(stamp);
                 if source.binary {
                     continue;
                 }
                 corpus.source_peak_bytes = corpus.source_peak_bytes.max(source.resident_bytes());
-                let ranges = crate::splitter::ranges(&source.text, relative)?;
+                let ranges = crate::splitter::ranges(&source.text, relative, &source.starts)?;
                 for (start, end) in ranges {
                     let (start, end) = (start.max(1), end.min(source.lines()));
                     if start > end {
@@ -171,6 +185,7 @@ impl Corpus {
                     )?;
                 }
             }
+            corpus.manifest = Some(manifest);
             corpus.corpus_len = corpus.documents.len();
             if let Some(input) = &args.rg_json {
                 crate::rg_input::visit(input, scope, |path, digest, chunk| {
@@ -375,11 +390,13 @@ impl Reader {
             self.view = Some((doc.file, doc.provided, source));
         }
         let source = &self.view.as_ref().unwrap().2;
-        Ok(crate::make_chunk(
-            file.display.clone(),
-            doc.start,
-            doc.end,
-            source.part(doc.start, doc.end)?.into(),
-        ))
+        Ok(Chunk {
+            path: file.display.clone(),
+            start: doc.start,
+            end: doc.end,
+            content: source.part(doc.start, doc.end)?.into(),
+            counts: HashMap::new(),
+            scores: None,
+        })
     }
 }

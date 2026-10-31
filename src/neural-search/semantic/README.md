@@ -17,7 +17,9 @@ and the ported source files. The semantic runtime targets Linux x64.
 `--model auto` selects Bekko128 for prose-only candidates and LateOn-Code-edge
 for code/mixed scopes. Complete-scope scoring retains sgrep's 75/25 fusion,
 exact-match priority and stable ordering; LateOn consumes all token windows with
-Q4/D64 MaxSim. There is no ANN, FFF prefilter or frecency adjustment. The sibling
+Q4/D64 MaxSim. Shared encoding reuses the request query/asset descriptors; score-only
+moves its source strings and emits no window payloads. A failed writer stops block
+delivery without stopping or replaying encoding. There is no ANN, FFF prefilter or frecency adjustment. The sibling
 `../engine/` separately owns FFF path/content search.
 
 ## CLI and shared service
@@ -48,8 +50,8 @@ changing ordinary CLI JSON.
 - Idle shutdown starts after running/queued work finishes. Metis's
   `[neuralSearch.semantic].idleTimeoutSeconds` defaults to 300 (integer 1–86400);
   status checks do not extend it. `stop` drains the service.
-- Only models stay warm. Each request owns its cache-policy snapshot, query,
-  scratch, mappings, reader leases and diagnostics. Disconnect/timeout cancels
+- Models and at most two read-only asset-verification proofs stay warm. Each
+  request owns its cache-policy snapshot, query, scratch, mappings, leases and diagnostics. Disconnect/timeout cancels
   that request; its workers/discovery are collected before releasing the slot.
   Native cancel is thread-safe; the ORT handle remains on its owner thread.
 
@@ -57,10 +59,13 @@ changing ordinary CLI JSON.
 
 Complete indexes store chunk ranges/text, word counts and tagged FP16
 representations. Format08 stores counts once and derives the current query's DF;
-Format07 remains readable with postings validation. Hits require matching source
-bytes and model/preprocessing identity. Stale, incomplete or corrupt indexes are
-recomputed. Source verification permits at most one complete retry, never partial
-results. The FP16 asset revision below invalidates old FP32/experimental indexes
+Format07 remains readable with postings validation. Hits are provisional: matching
+model/preprocessing identity permits a full cached scan, but its stored source
+manifest must match one final complete content capture before any output. A stale
+hit discards scores and rebuilds in the same request, reusing a compatible query.
+Misses build the snapshot during their first source read, then retain Reader and
+final content checks. Source changes during rebuilding permit one complete retry,
+never partial results. The FP16 asset revision below invalidates old FP32/experimental indexes
 through full-manifest identity, without changing the corpus-record format.
 
 ### Budget and eviction
@@ -90,7 +95,10 @@ Private index/ledger records use mode 0600. Immutable payloads and locked reader
 leases are published atomically; recovery removes only recognized abandoned
 stages with an exited owner and a free kernel lock. Unknown/live objects and
 symlinks remain preserved and charged; unverifiable leases disable caching.
-CRC/metadata are checked at open, vectors during the complete scoring scan.
+Bounded scope metadata can reject a known identity mismatch before the full CRC;
+a possible hit still checks its complete CRC and layout. Record metadata and
+vectors are validated during the full scan. Ranking reopens text without rebuilding
+counts.
 Corruption discards provisional scores and rebuilds with the existing query
 encoder; model/runtime failures are not disguised as cache corruption. Discarded
 work is reported separately. Bounded tasks reuse local Zstd contexts, never a
@@ -108,7 +116,9 @@ runtime/catalog together. No query-time Python, compiler or conversion runs.
 - Online acquisition uses the HF client and `HF_ENDPOINT`, verifies approved
   files, then replaces them atomically without truncating mapped inodes. Warm
   verification receipts bind device/inode/size/mtime/ctime; changed files require
-  full verification. Read-only installations can verify without writing receipts.
+  full verification. When disk receipts cannot be persisted, the process can reuse
+  at most two proofs bound to those same file identities; it never skips the first
+  or changed-file SHA. No new fingerprint key or receipt directory is introduced.
 - `HF_HUB_OFFLINE` values `1`, `true`, `YES` or `On` prohibit acquisition; missing
   or damaged assets fail explicitly. A `--cache-dir` override isolates models,
   parsers and indexes and cannot borrow assets from another store.
@@ -136,7 +146,10 @@ integrity does not imply zero numerical or retrieval-quality loss.
 - Each request uses at most four computing threads including the caller;
   inter-op=1, no spinning. Validation, encoding, scanning/ranking and source
   verification do not overlap their compute pools. Owned `rg --files` is serial.
-- Metadata/DF and cached-code scans use scoped tasks within that ceiling, with
+- Normal Format08 fuses metadata/DF, query frequencies and scoring, with geometry
+  admission limiting additional query state to 1MiB. Wide/large geometries and
+  Format07 retain the bounded two-pass fallback, not an unbounded corpus dictionary.
+  Cached-code and fallback DF scans use scoped tasks within that ceiling, with
   serial small batches. Code batches admit at most 8MiB mapped data / 1MiB raw
   metadata; a larger record runs alone. These are work-admission bounds, not RSS
   limits. Workers join before mapped views are released or recovery begins.

@@ -1,5 +1,5 @@
 //! One model owner per service. ORT stays on its owner thread, never Send/Sync.
-use super::{BlockSink, DocumentBlock, bekko, lateon, native};
+use super::{Delivery, DocumentBlock, EncodeSink, Work, bekko, lateon, native};
 use crate::{Result, cache::Cache, request};
 use half::f16;
 use std::{
@@ -12,7 +12,7 @@ use std::{
     thread,
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 struct Assets {
     directory: PathBuf,
     library: PathBuf,
@@ -58,14 +58,15 @@ struct Counts {
 type QueryReply = Result<(Vec<f32>, usize, native::ScoringKernel)>;
 enum Command {
     Query {
-        assets: Assets,
+        assets: Arc<Assets>,
         text: String,
         context: Arc<request::Context>,
         reply: SyncSender<QueryReply>,
     },
     Document {
-        assets: Assets,
-        query: Vec<f32>,
+        assets: Arc<Assets>,
+        query: Arc<Vec<f32>>,
+        blocks: bool,
         path: String,
         text: String,
         context: Arc<request::Context>,
@@ -77,9 +78,9 @@ enum Event {
         source: std::ops::Range<usize>,
         tokens: usize,
         values: Vec<f16>,
-        ack: SyncSender<Result<()>>,
+        ack: SyncSender<Result<Delivery>>,
     },
-    Done(Result<f64>),
+    Done(Result<(f64, Work)>),
 }
 pub(crate) struct Models {
     sender: Option<SyncSender<Command>>,
@@ -92,38 +93,54 @@ impl Models {
         let (tx, rx) = mpsc::sync_channel::<Command>(3);
         let counts = Arc::new(Counts::default());
         let stats = counts.clone();
-        let owner=thread::Builder::new().name("semantic-model".into()).spawn(move||{
-   let mut model:Option<(Assets,lateon::Encoder)>=None;
-   for command in rx {match command {
-    Command::Query{assets,text,context,reply}=>{
-     let result=request::enter(context,||->QueryReply {
-      request::check()?;
-      if model.as_ref().is_none_or(|(key,_)|*key!=assets){
-       model=None;let encoder=lateon::Encoder::open(&assets.directory,&assets.library)?;
-       stats.code.fetch_add(1,Ordering::Relaxed);model=Some((assets,encoder));
-      }
-      let encoder=&mut model.as_mut().expect("model loaded").1;
-      let (values,tokens)=encoder.query(&text)?;let kernel=encoder.scoring_kernel()?;Ok((values,tokens,kernel))
-     });let _=reply.send(result);
-    },
-    Command::Document{assets,query,path,text,context,reply}=>{
-     let result=request::enter(context,||->Result<f64>{
-      request::check()?;
-      if model.as_ref().is_none_or(|(key,_)|*key!=assets){return Err("ARTIFACT_MISMATCH: code assets changed during a request; retry after drain".into());}
-      let encoder=&mut model.as_mut().expect("matching model").1;
-      encoder.score_to(&query,&path,&text,&mut |block|{
-       request::check()?;
-       let DocumentBlock::Code{source,input_tokens,values}=block else{return Err("shared code model returned text".into())};
-       let (ack,done)=mpsc::sync_channel(0);
-       reply.send(Event::Window{source,tokens:input_tokens,values:values.to_vec(),ack}).map_err(|_|"shared document consumer disconnected")?;
-       // Rendezvous prevents model encoding and the request's writer/CRC from
-       // becoming an extra simultaneous computing thread for this request.
-       done.recv().map_err(|_|"shared document sink disconnected")??;request::check()
-      })
-     });let _=reply.send(Event::Done(result));
-    }
-   }}
-  })?;
+        let owner = thread::Builder::new().name("semantic-model".into()).spawn(move || {
+            let mut model: Option<(Arc<Assets>, lateon::Encoder)> = None;
+            for command in rx {
+                match command {
+                    Command::Query { assets, text, context, reply } => {
+                        let result = request::enter(context, || -> QueryReply {
+                            request::check()?;
+                            if model.as_ref().is_none_or(|(key, _)| *key != assets) {
+                                model = None;
+                                let encoder = lateon::Encoder::open(&assets.directory, &assets.library)?;
+                                stats.code.fetch_add(1, Ordering::Relaxed);
+                                model = Some((assets, encoder));
+                            }
+                            let encoder = &mut model.as_mut().expect("model loaded").1;
+                            let (values, tokens) = encoder.query(&text)?;
+                            let kernel = encoder.scoring_kernel()?;
+                            Ok((values, tokens, kernel))
+                        });
+                        let _ = reply.send(result);
+                    }
+                    Command::Document { assets, query, blocks, path, text, context, reply } => {
+                        let result = request::enter(context, || -> Result<(f64, Work)> {
+                            request::check()?;
+                            if model.as_ref().is_none_or(|(key, _)| *key != assets) {
+                                return Err("ARTIFACT_MISMATCH: code assets changed during a request; retry after drain".into());
+                            }
+                            let encoder = &mut model.as_mut().expect("matching model").1;
+                            let mut deliver = |block: DocumentBlock<'_>| -> Result<Delivery> {
+                                request::check()?;
+                                let DocumentBlock::Code { source, input_tokens, values } = block else {
+                                    return Err("shared code model returned text".into());
+                                };
+                                let (ack, done) = mpsc::sync_channel(0);
+                                reply.send(Event::Window {
+                                    source, tokens: input_tokens, values: values.to_vec(), ack,
+                                }).map_err(|_| "shared document consumer disconnected")?;
+                                // Encoding and writer/CRC must not compute concurrently.
+                                let delivery = done.recv().map_err(|_| "shared document sink disconnected")??;
+                                request::check()?;
+                                Ok(delivery)
+                            };
+                            encoder.score_to(&query, &path, &text, if blocks { Some(&mut deliver) } else { None })
+                        });
+                        let _ = reply.send(Event::Done(result));
+                    }
+                }
+            }
+        })?;
         Ok(Self {
             sender: Some(tx),
             owner: Some(owner),
@@ -132,7 +149,13 @@ impl Models {
         })
     }
     pub fn stats(&self) -> serde_json::Value {
-        serde_json::json!({"lateon_loads":self.counts.code.load(Ordering::Relaxed),"bekko_loads":self.counts.text.load(Ordering::Relaxed),"native_runtime_creations":self.counts.runtimes.load(Ordering::Relaxed),"native_encode_active":self.counts.encoding.load(Ordering::Relaxed),"native_encode_peak":self.counts.encoding_peak.load(Ordering::Relaxed)})
+        serde_json::json!({
+            "lateon_loads": self.counts.code.load(Ordering::Relaxed),
+            "bekko_loads": self.counts.text.load(Ordering::Relaxed),
+            "native_runtime_creations": self.counts.runtimes.load(Ordering::Relaxed),
+            "native_encode_active": self.counts.encoding.load(Ordering::Relaxed),
+            "native_encode_peak": self.counts.encoding_peak.load(Ordering::Relaxed),
+        })
     }
     pub fn encoding_started(&self) {
         let active = self.counts.encoding.fetch_add(1, Ordering::Relaxed) + 1;
@@ -173,11 +196,11 @@ impl Models {
         Ok(slot.as_ref().expect("text model loaded").1.clone())
     }
     pub(super) fn code(&self, assets: &Cache, text: &str) -> Result<(Client, Vec<f32>, usize)> {
-        let key = Assets::capture(
+        let key = Arc::new(Assets::capture(
             assets.model_directory("lateon-edge")?,
             assets.native_library(),
             false,
-        )?;
+        )?);
         let context = request::current().ok_or("shared encoder requires request context")?;
         let (reply, rx) = mpsc::sync_channel(0);
         let sender = self.sender.as_ref().ok_or("model service shutting down")?;
@@ -212,7 +235,7 @@ impl Drop for Models {
 pub(crate) struct Client {
     sender: SyncSender<Command>,
     kernel: native::ScoringKernel,
-    assets: Assets,
+    assets: Arc<Assets>,
 }
 impl Client {
     fn kernel(&self) -> native::ScoringKernel {
@@ -220,20 +243,21 @@ impl Client {
     }
     pub fn score_to(
         &self,
-        query: &[f32],
-        path: &str,
-        text: &str,
-        sink: &mut BlockSink<'_>,
-    ) -> Result<f64> {
+        query: &Arc<Vec<f32>>,
+        path: String,
+        text: String,
+        mut sink: Option<&mut EncodeSink<'_>>,
+    ) -> Result<(f64, Work)> {
         request::check()?;
         let context = request::current().ok_or("shared encoder requires request context")?;
         let (reply, rx) = mpsc::sync_channel(0);
         self.sender
             .send(Command::Document {
                 assets: self.assets.clone(),
-                query: query.to_vec(),
-                path: path.into(),
-                text: text.into(),
+                query: query.clone(),
+                blocks: sink.is_some(),
+                path,
+                text,
                 context,
                 reply,
             })
@@ -247,7 +271,8 @@ impl Client {
                     ack,
                 } => {
                     let result = request::check().and_then(|_| {
-                        sink(DocumentBlock::Code {
+                        let delivery = sink.as_mut().ok_or("unexpected code model window")?;
+                        delivery(DocumentBlock::Code {
                             source,
                             input_tokens: tokens,
                             values: &values,
@@ -270,13 +295,13 @@ pub(crate) enum CodeEncoder {
 impl CodeEncoder {
     pub fn score_to(
         &mut self,
-        query: &[f32],
-        path: &str,
-        text: &str,
-        sink: &mut BlockSink<'_>,
-    ) -> Result<f64> {
+        query: &Arc<Vec<f32>>,
+        path: String,
+        text: String,
+        sink: Option<&mut EncodeSink<'_>>,
+    ) -> Result<(f64, Work)> {
         match self {
-            Self::Local(e) => e.score_to(query, path, text, sink),
+            Self::Local(e) => e.score_to(query, &path, &text, sink),
             Self::Shared(e) => e.score_to(query, path, text, sink),
         }
     }

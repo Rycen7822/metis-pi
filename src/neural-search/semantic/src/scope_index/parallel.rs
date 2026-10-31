@@ -1,5 +1,5 @@
 //! Request-local code scanning. No encoder handles or decoded corpus cross tasks.
-use super::{HEADER, ScopeIndex, number, pages};
+use super::{HEADER, ScopeIndex, lexical::Statistics, number, pages};
 use crate::{
     Result,
     index::{Corrupt, codec::Decoder},
@@ -30,7 +30,7 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 #[derive(Default)]
 struct Part {
-    items: Vec<(usize, f64, f64, bool)>,
+    items: Vec<(usize, f64, f64, bool, Vec<usize>)>,
     work: Work,
     error: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
@@ -81,6 +81,7 @@ impl ScopeIndex {
         code: &CodeScan<'_>,
         avg: f64,
         exact: Option<&regex::Regex>,
+        words: Option<&[String]>,
         next: &AtomicUsize,
         end: usize,
         stop: &AtomicBool,
@@ -94,7 +95,14 @@ impl ScopeIndex {
                     break;
                 }
                 let record = self.record(id, &mut decoder)?;
-                let lexical = self.lexical_score(&record.chunk, avg);
+                let lexical = if words.is_none() {
+                    self.lexical_score(&record, avg)
+                } else {
+                    -0.0
+                };
+                let frequencies = words
+                    .map(|words| Statistics::row(&record, words))
+                    .unwrap_or_default();
                 let exact = exact.is_some_and(|pattern| pattern.is_match(&record.chunk.content));
                 let score = code.score_blocks(
                     |sink| {
@@ -107,7 +115,7 @@ impl ScopeIndex {
                     },
                     &mut part.work,
                 )?;
-                part.items.push((id, score, lexical, exact));
+                part.items.push((id, score, lexical, exact, frequencies));
             }
             Ok(())
         })();
@@ -126,6 +134,7 @@ impl ScopeIndex {
         exact_pattern: Option<&regex::Regex>,
         lexical: &mut [f64],
         exact: &mut HashSet<usize>,
+        mut statistics: Option<&mut Statistics<'_>>,
         limit: usize,
     ) -> ScanOutcome {
         let mut outcome = ScanOutcome {
@@ -134,6 +143,7 @@ impl ScopeIndex {
             worker_limit: 1,
             batches: 0,
         };
+        let words = statistics.as_ref().map(|s| s.words);
         let result = (|| -> Result<Vec<f64>> {
             let mut similarities = vec![0.0; self.count];
             let mut start = 0;
@@ -155,7 +165,7 @@ impl ScopeIndex {
                         match thread::Builder::new()
                             .name("semantic-scan".into())
                             .spawn_scoped(scope, move || {
-                                self.scan_part(code, avg, exact_pattern, next, end, stop)
+                                self.scan_part(code, avg, exact_pattern, words, next, end, stop)
                             }) {
                             Ok(handle) => handles.push(handle),
                             Err(error) => {
@@ -169,7 +179,15 @@ impl ScopeIndex {
                         }
                     }
                     if parts.is_empty() {
-                        parts.push(self.scan_part(code, avg, exact_pattern, &next, end, &stop));
+                        parts.push(self.scan_part(
+                            code,
+                            avg,
+                            exact_pattern,
+                            words,
+                            &next,
+                            end,
+                            &stop,
+                        ));
                     }
                     for handle in handles {
                         match handle.join() {
@@ -191,7 +209,10 @@ impl ScopeIndex {
                 for part in parts {
                     outcome.work.semantic_scored_chunks += part.work.semantic_scored_chunks;
                     outcome.work.scored_document_tokens += part.work.scored_document_tokens;
-                    for (id, score, bm25, is_exact) in part.items {
+                    for (id, score, bm25, is_exact, frequencies) in part.items {
+                        if let Some(statistics) = &mut statistics {
+                            statistics.rows[id] = frequencies;
+                        }
                         similarities[id] = score;
                         lexical[id] = bm25;
                         if is_exact {

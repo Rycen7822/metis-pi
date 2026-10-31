@@ -1,6 +1,6 @@
-//! Complete record metadata/DF validation, before query encoding or scoring.
+//! Layout validation and bounded metadata/DF fallback for legacy or wide scopes.
 use super::{HEADER, ScopeIndex, number, pages, parallel};
-use crate::{Result, index::codec::Decoder, semantic::Kind};
+use crate::{Result, index::codec::Decoder};
 use std::{
     collections::BTreeMap,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,9 +15,27 @@ struct Summary {
     df: Vec<usize>,
 }
 impl ScopeIndex {
+    pub(super) fn validate_layout(&self) -> Result<()> {
+        let mut boundary = HEADER;
+        for id in 0..self.count {
+            crate::request::check()?;
+            let at = number(&self.map, self.record_table + id * 16)?;
+            let bytes = number(&self.map, self.record_table + id * 16 + 8)?;
+            if at != boundary || at.checked_add(bytes).is_none_or(|n| n > self.record_table) {
+                return Err("invalid record boundary table".into());
+            }
+            if number(&self.map, at + 8)? != bytes {
+                return Err("record length disagrees with scope table".into());
+            }
+            boundary = at + bytes;
+        }
+        if boundary != self.record_table {
+            return Err("non-contiguous records".into());
+        }
+        Ok(())
+    }
     fn validation_part(
         &self,
-        kind: Kind,
         keys: &[&str],
         next: &AtomicUsize,
         end: usize,
@@ -35,16 +53,10 @@ impl ScopeIndex {
                 break;
             }
             let record = self.record(id, &mut decoder)?;
-            if record.kind() != kind {
-                return Err("record/scope model mismatch".into());
-            }
-            part.length = record
-                .chunk
-                .counts
-                .values()
-                .try_fold(part.length, |sum, n| {
-                    sum.checked_add(*n).ok_or("corpus length overflow")
-                })?;
+            part.length = part
+                .length
+                .checked_add(record.length)
+                .ok_or("corpus length overflow")?;
             if keys.len() <= record.chunk.counts.len() {
                 for (i, key) in keys.iter().enumerate() {
                     if record.chunk.counts.contains_key(*key) {
@@ -63,12 +75,10 @@ impl ScopeIndex {
     }
     pub(super) fn validate_records(
         &mut self,
-        kind: Kind,
         query_df: &mut BTreeMap<String, usize>,
     ) -> Result<usize> {
         let mut length = 0usize;
         let mut start = 0;
-        let mut next_boundary = HEADER;
         let mut decoder = Decoder::new()?;
         // Two usize slots per &str key, plus one usize per worker/term.
         let term_bytes = query_df
@@ -83,20 +93,11 @@ impl ScopeIndex {
         while start < self.count {
             crate::request::check()?;
             let (end, _, raw_metadata) = self.batch_end(start)?;
-            // Validate the chain in record order before handing out its records.
-            for id in start..end {
-                let at = number(&self.map, self.record_table + id * 16)?;
-                let bytes = number(&self.map, self.record_table + id * 16 + 8)?;
-                if at != next_boundary
-                    || at.checked_add(bytes).is_none_or(|n| n > self.record_table)
-                {
-                    return Err("invalid record boundary table".into());
-                }
-                if number(&self.map, at + 8)? != bytes {
-                    return Err("record length disagrees with scope table".into());
-                }
-                next_boundary = at + bytes;
-            }
+            let next_boundary = if end == self.count {
+                self.record_table
+            } else {
+                number(&self.map, self.record_table + end * 16)?
+            };
             let count = parallel::workers(
                 end - start,
                 raw_metadata,
@@ -109,12 +110,9 @@ impl ScopeIndex {
                 for id in start..end {
                     crate::request::check()?;
                     let record = self.record(id, &mut decoder)?;
-                    if record.kind() != kind {
-                        return Err("record/scope model mismatch".into());
-                    }
-                    length = record.chunk.counts.values().try_fold(length, |sum, n| {
-                        sum.checked_add(*n).ok_or("corpus length overflow")
-                    })?;
+                    length = length
+                        .checked_add(record.length)
+                        .ok_or("corpus length overflow")?;
                     if query_df.len() <= record.chunk.counts.len() {
                         for (word, df) in query_df.iter_mut() {
                             if record.chunk.counts.contains_key(word) {
@@ -138,10 +136,10 @@ impl ScopeIndex {
                     let run = || {
                         let result = if let Some(context) = &context {
                             crate::request::enter(context.clone(), || {
-                                self.validation_part(kind, &keys, &next, end, &stop)
+                                self.validation_part(&keys, &next, end, &stop)
                             })
                         } else {
-                            self.validation_part(kind, &keys, &next, end, &stop)
+                            self.validation_part(&keys, &next, end, &stop)
                         };
                         if result.is_err() {
                             stop.store(true, Ordering::Release);
@@ -213,9 +211,6 @@ impl ScopeIndex {
                 next_boundary,
             )?;
             start = end;
-        }
-        if next_boundary != self.record_table {
-            return Err("non-contiguous records".into());
         }
         Ok(length)
     }

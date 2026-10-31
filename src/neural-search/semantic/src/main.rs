@@ -32,7 +32,11 @@ enum ModelChoice {
 static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([a-z0-9])([A-Z])").unwrap());
 static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{N}]+").unwrap());
 static STOP: LazyLock<HashSet<&str>> = LazyLock::new(|| {
-    "a an and are as at be been but by can do does for from had has have how i if in into is it its me not of on or our should so that the their them there these they this to use using was we what when where which who will with would you your function description purpose input output".split_whitespace().collect()
+    concat!(
+        "a an and are as at be been but by can do does for from had has have how i if in into is it its me not of on or our ",
+        "should so that the their them there these they this to use using was we what when where which who will with would ",
+        "you your function description purpose input output"
+    ).split_whitespace().collect()
 });
 
 #[derive(Parser)]
@@ -195,11 +199,16 @@ fn source_files<'a>(
     Ok((root, files))
 }
 
-fn make_chunk(path: String, start: usize, end: usize, content: String) -> Chunk {
+fn chunk_counts(path: &str, content: &str) -> HashMap<String, usize> {
     let mut counts = HashMap::new();
-    for word in words(&content).into_iter().chain(words(&path)) {
+    for word in words(content).into_iter().chain(words(path)) {
         *counts.entry(word).or_insert(0) += 1;
     }
+    counts
+}
+
+fn make_chunk(path: String, start: usize, end: usize, content: String) -> Chunk {
+    let counts = chunk_counts(&path, &content);
     Chunk {
         path,
         start,
@@ -279,13 +288,8 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         .as_ref()
         .map(storage::IndexCache::source_filter)
         .unwrap_or_default();
-    let manifest_started = std::time::Instant::now();
-    let manifest = if args.stdin {
-        None
-    } else {
-        Some(scope_index::Manifest::capture(&path, &filter)?)
-    };
-    let manifest_capture_us = manifest_started.elapsed().as_micros();
+    // A cached result remains provisional until its stored source snapshot is
+    // matched by the final complete content capture. No second hash up front.
     let cache_allowed = !args.no_cache
         && !args.fresh_assets
         && !args.stdin
@@ -294,17 +298,30 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     let mut cached_scorer = None;
     if cache_allowed
         && !args.refresh_cache
-        && let (Some(config), Some(manifest)) = (&index_cache, &manifest)
+        && let Some(config) = &index_cache
     {
         let target = config.target(&path, args.model);
-        match scope_index::ScopeIndex::open(config, &target, manifest, &cache, args.model, &terms) {
+        match scope_index::ScopeIndex::open(config, &target, &path, &cache, args.model, &terms) {
             Ok(index) => {
-                match index.search(args, &cache, &mut cached_scorer, trace.as_mut()) {
+                let search_result = index.search(args, &cache, &mut cached_scorer, trace.as_mut());
+                let verify_started = std::time::Instant::now();
+                let search_result = match search_result {
+                    Ok(result) => index.verify_source(&path, &filter).map(|_| result),
+                    // An obsolete auto/code snapshot must not reject a current
+                    // text scope by its different query-token budget.
+                    Err(error) if error.is::<semantic::QueryTooLong>() => {
+                        match index.verify_source(&path, &filter) {
+                            Ok(()) => Err(error),
+                            Err(changed) => Err(changed),
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                let source_verify_us = verify_started.elapsed().as_micros();
+                match search_result {
                     Ok((results, work, phases)) => {
                         diagnostics::check_scope(work, index.len(), 0)?;
-                        let verify_started = std::time::Instant::now();
-                        manifest.verify(&path, &filter)?;
-                        let source_verify_us = verify_started.elapsed().as_micros();
+
                         if let Some(trace) = trace {
                             trace.commit(work, index.len(), 0, true)?;
                         }
@@ -313,7 +330,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                                 serde_json::json!({
                                     "kind":"development_cli_stages_not_quality_or_cold_page_acceptance",
                                     "cache_hit":true,"chunks":index.len(),
-                                    "manifest_capture_us":manifest_capture_us,"cache_phases":phases,
+                                    "manifest_capture_us":0,"source_snapshot_passes":1,"cache_phases":phases,
                                     "source_verify_us":source_verify_us,"search_total_us":started.elapsed().as_micros()
                                 })
                             },
@@ -323,7 +340,10 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                         )?;
                         return Ok(results);
                     }
-                    Err(error) if error.is::<index::Corrupt>() => {
+                    Err(error)
+                        if error.is::<index::Corrupt>()
+                            || error.is::<scope_index::SourceChanged>() =>
+                    {
                         crate::request::diagnostic(format_args!(
                             "sgrep: cache miss during score consumption: {error}"
                         ));
@@ -342,9 +362,17 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
             Err(_) => {}
         }
     }
-    let mut corpus = corpus::Corpus::scan(args, &path, manifest.as_ref(), &terms)?;
+    let mut corpus = corpus::Corpus::scan(args, &path, &filter, &terms)?;
+    let manifest = corpus.manifest.as_ref();
     if corpus.len() == 0 {
-        let work = semantic::Work::default();
+        corpus.verify_provided()?;
+        if let Some(manifest) = manifest {
+            manifest.verify(&path, &filter)?;
+        }
+        let work = cached_scorer
+            .as_ref()
+            .map(semantic::Scorer::work)
+            .unwrap_or_default();
         if let Some(trace) = trace {
             trace.commit(work, 0, 0, false)?;
         }
@@ -373,7 +401,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     };
     let model_ready = std::time::Instant::now();
     let mut builder =
-        if cache_allowed && let (Some(config), Some(manifest)) = (&index_cache, &manifest) {
+        if cache_allowed && let (Some(config), Some(manifest)) = (&index_cache, manifest) {
             match scope_index::Builder::begin(
                 config,
                 &config.target(&path, args.model),
@@ -396,8 +424,8 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     let mut similarities = Vec::with_capacity(corpus.len());
     let scoring_source_peak = corpus.visit(|chunk| {
         let score = match builder.as_mut() {
-            Some(builder) => builder.encode(&mut scorer, &chunk)?,
-            None => scorer.score_document(&chunk.path, &chunk.content)?,
+            Some(builder) => builder.encode(&mut scorer, chunk)?,
+            None => scorer.score_document(chunk.path, chunk.content)?,
         };
         similarities.push(score);
         Ok(())
@@ -420,7 +448,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     )?;
     drop(reader);
     corpus.verify_provided()?;
-    if let Some(manifest) = &manifest {
+    if let Some(manifest) = manifest {
         manifest.verify(&path, &filter)?;
     }
     if let Some(builder) = builder {
