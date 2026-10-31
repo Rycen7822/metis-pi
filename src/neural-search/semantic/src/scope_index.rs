@@ -19,7 +19,7 @@ use std::{
     fs::File,
     io::{self, BufReader, Read, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
-    path::Path,
+    path::{Path, PathBuf},
 };
 const HEADER: usize = 128;
 const MAGIC: &[u8; 8] = b"SGREPS08";
@@ -63,20 +63,74 @@ pub struct Manifest {
     pub scope: Vec<u8>,
     pub files: Vec<Stamp>,
 }
+fn capture_files(root: &Path, files: &[PathBuf]) -> Result<Vec<Stamp>> {
+    let mut stamps = Vec::with_capacity(files.len());
+    // Reuse I/O scratch only; each file still has its own fresh digest.
+    let mut block = [0u8; 65536];
+    for path in files {
+        crate::request::check()?;
+        let digest = file_digest_with_buffer(&root.join(path), &mut block)?;
+        stamps.push(Stamp {
+            path: path.as_os_str().as_bytes().to_vec(),
+            digest,
+        });
+    }
+    Ok(stamps)
+}
+
+fn capture_parallel(root: &Path, files: &[PathBuf]) -> Result<Vec<Stamp>> {
+    let workers = crate::semantic::computing_threads().min(files.len()).max(1);
+    if workers == 1 {
+        return capture_files(root, files);
+    }
+    let parts: Vec<_> = files.chunks(files.len().div_ceil(workers)).collect();
+    let context = crate::request::current();
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = parts[1..]
+            .iter()
+            .map(|part| {
+                let context = context.clone();
+                std::thread::Builder::new()
+                    .name("semantic-source".into())
+                    .spawn_scoped(scope, move || match context {
+                        Some(context) => {
+                            crate::request::enter(context, || capture_files(root, part))
+                        }
+                        None => capture_files(root, part),
+                    })
+            })
+            .collect();
+        let mut result = capture_files(root, parts[0]);
+        for job in jobs {
+            // Join every started worker even if the caller or another worker failed.
+            let part = match job {
+                Ok(job) => job
+                    .join()
+                    .unwrap_or_else(|_| Err("source digest worker panicked".into())),
+                Err(error) => Err(error.into()),
+            };
+            result = match (result, part) {
+                (Ok(mut stamps), Ok(mut more)) => {
+                    stamps.append(&mut more);
+                    Ok(stamps)
+                }
+                (Err(error), _) => Err(error),
+                (_, Err(error)) => Err(error),
+            };
+        }
+        result
+    })
+}
+
 impl Manifest {
     pub fn capture(scope: &Path, filter: &crate::storage::SourceFilter) -> Result<Self> {
         let (root, files) = crate::source_files(scope, filter)?;
-        let mut stamps = Vec::with_capacity(files.len());
-        // Reuse I/O scratch only; each file still has its own fresh digest.
-        let mut block = [0u8; 65536];
-        for path in files {
-            crate::request::check()?;
-            let digest = file_digest_with_buffer(&root.join(&path), &mut block)?;
-            stamps.push(Stamp {
-                path: path.as_os_str().as_bytes().to_vec(),
-                digest,
-            });
-        }
+        // Amortize scoped thread startup without adding a persistent I/O pool.
+        let stamps = if files.len() < 128 {
+            capture_files(root, &files)?
+        } else {
+            capture_parallel(root, &files)?
+        };
         Ok(Self {
             scope: scope.as_os_str().as_bytes().to_vec(),
             files: stamps,

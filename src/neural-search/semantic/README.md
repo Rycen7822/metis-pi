@@ -70,7 +70,10 @@ manifest must match one final complete content capture before any output. A stal
 hit discards scores and rebuilds in the same request, reusing a compatible query.
 Misses build the snapshot during their first source read, then retain Reader and
 final content checks. Source changes during rebuilding permit one complete retry,
-never partial results. The FP16 asset revision below invalidates old FP32/experimental indexes
+never partial results. Final content capture remains complete: fewer than 128 files
+are hashed serially; larger scopes use at most four request-owned lanes with
+bounded scratch. Cancellation or failure collects every worker before returning.
+The FP16 asset revision below invalidates old FP32/experimental indexes
 through full-manifest identity, without changing the corpus-record format.
 
 ### Budget and eviction
