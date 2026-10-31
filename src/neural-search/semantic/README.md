@@ -133,13 +133,21 @@ AVX2/F16C or scalar decoding fills the existing bounded arena, never a full FP32
 table copy. Document representations remain FP16; Bekko's contract is unchanged.
 
 The supported bundle requires native **ABI2**, `strict_artifact_contract=1` and
-LateOn manifest2 (`embedding_dtype=float16`, `backbone_dtype=float32`). Its table
-is `embedding_preln_f16.pack`: magic `SGRPLN16`, pack-layout version1, a 64-byte
-header and 50370×256 half values (25,789,504 bytes). Update CLI/native/assets as
-one bundle: ABI1 callers and FP32 tables fail closed, not by filename reinterpretation.
+LateOn manifest3 (`arithmetic_revision=ort-1.31-erf-v1`, FP16 embeddings/FP32 backbone).
+Its `embedding_preln_f16.pack` table uses magic `SGRPLN16`, pack-layout version1,
+a 64-byte header and 50370×256 half values (25,789,504 bytes). Update CLI/native/assets as
+one bundle: ABI1 callers, FP32 tables and older arithmetic manifests fail closed.
+The complete manifest invalidates old document indexes; no new fingerprint is needed.
 The [C header](native/include/sgrep_runtime.h) defines buffer ownership and errors.
 FP16 storage is intentionally lossy relative to the FP32 source; valid asset
 integrity does not imply zero numerical or retrieval-quality loss.
+
+GeGLU owns one public ORT CPU `Erf` operator per graph kernel. It reuses its output
+for scale → in-place Erf → gate, sharing the existing ORT pool without a new
+tensor scratch or math-library dependency. ORT/MLAS Erf is not bit-identical to
+the previous scalar `std::erf`; the arithmetic revision prevents mixed encodings.
+Native output/MaxSim boundaries share guarded SIMD finite classification while
+retaining scalar fallbacks and the original validation/error semantics.
 
 ## CPU and memory bounds
 
@@ -157,9 +165,10 @@ integrity does not imply zero numerical or retrieval-quality loss.
   memory limit. Misses/no-cache rehydrate one source file at a time; hits consume
   immutable mappings in bounded resident windows. Releasing this reader's PTEs
   does not evict shared file-cache pages or remove their cgroup/PSS charge.
-- Attention/scoring use guarded SIMD and scalar fallbacks. Native builds disable
-  fast-math and FMA contraction; neither larger disk tiers nor shared service
-  increase a request's compute/arena ceiling. Shared resident-model memory and
+- Attention/scoring use guarded SIMD and scalar fallbacks. Adapter builds disable
+  fast-math and FMA contraction; ORT/MLAS retains its pinned FP32 kernel semantics.
+  Neither larger disk tiers nor shared service increase a request's compute/arena
+  ceiling. Shared resident-model memory and
   three active requests require their own resource qualification.
 
 ## Build and staging
@@ -178,8 +187,10 @@ cmake --install "$BUILD_ROOT/native" --prefix "$BUILD_ROOT/runtime-stage"
 `ORT_SOURCE` must be commit `402979ac1bef89dcd55add41eaa7277c407599eb` with the
 owned patches applied. `ORT_BUILD` is its reduced non-minimal CPU `Release` build,
 with `onnxruntime_USE_TELEMETRY=OFF` and the exports in
-[native/ort-extra-symbols.txt](native/ort-extra-symbols.txt). A system ORT is not
-interchangeable; telemetry otherwise adds a process-lifetime SDK worker.
+[native/ort-extra-symbols.txt](native/ort-extra-symbols.txt). Its reduced registry must
+include [native/ort-required-operators.config](native/ort-required-operators.config):
+serialized graph operators alone omit the runtime-invoked CPU Erf kernel. A system
+ORT is not interchangeable; telemetry otherwise adds a process-lifetime SDK worker.
 
 Stage native libraries through CMake: installation sets `$ORIGIN`-only RPATH,
 unlike copying the build-tree `.so`. Supply the CLI, pinned sibling ORT and assets

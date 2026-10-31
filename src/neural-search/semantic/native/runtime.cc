@@ -90,7 +90,8 @@ struct sgrep_runtime {
     std::ifstream stream(manifest_path);
     if(!stream) throw std::runtime_error("cannot open LateOn manifest");
     const json manifest=json::parse(stream);
-    require(manifest.at("format_version")==2 && manifest.at("model")=="lateon_code_edge" &&
+    require(manifest.at("format_version")==3 && manifest.at("arithmetic_revision")=="ort-1.31-erf-v1" &&
+      manifest.at("model")=="lateon_code_edge" &&
       manifest.at("revision")=="4bcdf5ed93f791259eb130b577a240f753d68dd8" &&
       manifest.at("rows")==50370 && manifest.at("hidden")==256 && manifest.at("dimensions")==48 &&
       manifest.at("embedding_dtype")=="float16" && manifest.at("backbone_dtype")=="float32" &&
@@ -156,7 +157,8 @@ struct sgrep_runtime {
       {"device","cpu"},{"threads",state.threads},
       {"query_forward_count",query_forwards.load()},{"document_forward_count",document_forwards.load()},
       {"query_tokens",query_tokens.load()},{"document_tokens",document_tokens.load()},
-      {"graph_format",graph_format},{"embedding_storage_dtype","float16"},
+      {"graph_format",graph_format},{"arithmetic_revision","ort-1.31-erf-v1"},
+      {"embedding_storage_dtype","float16"},
       {"embedding_compute_dtype","float32"},{"embedding_mapped_bytes",table.bytes},
       {"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},
       {"forward_count",forward_count.load()},{"max_input_tokens",longest_input.load()},

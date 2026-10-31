@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #if defined(__x86_64__)
 #include <immintrin.h>
@@ -92,8 +93,17 @@ void normalize256(const float* input, const float* gamma, float* output) {
 struct Kernel {
   Kind kind;
   KernelState* state;
-  Ort::Op matmul{nullptr};
+  Ort::Op matmul{nullptr}, erf{nullptr};
   Kernel(const CustomOp& op, const OrtKernelInfo* info) : kind(op.kind), state(op.state) {
+    if (kind == Kind::GeGLU) {
+      const char* names[] = {"T"};
+      const ONNXTensorElementDataType types[] = {ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+      try {
+        erf = Ort::Op::Create(info, "Erf", "", 13, names, types, 1, nullptr, 0, 1, 1);
+      } catch (const Ort::Exception& error) {
+        throw std::runtime_error(std::string("ORT CPU Erf kernel required (ort-required-operators.config): ") + error.what());
+      }
+    }
     if (kind == Kind::Output) {
       const char* names[] = {"T"};
       const ONNXTensorElementDataType types[] = {ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
@@ -135,7 +145,8 @@ struct Kernel {
   void local(Ort::KernelContext& ctx) {
     auto query = ctx.GetInput(0), key = ctx.GetInput(1), value = ctx.GetInput(2);
     const auto dimensions = shape(query);
-    require(dimensions.size()==3 && dimensions[0]==1 && dimensions[2]==256 && dimensions[1]>0 && dimensions[1]<=2048, "invalid local attention shape");
+    require(dimensions.size()==3 && dimensions[0]==1 && dimensions[2]==256 &&
+      dimensions[1]>0 && dimensions[1]<=2048, "invalid local attention shape");
     require(shape(key)==dimensions && shape(value)==dimensions, "local Q/K/V shape mismatch");
     const size_t length = dimensions[1], blocks = (length+31)/32, work = 4*blocks;
     const size_t jobs = std::min<size_t>(state->threads, work);
@@ -181,7 +192,8 @@ struct Kernel {
   void residual_norm(Ort::KernelContext& ctx) {
     auto skip=ctx.GetInput(0), addition=ctx.GetInput(1), gamma=ctx.GetInput(2);
     const auto dimensions=shape(skip);
-    require(dimensions.size()==2 && dimensions[1]==256 && shape(addition)==dimensions && shape(gamma)==std::vector<int64_t>({256}), "invalid residual/LN shape");
+    require(dimensions.size()==2 && dimensions[1]==256 && shape(addition)==dimensions &&
+      shape(gamma)==std::vector<int64_t>({256}), "invalid residual/LN shape");
     const float* a=skip.GetTensorData<float>(), *b=addition.GetTensorData<float>(), *g=gamma.GetTensorData<float>();
     float* residual=ctx.GetOutput(0,dimensions).GetTensorMutableData<float>();
     float* normalized=ctx.GetOutput(1,dimensions).GetTensorMutableData<float>();
@@ -196,11 +208,22 @@ struct Kernel {
     require(dimensions.size()==2 && dimensions[1]==768, "invalid GeGLU shape");
     const int64_t out_shape[]={dimensions[0],384};
     const float* in=input.GetTensorData<float>();
-    float* out=ctx.GetOutput(0,out_shape,2).GetTensorMutableData<float>();
-    parallel(ctx,dimensions[0],*state,[&](size_t row,size_t) {
-      for (size_t d=0; d<384; ++d) {
-        const float x=in[row*768+d];
-        out[row*384+d]=(0.5f*x*(1.0f+std::erf(x*0.7071067811865475244f)))*in[row*768+384+d];
+    auto result = ctx.GetOutput(0, out_shape, 2);
+    float* out = result.GetTensorMutableData<float>();
+    // Reuse the output for the pointwise Erf, then finish the gate. Its CPU
+    // kernel shares our ORT pool; no tensor scratch or nested parallel region.
+    parallel(ctx, dimensions[0], *state, [&](size_t row, size_t) {
+      for (size_t d = 0; d < 384; ++d) out[row*384+d] = in[row*768+d] * 0.7071067811865475244f;
+    });
+    if (state->cancelled.load()) return;
+    const OrtValue* inputs[] = {result};
+    OrtValue* outputs[] = {result};
+    erf.Invoke(ctx.GetOrtKernelContext(), inputs, 1, outputs, 1);
+    if (state->cancelled.load()) return;
+    parallel(ctx, dimensions[0], *state, [&](size_t row, size_t) {
+      for (size_t d = 0; d < 384; ++d) {
+        const float x = in[row*768+d];
+        out[row*384+d] = (0.5f*x*(1.0f+out[row*384+d]))*in[row*768+384+d];
       }
     });
   }

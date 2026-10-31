@@ -21,6 +21,8 @@ type Tokenizer = tokenizers::TokenizerImpl<
 #[derive(Deserialize)]
 struct Manifest {
     format_version: u32,
+    #[serde(default)]
+    arithmetic_revision: String,
     embedding_file: String,
     graph_format: String,
     backbone_dtype: String,
@@ -48,7 +50,8 @@ impl Encoder {
         let manifest_path = model.join("manifest.json");
         let config: Manifest =
             serde_json::from_reader(BufReader::new(File::open(&manifest_path)?))?;
-        if config.format_version != 2
+        if config.format_version != 3
+            || config.arithmetic_revision != "ort-1.31-erf-v1"
             || config.graph_format != "ort"
             || config.backbone_dtype != "float32"
             || config.embedding_dtype != "float16"
