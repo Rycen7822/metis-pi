@@ -1,6 +1,7 @@
 #include "include/sgrep_runtime.h"
 #include "custom_ops.h"
 #include "half.h"
+#include "finite.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -156,7 +157,8 @@ struct sgrep_runtime {
       {"query_forward_count",query_forwards.load()},{"document_forward_count",document_forwards.load()},
       {"query_tokens",query_tokens.load()},{"document_tokens",document_tokens.load()},
       {"graph_format",graph_format},{"embedding_storage_dtype","float16"},
-      {"embedding_compute_dtype","float32"},{"embedding_mapped_bytes",table.bytes},{"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},
+      {"embedding_compute_dtype","float32"},{"embedding_mapped_bytes",table.bytes},
+      {"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},
       {"forward_count",forward_count.load()},{"max_input_tokens",longest_input.load()},
       {"global_flash_calls",calls},{"global_flash_scratch_peak_bytes",scratch},
       {"global_fallback_attempts",fallbacks},{"local_attention_calls",state.local_calls.load()},
@@ -187,7 +189,8 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_create(const sgrep_options* setti
     catch(const std::bad_alloc& e) {creation_error=e.what();return SG_BUDGET_EXCEEDED;}
     catch(const std::exception& e) {
       creation_error=e.what();
-      return creation_error.find("BFCArena")!=std::string::npos || creation_error.find("Failed to allocate")!=std::string::npos?SG_BUDGET_EXCEEDED:SG_ASSET_MISMATCH;
+      return creation_error.find("BFCArena")!=std::string::npos ||
+        creation_error.find("Failed to allocate")!=std::string::npos?SG_BUDGET_EXCEEDED:SG_ASSET_MISMATCH;
     }
 }
 
@@ -252,7 +255,7 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,con
     for(size_t i=1;i<encoded.size();++i) runtime->debug_values.push_back(std::move(encoded[i]));
 
     if(runtime->state.cancelled.load()) throw std::runtime_error("cancelled");
-    for(size_t i=0;i<rows*48;++i) if(!std::isfinite(output->vectors[i])) throw std::runtime_error("non-finite model output");
+    if (!sgrep::finite_checker()(output->vectors, rows*48)) throw std::runtime_error("non-finite model output");
     output->rows_written=rows;runtime->forward_count.fetch_add(1);
     if(input->role==SG_QUERY) {runtime->query_forwards.fetch_add(1);runtime->query_tokens.fetch_add(input->token_count);}
     else {runtime->document_forwards.fetch_add(1);runtime->document_tokens.fetch_add(input->token_count);}

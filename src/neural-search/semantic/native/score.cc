@@ -1,5 +1,6 @@
 #include "include/sgrep_runtime.h"
 #include "half.h"
+#include "finite.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -25,7 +26,8 @@ extern "C" SGREP_API sgrep_error sgrep_maxsim_update(const float* query,size_t q
     const uint16_t* document,size_t document_rows,float* maxima) {
   if(!query || !document || !maxima || !query_rows || query_rows>256 || !document_rows ||
       document_rows>std::numeric_limits<size_t>::max()/48) return SG_INVALID;
-  for(size_t i=0;i<query_rows*48;++i) if(!std::isfinite(query[i])) return SG_INVALID;
+  const auto finite = sgrep::finite_checker();
+  if (!finite(query, query_rows*48)) return SG_INVALID;
   for(size_t i=0;i<query_rows;++i) if(std::isnan(maxima[i]) || maxima[i]==std::numeric_limits<float>::infinity()) return SG_INVALID;
   auto decode=sgrep::half_decoder();
   auto dot=dot48_scalar;
@@ -36,7 +38,7 @@ extern "C" SGREP_API sgrep_error sgrep_maxsim_update(const float* query,size_t q
   for(size_t start=0;start<document_rows;start+=64) {
     const size_t count=std::min<size_t>(64,document_rows-start);
     decode(document+start*48,tile,count*48);
-    for(size_t i=0;i<count*48;++i) if(!std::isfinite(tile[i])) return SG_UNVERIFIED;
+    if (!finite(tile, count*48)) return SG_UNVERIFIED;
     for(size_t q=0;q<query_rows;q+=4) {
       for(size_t d=0;d<count;++d) {
         for(size_t row=q;row<std::min(q+4,query_rows);++row) {
