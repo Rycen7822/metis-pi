@@ -279,7 +279,14 @@ impl Server {
     }
     fn stats(&self) -> serde_json::Value {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        serde_json::json!({"protocol":PROTOCOL,"pid":std::process::id(),"active":s.active,"queued":s.queue.len(),"max_active":ACTIVE,"computing_threads_per_request":crate::semantic::computing_threads(),"peak_active":s.peak,"completed":s.finished,"cancelled":s.cancelled,"idle_timeout_seconds":s.idle.as_secs(),"draining":s.draining,"models":self.models.stats()})
+        serde_json::json!({
+            "protocol": PROTOCOL, "pid": std::process::id(),
+            "active": s.active, "queued": s.queue.len(), "max_active": ACTIVE,
+            "computing_threads_per_request": crate::semantic::computing_threads(),
+            "peak_active": s.peak, "completed": s.finished, "cancelled": s.cancelled,
+            "idle_timeout_seconds": s.idle.as_secs(), "draining": s.draining,
+            "models": self.models.stats()
+        })
     }
     fn worker(&self) {
         loop {
@@ -317,7 +324,7 @@ impl Server {
                     request::check()?;
                     let results = crate::search(&job.args)?;
                     request::check()?;
-                    let exit = if results.is_empty() { 1 } else { 0 };
+                    let exit = crate::result_exit(&job.args, &results);
                     Ok((crate::format_results(&job.args, &results)?, exit))
                 })
             }));
@@ -344,7 +351,11 @@ impl Server {
                     response = error(format!("requested shared diagnostics failed: {e}"));
                 }
             }
-            response.service = serde_json::json!({"pid":std::process::id(),"queue_wait_ms":queued.as_secs_f64()*1000.0,"execution_ms":begin.elapsed().as_secs_f64()*1000.0,"request":context.control.metrics(),"models":self.models.stats()});
+            response.service = serde_json::json!({
+                "pid": std::process::id(), "queue_wait_ms": queued.as_secs_f64() * 1000.0,
+                "execution_ms": begin.elapsed().as_secs_f64() * 1000.0,
+                "request": context.control.metrics(), "models": self.models.stats()
+            });
             let (completed, delivered) = mpsc::channel();
             let _ = job.reply.send(Delivery {
                 response,
@@ -404,9 +415,10 @@ impl Server {
                 if identity != self.identity {
                     return write_frame(
                         &mut stream,
-                        &error(
-                            "SERVICE_VERSION_MISMATCH: drain with `sgrep --service-control stop` before changing runtime/environment; no second model process started",
-                        ),
+                        &error(concat!(
+                            "SERVICE_VERSION_MISMATCH: drain with `sgrep --service-control stop` ",
+                            "before changing runtime/environment; no second model process started"
+                        )),
                         RESPONSE_BYTES,
                     );
                 }

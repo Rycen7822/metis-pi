@@ -37,7 +37,9 @@ Metis uses shared mode; omit `--shared-service` for a standalone CLI. Shared mod
 rejects stdin, rg-json, fresh-assets and explicit cache-dir modes. CLI options
 are listed by `sgrep --help` and defined in [src/main.rs](src/main.rs). Host output requires
 `--json --metis-protocol 1` and returns `{protocol:1,results:[...]}` without
-changing ordinary CLI JSON.
+changing ordinary CLI JSON. A completed host-protocol search exits successfully
+with empty results too; ordinary CLI keeps exit1 for no matches. Errors and
+cancellation still fail, never masquerading as an empty successful response.
 
 - One private Unix-socket service per UID/canonical HOME serves workspaces and
   Pi sessions. No system service or public TCP listener is installed. Runtime

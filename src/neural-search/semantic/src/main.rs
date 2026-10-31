@@ -612,7 +612,12 @@ fn run() -> Result<ExitCode> {
         &results,
         &mut io::BufWriter::new(io::stdout().lock()),
     )?;
-    Ok(ExitCode::from(if results.is_empty() { 1 } else { 0 }))
+    Ok(ExitCode::from(result_exit(&args, &results)))
+}
+
+// An empty host response is successful; ordinary CLI keeps its no-match status.
+fn result_exit(args: &Args, results: &[Chunk]) -> u8 {
+    u8::from(results.is_empty() && args.metis_protocol.is_none())
 }
 
 fn write_results(args: &Args, results: &[Chunk], mut out: impl Write) -> Result<()> {
