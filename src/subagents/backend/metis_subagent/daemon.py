@@ -9,7 +9,7 @@ from . import ipc, locks
 from .common import IS_WINDOWS, MAX_FRAME, DELIVERY_OPS, AgentError, dumps, private_dir, read_frame, close_writer
 from .runtime import Runtime
 from .schema import validate_op
-from . import PROTOCOL_VERSION
+from . import PROTOCOL_VERSION, RUNTIME_REVISION
 
 IDLE_SHUTDOWN_SECONDS = 30
 PASSIVE_OPS = frozenset(
@@ -76,7 +76,25 @@ async def serve(home: Path):
                     track_delivery = op in DELIVERY_OPS and req.get("delivery_receipt") is True
                     if track_delivery:
                         reservation = runtime.parent_notifications.reserve_delivery(op, params, source)
-                    job = asyncio.create_task(runtime.dispatch(op, params, source))
+                    async def execute():
+                        if op != "shutdown" or not params.get("if_idle"):
+                            return await runtime.dispatch(op, params, source)
+                        if params["expected_pid"] != os.getpid() or params["runtime_revision"] != RUNTIME_REVISION:
+                            raise AgentError("daemon_changed", "Daemon identity changed before idle handoff")
+                        if not runtime.can_idle_shutdown() or any(
+                            task is not current and (other is None or other not in PASSIVE_OPS)
+                            for task, other in clients.items()
+                        ):
+                            raise AgentError("daemon_busy", "Owned work or an admitted operation prevents idle handoff")
+                        # No await between checking owned work and closing admission.
+                        # Unknown detached writers remain quarantined, not reaped.
+                        notifications.draining = True
+                        server.close()
+                        runtime.notify()
+                        runtime.shutdown_requested.set()
+                        return {"shutdown": "requested", "pid": os.getpid()}
+
+                    job = asyncio.create_task(execute())
                     operations.add(job)
                     job.add_done_callback(operations.discard)
                     if op == "wait":

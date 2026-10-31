@@ -98,7 +98,7 @@ class Runtime:
         )
 
     def can_idle_shutdown(self):
-        """Only settled owned residents or verified parked history may exit."""
+        """Park settled residents; detached orphans stay quarantined in the ledger."""
         if (
             self.admission.locked()
             or self.parent_notifications.waits
@@ -110,10 +110,10 @@ class Runtime:
         idle = {aid for _, aid, _, _ in self.evictable()}
         if any(not w.closed and (aid not in idle or w.run.active_tools) for aid, w in self.workers.items()):
             return False
-        return not any(
-            a["id"] not in idle
-            for a in self.store.all("SELECT id FROM agents WHERE generation>0 AND cleanup!='verified'")
-        )
+        # A missing resident is not owned work this daemon can finish. Preserve
+        # its unknown cleanup and writer quarantine across restart, not a global
+        # keepalive that pins every unrelated parent to this runtime forever.
+        return True
 
     def retire_worker(self, w):
         if self.workers.get(w.agent["id"]) is w:
@@ -825,6 +825,7 @@ class Runtime:
                 "pid": os.getpid(),
                 "pi_host": 1,
                 "runtime_revision": RUNTIME_REVISION,
+                "idle_shutdown": 1,
             }
         if op.startswith("pi_"):
             result = await self.parent_notifications.dispatch(op, p, source)
@@ -876,6 +877,13 @@ class Runtime:
                 "python": sys.version.split()[0],
                 "profiles": list(self.config["profiles"]),
                 "resident_agents": sum(not w.closed for w in self.workers.values()),
+                "active_runs": self.store.one(
+                    "SELECT COUNT(*) n FROM runs WHERE state NOT IN "
+                    "('completed','failed','interrupted','crashed','cancelled','timed_out')"
+                )["n"],
+                "quarantined_agents": self.store.one(
+                    "SELECT COUNT(*) n FROM agents WHERE cleanup='unknown'"
+                )["n"],
                 "home": str(self.home),
                 "hooks": False,
                 "warning": "Managed Pi runs with your OS-user permissions; this is not an OS sandbox.",

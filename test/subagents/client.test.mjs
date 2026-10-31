@@ -9,8 +9,8 @@ import { SubagentClient } from '../../src/subagents/host/client.ts';
 const root = process.cwd();
 const frame = (request, result) => Buffer.from(JSON.stringify({ id: request.id, ok: true, result }) + '\n');
 
-function fixture(t, maxFrame = 1024) {
-  const child = new EventEmitter(), requests = [];
+function fixture(t, maxFrame = 1024, initialize) {
+  const child = new EventEmitter(), requests = [], initializations = [];
   child.exitCode = child.signalCode = null;
   for (const pipe of ['stdin', 'stdout', 'stderr']) child[pipe] = new PassThrough();
   const exit = () => {
@@ -21,7 +21,11 @@ function fixture(t, maxFrame = 1024) {
   child.stdin.on('data', chunk => {
     const request = JSON.parse(chunk.toString('utf8'));
     if (request.operation === 'initialize') {
-      queueMicrotask(() => child.stdout.emit('data', frame(request, { scope: 'offline-scope', boot_timeout: 1 })));
+      initializations.push(request);
+      const result = initialize?.() ?? { scope: 'offline-scope', boot_timeout: 1 };
+      const reply = result.error ? Buffer.from(JSON.stringify({ id: request.id, ok: false, ...result }) + '\n')
+        : frame(request, result);
+      queueMicrotask(() => child.stdout.emit('data', reply));
     } else {
       requests.push(request);
       child.emit('request');
@@ -44,11 +48,32 @@ function fixture(t, maxFrame = 1024) {
     }
     assert.equal(child.exitCode, 0, 'mock bridge exited and request timers were cleaned');
   });
-  return { client, child, requests, async next() {
+  return { client, child, requests, initializations, async next() {
     if (!requests.length) await once(child, 'request');
     return requests.shift();
   } };
 }
+
+test('initial version rejection can reconnect without reload or losing the original bind rights', async t => {
+  let first = true;
+  const f = fixture(t, 1024, () => {
+    if (!first) return undefined;
+    first = false;
+    return { error: { code: 'version_mismatch', message: 'not admitted' } };
+  });
+  await assert.rejects(f.client.call('work', {}), /not admitted/);
+  f.child.on('request', () => f.child.stdout.emit('data', frame(f.requests.at(-1), { resumed: true })));
+  assert.deepEqual(await f.client.call('work', {}), { resumed: true });
+  assert.equal(f.initializations.length, 2);
+  assert.deepEqual(f.initializations.map(request => request.reconnect), [false, false]);
+});
+
+test('uncertain initialization is not automatically retried as a new bind', async t => {
+  const f = fixture(t, 1024, () => ({ error: { code: 'connection_lost', message: 'bind may have committed' } }));
+  await assert.rejects(f.client.call('work', {}), /bind may have committed/);
+  await assert.rejects(f.client.call('work', {}), /bind may have committed/);
+  assert.equal(f.initializations.length, 1);
+});
 
 test('RPC responses preserve UTF8 across fragmented/chained frames and concurrent out-of-order replies', async t => {
   const f = fixture(t);

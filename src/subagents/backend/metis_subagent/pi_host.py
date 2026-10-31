@@ -12,6 +12,7 @@ from .stdio import OutputClosed, Stdio
 from . import RUNTIME_REVISION
 
 HOST_OPS = frozenset({"pi_watch", "pi_view", "pi_claim", "pi_observe", "pi_release", "pi_uncertain", "pi_detach"})
+DIAGNOSTICS = frozenset({"ping", "doctor"})
 
 
 async def serve_pi(home):
@@ -21,7 +22,24 @@ async def serve_pi(home):
     scope = None
     parked = False
 
+    async def mismatch(ping, reason):
+        try:
+            doctor = await request(home, "doctor", {}, timeout=5, autostart=False)
+        except AgentError:
+            doctor = {}
+        return AgentError(
+            "version_mismatch",
+            f"Subagent daemon PID {ping.get('pid', '?')} runtime "
+            f"{str(ping.get('runtime_revision', '?'))[:12]} differs from host {RUNTIME_REVISION[:12]}. "
+            f"{reason} Active runs={doctor.get('active_runs', '?')}, "
+            f"resident agents={doctor.get('resident_agents', '?')}, "
+            f"quarantined agents={doctor.get('quarantined_agents', '?')}. "
+            "Background work has not been interrupted.",
+        )
+
     async def backend(op, p, *, passive=False, source=None, on_result=None):
+        if op in DIAGNOSTICS:
+            return await request(home, op, p, autostart=False)
         for attempt in range(2):
             try:
                 ping = await request(home, "ping", {}, autostart=not passive)
@@ -30,17 +48,27 @@ async def serve_pi(home):
                         "version_mismatch", "Running daemon lacks Pi host support; drain and restart it explicitly"
                     )
                 if ping.get("runtime_revision") != RUNTIME_REVISION:
-                    raise AgentError(
-                        "version_mismatch",
-                        "Running subagent daemon has older or different source code. Reload cannot upgrade it. "
-                        "Let work finish and wait for verified idle shutdown, then reload. "
-                        "Background work has not been interrupted.",
-                    )
+                    if not passive and attempt == 0 and ping.get("idle_shutdown") == 1:
+                        try:
+                            await request(home, "shutdown", {
+                                "if_idle": True, "expected_pid": ping["pid"],
+                                "runtime_revision": ping["runtime_revision"],
+                            }, autostart=False)
+                        except AgentError as error:
+                            if error.code == "daemon_busy":
+                                raise await mismatch(ping, "Safe idle handoff refused: work or another admitted operation remains.") from error
+                            raise
+                        continue
+                    reason = ("Daemon lacks safe idle handoff; a controlled one-time restart is required. "
+                              "Reload alone cannot replace it.") if ping.get("idle_shutdown") != 1 else (
+                                  "No idle handoff from passive watch, or handoff already attempted."
+                              )
+                    raise await mismatch(ping, reason)
                 return await request(
                     home, op, p, timeout=call_timeout(op, p, home), autostart=False, source=source, on_result=on_result
                 )
             except AgentError as e:
-                if e.code not in {"daemon_unavailable", "daemon_idle"}:
+                if e.code not in {"daemon_unavailable", "daemon_idle", "daemon_changed"}:
                     raise
                 if passive:
                     raise AgentError("daemon_idle", "No active daemon; background synchronization is parked")
@@ -62,7 +90,10 @@ async def serve_pi(home):
             passive = msg.get("passive", False)
             if not isinstance(passive, bool):
                 raise AgentError("invalid_argument", "passive must be a boolean")
-            if op == "initialize":
+            if op in DIAGNOSTICS:
+                validate_op(op, p)
+                result = await backend(op, p, passive=True)
+            elif op == "initialize":
                 if source is not None:
                     raise AgentError("already_initialized", "Pi bridge is already bound")
                 candidate = msg.get("source")

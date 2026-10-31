@@ -293,7 +293,10 @@ TOOLS = [
             "model": S,
             "thinking": {
                 **LABEL,
-                "description": "Pi reasoning level; check the selected model's supported levels before launch. Omit to inherit settings. Unsupported levels are rejected.",
+                "description": (
+                    "Pi reasoning level; check the selected model's supported levels before launch. "
+                    "Omit to inherit settings. Unsupported levels are rejected."
+                ),
             },
             "access": {
                 "type": "string",
@@ -679,5 +682,13 @@ def validate_op(op, p):
         if op=="pi_claim": fields["events"]={"type":"array","items":{**S,"minLength":64,"maxLength":64},"minItems":1,"maxItems":20}
         if op in {"pi_observe","pi_release","pi_uncertain"}: fields["receipt"]=ID
         validate(p,obj(fields,["scope"]+(["agent_id"] if op=="pi_view" else ["receipt"] if "receipt" in fields else [])))
-    elif op not in {"ping", "doctor", "scope_list", "shutdown"}:
+    elif op == "shutdown":
+        fields = {"force": {"type": "boolean"}, "if_idle": {"type": "boolean"},
+                  "expected_pid": {"type": "integer", "minimum": 1, "maximum": 2**53-1},
+                  "runtime_revision": {**S, "pattern": "^[0-9a-f]{64}$"}}
+        required = ["expected_pid", "runtime_revision"] if p.get("if_idle") else []
+        validate(p, obj(fields, required))
+        if p.get("if_idle") and p.get("force"):
+            raise AgentError("invalid_argument", "Idle handoff cannot force shutdown")
+    elif op not in {"ping", "doctor", "scope_list"}:
         raise AgentError("unknown_operation", "Unknown operation")

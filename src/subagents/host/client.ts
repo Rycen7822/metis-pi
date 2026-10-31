@@ -132,7 +132,8 @@ export class SubagentClient {
       const child = spawn(
         getPythonCommand(),
         [join(this.runtime.root, "main.py"), "--home", join(this.agentDir, "metis", "subagent"), "pi-host"],
-        { cwd: this.ctx.cwd, stdio: "pipe", windowsHide: true, env: { ...process.env, PYTHONUTF8: "1", METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
+        { cwd: this.ctx.cwd, stdio: "pipe", windowsHide: true,
+          env: { ...process.env, PYTHONUTF8: "1", METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
       );
       const bridge = (this.bridge = { child, fragments: [], frameBytes: 0, stderr: "" });
       child.stdout.on("data", (chunk: Buffer) => this.receive(bridge, chunk));
@@ -182,7 +183,9 @@ export class SubagentClient {
       this.bootTimeout = result.boot_timeout as number;
       this.attached(this.scope);
     })().catch((error) => {
-      if (isDaemonIdle(error) && this.bridge === bridge) {
+      const preAdmission = isDaemonIdle(error)
+        || (error instanceof RuntimeError && error.code === "version_mismatch");
+      if (preAdmission && this.bridge === bridge) {
         bridge.ready = undefined;
         this.reconnect = reconnect; // Proven pre-admission rejection only.
       }

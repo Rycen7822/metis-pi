@@ -64,6 +64,53 @@ class ClientTimeoutBudget(unittest.TestCase):
             with self.subTest(args=args),self.assertRaises(AgentError): validate_op('wait',{'scope':'scope',**args})
         validate_op('wait',{'scope':'scope','mode':'all','timeout_seconds':0})
 
+class RuntimeRevision(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='subagent-revision-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        backend = self.root / 'src/subagents/backend'
+        package = backend / 'metis_subagent'
+        package.mkdir(parents=True)
+        self.worker = self.root / 'src/subagents/worker'
+        self.worker.mkdir()
+        for name in ('__init__.py', 'paths.py'):
+            (package / name).write_bytes((ROOT / 'metis_subagent' / name).read_bytes())
+        (backend / 'main.py').write_text('# fixture entrypoint\n')
+        (self.root / 'package.json').write_text('{"version":"fixture"}')
+        (self.root / 'src/extension-paths.ts').write_text('// fixture\n')
+        (self.root / 'src/presentation').mkdir()
+        (self.root / 'src/presentation/tool-source.mjs').write_text('// fixture\n')
+        self.template = self.root / 'metis-pi.toml'
+        self.template.write_text('[subagents]\nrpcTimeoutSeconds=20\n')
+        self.backend = backend
+
+    def revision(self):
+        script = (
+            'import sys;sys.path.insert(0,sys.argv[1]);'
+            'from metis_subagent import RUNTIME_REVISION;print(RUNTIME_REVISION)'
+        )
+        return subprocess.check_output(
+            [sys.executable, '-I', '-B', '-c', script, str(self.backend)], text=True, timeout=5
+        ).strip()
+
+    def test_unrelated_config_comments_and_order_do_not_change_runtime_identity(self):
+        original = self.revision()
+        self.template.write_text(
+            '# semantic defaults changed\n[neuralSearch.semantic]\ncacheBudgetMiB=512\n'
+            '[subagents] # same effective defaults\nrpcTimeoutSeconds = 20\n'
+        )
+        self.assertEqual(self.revision(), original)
+
+    def test_subagent_defaults_and_worker_code_still_change_runtime_identity(self):
+        original = self.revision()
+        self.template.write_text('[subagents]\nrpcTimeoutSeconds=21\n')
+        changed = self.revision()
+        self.assertNotEqual(changed, original)
+        (self.worker / 'fixture.mjs').write_text('// worker implementation changed\n')
+        self.assertNotEqual(self.revision(), changed)
+
+
 class ProcessIdentity(unittest.TestCase):
     def test_pid_reuse_is_not_live_owner(self):
         # Verdict logic shared by both platforms: patch the identity source that

@@ -51,6 +51,17 @@ scope、会话记录、数据库格式或已保存的请求身份。启动时仅
 后端拥有的第一个扩展槽位绑定到当前包内权限扩展，兼容包目录移动；用户
 profile 扩展、模型和推理参数不重写，原始账本记录不改动。
 
-修改工具 schema 后运行 `npm run prepare:subagents`。源码指纹覆盖 Python
-后端、私有入口、全部 worker 代码和默认模板；驻留 daemon 不会因磁盘更新
-自动升级，应先让任务结束并正常停驻，再重新加载。
+修改工具 schema 后运行 `npm run prepare:subagents`。运行身份覆盖 Python
+后端、私有入口、全部 worker 代码和规范化的 `[subagents]` 默认值；其它模块
+配置、TOML 注释和表顺序不影响它，不额外建立一套摘要。
+
+宿主重载只关闭自己的 bridge，不能终止其它父会话的任务。新 bridge 遇到
+运行身份不匹配时，通过 ping 协商空闲交接能力，再请求带原 PID/revision 的
+`shutdown(if_idle)`。daemon 在同一事件循环内检查任务、resident 与已接纳
+操作，然后关闭准入；忙碌时拒绝，不采用先 doctor 再无条件 stop 的竞态流程。
+旧版没有此能力时不发送新 shutdown 参数，明确提示需一次受控过渡；单纯
+reload 不能替换旧后台。ping/doctor 诊断不要求初始化成功，也不会启动后台。
+
+历史 `cleanup=unknown` 继续隔离潜在写入者，但不充当空 daemon 的永久
+keepalive；重启不删除记录或伪造 verified。初始化的版本拒绝可重新连接，
+未知连接丢失/变更回复仍不能自动当成未执行重发。

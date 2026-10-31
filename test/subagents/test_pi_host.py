@@ -13,11 +13,27 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='metis-subagent-host-')
         self.home=Path(self.tmp.name); self.revision=RUNTIME_REVISION; self.calls=[]; self.peers=[]; self.jobs=[]; self.spawn_mode=None
+        self.upgrade_mode = None
         async def handle(reader,writer):
             self.peers.append(writer)
             try:
                 frame=await read_frame(reader); op=frame['op']; self.calls.append((op,frame['params']))
-                if op=='ping': result={'pi_host':1,'runtime_revision':self.revision}
+                if op=='ping':
+                    result={'pi_host':1,'pid':1234,'runtime_revision':self.revision}
+                    if self.upgrade_mode is not None: result['idle_shutdown']=1
+                elif op=='doctor':
+                    result={'active_runs':int(self.upgrade_mode=='busy'),'resident_agents':0,'quarantined_agents':3}
+                elif op=='shutdown':
+                    self.assertEqual(frame['params'],{
+                        'if_idle':True,'expected_pid':1234,'runtime_revision':self.revision,
+                    })
+                    if self.upgrade_mode=='busy':
+                        error={'code':'daemon_busy','message':'owned work remains'}
+                        writer.write((dumps({'ok':False,'error':error})+'\n').encode())
+                        await writer.drain(); return
+                    self.revision=RUNTIME_REVISION
+                    if self.upgrade_mode=='lost': return
+                    result={'shutdown':'requested','pid':1234}
                 elif op=='scope_open': result={'scope':'scope_host_test'}
                 elif op=='pi_watch' and self.spawn_mode=='lost':
                     self.server.close(); return
@@ -65,6 +81,37 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['ok']); self.assertEqual(result['error']['code'],'version_mismatch')
         self.assertEqual([op for op,_ in self.calls].count('spawn'),0)
         self.assertIn('Background work has not been interrupted',result['error']['message'])
+
+    async def test_capable_idle_daemon_handoff_dispatches_original_request_once(self):
+        self.revision='0'*64; self.upgrade_mode='idle'
+        result=await self.call('subagents_spawn_agent',{'task':'continue','access':'read','request_id':'one-operation'})
+        self.assertTrue(result['ok'],result)
+        self.assertEqual([op for op,_ in self.calls].count('shutdown'),1)
+        self.assertEqual([p['request_id'] for op,p in self.calls if op=='spawn'],['one-operation'])
+
+    async def test_busy_daemon_is_not_interrupted_and_diagnostics_remain_available(self):
+        self.revision='0'*64; self.upgrade_mode='busy'
+        result=await self.call('subagents_spawn_agent',{'task':'not admitted','access':'read','request_id':'busy-operation'})
+        self.assertEqual(result['error']['code'],'version_mismatch')
+        self.assertIn('Active runs=1',result['error']['message'])
+        self.assertEqual([op for op,_ in self.calls].count('spawn'),0)
+        diagnosed=await self.call('doctor',{})
+        self.assertTrue(diagnosed['ok'],diagnosed)
+        self.assertEqual(diagnosed['result']['quarantined_agents'],3)
+
+    async def test_legacy_daemon_is_not_given_new_shutdown_fields(self):
+        self.revision='0'*64
+        result=await self.call('subagents_spawn_agent',{'task':'not admitted','access':'read','request_id':'legacy-operation'})
+        self.assertEqual(result['error']['code'],'version_mismatch')
+        self.assertIn('controlled one-time restart',result['error']['message'])
+        self.assertEqual([op for op,_ in self.calls].count('shutdown'),0)
+
+    async def test_unknown_handoff_reply_does_not_dispatch_or_retry_original_mutation(self):
+        self.revision='0'*64; self.upgrade_mode='lost'
+        result=await self.call('subagents_spawn_agent',{'task':'not admitted','access':'read','request_id':'lost-handoff'})
+        self.assertEqual(result['error']['code'],'connection_lost')
+        self.assertEqual([op for op,_ in self.calls].count('shutdown'),1)
+        self.assertEqual([op for op,_ in self.calls].count('spawn'),0)
 
     async def test_unknown_mutation_reply_is_not_retried(self):
         self.spawn_mode='lost'

@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import sys
+import sqlite3
 import unittest
 from paths import TEST_ROOT
 from test_transport import IpcHarness
@@ -18,6 +19,53 @@ class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proc.poll(),0,'owned idle daemon exited normally')
         with self.assertRaises(AgentError) as caught: await self.request('ping',{},autostart=False)
         self.assertEqual(caught.exception.code,'daemon_unavailable')
+
+    async def test_idle_handoff_preserves_orphan_quarantine_across_restart(self):
+        sid=await self.open_scope()
+        run=await self.request('spawn',{'scope':sid,'request_id':'writer-seed','task':'finished','access':'write'})
+        await self.request('wait',{'scope':sid,'run_ids':[run['run_id']],'timeout_seconds':8})
+        closed=await self.request('close',{'scope':sid,'agent_id':run['agent_id'],'request_id':'close-seed'})
+        self.assertEqual(closed['cleanup'],'verified')
+        # Seed detached history separately: the live seed's exit callback may
+        # still reconcile its own row after close returns. Unknown cleanup also
+        # quarantines a crashed row, not only the orphaned state label.
+        orphan='pi_quarantined_history'
+        with sqlite3.connect(self.home/'registry.sqlite') as db:
+            db.execute("INSERT INTO agents(id,scope,name,cwd,session_file,state,launch,generation,cleanup,created,updated) "
+                       "SELECT ?,scope,?,cwd,session_file,'crashed',launch,1,'unknown',created,updated FROM agents WHERE id=?",
+                       (orphan,'detached writer history',run['agent_id']))
+        ping=await self.request('ping',{})
+        self.assertEqual(ping['idle_shutdown'],1)
+        proc=self.daemons[-1]
+        await self.request('shutdown',{'if_idle':True,'expected_pid':ping['pid'],'runtime_revision':ping['runtime_revision']})
+        await self.parked(proc)
+        doctor=await self.request('doctor',{})
+        self.assertEqual((doctor['active_runs'],doctor['resident_agents'],doctor['quarantined_agents']),(0,0,1))
+        self.assertNotEqual(self.daemons[-1].pid,proc.pid)
+        with self.assertRaises(AgentError) as blocked:
+            await self.request('spawn',{'scope':sid,'request_id':'overlap','task':'must stay blocked','access':'write'})
+        self.assertEqual(blocked.exception.code,'writer_conflict')
+        with sqlite3.connect(self.home/'registry.sqlite') as db:
+            row=db.execute('SELECT state,cleanup FROM agents WHERE id=?',(orphan,)).fetchone()
+        self.assertEqual(row,('crashed','unknown'))
+
+    async def test_idle_handoff_refuses_busy_or_different_daemon_without_losing_work(self):
+        sid=await self.open_scope(); ping=await self.request('ping',{}); proc=self.daemons[-1]
+        gate=self.root/'handoff-release'
+        run=await self.spawn(sid,f'gate={gate}|must finish')
+        params={'if_idle':True,'expected_pid':ping['pid'],'runtime_revision':ping['runtime_revision']}
+        with self.assertRaises(AgentError) as changed:
+            await self.request('shutdown',{**params,'expected_pid':ping['pid']+1})
+        self.assertEqual(changed.exception.code,'daemon_changed')
+        with self.assertRaises(AgentError) as busy:
+            await self.request('shutdown',params)
+        self.assertEqual(busy.exception.code,'daemon_busy')
+        self.assertEqual((await self.request('ping',{}))['pid'],proc.pid)
+        gate.touch()
+        done=await self.request('wait',{'scope':sid,'run_ids':[run['run_id']],'timeout_seconds':8})
+        self.assertEqual(done['runs'][0]['state'],'completed')
+        await self.request('shutdown',params)
+        await self.parked(proc)
 
     async def test_empty_daemon_exits_despite_passive_watch_and_preserves_scope(self):
         source={'env':{},'parent':{'kind':'pi','session_id':'idle-watch','agent_dir':str(self.root),'session_file':'',
@@ -102,6 +150,11 @@ with fixture_launch([sys.executable,str(paths.TEST_ROOT/'fake_pi.py')]):
             writer.write((dumps({'v':PROTOCOL_VERSION,'op':'spawn','params':params,'source':self.source})+'\n').encode()); await writer.drain()
             self.assertEqual((await asyncio.wait_for(proc.stdout.readline(),5)).strip(),b'SPAWN_ADMITTED')
             writer.close(); await writer.wait_closed(); writer=None
+            ping=await self.request('ping',{},autostart=False)
+            with self.assertRaises(AgentError) as busy:
+                await self.request('shutdown',{'if_idle':True,'expected_pid':proc.pid,
+                                              'runtime_revision':ping['runtime_revision']},autostart=False)
+            self.assertEqual(busy.exception.code,'daemon_busy','accepted spawn cannot race handoff before its run exists')
             await asyncio.sleep(IDLE_SHUTDOWN_SECONDS+1)
             self.assertEqual((await self.request('ping',{},autostart=False))['pid'],proc.pid,'admitted detached operation keeps admission open')
             gate.touch()

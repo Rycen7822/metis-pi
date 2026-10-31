@@ -120,7 +120,8 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.mutation("close", a["agent_id"])
         self.assertTrue(self.rt.can_idle_shutdown())
         self.rt.store.execute("UPDATE agents SET cleanup='unknown' WHERE id=?", (a["agent_id"],))
-        self.assertFalse(self.rt.can_idle_shutdown())
+        self.assertTrue(self.rt.can_idle_shutdown(), "parked history is not owned work")
+        self.assertEqual(self.rt.store.agent(self.scope, a["agent_id"])["cleanup"], "unknown")
         self.rt.store.execute("UPDATE agents SET cleanup='verified' WHERE id=?", (a["agent_id"],))
 
     async def test_idle_shutdown_does_not_abandon_a_pending_question(self):
