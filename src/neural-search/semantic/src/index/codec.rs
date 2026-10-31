@@ -8,17 +8,38 @@ const MAX_METADATA: usize = 8 << 20;
 const MAX_VALUES: usize = 2048 * 48;
 const MAX_SCOPE_METADATA: usize = 128 << 20;
 
-/// Owned by one scope pass, not global or per-record. Outputs still use the
-/// existing bounded allocations; no decompressed corpus is retained here.
+/// Owned by one scope pass, not global or per-record. The buffers hold at most
+/// one validated window each (192 KiB of values, 96 KiB of exponent symbols),
+/// so no decompressed corpus is retained here.
 pub(crate) struct Decoder {
     zstd: zstd::bulk::Decompressor<'static>,
+    values: Vec<f16>,
+    exponents: Vec<u8>,
 }
 impl Decoder {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             zstd: zstd::bulk::Decompressor::new()?,
+            values: Vec::new(),
+            exponents: Vec::new(),
         })
     }
+}
+
+/// Hand out the first `count` slots of one scratch buffer. The buffer only grows
+/// to the largest window seen and `count` is already bounded by `MAX_VALUES`, so
+/// a shorter window after a longer one neither reallocates nor rewrites the whole
+/// span. Callers must use only the returned slice: slots past `count` still hold
+/// an earlier window.
+fn scratch<T: Clone + Default>(buffer: &mut Vec<T>, count: usize) -> &mut [T] {
+    if buffer.len() < count {
+        if buffer.capacity() < count {
+            // `reserve_exact` takes the number of ADDITIONAL slots.
+            buffer.reserve_exact(count - buffer.len());
+        }
+        buffer.resize(count, T::default());
+    }
+    &mut buffer[..count]
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -91,12 +112,15 @@ pub(crate) fn pack_code(values: &[f16]) -> Result<Option<Vec<u8>>> {
     packed.extend_from_slice(&encoded);
     Ok(Some(packed))
 }
-pub(crate) fn code(
+/// Decode into the decoder's bounded scratch and borrow it for this block. A
+/// caller must drop the slice before decoding the next window; the borrow
+/// checker enforces that without unsafe aliasing.
+pub(crate) fn code<'a>(
     stored: &[u8],
     codec: u32,
     count: usize,
-    decoder: &mut Decoder,
-) -> Result<Vec<f16>> {
+    decoder: &'a mut Decoder,
+) -> Result<&'a [f16]> {
     if count == 0 || count > MAX_VALUES || count % 48 != 0 {
         return Err(invalid("invalid decoded window geometry").into());
     }
@@ -104,37 +128,48 @@ pub(crate) fn code(
         if stored.len() != count * 2 {
             return Err(invalid("invalid raw window length").into());
         }
-        return Ok(stored
-            .chunks_exact(2)
-            .map(|v| f16::from_bits(u16::from_le_bytes([v[0], v[1]])))
-            .collect());
+        let values = scratch(&mut decoder.values, count);
+        for (value, bytes) in values.iter_mut().zip(stored.chunks_exact(2)) {
+            *value = f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]]));
+        }
+        return Ok(values);
     }
     let packed_length = count * 11 / 8;
     if codec != 1 || stored.len() <= packed_length || stored.len() >= count * 2 {
         return Err(invalid("invalid lossless window length/codec").into());
     }
-    let exponents = decoder
-        .zstd
-        .decompress(&stored[packed_length..], count)
+    // Disjoint field borrows: the exponent scratch stays readable while values
+    // are rebuilt, and both remain owned by this decoder.
+    let Decoder {
+        zstd,
+        values,
+        exponents,
+    } = decoder;
+    let exponents = scratch(exponents, count);
+    // The slice exposes exactly `count` slots, so zstd keeps the output bound a
+    // fresh allocation had and frame length errors keep their error category.
+    let written = zstd
+        .decompress_to_buffer(&stored[packed_length..], exponents)
         .map_err(|_| invalid("invalid exponent frame"))?;
-    if exponents.len() != count || exponents.iter().any(|&v| v > 31) {
+    if written != count || exponents.iter().any(|&v| v > 31) {
         return Err(invalid("invalid exponent symbols").into());
     }
-    let mut values = Vec::with_capacity(count);
+    let values = scratch(values, count);
     // Valid geometry is a multiple of 48, so groups of eight values occupy
     // exactly eleven bytes. Reassemble all sixteen bits without FP arithmetic.
-    for (bytes, exponents) in stored[..packed_length]
-        .chunks_exact(11)
-        .zip(exponents.chunks_exact(8))
-    {
+    for (group_values, (bytes, symbols)) in values.chunks_exact_mut(8).zip(
+        stored[..packed_length]
+            .chunks_exact(11)
+            .zip(exponents.chunks_exact(8)),
+    ) {
         let mut group = [0u8; 16];
         group[..11].copy_from_slice(bytes);
         let bits = u128::from_le_bytes(group);
-        for (i, &exponent) in exponents.iter().enumerate() {
-            let value = ((bits >> (11 * i)) & 0x7ff) as u16;
-            values.push(f16::from_bits(
-                (value & 0x3ff) | ((value & 0x400) << 5) | (u16::from(exponent) << 10),
-            ));
+        for (i, (value, &exponent)) in group_values.iter_mut().zip(symbols).enumerate() {
+            let eleven = ((bits >> (11 * i)) & 0x7ff) as u16;
+            *value = f16::from_bits(
+                (eleven & 0x3ff) | ((eleven & 0x400) << 5) | (u16::from(exponent) << 10),
+            );
         }
     }
     Ok(values)

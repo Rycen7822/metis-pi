@@ -337,7 +337,7 @@ impl<'a> Record<'a> {
             sink(DocumentBlock::Code {
                 source: start..end,
                 input_tokens,
-                values: &values,
+                values,
             })?;
             at = at
                 .checked_add(bytes)

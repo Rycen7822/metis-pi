@@ -152,7 +152,9 @@ for scale → in-place Erf → gate, sharing the existing ORT pool without a new
 tensor scratch or math-library dependency. ORT/MLAS Erf is not bit-identical to
 the previous scalar `std::erf`; the arithmetic revision prevents mixed encodings.
 Native output/MaxSim boundaries share guarded SIMD finite classification while
-retaining scalar fallbacks and the original validation/error semantics.
+retaining scalar fallbacks and the original validation/error semantics. AVX2 MaxSim
+shares document loads across four query rows and transposes the final lane sums;
+per-row arithmetic, stable maxima and partial-error stores remain bit-identical.
 
 ## CPU and memory bounds
 
@@ -166,6 +168,11 @@ retaining scalar fallbacks and the original validation/error semantics.
   serial small batches. Code batches admit at most 8MiB mapped data / 1MiB raw
   metadata; a larger record runs alone. These are work-admission bounds, not RSS
   limits. Workers join before mapped views are released or recovery begins.
+- Each scan worker's decoder reuses at most one window's FP16 values (192KiB) and
+  exponent symbols (96KiB), outside the native arena. A synchronous sink borrows
+  only the current window's slice; retained capacity never exposes a previous
+  window's tail. Twelve concurrent decoders need at most 3.375MiB for these two
+  buffers, excluding existing Zstd/metadata state; no decoded scope is retained.
 - Native temporary allocations use a hard arena cap of 128MiB, not a whole-process
   memory limit. Misses/no-cache rehydrate one source file at a time; hits consume
   immutable mappings in bounded resident windows. Releasing this reader's PTEs
