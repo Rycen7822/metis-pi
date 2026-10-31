@@ -68,6 +68,11 @@ Format07 remains readable with postings validation. Hits are provisional: matchi
 model/preprocessing identity permits a full cached scan, but its stored source
 manifest must match one final complete content capture before any output. A stale
 hit discards scores and rebuilds in the same request, reusing a compatible query.
+Code/Format08 rebuilds reuse checked records only for unchanged raw paths/content,
+with an unambiguous UTF-8 mapping and identical chunk range/text. Every window is
+still scored, and current corpus statistics and ranking are rebuilt. Text,
+Format07, non-UTF8 and ambiguous paths keep full encoding. Reuse is request-local:
+no persistent per-file embedding store or second model process is introduced.
 Misses build the snapshot during their first source read, then retain Reader and
 final content checks. Source changes during rebuilding permit one complete retry,
 never partial results. Final content capture remains complete: fewer than 128 files
@@ -93,8 +98,9 @@ through full-manifest identity, without changing the corpus-record format.
   target; explicit budget-shrink eviction is separate. Last-reader release updates
   LRU age without changing payload bytes.
 - Allocation is qualified on ext4/tmpfs. Unsupported allocation, permissions,
-  insufficient peak space or unavailable locks fall back to complete uncached
-  search. Shared admission can wait cancellably on writer contention; eviction
+  insufficient peak space or unavailable locks fall back to complete evaluation
+  without publication; compatible records can still be reused for scoring.
+  Shared admission can wait cancellably on writer contention; eviction
   never waits for active readers.
 
 ### Integrity and lifetime

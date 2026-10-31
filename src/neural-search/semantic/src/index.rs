@@ -265,6 +265,15 @@ impl<'a> Record<'a> {
     pub fn kind(&self) -> Kind {
         self.kind
     }
+    /// The caller scores every stored window before copying this checked record.
+    pub fn copy_to(&self, output: &mut (impl Write + Seek)) -> Result<(u64, u64)> {
+        let start = output.stream_position()?;
+        for block in self.data.chunks(65536) {
+            crate::request::check()?;
+            output.write_all(block)?;
+        }
+        Ok((start, self.data.len() as u64))
+    }
     pub fn visit(&self, decoder: &mut codec::Decoder, sink: &mut BlockSink<'_>) -> Result<()> {
         let mut at = self.semantic;
         if self.kind == Kind::Text {

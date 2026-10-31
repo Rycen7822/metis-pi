@@ -305,6 +305,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         && args.rg_json.is_none()
         && index_cache.as_ref().is_some_and(|c| c.max_bytes > 0);
     let mut cached_scorer = None;
+    let mut previous_index = None;
     if cache_allowed
         && !args.refresh_cache
         && let Some(config) = &index_cache
@@ -313,6 +314,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         match scope_index::ScopeIndex::open(config, &target, &path, &cache, args.model, &terms) {
             Ok(index) => {
                 let search_result = index.search(args, &cache, &mut cached_scorer, trace.as_mut());
+                let complete = search_result.is_ok();
                 let verify_started = std::time::Instant::now();
                 let search_result = match search_result {
                     Ok(result) => index.verify_source(&path, &filter).map(|_| result),
@@ -355,6 +357,9 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                         ));
                         if let Some(scorer) = &mut cached_scorer {
                             scorer.discard_cached_scores();
+                        }
+                        if complete && error.is::<scope_index::SourceChanged>() {
+                            previous_index = Some(index);
                         }
                         // A failed diagnostic capture is provisional too.
                         trace = diagnostics::RetrievalTrace::from_env(args)?;
@@ -408,22 +413,16 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     let model_ready = std::time::Instant::now();
     let mut builder =
         if cache_allowed && let (Some(config), Some(manifest)) = (&index_cache, manifest) {
-            match scope_index::Builder::begin(
+            let mut builder = scope_index::Builder::begin(
                 config,
                 &config.target(&path, args.model),
                 manifest.clone(),
                 &cache,
                 scorer.kind(),
                 corpus.prose_only,
-            ) {
-                Ok(builder) => Some(builder),
-                Err(error) => {
-                    crate::request::diagnostic(format_args!(
-                        "sgrep: cache admission unavailable; evaluating complete scope: {error}"
-                    ));
-                    None
-                }
-            }
+            )?;
+            builder.reuse(previous_index)?;
+            Some(builder)
         } else {
             None
         };

@@ -11,6 +11,7 @@ use memmap2::Mmap;
 mod lexical;
 mod pages;
 mod parallel;
+mod reuse;
 mod validation;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -206,6 +207,7 @@ pub struct Builder {
     offsets: Vec<(u64, u64)>,
     metadata: Metadata,
     total_length: usize,
+    reuse: Option<reuse::Reuse>,
 }
 impl Builder {
     pub fn begin(
@@ -216,21 +218,95 @@ impl Builder {
         kind: Kind,
         prose_only: bool,
     ) -> Result<Self> {
-        let mut output = cache.begin(target)?;
-        output.write_all(&[0u8; HEADER])?;
+        let metadata = Metadata {
+            manifest,
+            artifact: artifact(assets, kind)?,
+            kind: kind_tag(kind),
+            prose_only,
+        };
+        let admission = (|| -> Result<BudgetFile> {
+            let mut output = cache.begin(target)?;
+            output.write_all(&[0u8; HEADER])?;
+            Ok(output)
+        })();
+        let output = match admission {
+            Ok(output) => Some(output),
+            Err(error) => {
+                crate::request::check()?;
+                crate::request::diagnostic(format_args!(
+                    "sgrep: cache admission unavailable; evaluating complete scope: {error}"
+                ));
+                None
+            }
+        };
         Ok(Self {
-            output: Some(output),
+            output,
             offsets: Vec::new(),
-            metadata: Metadata {
-                manifest,
-                artifact: artifact(assets, kind)?,
-                kind: kind_tag(kind),
-                prose_only,
-            },
+            metadata,
             total_length: 0,
+            reuse: None,
         })
     }
+    pub fn reuse(&mut self, previous: Option<ScopeIndex>) -> Result<()> {
+        let Some(previous) = previous else {
+            return Ok(());
+        };
+        match reuse::Reuse::new(previous, &self.metadata) {
+            Ok(reuse) => self.reuse = reuse,
+            Err(error) if error.is::<crate::index::Corrupt>() => {
+                crate::request::diagnostic(format_args!(
+                    "sgrep: record reuse unavailable: {error}"
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
+    fn reused_score(&mut self, scorer: &mut Scorer, chunk: &Chunk) -> Result<Option<f64>> {
+        let Some(reuse) = &mut self.reuse else {
+            return Ok(None);
+        };
+        let Some((record, decoder)) = reuse.find(chunk)? else {
+            return Ok(None);
+        };
+        let score = scorer.score_blocks(|sink| record.visit(decoder, sink))?;
+        if let Some(output) = &mut self.output {
+            match record.copy_to(output) {
+                Ok(location) => {
+                    self.offsets.push(location);
+                    self.total_length = self
+                        .total_length
+                        .checked_add(record.length)
+                        .ok_or("corpus length overflow")?;
+                }
+                Err(error) => {
+                    crate::request::check()?;
+                    if !recoverable(error.as_ref()) {
+                        return Err(error);
+                    }
+                    output.failure(&error);
+                    self.output = None;
+                    self.offsets.clear();
+                    crate::request::diagnostic(format_args!(
+                        "sgrep: cache copy disabled; scoring continues: {error}"
+                    ));
+                }
+            }
+        }
+        Ok(Some(score))
+    }
     pub fn encode(&mut self, scorer: &mut Scorer, mut chunk: Chunk) -> Result<f64> {
+        match self.reused_score(scorer, &chunk) {
+            Ok(Some(score)) => return Ok(score),
+            Ok(None) => {}
+            Err(error) if error.is::<crate::index::Corrupt>() => {
+                self.reuse = None;
+                crate::request::diagnostic(format_args!(
+                    "sgrep: record reuse disabled; encoding continues: {error}"
+                ));
+            }
+            Err(error) => return Err(error),
+        }
         if self.output.is_none() {
             return scorer.score_document(chunk.path, chunk.content);
         }

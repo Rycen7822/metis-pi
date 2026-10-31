@@ -322,13 +322,24 @@ impl Scorer {
                 encoder,
                 query,
                 work,
-            } => CodeScan {
-                query,
-                kernel: encoder.scoring_kernel()?,
-                cancellation: crate::request::current(),
+            } => {
+                let mut observed = Work::default();
+                let result = CodeScan {
+                    query,
+                    kernel: encoder.scoring_kernel()?,
+                    cancellation: crate::request::current(),
+                }
+                .score_blocks(visit, &mut observed)
+                .map_err(|error| encoder.scoring_error(error));
+                if result.is_ok() {
+                    work.semantic_scored_chunks += observed.semantic_scored_chunks;
+                    work.scored_document_tokens += observed.scored_document_tokens;
+                } else {
+                    work.discarded_cached_chunks += observed.semantic_scored_chunks;
+                    work.discarded_cached_document_tokens += observed.scored_document_tokens;
+                }
+                result
             }
-            .score_blocks(visit, work)
-            .map_err(|error| encoder.scoring_error(error)),
         }
     }
 }
