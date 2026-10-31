@@ -319,13 +319,7 @@ impl Corpus {
         let average = (total as f64 / self.corpus_len as f64).max(1.);
         let idf: Vec<_> = frequencies
             .iter()
-            .map(|&df| {
-                if df == 0 {
-                    0.
-                } else {
-                    (1. + (self.corpus_len as f64 - df as f64 + 0.5) / (df as f64 + 0.5)).ln()
-                }
-            })
+            .map(|&df| crate::inverse_document_frequency(self.corpus_len, df))
             .collect();
         self.documents
             .iter()

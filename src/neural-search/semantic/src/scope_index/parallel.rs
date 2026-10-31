@@ -95,14 +95,10 @@ impl ScopeIndex {
                     break;
                 }
                 let record = self.record(id, &mut decoder)?;
-                let lexical = if words.is_none() {
-                    self.lexical_score(&record, avg)
-                } else {
-                    -0.0
+                let (lexical, frequencies) = match words {
+                    Some(words) => (-0.0, Statistics::row(&record, words)),
+                    None => (self.lexical_score(&record, avg), Vec::new()),
                 };
-                let frequencies = words
-                    .map(|words| Statistics::row(&record, words))
-                    .unwrap_or_default();
                 let exact = exact.is_some_and(|pattern| pattern.is_match(&record.chunk.content));
                 let score = code.score_blocks(
                     |sink| {

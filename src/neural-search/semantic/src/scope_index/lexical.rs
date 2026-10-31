@@ -58,14 +58,7 @@ impl Statistics<'_> {
         let avg = (length as f64 / count.max(1) as f64).max(1.0);
         let idf: Vec<_> = df
             .into_iter()
-            .map(|df| {
-                if df == 0 {
-                    0.0
-                } else {
-                    let df = df as f64;
-                    (1.0 + (count as f64 - df + 0.5) / (df + 0.5)).ln()
-                }
-            })
+            .map(|df| crate::inverse_document_frequency(count, df))
             .collect();
         for (result, row) in output.iter_mut().zip(self.rows) {
             // Same sorted term order and Sum<f64> identity (including -0.0).

@@ -246,6 +246,15 @@ fn is_prose(path: &str) -> bool {
     )
 }
 
+fn inverse_document_frequency(corpus_len: usize, frequency: usize) -> f64 {
+    if frequency == 0 {
+        0.0
+    } else {
+        let df = frequency as f64;
+        (1.0 + (corpus_len as f64 - df + 0.5) / (df + 0.5)).ln()
+    }
+}
+
 fn term_score(idf: f64, count: usize, length: usize, average: f64) -> f64 {
     let count = count as f64;
     idf * count * 2.5 / (count + 1.5 * (0.25 + 0.75 * length as f64 / average))
@@ -310,10 +319,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                     // An obsolete auto/code snapshot must not reject a current
                     // text scope by its different query-token budget.
                     Err(error) if error.is::<semantic::QueryTooLong>() => {
-                        match index.verify_source(&path, &filter) {
-                            Ok(()) => Err(error),
-                            Err(changed) => Err(changed),
-                        }
+                        index.verify_source(&path, &filter).and(Err(error))
                     }
                     Err(error) => Err(error),
                 };

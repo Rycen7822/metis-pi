@@ -429,57 +429,58 @@ impl ScopeIndex {
             query_idf: BTreeMap::new(),
             fused_words: None,
         };
-        let mut decoder = crate::index::codec::Decoder::new()?;
         let mut query_df: BTreeMap<_, usize> =
             query_words.iter().cloned().map(|word| (word, 0)).collect();
         index.validate_layout()?;
-        if !legacy && lexical::Statistics::fits(count, &query_df) {
-            index.fused_words = Some(std::mem::take(&mut query_df).into_keys().collect());
-            index.timings.metadata_passes = 1;
-        } else {
+        let fused = !legacy && lexical::Statistics::fits(count, &query_df);
+        if !fused {
             let lexical_length = index.validate_records(&mut query_df)?;
             if lexical_length != total_length {
                 return Err("inconsistent corpus length".into());
             }
-            index.timings.metadata_passes = 2;
         }
-        let mut released;
-        let mut previous = None;
-        released = record_table + count * 16;
-        for i in 0..terms {
-            crate::request::check()?;
-            let (term, postings) = index.legacy_term(i, &mut decoder)?;
-            if previous.as_ref().is_some_and(|p: &String| p >= &term) {
-                return Err("unsorted lexical dictionary".into());
-            }
-            let mut last = None;
-            for [id, count, length] in postings {
-                if id >= index.count
-                    || count == 0
-                    || count > length
-                    || last.is_some_and(|p| p >= id)
-                {
-                    return Err("invalid lexical posting".into());
+        if terms > 0 {
+            let mut decoder = crate::index::codec::Decoder::new()?;
+            let mut previous = None;
+            let mut released = record_table + count * 16;
+            for i in 0..terms {
+                crate::request::check()?;
+                let (term, postings) = index.legacy_term(i, &mut decoder)?;
+                if previous.as_ref().is_some_and(|p: &String| p >= &term) {
+                    return Err("unsorted lexical dictionary".into());
                 }
-                last = Some(id);
+                let mut last = None;
+                for [id, count, length] in postings {
+                    if id >= index.count
+                        || count == 0
+                        || count > length
+                        || last.is_some_and(|p| p >= id)
+                    {
+                        return Err("invalid lexical posting".into());
+                    }
+                    last = Some(id);
+                }
+                previous = Some(term);
+                let consumed = if i + 1 == terms {
+                    term_table
+                } else {
+                    number(&index.map, term_table + (i + 1) * 8)?
+                };
+                pages::consumed(&index.map, &mut released, consumed)?;
             }
-            previous = Some(term);
-            let consumed = if i + 1 == terms {
-                term_table
-            } else {
-                number(&index.map, term_table + (i + 1) * 8)?
-            };
-            pages::consumed(&index.map, &mut released, consumed)?;
         }
         pages::release(&index.map, 0, index.map.len())?;
-        index.query_idf = query_df
-            .into_iter()
-            .filter(|(_, df)| *df > 0)
-            .map(|(word, df)| {
-                let df = df as f64;
-                (word, (1.0 + (count as f64 - df + 0.5) / (df + 0.5)).ln())
-            })
-            .collect();
+        if fused {
+            index.fused_words = Some(query_df.into_keys().collect());
+            index.timings.metadata_passes = 1;
+        } else {
+            index.query_idf = query_df
+                .into_iter()
+                .filter(|(_, df)| *df > 0)
+                .map(|(word, df)| (word, crate::inverse_document_frequency(count, df)))
+                .collect();
+            index.timings.metadata_passes = 2;
+        }
         index.timings.record_validation_us = crc_ready.elapsed().as_micros();
         Ok(index)
     }
