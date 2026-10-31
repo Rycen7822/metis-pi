@@ -14,11 +14,19 @@ const OUTPUT_BYTES = 50_000;
 const WIRE_BYTES = 16 << 20;
 const DIAGNOSTIC_BYTES = 16 << 10;
 export const semanticSchema = Type.Object({
-  query: Type.String({ minLength: 1, description: "Natural-language description or concept to locate. Searches the complete selected scope; exact text/regex belongs in grep." }),
-  path: Type.Optional(Type.String({ minLength: 1, description: "Existing file or directory, relative to cwd or absolute (default cwd). ~/ is supported. This is a literal scope, not a filename glob or FFF filter; every chunk in it is scored." })),
-  model: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("text"), Type.Literal("code")], { description: "Default auto: text only for prose-only scope, otherwise code for the entire scope." })),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Maximum ranked results (default5, maximum100). Does not prefilter candidates. No pagination cursor." })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600, description: "Whole request deadline including service startup, queue waiting and complete scoring (default1800 seconds). Timeout is an error, not partial results." })),
+  query: Type.String({ minLength: 1,
+    description: "Natural-language description or concept to locate. "
+      + "Searches the complete selected scope; exact text/regex belongs in grep." }),
+  path: Type.Optional(Type.String({ minLength: 1,
+    description: "Existing file or directory, relative to cwd or absolute (default cwd). ~/ is supported. "
+      + "This is a literal scope, not a filename glob or FFF filter; every chunk in it is scored." })),
+  model: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("text"), Type.Literal("code")], {
+    description: "Default auto: text only for prose-only scope, otherwise code for the entire scope." })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100,
+    description: "Maximum ranked results (default5, maximum100). Does not prefilter candidates. No pagination cursor." })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600,
+    description: "Whole request deadline including service startup, queue waiting and complete scoring (default1800 seconds). "
+      + "Timeout is an error, not partial results." })),
 }, { additionalProperties: false });
 
 type SemanticScores = {
@@ -34,7 +42,9 @@ type SemanticChunk = { path: string; start: number; end: number; content: string
 export function createSemanticAction(runtime: SearchRuntime, toolName: string): ToolDefinition<typeof semanticSchema> {
   return {
     name: toolName, label: "Semantic",
-    description: "按含义搜索代码和文档，适用于自然语言功能描述、实现位置和相关概念检索；使用全范围语义评分与 BM25 混合排序。精确文本或正则匹配使用 grep，文件路径查找使用 find。No FFF prefilter/frecency or automatic fallback. Requires a prepared CPU runtime.",
+    description: "按含义搜索代码和文档，适用于自然语言功能描述、实现位置和相关概念检索；"
+      + "使用全范围语义评分与 BM25 混合排序。精确文本或正则匹配使用 grep，文件路径查找使用 find。"
+      + "No FFF prefilter/frecency or automatic fallback. Requires a prepared CPU runtime.",
     parameters: semanticSchema,
     outputSchema: Type.Unknown(),
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -60,6 +70,8 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
       const results: SemanticChunk[] = [];
       let bytes = 0;
       for (const chunk of chunks) {
+        // UTF-16 length is a lower bound on the record's serialized UTF-8 bytes.
+        if (chunk.content.length > OUTPUT_BYTES - bytes) break;
         bytes += Buffer.byteLength(JSON.stringify(chunk));
         if (bytes > OUTPUT_BYTES) break;
         results.push(chunk);
@@ -68,7 +80,8 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
       const next = outputTruncated ? chunks[results.length] : undefined;
       const omitted = next ? { path: next.path, start: next.start, end: next.end } : undefined;
       const notice = next
-        ? `\n[Output truncated at ${OUTPUT_BYTES} bytes; only complete ranked-prefix records retained. Next result: ${safeText(next.path)}:${next.start}-${next.end}. Read that source or narrow the scope.]` : "";
+        ? `\n[Output truncated at ${OUTPUT_BYTES} bytes; only complete ranked-prefix records retained. `
+          + `Next result: ${safeText(next.path)}:${next.start}-${next.end}. Read that source or narrow the scope.]` : "";
       const body = results.map(chunk => `${safeText(chunk.path)}:${chunk.start}-${chunk.end}\n${safeText(chunk.content)}`).join("\n\n");
       const diagnostics = wire.stderr ? `\n[CLI diagnostics: ${safeText(wire.stderr)}]` : "";
       const text = (body || (chunks.length ? "No complete result fits the display budget." : "No semantic results.")) + notice + diagnostics;
@@ -92,13 +105,19 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
 function runSemanticCli(root: string, cwd: string, query: string, model: string, limit: number,
   timeoutSeconds: number, policy: string, idleTimeoutSeconds: number, signal: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   signal.throwIfAborted();
-  if (process.platform !== "linux" || process.arch !== "x64") throw new Error("The semantic CPU runtime currently requires Linux x64; no alternate backend is selected.");
+  if (process.platform !== "linux" || process.arch !== "x64") {
+    throw new Error("The semantic CPU runtime currently requires Linux x64; no alternate backend is selected.");
+  }
   const runtimeDir = process.env.SGREP_RUNTIME_DIR
     ? path.resolve(process.env.SGREP_RUNTIME_DIR)
     : fileURLToPath(new URL("../assets/semantic/linux-x64/", import.meta.url));
   const binary = path.join(runtimeDir, "bin", "sgrep");
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, ["--shared-service", "--idle-timeout-seconds", String(idleTimeoutSeconds), "--service-timeout-seconds", String(timeoutSeconds), "--json", "--explain", "--metis-protocol", "1", "--model", model, "-n", String(limit), "--", query, root], {
+    const child = spawn(binary, [
+      "--shared-service", "--idle-timeout-seconds", String(idleTimeoutSeconds),
+      "--service-timeout-seconds", String(timeoutSeconds), "--json", "--explain", "--metis-protocol", "1",
+      "--model", model, "-n", String(limit), "--", query, root,
+    ], {
       cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, SGREP_RUNTIME_DIR: runtimeDir, SGREP_CACHE_POLICY_REQUEST: policy },
     });
@@ -121,16 +140,23 @@ function runSemanticCli(root: string, cwd: string, query: string, model: string,
       }, 1000);
     }
     const onAbort = () => stop(signal.reason);
-    const deadline = setTimeout(() => stop(new Error(`Semantic search timed out after ${timeoutSeconds}s; no partial results returned.`)), timeoutSeconds * 1000);
+    const deadline = setTimeout(() => stop(new Error(
+      `Semantic search timed out after ${timeoutSeconds}s; no partial results returned.`,
+    )), timeoutSeconds * 1000);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
-    child.on("error", error => stop(new Error(`Semantic runtime could not start at ${binary}; install a qualified prepared runtime. No build or fallback was attempted.`, { cause: error })));
+    child.on("error", error => stop(new Error(
+      `Semantic runtime could not start at ${binary}; install a qualified prepared runtime. No build or fallback was attempted.`,
+      { cause: error },
+    )));
     child.stdout.on("error", stop);
     child.stderr.on("error", stop);
     child.stdout.on("data", (chunk: Buffer) => {
       if (failed) return;
       size += chunk.length;
-      if (size > WIRE_BYTES) stop(new Error("Semantic CLI JSON exceeds the16MiB transport limit; reduce result limit or scope. No partial JSON returned."));
+      if (size > WIRE_BYTES) stop(new Error(
+        "Semantic CLI JSON exceeds the16MiB transport limit; reduce result limit or scope. No partial JSON returned.",
+      ));
       else output.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {

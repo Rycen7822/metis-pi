@@ -490,6 +490,17 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     Ok(result)
 }
 
+fn top200(scores: &[f64], mut order: Vec<usize>) -> Vec<usize> {
+    // Both input lanes have ascending IDs: preserve stable ties explicitly.
+    let compare = |&a: &usize, &b: &usize| scores[b].total_cmp(&scores[a]).then_with(|| a.cmp(&b));
+    if order.len() > 200 {
+        order.select_nth_unstable_by(200, compare);
+        order.truncate(200);
+    }
+    order.sort_unstable_by(compare);
+    order
+}
+
 fn rank(
     args: &Args,
     corpus_len: usize,
@@ -506,12 +517,11 @@ fn rank(
     let mut order: Vec<_> = if args.stdin {
         (0..lexical.len()).collect()
     } else {
-        let mut lexical_order: Vec<_> = (0..corpus_len).filter(|&i| lexical[i] > 0.0).collect();
-        lexical_order.sort_by(|&a, &b| lexical[b].total_cmp(&lexical[a]));
-        lexical_order.truncate(200);
-        let mut semantic_order: Vec<_> = (0..corpus_len).collect();
-        semantic_order.sort_by(|&a, &b| similarities[b].total_cmp(&similarities[a]));
-        semantic_order.truncate(200);
+        let mut lexical_order = top200(
+            lexical,
+            (0..corpus_len).filter(|&i| lexical[i] > 0.0).collect(),
+        );
+        let semantic_order = top200(similarities, (0..corpus_len).collect());
         if let Some(trace) = trace.as_deref_mut() {
             trace.lexical = lexical_order.clone();
             trace.semantic = semantic_order.clone();

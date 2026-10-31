@@ -90,16 +90,14 @@ impl Splitter<'_> {
         if current_depth < self.split_points_by_depth.len() {
             let points = &self.split_points_by_depth[current_depth];
 
-            let relevant: Vec<usize> = points
-                .iter()
-                .copied()
-                .filter(|&p| p > region_start && p < region_end)
-                .collect();
+            let start = points.partition_point(|&p| p <= region_start);
+            let end = points.partition_point(|&p| p < region_end);
+            let relevant = &points[start..end];
 
             if !relevant.is_empty() {
                 let mut boundaries = Vec::with_capacity(relevant.len() + 2);
                 boundaries.push(region_start);
-                boundaries.extend_from_slice(&relevant);
+                boundaries.extend_from_slice(relevant);
                 boundaries.push(region_end);
 
                 self.merge_boundaries(&boundaries, current_depth, out);

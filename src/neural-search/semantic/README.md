@@ -21,6 +21,9 @@ Q4/D64 MaxSim. Shared encoding reuses the request query/asset descriptors; score
 moves its source strings and emits no window payloads. A failed writer stops block
 delivery without stopping or replaying encoding. There is no ANN, FFF prefilter or frecency adjustment. The sibling
 `../engine/` separately owns FFF path/content search.
+Each lane selects its exact stable Top200 before sorting; supplied and exact
+matches remain uncapped. AST splitting bisects sorted boundaries without
+changing byte ranges, line ranges, or chunk content.
 
 ## CLI and shared service
 
