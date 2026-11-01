@@ -692,14 +692,15 @@ export default function goalExtension(pi: ExtensionAPI) {
         return;
       }
 
-      switch (trimmed.toLowerCase()) {
+      const command = trimmed.toLowerCase();
+      switch (command) {
         case "clear":
           controlGoal("clear", ctx);
           return;
         case "pause":
         case "resume": {
           try {
-            controlGoal(trimmed.toLowerCase() === "pause" ? "pause" : "resume", ctx);
+            controlGoal(command, ctx);
           } catch (err) {
             showGoalMessage(`Failed to update thread goal: ${err instanceof Error ? err.message : String(err)}`);
           }

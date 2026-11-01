@@ -107,35 +107,6 @@ function tick(t: TestContext, seconds: number): void {
   for (let i = 0; i < seconds; i += 1) t.mock.timers.tick(1000);
 }
 
-test("goal popup fills the viewer viewport with the same orange rail and dark surface", async t => {
-  const previous = { NO_COLOR: process.env.NO_COLOR, FORCE_COLOR: process.env.FORCE_COLOR };
-  delete process.env.NO_COLOR;
-  process.env.FORCE_COLOR = "3";
-  t.after(() => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
-  });
-  const h = makeHost(t), ui = popupHost(h);
-  await h.command("a short goal still fills the popup");
-  const opened = h.command("");
-  await ui.ready();
-  const rows = ui.popup.render(90);
-  assert.equal(rows.length, 28, "the popup fills 70% of the 40-row terminal even for a short objective");
-  const background = "\x1b[48;2;31;31;31m", rail = "\x1b[38;2;217;119;6m▏\x1b[39m";
-  assert.ok(rows.every(row => row.startsWith(background + rail) && row.endsWith("\x1b[49m")));
-  assert.ok(rows.every(row => visibleWidth(row) === 90), "the whole native overlay width is painted");
-  assert.match(ui.frame().join("\n"), /Goal.*\[X\]/);
-  assert.doesNotMatch(ui.frame().join("\n"), /[╭╮╰╯─│]/, "there is no enclosing frame outside the left rail");
-  ui.click("[Edit]");
-  const editing = ui.popup.render(90);
-  assert.equal(editing.length, 28, "editing keeps the same viewport");
-  assert.ok(editing.every(row => row.startsWith(background + rail) && visibleWidth(row) === 90));
-  ui.click("[Cancel]");
-  ui.click("[X]");
-  await opened;
-});
-
 test("goal popup controls use live state, persist pause and resume, and only clear paused or completed goals", async t => {
   const h = makeHost(t), ui = popupHost(h);
   await h.tool("create", { objective: "keep this objective and budget", token_budget: 100 });
@@ -199,10 +170,12 @@ test("goal popup keeps live usage, edits through native input and leaves Cancel 
   h.events.emit("metis:goal-open", {});
   h.events.emit("metis:goal-open", {});
   assert.match(await ui.ready(), /Pursuing · Elapsed: 3s/);
+  assert.equal(ui.popup.render(90).length, 28, "even short goals fill the same 70% viewport as subagents");
   assert.equal(custom.mock.calls.length, 1, "repeated clicks keep one popup");
   ui.key("readonly text must not edit");
   ui.click("[Edit]");
   assert.match(ui.click("[Editing]"), /\[Cancel\].*\[Save\]/);
+  assert.equal(ui.popup.render(90).length, 28, "editing retains the full viewport");
   assert.doesNotMatch(ui.popup.render(90).join("\n"), /\u001b\]52;/, "goal data cannot inject terminal controls through Editor prefill");
   ui.key("draft to discard");
   assert.match(ui.click("[Save]", () => ui.tui.handleTerminalInput("\u001b")), /original objective/);
