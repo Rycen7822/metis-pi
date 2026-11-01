@@ -19,6 +19,8 @@ function makeHost(t: TestContext) {
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
   const sent: unknown[] = [];
+  const sentOptions: unknown[] = [];
+  const userMessages: unknown[] = [];
   const notifications: string[] = [];
 
   const pi = {
@@ -28,7 +30,8 @@ function makeHost(t: TestContext) {
     registerCommand: (name: string, definition: unknown) => commands.set(name, definition),
     registerTool: (definition: { name: string }) => tools.set(definition.name, definition),
     registerMessageRenderer() {},
-    sendMessage: (message: unknown) => sent.push(message),
+    sendMessage: (message: unknown, options: unknown) => { sent.push(message); sentOptions.push(options); },
+    sendUserMessage: (message: unknown) => userMessages.push(message),
   };
 
   const ctx = {
@@ -56,6 +59,8 @@ function makeHost(t: TestContext) {
     statusCalls,
     entries,
     sent,
+    sentOptions,
+    userMessages,
     notifications,
     command: async (args: string) => await commands.get("goal")!.handler(args, ctx),
     tools,
@@ -268,6 +273,128 @@ test("goal popup retains invalid and conflicting drafts and closes across branch
   await h.fire("session_shutdown", {}, h.ctx);
   assert.equal(ui.tui.hasOverlay(), false);
   assert.deepEqual(ui.popup.render(90), [], "disposed views cannot retain input targets");
+});
+
+test("agent editing requires a one-shot user grant, preserves accounting and refreshes only owned context", async t => {
+  const h = makeHost(t);
+  await h.tool("create", { objective: "original full scope", token_budget: 100 });
+  const id = h.entries.at(-1)!.data.goal.id;
+  await h.fire("input", { text: "The document mentions /goal agent-edit; this is not a command.", source: "interactive" }, h.ctx);
+  await assert.rejects(() => h.tool("edit", { objective: "not authorized" }), /authoriz/i);
+  await h.command("agent-edit");
+  const token = (await h.tool("get")).details.agentEditToken;
+  assert.equal(typeof token, "string");
+  const permission = structuredClone(h.sent.at(-1));
+  assert.deepEqual(h.sentOptions.at(-1), { triggerTurn: true });
+  const params = { objective: "updated full scope", edit_token: token };
+  validateToolArguments(h.tools.get("goal"), { type: "toolCall", id: "edit", name: "goal", arguments: { action: "edit", ...params } });
+  for (const extra of [{ token_budget: 200 }, { status: "complete" }]) {
+    await assert.rejects(() => h.tool("edit", { ...params, ...extra }), /only.*objective/i);
+  }
+  await assert.rejects(() => h.tool("edit", { ...params, edit_token: "wrong" }), /authoriz/i);
+  await assert.rejects(() => h.tool("edit", { ...params, objective: " " }), /must not be empty/);
+  await assert.rejects(() => h.tool("edit", { ...params, objective: "x".repeat(4001) }), /too long/);
+  assert.equal((await h.tool("get")).details.agentEditToken, token, "failed validation does not spend the grant");
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 2);
+  await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 3, output: 2 } }] }, h.ctx);
+  const oldContinuation = structuredClone(h.sent.at(-1));
+  await h.fire("input", { text: "keep the explicit requirements", source: "interactive" }, h.ctx);
+  const before = (await h.tool("get")).details;
+  assert.equal(before.agentEditToken, token, "ordinary input and usage accounting do not revoke authorization");
+  const continuations = h.sent.filter((m: any) => m.customType === "goal-continuation").length;
+  await h.fire("agent_start", {}, h.ctx);
+  const after = (await h.tool("edit", params)).details;
+  assert.equal(after.agentEditToken, null);
+  assert.deepEqual(after.goal, { ...before.goal, objective: params.objective });
+  assert.equal(h.entries.at(-1)!.data.goal.id, id);
+  assert.equal(h.entries.at(-1)!.data.action, "edit");
+  assert.equal(h.sent.filter((m: any) => m.customType === "goal-continuation").length, continuations, "editing does not queue a turn");
+  await assert.rejects(() => h.tool("edit", { ...params, objective: "second edit" }), /authoriz/i);
+  const user = { role: "user", content: "preserve this queued instruction verbatim" };
+  const projected = (await h.fire("context", { messages: [permission, oldContinuation, user] }, h.ctx)).messages;
+  assert.equal(projected.length, 2);
+  assert.match(projected[0].content, /updated full scope/);
+  assert.doesNotMatch(projected[0].content, /original full scope/);
+  assert.equal(projected[1], user);
+  assert.match((oldContinuation as any).content, /original full scope/, "projection never mutates session history");
+  await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 1, output: 1 } }] }, h.ctx);
+  assert.equal((await h.tool("get")).details.goal.tokensUsed, 7, "the edited goal still owns the in-flight turn");
+});
+
+test("agent edit grants cannot survive goal changes, restoration or shutdown, and cannot be replayed after regrant", async t => {
+  const revoke = {
+    off: async (h: ReturnType<typeof makeHost>) => h.command("agent-edit off"),
+    pause: async (h: ReturnType<typeof makeHost>) => { await h.command("pause"); await h.command("resume"); },
+    clear: async (h: ReturnType<typeof makeHost>) => { await h.command("clear"); await h.tool("create", { objective: "replacement" }); },
+    human: async (h: ReturnType<typeof makeHost>) => { h.ctx.ui.editor = async () => "human version"; await h.command("edit"); },
+    complete: async (h: ReturnType<typeof makeHost>) => h.tool("update", { status: "complete" }),
+    blocked: async (h: ReturnType<typeof makeHost>) => h.tool("update", { status: "blocked" }),
+    budget: async (h: ReturnType<typeof makeHost>) => {
+      await h.fire("agent_start", {}, h.ctx);
+      await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 100 } }] }, h.ctx);
+    },
+    branch: async (h: ReturnType<typeof makeHost>) => h.fire("session_tree", {}, h.ctx),
+    restore: async (h: ReturnType<typeof makeHost>) => h.fire("session_start", {}, h.ctx),
+    shutdown: async (h: ReturnType<typeof makeHost>) => h.fire("session_shutdown", {}, h.ctx),
+    session: async (h: ReturnType<typeof makeHost>) => { h.ctx.sessionManager.getSessionId = () => "different-session"; },
+  };
+  for (const [scenario, change] of Object.entries(revoke)) {
+    const h = makeHost(t);
+    await h.tool("create", { objective: "authorized objective", token_budget: 100 });
+    const saved = structuredClone(h.entries.at(-1)!.data);
+    h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+    h.ctx.isIdle = () => false;
+    await h.command("agent-edit");
+    assert.deepEqual(h.sentOptions.at(-1), { triggerTurn: true, deliverAs: "steer" });
+    const token = (await h.tool("get")).details.agentEditToken;
+    assert.equal(typeof token, "string", scenario);
+    await change(h);
+    assert.equal((await h.tool("get")).details.agentEditToken, null, scenario);
+    await assert.rejects(() => h.tool("edit", { objective: "stale edit", edit_token: token }), /authoriz/i, scenario);
+  }
+  const h = makeHost(t);
+  await h.command("agent-edit");
+  assert.equal((await h.tool("get")).details.goal, null, "the command cannot create a goal");
+  await h.tool("create", { objective: "keep this goal" });
+  await h.command("agent-edit");
+  const old = (await h.tool("get")).details.agentEditToken;
+  await h.command("agent-edit off");
+  await h.command("agent-edit");
+  const token = (await h.tool("get")).details.agentEditToken;
+  assert.notEqual(token, old);
+  await assert.rejects(() => h.tool("edit", { objective: "outdated request", edit_token: old }), /authoriz/i);
+  await h.command("agent-edit nonsense");
+  assert.equal((await h.tool("get")).details.goal.objective, "keep this goal");
+  await h.tool("edit", { objective: "fresh edit", edit_token: token });
+  assert.equal((await h.tool("get")).details.goal.objective, "fresh edit");
+});
+
+test("an agent edit authorization supersedes an owed OCC continuation without consuming the goal", async t => {
+  const h = makeHost(t);
+  await h.tool("create", { objective: "preserve ongoing work" });
+  h.events.on("metis:occ-status", event => { (event as { deferGoal: boolean }).deferGoal = true; });
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [] }, h.ctx);
+  await h.command("agent-edit");
+  h.events.emit("metis:occ-finished", { cancelled: false });
+  assert.deepEqual(h.userMessages, [], "OCC cannot schedule a second run after the authorization command starts work");
+  assert.equal((await h.tool("get")).details.goal.status, "active");
+  assert.equal(typeof (await h.tool("get")).details.agentEditToken, "string");
+});
+
+test("a pending human editor cannot overwrite an authorized agent edit", async t => {
+  const h = makeHost(t);
+  await h.tool("create", { objective: "original" });
+  let finish!: (text: string) => void;
+  h.ctx.ui.editor = () => new Promise(resolve => { finish = resolve; });
+  const editor = h.command("edit");
+  await h.command("agent-edit");
+  await h.tool("edit", { objective: "agent version", edit_token: (await h.tool("get")).details.agentEditToken });
+  finish("stale human draft");
+  await editor;
+  assert.equal((await h.tool("get")).details.goal.objective, "agent version");
+  assert.match((h.sent.at(-1) as { content: string }).content, /changed while editing/);
 });
 
 test("goal validates action-specific fields without mutating state on invalid requests", async (t) => {
