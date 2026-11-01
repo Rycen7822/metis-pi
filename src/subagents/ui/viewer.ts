@@ -49,13 +49,14 @@ interface AgentView {
 }
 interface HeaderTarget { x: number; y: number; width: number; activate: () => void }
 const MAX_CACHED_VIEWS = 8;
-// Edge-attached strokes: 1/4 cell width and 1/8 cell height look similar on typical 1:2 cells.
-// Unicode's single-cell corner joins are 1/8 wide; only those short turns are narrower than the sides.
+// Common Block Elements avoid the blank Legacy Computing glyphs seen in some terminal fonts.
+// Sides use 1/4 cell width, top/bottom 1/8 cell height; the quadrant corners form thicker joins.
+// SGR 7/27 invert only ▊: its left 3/4 takes the panel background, leaving the right 1/4 colored.
 const POPUP_BORDER = {
-  left: "▎", right: "🮇",
+  left: "▎", right: "\x1b[7m▊\x1b[27m",
   top: "▔", bottom: "▁",
-  topLeft: "🭽", topRight: "🭾",
-  bottomLeft: "🭼", bottomRight: "🭿",
+  topLeft: "▛", topRight: "▜",
+  bottomLeft: "▙", bottomRight: "▟",
 };
 
 function disposeView(view: AgentView) {

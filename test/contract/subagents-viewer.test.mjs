@@ -305,7 +305,7 @@ test("conversation scrollbar tracks keys, wheel, pointer capture and resize with
     reader: [textMessage(Array.from({ length: 100 }, (_, i) => `ROW_${i}`).join("\n\n"))],
   } });
   await nextTurn();
-  const thumb = () => viewer.render(90).flatMap((row, index) => row.endsWith("\x1b[36m🮇\x1b[39m") ? [index] : []);
+  const thumb = () => viewer.render(90).flatMap((row, index) => row.endsWith("\x1b[36m\x1b[7m▊\x1b[27m\x1b[39m") ? [index] : []);
   const initial = thumb();
   assert.ok(initial.length > 0, "overflow has a visible right-edge scrollbar");
   assert.equal(initial.at(-1), rows().length - 3, "the initial follow-tail thumb reaches the body bottom");
@@ -339,14 +339,14 @@ test("one-row tabs keep close at the right border and only a left click closes",
   const { viewer, rows, mouse, closes } = popup(t, { theme: frameTheme });
   await nextTurn();
   const width = 90, rendered = viewer.render(width), header = rows(width)[1];
-  assert.equal(rendered[0], `\x1b[90m🭽${"▔".repeat(width - 2)}🭾\x1b[39m`);
-  assert.equal(rendered.at(-1), `\x1b[90m🭼${"▁".repeat(width - 2)}🭿\x1b[39m`);
+  assert.equal(rendered[0], `\x1b[90m▛${"▔".repeat(width - 2)}▜\x1b[39m`);
+  assert.equal(rendered.at(-1), `\x1b[90m▙${"▁".repeat(width - 2)}▟\x1b[39m`);
   assert.ok(
-    rendered.slice(1, -1).every(row => row.startsWith("\x1b[90m▎\x1b[39m") && row.endsWith("\x1b[90m🮇\x1b[39m")),
+    rendered.slice(1, -1).every(row => row.startsWith("\x1b[90m▎\x1b[39m") && row.endsWith("\x1b[90m\x1b[7m▊\x1b[27m\x1b[39m")),
     "the header and body retain theme-colored, single-column side strokes",
   );
   assert.match(header, /\[reader\].*writer.*tester/);
-  assert.match(header, /\[X\]🮇$/);
+  assert.match(header, /\[X\]▊$/);
   assert.equal(visibleWidth(header), width);
   const x = width - 3, y = 1;
   assert.equal(mouse(width, x, y, { type: "press" }).handled, true, "claim primary press before Pi's selection fallback");
@@ -370,7 +370,7 @@ test("resizing to zero and narrow widths clears invisible tab and close hit targ
     const rendered = rows(width);
     assert.ok(rendered.every(row => visibleWidth(row) <= width), `rows fit ${width} columns`);
     if (width === 0) assert.deepEqual(rendered, []);
-    if (width === 5) assert.match(rendered[1], /\[X\]🮇$/);
+    if (width === 5) assert.match(rendered[1], /\[X\]▊$/);
     mouse(width, oldTabX, 1);
     mouse(width, 87, 1);
     assert.equal(calls.length, initialCalls, `hidden old tab cannot switch at width ${width}`);
@@ -566,7 +566,7 @@ test("overflow arrows navigate tabs and keyboard selection remains visible", asy
   const pagedFrame = rows(width), header = pagedFrame[1];
   assert.notEqual(header, lastHeader, "the visible paging arrow is actionable");
   assert.deepEqual(pagedFrame.slice(2), lastFrame.slice(2), "browsing off-screen labels does not change the selected transcript");
-  assert.match(header, /\[X\]🮇$/);
+  assert.match(header, /\[X\]▊$/);
 });
 
 test("backward overflow paging does not skip variable-width tab labels", async t => {
@@ -595,7 +595,7 @@ test("Unicode tab labels truncate within terminal columns without corrupting tex
     const rendered = rows(width);
     assert.ok(rendered.every(row => visibleWidth(row) <= width), `wide and combining labels fit ${width} columns`);
     assert.ok(rendered.every(row => row.isWellFormed() && !row.includes("\ufffd")), "labels do not contain split surrogates or replacement glyphs");
-    if (width >= 5) assert.match(rendered[1], /\[X\]🮇$/);
+    if (width >= 5) assert.match(rendered[1], /\[X\]▊$/);
   }
 });
 
@@ -720,9 +720,11 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
     return { x: visibleWidth(lines[row].slice(0, lines[row].indexOf(label))) + 1, y: row + 1 };
   };
   const lines = screenLines(tui);
-  const thumbRow = tui.getScreenLines().findIndex(line => line.includes("\x1b[36m🮇"));
+  const thumbRow = tui.getScreenLines().findIndex(line => line.includes("\x1b[36m\x1b[7m▊"));
   assert.ok(thumbRow >= 0, "the actual overlay paints its scrollbar");
-  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].indexOf("🮇"))) + 1;
+  const right = tui.getScreenLines()[thumbRow];
+  assert.match(right.slice(right.indexOf("▊") + 1), /^\x1b\[(?:0|27)m/, "inverse ends before the underlying row resumes");
+  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].indexOf("▊"))) + 1;
   const bodyY = headerTarget("[reader]").y + 4;
   tui.handleTerminalInput(sgr(0, barX, bodyY));
   tui.doRender();
