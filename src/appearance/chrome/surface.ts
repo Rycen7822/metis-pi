@@ -33,7 +33,6 @@ export function makeSurfaceOps(
   dim: (text: string) => string,
 ): SurfaceOps {
   const bg = backgroundAnsi(DARK_SURFACE_BG, level);
-  const bgFn = (text: string): string => paintSurfaceBackground(text, bg);
   return {
     kind: level.kind,
     paintRow: (row, width) => {
@@ -41,7 +40,7 @@ export function makeSurfaceOps(
       const w = Number.isFinite(width) && width >= 1 ? Math.floor(width) : 1;
       const visible = cellWidth(row.replaceAll(CURSOR_MARKER, ""));
       const padding = Math.max(0, w - visible);
-      return bgFn(`${row}${" ".repeat(padding)}`);
+      return paintSurfaceBackground(`${row}${" ".repeat(padding)}`, bg);
     },
     paintGlyph: (text, tone) => (tone === "accent" ? accent(text) : dim(text)),
   };

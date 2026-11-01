@@ -111,13 +111,10 @@ export function diffSignFg(kind: "add" | "remove", level: ColorLevel): string {
 }
 
 function surface(kind: "add" | "remove" | "context", level: ColorLevel): SurfaceStyle {
-  if (kind === "context") {
+  if (kind === "context" || level.kind === "none") {
     return { lineBg: "", signFg: "", markerFg: "", contentFg: (text) => text };
   }
   const fg = diffSignFg(kind, level);
-  if (!fg) {
-    return { lineBg: "", signFg: "", markerFg: "", contentFg: (text) => text };
-  }
   const rgb = kind === "add" ? DIFF_ADD_BG : DIFF_DEL_BG;
   const bg = backgroundAnsi(rgb, level);
   if (!bg) {
@@ -127,7 +124,7 @@ function surface(kind: "add" | "remove" | "context", level: ColorLevel): Surface
   const markerColor = kind === "add" ? DIFF_ADD_MARKER_COLOR : DIFF_DEL_MARKER_COLOR;
   return {
     lineBg: bg,
-    signFg: `${fg}${bg}`,
+    signFg: fg,
     markerFg: foregroundAnsi(markerColor, level),
     contentFg: (text) => `${fg}${text}\x1b[39m`,
   };
@@ -194,7 +191,7 @@ export function wrapStyledContent(text: string, width: number): string[] {
   return lines;
 }
 
-/** Render diff rows Codex-style from structured rows. Never returns empty. */
+/** Render diff rows Codex-style from structured rows. */
 
 export function renderDiffLines(input: DiffRenderInput): string[] {
   const { rows, layout, colorLevel } = input;
@@ -206,7 +203,8 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
   const maxSingle = Math.max(0, ...rows.map((row) => row.lineNumber ?? 0));
   const numberWidth = lineNumberWidth(Math.max(maxNew, maxOld, maxSingle));
   // Codex prefix: left inset + gutter(number + space) + sign char.
-  const prefixCols = DIFF_LEFT_INSET + numberWidth + 1 + 1;
+  const signCell = DIFF_LEFT_INSET + numberWidth + 1;
+  const prefixCols = signCell + 1;
   const contentWidth = Math.max(1, usable - prefixCols);
   const out: string[] = [];
 
@@ -241,7 +239,10 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         ? String(row.newNumber)
         : row.oldNumber !== undefined ? String(row.oldNumber) : "";
     const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
-    const gutter = `${" ".repeat(DIFF_LEFT_INSET)}${numberText.padStart(numberWidth)} `;
+    // The marker occupies an existing inset cell; all content and copy columns stay fixed.
+    const inset = style.markerFg
+      ? `${style.markerFg}▌\x1b[39m${" ".repeat(DIFF_LEFT_INSET - 1)}` : " ".repeat(DIFF_LEFT_INSET);
+    const gutter = `${inset}${numberText.padStart(numberWidth)} `;
 
     // Highlight the whole row once, then ANSI-aware wrap (never a naive slice
     // mid-sequence). Delete rows keep syntax colors under an overlay dim.
@@ -249,7 +250,7 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
       row.content,
       input.language,
       input.paint,
-      (text) => style.contentFg(text),
+      style.contentFg,
     );
     if (row.kind === "remove" && content) {
       // Codex dims delete-line syntax so the removal cue wins (overlay dim,
@@ -261,7 +262,7 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
     for (let i = 0; i < chunks.length; i++) {
       const head = i === 0
         ? `${gutter}${style.signFg ? `${style.signFg}${sign}\x1b[39m` : sign}`
-        : `${" ".repeat(DIFF_LEFT_INSET)}${" ".repeat(numberWidth)}  `;
+        : `${inset}${" ".repeat(numberWidth + 2)}`;
       const body = chunks[i]!;
       if (style.lineBg) {
         // Padding BEFORE the background reset: the surface reaches the right
@@ -269,13 +270,10 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         // pad, bg off.
         const visible = layout.visibleWidth(head + body);
         const pad = " ".repeat(Math.max(0, usable - visible));
-        // Replace one inset cell with a half-width foreground stroke; background and copy columns stay unchanged.
-        const markedHead = `${style.markerFg}▌\x1b[39m${head.slice(1)}`;
-        out.push(`${style.lineBg}${markedHead}${body}${pad}${BG_RESET}`);
+        out.push(`${style.lineBg}${head}${body}${pad}${BG_RESET}`);
       } else {
         out.push(`${head}${body}`.trimEnd());
       }
-      const signCell = DIFF_LEFT_INSET + numberWidth + 1;
       if (i === 0) {
         input.copyOut?.push({
           spans: [
