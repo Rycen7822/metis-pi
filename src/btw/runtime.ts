@@ -16,16 +16,22 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type AssistantMessage, type Message, type ThinkingLevel as AiThinkingLevel } from "@earendil-works/pi-ai";
 import {
-	Container,
 	Input,
 	Markdown,
+	getCapabilities,
 	truncateToWidth,
 	visibleWidth,
+	type Component,
 	type Focusable,
 	type KeybindingsManager,
 	type OverlayHandle,
 	type TUI,
+	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
+import {
+	backgroundAnsi, CODEMODE_ORANGE, DARK_SURFACE_BG, FG_DEFAULT, foregroundAnsi, resolveColorContext,
+} from "../presentation/palette.ts";
+import { paintSurfaceBackground } from "../presentation/sgr.ts";
 
 const BTW_ENTRY_TYPE = "btw-thread-entry";
 const BTW_RESET_TYPE = "btw-thread-reset";
@@ -187,8 +193,11 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 }
 
 
-class BtwOverlay extends Container implements Focusable {
+class BtwOverlay implements Component, Focusable {
 	private readonly input = new Input();
+	private readonly rail: string;
+	private readonly background: string;
+	private closeTarget?: { x: number; width: number };
 
 	get focused(): boolean {
 		return this.input.focused;
@@ -207,7 +216,10 @@ class BtwOverlay extends Container implements Focusable {
 		onSubmit: (value: string) => void,
 		private readonly onDismiss: () => void,
 	) {
-		super();
+		const colorLevel = resolveColorContext({ terminalTrueColor: getCapabilities().trueColor });
+		const orange = foregroundAnsi(CODEMODE_ORANGE, colorLevel);
+		this.rail = orange ? `${orange}▏${FG_DEFAULT}` : "▏";
+		this.background = backgroundAnsi(DARK_SURFACE_BG, colorLevel);
 		this.input.onSubmit = onSubmit;
 		this.input.onEscape = onDismiss;
 	}
@@ -235,61 +247,52 @@ class BtwOverlay extends Container implements Focusable {
 		return this.input.getValue();
 	}
 
-	private frameLine(content: string, innerWidth: number): string {
-		const truncated = truncateToWidth(content, innerWidth, "");
-		const padding = Math.max(0, innerWidth - visibleWidth(truncated));
-		return `${this.theme.fg("borderMuted", "│")}${truncated}${" ".repeat(padding)}${this.theme.fg("borderMuted", "│")}`;
+	invalidate(): void { this.input.invalidate(); }
+
+	handleMouse(event: TuiMouseEvent) {
+		const target = this.closeTarget;
+		if (!target || event.y !== 0 || event.x < target.x || event.x >= target.x + target.width || event.button !== "left") return;
+		if (event.type === "click") this.onDismiss();
+		if (event.type === "press" || event.type === "release" || event.type === "click") return { handled: true };
 	}
 
-	private borderLine(innerWidth: number, edge: "top" | "bottom"): string {
-		const left = edge === "top" ? "┌" : "└";
-		const right = edge === "top" ? "┐" : "┘";
-		return this.theme.fg("borderMuted", `${left}${"─".repeat(innerWidth)}${right}`);
-	}
-
-	override render(width: number): string[] {
-		const dialogWidth = Math.max(56, Math.min(width, Math.floor(width * 0.9)));
-		const innerWidth = Math.max(40, dialogWidth - 2);
-		const terminalRows = process.stdout.rows ?? 30;
-		const dialogHeight = Math.max(16, Math.min(30, Math.floor(terminalRows * 0.75)));
-		const chromeHeight = 7;
-		const transcriptHeight = Math.max(6, dialogHeight - chromeHeight);
-
-		// Markdown renders to innerWidth already — no manual wrapping needed
-		const transcript = this.getTranscript(innerWidth, this.theme);
-		const visibleTranscript = transcript.slice(-transcriptHeight);
-		const transcriptPadding = Math.max(0, transcriptHeight - visibleTranscript.length);
-
-		const status = this.getStatus();
-
+	render(width: number): string[] {
+		this.closeTarget = undefined;
+		if (width <= 0) return [];
+		// Match the other popups: rail + left space, one spare body column, and right padding.
+		const hasRail = width >= 5;
+		const contentLeft = hasRail ? 2 : 0;
+		const innerWidth = hasRail ? width - 4 : width;
+		const headerWidth = hasRail ? width - 3 : width;
+		// The overlay uses the same 70% terminal-height viewport as Goal and Subagent.
+		const height = Math.max(1, Math.floor(this.tui.terminal.rows * 0.7));
+		const close = truncateToWidth("[X]", headerWidth, "");
+		const title = truncateToWidth("BTW side chat", Math.max(0, headerWidth - visibleWidth(close) - 1), "");
+		const closeX = headerWidth - visibleWidth(close);
+		const header: string[] = [];
+		if (height > 1) {
+			header.push(this.theme.fg("accent", this.theme.bold(title)) + " ".repeat(closeX - visibleWidth(title))
+				+ this.theme.fg("accent", close));
+			this.closeTarget = { x: closeX + contentLeft, width: visibleWidth(close) };
+		}
+		// Full chrome has three header and three footer rows; tiny terminals prioritize the input.
+		if (height >= 6) header.push(this.theme.fg("dim", "Separate side conversation. Esc closes."), "");
 		const previousFocused = this.input.focused;
 		this.input.focused = false;
 		const inputLine = this.input.render(innerWidth)[0] ?? "";
 		this.input.focused = previousFocused;
-
-		const lines = [
-			this.borderLine(innerWidth, "top"),
-			this.frameLine(this.theme.fg("accent", this.theme.bold(" BTW side chat ")), innerWidth),
-			this.frameLine(this.theme.fg("dim", "Separate side conversation. Esc closes."), innerWidth),
-			this.theme.fg("borderMuted", `├${"─".repeat(innerWidth)}┤`),
-		];
-
-		for (const line of visibleTranscript) {
-			lines.push(this.frameLine(line, innerWidth));
-		}
-		for (let i = 0; i < transcriptPadding; i++) {
-			lines.push(this.frameLine("", innerWidth));
-		}
-
-		lines.push(this.theme.fg("borderMuted", `├${"─".repeat(innerWidth)}┤`));
-		lines.push(this.frameLine(this.theme.fg("warning", status), innerWidth));
-		lines.push(
-			`${this.theme.fg("borderMuted", "│")}${inputLine}${this.theme.fg("borderMuted", "│")}`,
-		);
-		lines.push(this.frameLine(this.theme.fg("dim", "Enter submit · Esc close"), innerWidth));
-		lines.push(this.borderLine(innerWidth, "bottom"));
-
-		return lines;
+		const footer: string[] = [];
+		if (height >= 3) footer.push(this.theme.fg("warning", this.getStatus()));
+		footer.push(inputLine);
+		if (height >= 4) footer.push(this.theme.fg("dim", "Enter submit · Esc close"));
+		const transcriptHeight = Math.max(0, height - header.length - footer.length);
+		const transcript = transcriptHeight ? this.getTranscript(innerWidth, this.theme).slice(-transcriptHeight) : [];
+		while (transcript.length < transcriptHeight) transcript.push("");
+		return [...header, ...transcript, ...footer].map((line, index) => {
+			const text = truncateToWidth(line, index === 0 && header.length ? headerWidth : innerWidth, "");
+			const row = hasRail ? `${this.rail} ${text}${" ".repeat(headerWidth - visibleWidth(text))} ` : text;
+			return paintSurfaceBackground(row + " ".repeat(Math.max(0, width - visibleWidth(row))), this.background);
+		});
 	}
 }
 
@@ -358,15 +361,17 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const lines: string[] = [];
+			const userLabel = theme.fg("accent", theme.bold("You: "));
+			const questionWidth = Math.max(0, width - visibleWidth(userLabel));
 			for (const item of thread.slice(-6)) {
 				const userText = item.question.trim().split("\n")[0];
-				lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
+				lines.push(userLabel + truncateToWidth(userText, questionWidth, "…"));
 				lines.push("", ...renderMarkdownLines(item.answer, width), "");
 			}
 
 			if (pending) {
 				const userText = pending.question.trim().split("\n")[0];
-				lines.push(theme.fg("accent", theme.bold("You: ")) + truncateToWidth(userText, width - 5, "…"));
+				lines.push(userLabel + truncateToWidth(userText, questionWidth, "…"));
 				lines.push(...renderToolCallLines(pending.tools, theme, width));
 				if (pending.error) {
 					lines.push(theme.fg("error", `❌ ${pending.error}`));
@@ -573,13 +578,7 @@ export default function (pi: ExtensionAPI) {
 			},
 			{
 				overlay: true,
-				overlayOptions: {
-					width: "80%",
-					minWidth: 72,
-					maxHeight: "78%",
-					anchor: "top-center",
-					margin: { top: 1, left: 2, right: 2 },
-				},
+				overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" },
 				onHandle: (handle) => {
 					runtime.handle = handle;
 					if (runtime.closed) handle.hide();
