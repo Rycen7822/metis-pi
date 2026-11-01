@@ -173,12 +173,12 @@ export class ThinkingRailComponent implements Component {
       return this.#cache;
     }
     const level = this.#level;
-    const rail = level.kind === "none" ? "| " : `\x1b[38;2;${CODEX_CYAN_RGB}m▏\x1b[39m `;
+    const rail = level.kind === "none" ? "| " : `\x1b[38;2;${CODEX_CYAN_RGB}m│\x1b[39m `;
     // Per-row shift: rows already carrying a rail pass through WITHOUT the
     // prefix, so their provenance shift is 0, not railCells.
     const shifts = childLines.map((line) => {
       const stripped = stripAnsi(line);
-      return stripped.startsWith("▏") || stripped.startsWith("| ") ? 0 : railCells;
+      return stripped.startsWith("│") || stripped.startsWith("| ") ? 0 : railCells;
     });
     this.#cache = childLines.map((line, i) => (shifts[i] === 0 ? line : `${rail}${line}`));
     // Provenance: every rail row is the child's row shifted right by its rail

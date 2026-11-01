@@ -283,7 +283,7 @@ export function makeCodemodeRenderers(input: {
   const colorLevel = input.colorLevel ?? detectColorLevel();
   const labelColor = foregroundAnsi(CODEMODE_ORANGE, colorLevel);
   const label = (text: string) => labelColor ? `${labelColor}${text}${FG_DEFAULT}` : text;
-  const scriptGlyph = colorLevel.kind === "none" ? "|" : label("▏");
+  const scriptGlyph = colorLevel.kind === "none" ? "|" : label("│");
   return {
     renderCall(args, theme, context) {
       const timer = timerState(context);

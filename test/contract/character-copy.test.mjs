@@ -48,15 +48,16 @@ test("long shell command caps keep complete graphemes and OSC8 sequences", () =>
 
 test("thinking rail recognizes an existing prefix through SGR and OSC8 while keeping its copy source", () => {
   const osc = "\x1b]8;;https://example.test\x1b\\", endOsc = "\x1b]8;;\x1b\\";
-  for (const source of [`\x1b[36m▏\x1b[39m existing`, `${osc}▏${endOsc} existing`]) {
+  for (const source of [`\x1b[36m│\x1b[39m existing`, `${osc}│${endOsc} existing`]) {
     const rail = new ThinkingRailComponent(new Tui.Text(source, 0, 0), { kind: "truecolor" });
     const frame = copyFrame(rail, 40);
-    assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "▏ existing");
-    assert.equal(select(frame).text, "▏ existing");
+    assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "│ existing");
+    assert.equal(select(frame).text, "│ existing");
   }
   const rail = new ThinkingRailComponent(new Tui.Text(`${osc}普通é😀${endOsc}`, 0, 0), { kind: "truecolor" });
   const frame = copyFrame(rail, 40);
-  assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "▏ 普通é😀");
+  assert.ok(frame.root.lines[0].startsWith("\x1b[38;2;58;150;221m│\x1b[39m "), "thinking keeps its cyan rail color");
+  assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "│ 普通é😀");
   assert.equal(select(frame).text, "普通é😀");
 });
 
