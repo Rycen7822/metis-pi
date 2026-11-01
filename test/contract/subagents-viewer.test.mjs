@@ -12,12 +12,6 @@ import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 
 initTheme("dark", false);
 
-// Distinct ANSI foregrounds expose border/scrollbar roles even when their glyph is the same.
-const frameTheme = { ...theme, fg(name, text) {
-  const color = { border: 90, accent: 36 }[name]; // Gray/cyan test markers, not production colors.
-  return color === undefined ? text : `\x1b[${color}m${text}\x1b[39m`;
-} };
-
 const defaultAgents = ["reader", "writer", "tester"].map(name => ({ id: name, name, state: "running" }));
 const textMessage = text => ({ role: "assistant", content: [{ type: "text", text }] });
 // Trusted registration metadata supplied separately from serialized messages.
@@ -46,7 +40,7 @@ function popup(t, options = {}) {
     });
   });
   const viewer = new SubagentViewer(
-    options.agentId ?? "reader", options.theme ?? theme, tui,
+    options.agentId ?? "reader", theme, tui,
     new KeybindingsManager({
       ...TUI_KEYBINDINGS,
       "app.tools.expand": { defaultKeys: "ctrl+o" },
@@ -211,14 +205,11 @@ test("conversation popup keeps native click folds through refresh and scrolling"
 
 test("conversation reuses codemode folds and keeps unrecognized tools bounded", async t => {
   const messages = ["codemode", "tool_search"].flatMap(name => [
-    { role: "assistant", content: [{ type: "toolCall", id: name, name, arguments: name === "codemode"
-      ? { code: "// SOURCE_MARKER\ntext(await tools.read({path:\"FULL_NESTED_PATH\"}));" } : { query: "tools" } }] },
+    { role: "assistant", content: [{ type: "toolCall", id: name, name, arguments: name === "codemode" ? { code: "// SOURCE_MARKER\ntext(await tools.read({path:\"FULL_NESTED_PATH\"}));" } : { query: "tools" } }] },
     { role: "toolResult", toolCallId: name, toolName: name, durationMs: 1250,
       content: [{ type: "text", text: Array.from({ length: 20 }, (_, i) => `RESULT_${name}_${i}`).join("\n") }],
       details: { calls: name === "codemode" ? [{ id: "codemode/1", name: "read", status: "ok", args: "{truncated" }] : [] },
-      ...(name === "codemode" ? { nestedCalls: { complete: true, calls: [
-        { id: "codemode/1", name: "read", status: "ok", arguments: { path: "FULL_NESTED_PATH" } },
-      ] } } : {}), },
+      ...(name === "codemode" ? { nestedCalls: { complete: true, calls: [{ id: "codemode/1", name: "read", status: "ok", arguments: { path: "FULL_NESTED_PATH" } }] } } : {}), },
   ]);
   const { viewer, rows, clickText } = popup(t, { messages: { reader: messages } });
   await nextTurn();
@@ -247,9 +238,7 @@ test("conversation preserves mutation evidence, follow-up commands and native ex
     ["exec_command", { cmd: "verify" }, { output: "RESULT\n".repeat(12), session_id: 17, wall_time_seconds: 1.25 },
       false, /Session 17 still running/],
   ];
-  for (const [
-    name, args, details, isError, expected,
-  ] of cases) await t.test(`${name} ${details.metisActionFusion?.command.status ?? "result"}`, async t => {
+  for (const [name, args, details, isError, expected] of cases) await t.test(`${name} ${details.metisActionFusion?.command.status ?? "result"}`, async t => {
     const { rows } = popup(t, { messages: { reader: [
       { role: "assistant", content: [{ type: "toolCall", id: "call", name, arguments: args }] },
       { role: "toolResult", toolCallId: "call", toolName: name, isError, details,
@@ -301,11 +290,11 @@ test("conversation tools retain subagent summaries for current and pre-rename tr
 
 test("conversation scrollbar tracks keys, wheel, pointer capture and resize without taking body columns", async t => {
   const tui = { terminal: { rows: 80 }, requestRender() {} };
-  const { viewer, rows, mouse, clickText } = popup(t, { tui, theme: frameTheme, messages: {
+  const { viewer, rows, mouse, clickText } = popup(t, { tui, messages: {
     reader: [textMessage(Array.from({ length: 100 }, (_, i) => `ROW_${i}`).join("\n\n"))],
   } });
   await nextTurn();
-  const thumb = () => viewer.render(90).flatMap((row, index) => row.endsWith("\x1b[36m\x1b[7m▊\x1b[27m\x1b[39m") ? [index] : []);
+  const thumb = () => rows().flatMap((row, index) => row.endsWith("┃") ? [index] : []);
   const initial = thumb();
   assert.ok(initial.length > 0, "overflow has a visible right-edge scrollbar");
   assert.equal(initial.at(-1), rows().length - 3, "the initial follow-tail thumb reaches the body bottom");
@@ -336,17 +325,11 @@ test("conversation scrollbar tracks keys, wheel, pointer capture and resize with
 });
 
 test("one-row tabs keep close at the right border and only a left click closes", async t => {
-  const { viewer, rows, mouse, closes } = popup(t, { theme: frameTheme });
+  const { rows, mouse, closes } = popup(t);
   await nextTurn();
-  const width = 90, rendered = viewer.render(width), header = rows(width)[1];
-  assert.equal(rendered[0], `\x1b[90m▛${"▔".repeat(width - 2)}▜\x1b[39m`);
-  assert.equal(rendered.at(-1), `\x1b[90m▙${"▁".repeat(width - 2)}▟\x1b[39m`);
-  assert.ok(
-    rendered.slice(1, -1).every(row => row.startsWith("\x1b[90m▎\x1b[39m") && row.endsWith("\x1b[90m\x1b[7m▊\x1b[27m\x1b[39m")),
-    "the header and body retain theme-colored, single-column side strokes",
-  );
+  const width = 90, header = rows(width)[1];
   assert.match(header, /\[reader\].*writer.*tester/);
-  assert.match(header, /\[X\]▊$/);
+  assert.match(header, /\[X\]│$/);
   assert.equal(visibleWidth(header), width);
   const x = width - 3, y = 1;
   assert.equal(mouse(width, x, y, { type: "press" }).handled, true, "claim primary press before Pi's selection fallback");
@@ -370,7 +353,7 @@ test("resizing to zero and narrow widths clears invisible tab and close hit targ
     const rendered = rows(width);
     assert.ok(rendered.every(row => visibleWidth(row) <= width), `rows fit ${width} columns`);
     if (width === 0) assert.deepEqual(rendered, []);
-    if (width === 5) assert.match(rendered[1], /\[X\]▊$/);
+    if (width === 5) assert.match(rendered[1], /\[X\]│$/);
     mouse(width, oldTabX, 1);
     mouse(width, 87, 1);
     assert.equal(calls.length, initialCalls, `hidden old tab cannot switch at width ${width}`);
@@ -566,7 +549,7 @@ test("overflow arrows navigate tabs and keyboard selection remains visible", asy
   const pagedFrame = rows(width), header = pagedFrame[1];
   assert.notEqual(header, lastHeader, "the visible paging arrow is actionable");
   assert.deepEqual(pagedFrame.slice(2), lastFrame.slice(2), "browsing off-screen labels does not change the selected transcript");
-  assert.match(header, /\[X\]▊$/);
+  assert.match(header, /\[X\]│$/);
 });
 
 test("backward overflow paging does not skip variable-width tab labels", async t => {
@@ -580,8 +563,7 @@ test("backward overflow paging does not skip variable-width tab labels", async t
   clickText("[>]", width, { header: true });
   assert.match(rows(width)[1], /tester.*x/);
   clickText("[<]", width, { header: true });
-  assert.ok(rows(width)[1].includes("writer"),
-    "backward paging must expose the preceding page, not skip it when the current page contains more tabs");
+  assert.ok(rows(width)[1].includes("writer"), "backward paging must expose the preceding page, not skip it when the current page contains more tabs");
   clickText("[<]", width, { header: true });
   assert.match(rows(width)[1], /\[reader\]/);
 });
@@ -595,7 +577,7 @@ test("Unicode tab labels truncate within terminal columns without corrupting tex
     const rendered = rows(width);
     assert.ok(rendered.every(row => visibleWidth(row) <= width), `wide and combining labels fit ${width} columns`);
     assert.ok(rendered.every(row => row.isWellFormed() && !row.includes("\ufffd")), "labels do not contain split surrogates or replacement glyphs");
-    if (width >= 5) assert.match(rendered[1], /\[X\]▊$/);
+    if (width >= 5) assert.match(rendered[1], /\[X\]│$/);
   }
 });
 
@@ -704,7 +686,7 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
   const { tui, terminal } = altScreen(100, 60);
   terminal.hideCursor = () => terminal.write("\u001b[?25l");
   terminal.showCursor = () => terminal.write("\u001b[?25h");
-  const { viewer, calls, closes } = popup(t, { tui, theme: frameTheme, messages: {
+  const { viewer, calls, closes } = popup(t, { tui, messages: {
     reader: [textMessage(Array.from({ length: 80 }, (_, i) => `SCROLL_${i}`).join("\n\n"))],
   } });
   tui.setLayoutRoot(container());
@@ -719,12 +701,9 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
     assert.ok(row >= 0, `overlay header contains ${label}`);
     return { x: visibleWidth(lines[row].slice(0, lines[row].indexOf(label))) + 1, y: row + 1 };
   };
-  const lines = screenLines(tui);
-  const thumbRow = tui.getScreenLines().findIndex(line => line.includes("\x1b[36m\x1b[7m▊"));
+  const lines = screenLines(tui), thumbRow = lines.findIndex(line => line.includes("┃"));
   assert.ok(thumbRow >= 0, "the actual overlay paints its scrollbar");
-  const right = tui.getScreenLines()[thumbRow];
-  assert.match(right.slice(right.indexOf("▊") + 1), /^\x1b\[(?:0|27)m/, "inverse ends before the underlying row resumes");
-  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].indexOf("▊"))) + 1;
+  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].indexOf("┃"))) + 1;
   const bodyY = headerTarget("[reader]").y + 4;
   tui.handleTerminalInput(sgr(0, barX, bodyY));
   tui.doRender();

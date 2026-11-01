@@ -49,15 +49,6 @@ interface AgentView {
 }
 interface HeaderTarget { x: number; y: number; width: number; activate: () => void }
 const MAX_CACHED_VIEWS = 8;
-// Common Block Elements avoid the blank Legacy Computing glyphs seen in some terminal fonts.
-// Sides use 1/4 cell width, top/bottom 1/8 cell height; the quadrant corners form thicker joins.
-// SGR 7/27 invert only ▊: its left 3/4 takes the panel background, leaving the right 1/4 colored.
-const POPUP_BORDER = {
-  left: "▎", right: "\x1b[7m▊\x1b[27m",
-  top: "▔", bottom: "▁",
-  topLeft: "▛", topRight: "▜",
-  bottomLeft: "▙", bottomRight: "▟",
-};
 
 function disposeView(view: AgentView) {
   view.content.dispose(); view.lines = []; view.layout = []; view.snapshot = undefined;
@@ -378,7 +369,7 @@ export class SubagentViewer implements Component {
     const close = width >= 3 ? this.theme.fg("accent", "[X]") : truncateToWidth("[X]", width, "");
     if (width >= 3) this.targets.push({ x: width - (bordered ? 4 : 3), y, width: 3, activate: () => this.close() });
     const title = `${" ".repeat(padding)}${tabs}${" ".repeat(Math.max(0, area - padding - visibleWidth(tabs)))}${close}`;
-    return bordered ? `${border(POPUP_BORDER.left)}${title}${border(POPUP_BORDER.right)}` : title;
+    return bordered ? `${border("│")}${title}${border("│")}` : title;
   }
 
   render(width: number): string[] {
@@ -424,15 +415,15 @@ export class SubagentViewer implements Component {
     const rows = width < 5
       ? [header, ...content.map(line => truncateToWidth(line.replace(/\n/g, " "), width, "…"))].slice(0, height)
       : [
-        border(`${POPUP_BORDER.topLeft}${POPUP_BORDER.top.repeat(width - 2)}${POPUP_BORDER.topRight}`), header,
+        border(`╭${"─".repeat(width - 2)}╮`), header,
         ...content.map((line, index) => {
           const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
           const thumb = this.scrollbar, bodyY = index - bodyStart;
           const edge = thumb && bodyY >= thumb.top && bodyY < thumb.top + thumb.height
-            ? this.theme.fg("accent", POPUP_BORDER.right) : border(POPUP_BORDER.right);
-          return `${border(POPUP_BORDER.left)} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${edge}`;
+            ? this.theme.fg("accent", "┃") : border("│");
+          return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${edge}`;
         }),
-        border(`${POPUP_BORDER.bottomLeft}${POPUP_BORDER.bottom.repeat(width - 2)}${POPUP_BORDER.bottomRight}`),
+        border(`╰${"─".repeat(width - 2)}╯`),
       ].slice(0, height);
     this.renderedHeight = rows.length;
     this.targets = this.targets.filter(target => target.y < rows.length);
