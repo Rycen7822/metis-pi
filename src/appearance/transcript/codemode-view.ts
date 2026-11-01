@@ -5,7 +5,7 @@ import { MouseRegion } from "@earendil-works/pi-tui";
 import { shellTitle } from "../../presentation/shell.ts";
 import { stackComponents } from "../../selection-copy/stack.ts";
 import { productFor, registerProduct } from "../../selection-copy/model.ts";
-import { detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "../../presentation/palette.ts";
+import { CODEMODE_ORANGE, detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "../../presentation/palette.ts";
 
 interface CodemodeTimerState {
   startedAt?: number;
@@ -281,7 +281,7 @@ export function makeCodemodeRenderers(input: {
     return view;
   };
   const colorLevel = input.colorLevel ?? detectColorLevel();
-  const labelColor = foregroundAnsi("#d97706", colorLevel);
+  const labelColor = foregroundAnsi(CODEMODE_ORANGE, colorLevel);
   const label = (text: string) => labelColor ? `${labelColor}${text}${FG_DEFAULT}` : text;
   const scriptGlyph = colorLevel.kind === "none" ? "|" : label("▏");
   return {

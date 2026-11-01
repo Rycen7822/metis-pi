@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
+  getCapabilities,
   truncateToWidth,
   visibleWidth,
   type Component,
@@ -12,6 +13,10 @@ import { DEFAULT_CONFIG, type AppearanceConfig } from "../../appearance/config.t
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
 import { activeAgents } from "./widget.ts";
 import type { ToolPresentation } from "../../presentation/tool-source.mjs";
+import {
+  backgroundAnsi, CODEMODE_ORANGE, DARK_SURFACE_BG, FG_DEFAULT, foregroundAnsi, resolveColorContext,
+} from "../../presentation/palette.ts";
+import { paintSurfaceBackground } from "../../presentation/sgr.ts";
 
 export interface AgentInspection {
   agent: {
@@ -63,7 +68,7 @@ export class SubagentViewer implements Component {
   private readAbort = new AbortController();
   private disposed = false;
   private pageSize = 1;
-  private bodyTop = 3;
+  private bodyTop = 2;
   private bodyPadding = 2;
   private innerWidth = 1;
   private renderedHeight = 0;
@@ -83,6 +88,8 @@ export class SubagentViewer implements Component {
   private readonly appearance: AppearanceConfig;
   private readonly agentSource: () => ViewerAgent[];
   private readonly live: boolean;
+  private readonly rail: string;
+  private readonly background: string;
 
   constructor(
     agentId: string,
@@ -99,6 +106,10 @@ export class SubagentViewer implements Component {
     this.agentId = agentId; this.theme = theme; this.tui = tui; this.keys = keys;
     this.done = done; this.abort = abort; this.inspect = inspect;
     this.appearance = appearance; this.agentSource = agentSource; this.live = live;
+    const colorLevel = resolveColorContext({ terminalTrueColor: getCapabilities().trueColor });
+    const orange = foregroundAnsi(CODEMODE_ORANGE, colorLevel);
+    this.rail = orange ? `${orange}▏${FG_DEFAULT}` : "▏";
+    this.background = backgroundAnsi(DARK_SURFACE_BG, colorLevel);
     this.cacheView(agentId);
     this.onAbort = () => this.close();
     abort.signal.addEventListener("abort", this.onAbort, { once: true });
@@ -272,7 +283,7 @@ export class SubagentViewer implements Component {
     const view = this.view;
     const bodyY = event.y - this.bodyTop;
     const thumb = this.scrollbar;
-    if (thumb && event.x === this.innerWidth + 3 && bodyY >= 0 && bodyY < this.pageSize &&
+    if (thumb && event.x === this.innerWidth + 2 && bodyY >= 0 && bodyY < this.pageSize &&
         event.button === "left" && (event.type === "press" || event.type === "click")) {
       const onThumb = bodyY >= thumb.top && bodyY < thumb.top + thumb.height;
       const grab = onThumb ? bodyY - thumb.top : Math.floor(thumb.height / 2);
@@ -360,16 +371,15 @@ export class SubagentViewer implements Component {
   }
 
   private renderHeader(width: number): string {
-    const bordered = width >= 5, y = bordered ? 1 : 0;
-    const border = (text: string) => this.theme.fg("border", text);
-    const area = bordered ? width - 5 : Math.max(0, width - 3);
-    const padding = area > 0 && bordered ? 1 : 0;
+    const hasRail = width >= 5;
+    const area = hasRail ? width - 5 : Math.max(0, width - 3);
+    const padding = area > 0 && hasRail ? 1 : 0;
     const tabsWidth = Math.max(0, area - padding - 1);
-    const tabs = this.renderTabs(tabsWidth, bordered ? 1 + padding : 0, y);
+    const tabs = this.renderTabs(tabsWidth, hasRail ? 1 + padding : 0, 0);
     const close = width >= 3 ? this.theme.fg("accent", "[X]") : truncateToWidth("[X]", width, "");
-    if (width >= 3) this.targets.push({ x: width - (bordered ? 4 : 3), y, width: 3, activate: () => this.close() });
+    if (width >= 3) this.targets.push({ x: width - (hasRail ? 4 : 3), y: 0, width: 3, activate: () => this.close() });
     const title = `${" ".repeat(padding)}${tabs}${" ".repeat(Math.max(0, area - padding - visibleWidth(tabs)))}${close}`;
-    return bordered ? `${border("│")}${title}${border("│")}` : title;
+    return hasRail ? `${this.rail}${title} ` : title;
   }
 
   render(width: number): string[] {
@@ -381,11 +391,12 @@ export class SubagentViewer implements Component {
     const content = [this.theme.fg("muted", clean(`${modelPrefix}${agent?.cwd ?? ""}`))];
     const notice = view.error || clean(view.snapshot?.run?.error ?? "") || (view.truncated ? "Some history omitted" : "");
     if (notice) content.push(this.theme.fg(view.error || view.snapshot?.run?.error ? "error" : "dim", notice));
-    const bodyStart = content.length, frameRows = width < 5 ? 1 : 2;
+    const bodyStart = content.length;
     const inner = Math.max(1, width - 4);
-    this.innerWidth = inner; this.bodyTop = frameRows + bodyStart; this.bodyPadding = width < 5 ? 0 : 2;
+    this.innerWidth = inner; this.bodyTop = 1 + bodyStart; this.bodyPadding = width < 5 ? 0 : 2;
     const height = Math.max(1, Math.floor(this.tui.terminal.rows * 0.7));
-    this.pageSize = Math.max(1, height - this.bodyTop - frameRows);
+    // One header and one footer, with no enclosing top/bottom frame rows.
+    this.pageSize = Math.max(1, height - this.bodyTop - 1);
     if (inner !== view.cachedWidth) {
       view.lines = []; view.layout = [];
       for (const entry of view.content.entries) {
@@ -410,24 +421,20 @@ export class SubagentViewer implements Component {
     content.push(...body,
       this.theme.fg("muted", `Click tools/thoughts · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`),
     );
-    const header = this.renderHeader(width);
-    const border = (text: string) => this.theme.fg("border", text);
-    const rows = width < 5
-      ? [header, ...content.map(line => truncateToWidth(line.replace(/\n/g, " "), width, "…"))].slice(0, height)
-      : [
-        border(`╭${"─".repeat(width - 2)}╮`), header,
-        ...content.map((line, index) => {
-          const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
-          const thumb = this.scrollbar, bodyY = index - bodyStart;
-          const edge = thumb && bodyY >= thumb.top && bodyY < thumb.top + thumb.height
-            ? this.theme.fg("accent", "┃") : border("│");
-          return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${edge}`;
-        }),
-        border(`╰${"─".repeat(width - 2)}╯`),
-      ].slice(0, height);
+    const rows = [this.renderHeader(width), ...content.map((line, index) => {
+      const text = line.replace(/\n/g, " ");
+      if (width < 5) return truncateToWidth(text, width, "…");
+      const clipped = truncateToWidth(text, inner, "…");
+      const thumb = this.scrollbar, bodyY = index - bodyStart;
+      const indicator = thumb && bodyY >= thumb.top && bodyY < thumb.top + thumb.height
+        ? this.theme.fg("accent", "┃") : " ";
+      return `${this.rail} ${clipped}${" ".repeat(Math.max(0, inner - visibleWidth(clipped)))}${indicator} `;
+    })].slice(0, height);
     this.renderedHeight = rows.length;
     this.targets = this.targets.filter(target => target.y < rows.length);
-    return rows;
+    return rows.map(row => paintSurfaceBackground(
+      row + " ".repeat(Math.max(0, width - visibleWidth(row))), this.background,
+    ));
   }
 
   invalidate() {

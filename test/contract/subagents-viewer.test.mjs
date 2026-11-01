@@ -40,7 +40,7 @@ function popup(t, options = {}) {
     });
   });
   const viewer = new SubagentViewer(
-    options.agentId ?? "reader", theme, tui,
+    options.agentId ?? "reader", options.theme ?? theme, tui,
     new KeybindingsManager({
       ...TUI_KEYBINDINGS,
       "app.tools.expand": { defaultKeys: "ctrl+o" },
@@ -62,7 +62,7 @@ function popup(t, options = {}) {
   const clickText = (label, width = 90, options = {}) => {
     const { header = false, ...event } = options;
     const rendered = rows(width);
-    const y = header ? 1 : rendered.findIndex(row => row.includes(label));
+    const y = header ? 0 : rendered.findIndex(row => row.includes(label));
     const index = rendered[y]?.indexOf(label) ?? -1;
     assert.ok(index >= 0, `visible mouse target ${label}`);
     return mouse(width, visibleWidth(rendered[y].slice(0, index)), y, {
@@ -77,6 +77,27 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
+
+test("popup has only a codemode-orange left rail on a full dark-gray surface", async t => {
+  const previous = { NO_COLOR: process.env.NO_COLOR, FORCE_COLOR: process.env.FORCE_COLOR };
+  delete process.env.NO_COLOR;
+  process.env.FORCE_COLOR = "3";
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const resetTheme = { ...theme, fg: (_role, text) => `\x1b[37m${text}\x1b[0m` };
+  const { viewer, rows } = popup(t, { theme: resetTheme });
+  await nextTurn();
+  const bg = "\x1b[48;2;31;31;31m", rail = "\x1b[38;2;217;119;6m▏\x1b[39m";
+  const raw = viewer.render(90);
+  assert.ok(raw.every(row => row.startsWith(bg + rail) && row.endsWith("\x1b[49m")));
+  assert.ok(raw.some(row => row.includes("\x1b[0m" + bg)), "inner resets restore the gray surface");
+  assert.ok(rows().every(row => row.startsWith("▏") && visibleWidth(row) === 90));
+  assert.match(rows()[0], /\[reader\].*\[X\] $/);
+  assert.doesNotMatch(rows().join("\n"), /[╭╮╰╯─│▛▜▙▟▊]/);
+});
 
 test("conversation status shows each agent's resolved model and thinking before its cwd", async t => {
   const settings = {
@@ -205,11 +226,14 @@ test("conversation popup keeps native click folds through refresh and scrolling"
 
 test("conversation reuses codemode folds and keeps unrecognized tools bounded", async t => {
   const messages = ["codemode", "tool_search"].flatMap(name => [
-    { role: "assistant", content: [{ type: "toolCall", id: name, name, arguments: name === "codemode" ? { code: "// SOURCE_MARKER\ntext(await tools.read({path:\"FULL_NESTED_PATH\"}));" } : { query: "tools" } }] },
+    { role: "assistant", content: [{ type: "toolCall", id: name, name, arguments: name === "codemode"
+      ? { code: "// SOURCE_MARKER\ntext(await tools.read({path:\"FULL_NESTED_PATH\"}));" } : { query: "tools" } }] },
     { role: "toolResult", toolCallId: name, toolName: name, durationMs: 1250,
       content: [{ type: "text", text: Array.from({ length: 20 }, (_, i) => `RESULT_${name}_${i}`).join("\n") }],
       details: { calls: name === "codemode" ? [{ id: "codemode/1", name: "read", status: "ok", args: "{truncated" }] : [] },
-      ...(name === "codemode" ? { nestedCalls: { complete: true, calls: [{ id: "codemode/1", name: "read", status: "ok", arguments: { path: "FULL_NESTED_PATH" } }] } } : {}), },
+      ...(name === "codemode" ? { nestedCalls: { complete: true, calls: [
+        { id: "codemode/1", name: "read", status: "ok", arguments: { path: "FULL_NESTED_PATH" } },
+      ] } } : {}), },
   ]);
   const { viewer, rows, clickText } = popup(t, { messages: { reader: messages } });
   await nextTurn();
@@ -238,7 +262,9 @@ test("conversation preserves mutation evidence, follow-up commands and native ex
     ["exec_command", { cmd: "verify" }, { output: "RESULT\n".repeat(12), session_id: 17, wall_time_seconds: 1.25 },
       false, /Session 17 still running/],
   ];
-  for (const [name, args, details, isError, expected] of cases) await t.test(`${name} ${details.metisActionFusion?.command.status ?? "result"}`, async t => {
+  for (const [
+    name, args, details, isError, expected,
+  ] of cases) await t.test(`${name} ${details.metisActionFusion?.command.status ?? "result"}`, async t => {
     const { rows } = popup(t, { messages: { reader: [
       { role: "assistant", content: [{ type: "toolCall", id: "call", name, arguments: args }] },
       { role: "toolResult", toolCallId: "call", toolName: name, isError, details,
@@ -294,28 +320,28 @@ test("conversation scrollbar tracks keys, wheel, pointer capture and resize with
     reader: [textMessage(Array.from({ length: 100 }, (_, i) => `ROW_${i}`).join("\n\n"))],
   } });
   await nextTurn();
-  const thumb = () => rows().flatMap((row, index) => row.endsWith("┃") ? [index] : []);
+  const thumb = () => rows().flatMap((row, index) => row.trimEnd().endsWith("┃") ? [index] : []);
   const initial = thumb();
   assert.ok(initial.length > 0, "overflow has a visible right-edge scrollbar");
-  assert.equal(initial.at(-1), rows().length - 3, "the initial follow-tail thumb reaches the body bottom");
+  assert.equal(initial.at(-1), rows().length - 2, "the initial follow-tail thumb reaches the body bottom");
   viewer.handleInput("\u001b[H");
   const top = thumb()[0];
   assert.equal(top, rows().findIndex(row => row.includes("assistant:")), "Home puts the thumb at the first body row");
   mouse(90, 3, top, { type: "wheel", button: "none", wheelDelta: 40 });
   assert.ok(thumb()[0] > top && thumb().at(-1) < initial.at(-1), "wheel updates the reading position");
-  mouse(90, 89, rows().length - 3);
-  assert.equal(thumb().at(-1), rows().length - 3, "clicking the lower track reaches the tail");
-  assert.equal(mouse(90, 89, top, { type: "press" }).capture, true);
+  mouse(90, 88, rows().length - 2);
+  assert.equal(thumb().at(-1), rows().length - 2, "clicking the lower track reaches the tail");
+  assert.equal(mouse(90, 88, top, { type: "press" }).capture, true);
   assert.equal(thumb()[0], top, "pressing the upper track scrolls to the start");
   const below = rows().length + 20;
   assert.equal(mouse(90, -5, below, { type: "drag" }).handled, true);
-  assert.equal(thumb().at(-1), rows().length - 3, "captured drag clamps outside the popup");
+  assert.equal(thumb().at(-1), rows().length - 2, "captured drag clamps outside the popup");
   assert.equal(mouse(90, -5, below, { type: "release" }).handled, true);
   assert.equal(mouse(90, -5, -1, { type: "drag" }), undefined, "release ends capture ownership");
   tui.terminal.rows = 40;
   assert.ok(thumb().length < initial.length, "resizing updates the thumb without changing the follow-tail anchor");
-  assert.equal(thumb().at(-1), rows().length - 3);
-  assert.equal(mouse(90, 89, thumb()[0], { type: "press" }).capture, true);
+  assert.equal(thumb().at(-1), rows().length - 2);
+  assert.equal(mouse(90, 88, thumb()[0], { type: "press" }).capture, true);
   assert.deepEqual(viewer.render(0), []);
   assert.equal(mouse(90, -5, -1, { type: "drag" }), undefined, "a hidden scrollbar cannot retain a drag");
   clickText("writer", 90, { header: true });
@@ -324,14 +350,14 @@ test("conversation scrollbar tracks keys, wheel, pointer capture and resize with
   for (const width of [1, 4, 5, 90]) assert.ok(viewer.render(width).every(row => visibleWidth(row) <= width));
 });
 
-test("one-row tabs keep close at the right border and only a left click closes", async t => {
+test("one-row tabs keep close at the right edge and only a left click closes", async t => {
   const { rows, mouse, closes } = popup(t);
   await nextTurn();
-  const width = 90, header = rows(width)[1];
+  const width = 90, header = rows(width)[0];
   assert.match(header, /\[reader\].*writer.*tester/);
-  assert.match(header, /\[X\]│$/);
+  assert.match(header, /\[X\] $/);
   assert.equal(visibleWidth(header), width);
-  const x = width - 3, y = 1;
+  const x = width - 3, y = 0;
   assert.equal(mouse(width, x, y, { type: "press" }).handled, true, "claim primary press before Pi's selection fallback");
   for (const event of [
     { type: "release" }, { type: "drag" }, { type: "move" },
@@ -346,24 +372,24 @@ test("one-row tabs keep close at the right border and only a left click closes",
 test("resizing to zero and narrow widths clears invisible tab and close hit targets", async t => {
   const { rows, mouse, calls, closes } = popup(t);
   await nextTurn();
-  const wide = rows(90)[1];
+  const wide = rows(90)[0];
   const oldTabX = visibleWidth(wide.slice(0, wide.indexOf("writer")));
   const initialCalls = calls.length;
   for (const width of [0, 1, 4, 5]) {
     const rendered = rows(width);
     assert.ok(rendered.every(row => visibleWidth(row) <= width), `rows fit ${width} columns`);
     if (width === 0) assert.deepEqual(rendered, []);
-    if (width === 5) assert.match(rendered[1], /\[X\]│$/);
-    mouse(width, oldTabX, 1);
-    mouse(width, 87, 1);
+    if (width === 5) assert.match(rendered[0], /\[X\] $/);
+    mouse(width, oldTabX, 0);
+    mouse(width, 87, 0);
     assert.equal(calls.length, initialCalls, `hidden old tab cannot switch at width ${width}`);
     assert.deepEqual(closes, [], `hidden old close cannot fire at width ${width}`);
   }
-  mouse(5, 2, 0);
+  mouse(5, 2, -1);
   mouse(5, 2, 2);
-  mouse(5, 4, 1);
-  assert.deepEqual(closes, [], "close is not a whole-header or border-row target");
-  assert.equal(mouse(5, 2, 1).handled, true);
+  mouse(5, 4, 0);
+  assert.deepEqual(closes, [], "close is not a whole-header or body-row target");
+  assert.equal(mouse(5, 2, 0).handled, true);
   assert.deepEqual(closes, [undefined], "the five-column header still has its visible close target");
 });
 
@@ -413,7 +439,7 @@ test("mouse and keyboard tab switches show the selected transcript and retain ea
 
   clickText("writer", 90, { header: true });
   await nextTurn();
-  assert.match(rows()[1], /\[writer\]/);
+  assert.match(rows()[0], /\[writer\]/);
   assert.ok(rows().some(row => row.includes("WRITER_LINE_60")), "new tabs start at their own transcript tail");
   assert.ok(!rows().some(row => /READER_(THOUGHT|OUTPUT|LINE)/.test(row)));
   viewer.handleInput("\u001b[H");
@@ -437,7 +463,7 @@ test("mouse and keyboard tab switches show the selected transcript and retain ea
   assert.deepEqual(rows(), writerView, "Tab returns to writer's independent scroll position");
   viewer.handleInput("\u001b[C");
   await nextTurn();
-  assert.match(rows()[1], /\[tester\]/);
+  assert.match(rows()[0], /\[tester\]/);
   assert.ok(rows().some(row => row.includes("CONTENT_tester")));
   viewer.handleInput("\u001b[Z");
   await nextTurn();
@@ -456,7 +482,7 @@ test("only active agents become tabs; inactive history and a finished initial se
   ];
   const { rows, calls } = popup(t, { agentId: "old-review", agents: () => agents });
   await nextTurn();
-  assert.match(rows()[1], /\[reader\].*starting.*waiting.*stopping/);
+  assert.match(rows()[0], /\[reader\].*starting.*waiting.*stopping/);
   assert.ok(!rows().some(row => /old-review|old-tests|closed/.test(row)));
   assert.ok(rows().some(row => row.includes("CONTENT_reader")));
   assert.deepEqual(calls.map(call => call.agentId), ["reader"], "inactive history is never inspected");
@@ -472,14 +498,14 @@ test("finished tabs disappear, selection moves to an active agent, and an empty 
       ? lateReader.promise : inspection(agentId, after === 0 ? [textMessage(`ACTIVE_${agentId}`)] : []),
   });
   await nextTurn();
-  assert.match(rows()[1], /\[reader\].*writer/);
+  assert.match(rows()[0], /\[reader\].*writer/);
   t.mock.timers.tick(1_000);
   await nextTurn();
   const pending = calls.at(-1);
   assert.equal(pending.agentId, "reader");
   assert.equal(pending.signal.aborted, false);
   agents = [{ ...defaultAgents[0], state: "idle" }, ...defaultAgents.slice(1)];
-  assert.match(rows()[1], /\[writer\].*tester/);
+  assert.match(rows()[0], /\[writer\].*tester/);
   await nextTurn();
   assert.equal(pending.signal.aborted, true, "finishing the selected agent cancels its pending read");
   assert.ok(!rows().some(row => row.includes("reader")));
@@ -488,8 +514,8 @@ test("finished tabs disappear, selection moves to an active agent, and an empty 
   await nextTurn();
   assert.ok(!rows().some(row => row.includes("LATE_FINISHED_READER")));
   agents = [defaultAgents[1]];
-  assert.match(rows()[1], /\[writer\]/);
-  assert.ok(!rows()[1].includes("tester"), "a non-selected finished tab is also removed");
+  assert.match(rows()[0], /\[writer\]/);
+  assert.ok(!rows()[0].includes("tester"), "a non-selected finished tab is also removed");
   viewer.handleInput("\t");
   assert.equal(calls.filter(call => call.agentId === "writer").length, 1, "keyboard cycling never revives a removed agent");
   agents = [];
@@ -533,23 +559,23 @@ test("overflow arrows navigate tabs and keyboard selection remains visible", asy
   const { viewer, rows, clickText } = popup(t, { agentId: "worker0", agents: () => agents });
   await nextTurn();
   const width = 44;
-  assert.match(rows(width)[1], /\[worker0\]/);
-  assert.match(rows(width)[1], /\[>\]/);
+  assert.match(rows(width)[0], /\[worker0\]/);
+  assert.match(rows(width)[0], /\[>\]/);
   for (let i = 1; i < agents.length; i++) {
     viewer.handleInput("\u001b[C");
     await nextTurn();
-    assert.ok(rows(width)[1].includes(`[worker${i}]`), `selected worker${i} is visible rather than clipped off-page`);
+    assert.ok(rows(width)[0].includes(`[worker${i}]`), `selected worker${i} is visible rather than clipped off-page`);
     assert.ok(rows(width).some(row => row.includes(`CONTENT_worker${i}`)));
   }
-  assert.ok(rows(23)[1].includes("[worker9]"), "resizing also reveals the selected tab");
-  const lastFrame = rows(width), lastHeader = lastFrame[1];
+  assert.ok(rows(23)[0].includes("[worker9]"), "resizing also reveals the selected tab");
+  const lastFrame = rows(width), lastHeader = lastFrame[0];
   assert.match(lastHeader, /\[<\]/);
   clickText("[<]", width, { header: true });
   await nextTurn();
-  const pagedFrame = rows(width), header = pagedFrame[1];
+  const pagedFrame = rows(width), header = pagedFrame[0];
   assert.notEqual(header, lastHeader, "the visible paging arrow is actionable");
-  assert.deepEqual(pagedFrame.slice(2), lastFrame.slice(2), "browsing off-screen labels does not change the selected transcript");
-  assert.match(header, /\[X\]│$/);
+  assert.deepEqual(pagedFrame.slice(1), lastFrame.slice(1), "browsing off-screen labels does not change the selected transcript");
+  assert.match(header, /\[X\] $/);
 });
 
 test("backward overflow paging does not skip variable-width tab labels", async t => {
@@ -557,27 +583,28 @@ test("backward overflow paging does not skip variable-width tab labels", async t
   const { rows, clickText } = popup(t, { agents: () => agents });
   await nextTurn();
   const width = 23;
-  assert.match(rows(width)[1], /\[reader\]/);
+  assert.match(rows(width)[0], /\[reader\]/);
   clickText("[>]", width, { header: true });
-  assert.ok(rows(width)[1].includes("writer"));
+  assert.ok(rows(width)[0].includes("writer"));
   clickText("[>]", width, { header: true });
-  assert.match(rows(width)[1], /tester.*x/);
+  assert.match(rows(width)[0], /tester.*x/);
   clickText("[<]", width, { header: true });
-  assert.ok(rows(width)[1].includes("writer"), "backward paging must expose the preceding page, not skip it when the current page contains more tabs");
+  assert.ok(rows(width)[0].includes("writer"),
+    "backward paging must expose the preceding page, not skip it when the current page contains more tabs");
   clickText("[<]", width, { header: true });
-  assert.match(rows(width)[1], /\[reader\]/);
+  assert.match(rows(width)[0], /\[reader\]/);
 });
 
 test("Unicode tab labels truncate within terminal columns without corrupting text or the close button", async t => {
   const name = "读者👩‍👩‍👦e\u0301🚀".repeat(5);
   const { rows } = popup(t, { agents: () => [{ id: "reader", name, state: "running" }, ...defaultAgents.slice(1)] });
   await nextTurn();
-  assert.ok(rows(90)[1].includes(`[${name}]`), "the full Unicode label is actually rendered when it fits");
+  assert.ok(rows(90)[0].includes(`[${name}]`), "the full Unicode label is actually rendered when it fits");
   for (const width of [1, 4, 5, 6, 9, 14, 22, 44, 90]) {
     const rendered = rows(width);
     assert.ok(rendered.every(row => visibleWidth(row) <= width), `wide and combining labels fit ${width} columns`);
     assert.ok(rendered.every(row => row.isWellFormed() && !row.includes("\ufffd")), "labels do not contain split surrogates or replacement glyphs");
-    if (width >= 5) assert.match(rendered[1], /\[X\]│$/);
+    if (width >= 5) assert.match(rendered[0], /\[X\] $/);
   }
 });
 
@@ -604,7 +631,7 @@ test("recent tab state is retained but traversing nine agents evicts an old tran
     viewer.handleInput("\u001b[D");
     await nextTurn();
   }
-  assert.match(rows()[1], /\[agent0\]/);
+  assert.match(rows()[0], /\[agent0\]/);
   assert.equal(calls.filter(call => call.agentId === "agent0").at(-1).after, 0, "evicted history restarts with its own initial cursor");
   assert.ok(rows().some(row => row.includes("agent0_LINE_50")), "evicted scroll state resets instead of keeping unlimited hidden views");
 });
@@ -634,7 +661,7 @@ for (const outcome of ["response", "error"]) {
     if (outcome === "response") old.resolve(inspection("reader", [textMessage("STALE_READER")], { next_cursor: 777, has_more: true }));
     else old.reject(new Error("STALE_READER_ERROR"));
     await nextTurn();
-    assert.match(rows()[1], /\[writer\]/);
+    assert.match(rows()[0], /\[writer\]/);
     assert.ok(rows().some(row => row.includes("CURRENT_WRITER")));
     assert.ok(!rows().some(row => row.includes("STALE_READER")), "late success or error cannot mutate the selected view");
     t.mock.timers.tick(50);
@@ -670,7 +697,7 @@ test("returning to the same tab still isolates an older cancelled inspection gen
   await nextTurn();
   t.mock.timers.tick(1_500);
   await nextTurn();
-  assert.match(rows()[1], /\[reader\]/);
+  assert.match(rows()[0], /\[reader\]/);
   assert.ok(rows().some(row => row.includes("FRESH_reader")));
   assert.ok(!rows().some(row => row.includes("CANCELLED_GENERATION")));
   assert.ok(!calls.some(call => call.after === 777), "the obsolete cursor never replaces the current generation's cursor");

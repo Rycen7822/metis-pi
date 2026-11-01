@@ -1,5 +1,5 @@
 // Composer surface painting (OpenCode-style gray prompt surface, Codex-neutral
-// hue). The editor owns this painter so the bg RGB is defined exactly once.
+// hue). The dark fill and reset-safe background painter are shared with popups.
 //
 // A stateless "wrap the row in bg…49m" is NOT equivalent (same trap as DIM):
 // the host editor emits inner resets — the cursor cell is `\x1b[7m \x1b[0m` —
@@ -7,30 +7,9 @@
 // painter therefore re-asserts the bg after every bg-clearing SGR inside the
 // row, honoring extended-color argument consumption (48;2;R;G;B / 48;5;N).
 
-import { appendAfterSgr } from "../../presentation/sgr.ts";
-import { rgbToAnsi256, type ColorLevel, type Rgb } from "../../presentation/palette.ts";
+import { paintSurfaceBackground } from "../../presentation/sgr.ts";
+import { backgroundAnsi, DARK_SURFACE_BG, type ColorLevel } from "../../presentation/palette.ts";
 import { cellWidth } from "../../presentation/segments.ts";
-
-/** Dark neutral surface, within the spec's #1f1f1f..#232323 band. */
-const COMPOSER_BG: Rgb = { r: 31, g: 31, b: 31 }; // #1f1f1f
-
-function bgAnsi(rgb: Rgb, level: ColorLevel): string {
-  if (level.kind === "truecolor") return `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m`;
-  if (level.kind === "ansi256") return `\x1b[48;5;${rgbToAnsi256(rgb)}m`;
-  return ""; // ansi16 cannot represent the surface honestly; none = no SGR
-}
-
-/** Restore our background only if the final background command cleared it. */
-function reassertBackground(segment: string, bg: string): string {
-  return appendAfterSgr(segment, (commands) => {
-    let cleared = false;
-    for (const code of commands) {
-      if (code === 0 || code === 49) cleared = true;
-      else if (code === 48 || (code >= 40 && code <= 47) || (code >= 100 && code <= 107)) cleared = false;
-    }
-    return cleared ? bg : "";
-  });
-}
 
 export interface SurfaceOps {
   /** Color level the painter was built for (callers gate features on kind). */
@@ -53,8 +32,8 @@ export function makeSurfaceOps(
   accent: (text: string) => string,
   dim: (text: string) => string,
 ): SurfaceOps {
-  const bg = bgAnsi(COMPOSER_BG, level);
-  const bgFn = (text: string): string => (bg ? `${bg}${reassertBackground(text, bg)}\x1b[49m` : text);
+  const bg = backgroundAnsi(DARK_SURFACE_BG, level);
+  const bgFn = (text: string): string => paintSurfaceBackground(text, bg);
   return {
     kind: level.kind,
     paintRow: (row, width) => {

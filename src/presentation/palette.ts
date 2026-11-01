@@ -23,6 +23,10 @@ export type MochaToken = keyof typeof MOCHA;
 export const CODEX_CYAN = "#3a96dd";
 /** CODEX_CYAN pre-expanded, for raw SGR strings that bypass foregroundAnsi. */
 export const CODEX_CYAN_RGB = "58;150;221";
+/** Shared codemode label/rail orange; do not substitute the theme's blue accent. */
+export const CODEMODE_ORANGE = "#d97706";
+/** Neutral dark surface shared by the composer and subagent popup (#1f1f1f). */
+export const DARK_SURFACE_BG: Rgb = { r: 31, g: 31, b: 31 };
 
 /** Codex diff dark surfaces (exec_cell/diff_render.rs). */
 export const DIFF_ADD_BG: Rgb = { r: 33, g: 58, b: 43 };   // #213A2B
