@@ -128,8 +128,8 @@ test("a 12-cell diff has literal hanging rows and complete add/remove background
     for (const row of group) {
       assert.ok(row.startsWith(`\x1b[48;2;${rgb}m`));
       const prefix = row.slice(0, row.indexOf("▌"));
-      const markerRgb = rgb === "74;34;29" ? "244;71;71" : "54;148;50";
-      assert.ok(prefix.includes(`\x1b[38;2;${markerRgb}m`), "marker uses the screenshot edge color");
+      const markerRgb = rgb === "74;34;29" ? "244;71;71" : "62;170;58";
+      assert.ok(prefix.includes(`\x1b[38;2;${markerRgb}m`), "marker uses the independent edge color");
       assert.doesNotMatch(prefix, /\x1b\[(?:0|7|39|49)m/, "the marker keeps the existing background without inverse");
       assert.ok(row.endsWith("\x1b[49m"), "even a blank added row closes its background");
       assert.equal(layout.visibleWidth(row), 12);
@@ -146,7 +146,7 @@ test("diff marker follows tinted rows and remains copy decoration across color l
     assert.equal(stripVTControlCharacters(rendered[0]).startsWith("▌"), tinted);
     assert.equal(stripVTControlCharacters(rendered[1]).startsWith("▌"), tinted);
     if (tinted) {
-      const colors = kind === "truecolor" ? ["38;2;54;148;50", "38;2;244;71;71"] : ["38;5;65", "38;5;203"];
+      const colors = kind === "truecolor" ? ["38;2;62;170;58", "38;2;244;71;71"] : ["38;5;71", "38;5;203"];
       for (const [index, color] of colors.entries()) {
         const prefix = rendered[index].slice(0, rendered[index].indexOf("▌"));
         assert.ok(prefix.includes(`\x1b[${color}m`), "only marker colors use the independent palette");

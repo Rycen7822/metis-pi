@@ -31,8 +31,8 @@ export const DARK_SURFACE_BG: Rgb = { r: 31, g: 31, b: 31 };
 /** Codex diff dark surfaces (exec_cell/diff_render.rs). */
 export const DIFF_ADD_BG: Rgb = { r: 33, g: 58, b: 43 };   // #213A2B
 export const DIFF_DEL_BG: Rgb = { r: 74, g: 34, b: 29 };   // #4A221D
-/** Screenshot-referenced edge accents, independent of the terminal's ANSI sign palette. */
-export const DIFF_ADD_MARKER_COLOR = "#369432";
+/** Diff edge accents, independent of the terminal's ANSI sign palette. */
+export const DIFF_ADD_MARKER_COLOR = "#3eaa3a";
 export const DIFF_DEL_MARKER_COLOR = "#f44747";
 /** ANSI-256 fallback indexes for the same surfaces (diff_render.rs). */
 export const DIFF_ADD_BG_256 = 22;
