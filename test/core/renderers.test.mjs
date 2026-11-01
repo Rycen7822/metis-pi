@@ -121,15 +121,34 @@ test("a 12-cell diff has literal hanging rows and complete add/remove background
   const strip = (value) => value.replace(/\x1b\[[0-9;]*m/g, "");
   // Three-digit numbers make a seven-cell gutter, leaving five content cells.
   assert.deepEqual(rendered.map(strip), [
-    "  124", "  125 -12345", "       67890",
-    "  125 +abcde", "       fghij", "  126 +     ", "  127",
+    "  124", "▊ 125 -12345", "▊      67890",
+    "▊ 125 +abcde", "▊      fghij", "▊ 126 +     ", "  127",
   ]);
   for (const [group, rgb] of [[rendered.slice(1, 3), "74;34;29"], [rendered.slice(3, 6), "33;58;43"]]) {
     for (const row of group) {
       assert.ok(row.startsWith(`\x1b[48;2;${rgb}m`));
+      const prefix = row.slice(0, row.indexOf("▊"));
+      assert.ok(prefix.includes(rgb === "74;34;29" ? "\x1b[31m" : "\x1b[32m"), "marker uses the sign foreground");
+      assert.doesNotMatch(prefix, /\x1b\[(?:0|7|39|49)m/, "the marker keeps the existing background without inverse");
       assert.ok(row.endsWith("\x1b[49m"), "even a blank added row closes its background");
       assert.equal(layout.visibleWidth(row), 12);
     }
+  }
+});
+
+test("diff marker follows tinted rows and remains copy decoration across color levels", () => {
+  const rows = parseDisplayDiff("+ 1 foo\n- 1 old\n  1 same");
+  for (const kind of ["ansi256", "ansi16", "none"]) {
+    const copyOut = [];
+    const rendered = renderDiffLines({ rows, width: 20, layout, colorLevel: { kind }, copyOut });
+    assert.equal(stripVTControlCharacters(rendered[0]).startsWith("▊"), kind === "ansi256");
+    assert.equal(stripVTControlCharacters(rendered[1]).startsWith("▊"), kind === "ansi256");
+    assert.ok(stripVTControlCharacters(rendered[2]).startsWith("  "), "context retains its original inset");
+    assert.deepEqual(copyOut[0], { spans: [
+      { colStart: 0, colEnd: 4, kind: "decoration" },
+      { colStart: 4, colEnd: 5, kind: "semantic", text: "+" },
+      { colStart: 5, colEnd: 8, kind: "content", text: "foo" },
+    ], breakBefore: "hard" });
   }
 });
 

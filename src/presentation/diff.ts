@@ -266,7 +266,9 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         // pad, bg off.
         const visible = layout.visibleWidth(head + body);
         const pad = " ".repeat(Math.max(0, usable - visible));
-        out.push(`${style.lineBg}${head}${body}${pad}${BG_RESET}`);
+        // Replace one existing inset cell with a foreground marker; background and copy columns stay unchanged.
+        const markedHead = `${style.signFg}▊\x1b[39m${head.slice(1)}`;
+        out.push(`${style.lineBg}${markedHead}${body}${pad}${BG_RESET}`);
       } else {
         out.push(`${head}${body}`.trimEnd());
       }
