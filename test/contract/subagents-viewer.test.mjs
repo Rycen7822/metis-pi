@@ -99,15 +99,15 @@ test("popup has only a codemode-orange left rail on a full dark-gray surface", a
   assert.doesNotMatch(rows().join("\n"), /[╭╮╰╯─│▛▜▙▟▊]/);
 });
 
-test("conversation status shows each agent's resolved model and thinking before its cwd", async t => {
+test("conversation status wraps the resolved model, thinking, access and cwd for each agent", async t => {
   const settings = {
     reader: {
       resolved_model: { provider: "opendesign", id: "deepseek-v4.1-flash" },
-      thinking: "max", cwd: "/home/xu/project/harness/metis-pi",
+      thinking: "max", access: "read", cwd: "/home/xu/project/harness/metis-pi",
     },
     writer: {
       resolved_model: { provider: "openai", id: "gpt-4.1" },
-      thinking: "off", cwd: "/tmp/writer",
+      thinking: "off", access: "write", cwd: "/tmp/writer",
     },
     tester: {
       resolved_model: { provider: "opendesign", id: "deepseek-v4.1-flash" },
@@ -120,14 +120,16 @@ test("conversation status shows each agent's resolved model and thinking before 
     }),
   });
   const expected = [
-    "opendesign/deepseek-v4.1-flash max · /home/xu/project/harness/metis-pi",
-    "openai/gpt-4.1 off · /tmp/writer",
+    "opendesign/deepseek-v4.1-flash max · read · /home/xu/project/harness/metis-pi",
+    "openai/gpt-4.1 off · write · /tmp/writer",
     "opendesign/deepseek-v4.1-flash · /tmp/tester",
   ];
   for (const [index, status] of expected.entries()) {
     if (index) viewer.handleInput("\u001b[C");
     await nextTurn();
     assert.ok(rows(120).some(row => row.includes(status)), status);
+    const narrow = rows(36).slice(1).map(row => row.slice(2, -2)).join("").replace(/\s/g, "");
+    assert.ok(narrow.includes(status.replace(/\s/g, "")), "narrow windows retain the complete settings and cwd");
   }
 });
 

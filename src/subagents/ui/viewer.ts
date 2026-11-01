@@ -4,6 +4,7 @@ import {
   getCapabilities,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
   type Component,
   type KeybindingsManager,
   type TUI,
@@ -25,6 +26,7 @@ export interface AgentInspection {
     cwd?: string;
     resolved_model?: { provider: string; id: string };
     thinking?: string;
+    access?: "read" | "write";
     active_tools?: string[];
   };
   messages: Array<{ id: string; message: ViewerMessage }>;
@@ -387,12 +389,14 @@ export class SubagentViewer implements Component {
     if (width <= 0 || !this.syncAgents()) { this.scrollbarGrab = undefined; return []; }
     const view = this.view;
     const agent = view.snapshot?.agent, model = agent?.resolved_model;
-    const modelPrefix = model ? `${model.provider}/${model.id}${agent?.thinking ? ` ${agent.thinking}` : ""} · ` : "";
-    const content = [this.theme.fg("muted", clean(`${modelPrefix}${agent?.cwd ?? ""}`))];
+    // Reserve the rail, left padding, scrollbar and right padding when they fit.
+    const inner = width < 5 ? width : width - 4;
+    const modelLabel = model ? `${model.provider}/${model.id}${agent?.thinking ? ` ${agent.thinking}` : ""}` : "";
+    const metadata = clean([modelLabel, agent?.access, agent?.cwd].filter(Boolean).join(" · "));
+    const content = wrapTextWithAnsi(metadata, inner).map(line => this.theme.fg("muted", line));
     const notice = view.error || clean(view.snapshot?.run?.error ?? "") || (view.truncated ? "Some history omitted" : "");
     if (notice) content.push(this.theme.fg(view.error || view.snapshot?.run?.error ? "error" : "dim", notice));
     const bodyStart = content.length;
-    const inner = Math.max(1, width - 4);
     this.innerWidth = inner; this.bodyTop = 1 + bodyStart; this.bodyPadding = width < 5 ? 0 : 2;
     const height = Math.max(1, Math.floor(this.tui.terminal.rows * 0.7));
     // One header and one footer, with no enclosing top/bottom frame rows.

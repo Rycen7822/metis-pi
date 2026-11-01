@@ -51,15 +51,16 @@ def conversation(store, worker_for, p):
     """Private Pi UI projection; reasoning never enters public inspect events."""
     a = store.resolve_agent(p["scope"], label(p.get("agent_id"), "agent_id"))
     after = integer(p.get("after", 0), "after", 0, 2**53 - 1)
+    launch = json.loads(a["launch"])
     run = store.run(p["scope"], a["current_run"]) if a["current_run"] else store.latest_run(a["id"])
     result = {
-        "agent": brief_agent(a, worker_for(a["id"])),
+        "agent": {**brief_agent(a, worker_for(a["id"])), "access": launch["access"]},
         "messages": [],
         "next_cursor": after,
         "has_more": False,
         "session_file": a["session_file"],
         "history_pruned": False,
-        "tool_renderers": json.loads(a["launch"]).get("tool_renderers", {}),
+        "tool_renderers": launch.get("tool_renderers", {}),
     }
     if run:
         result["run"] = brief_run({**run, "name": a["name"]})

@@ -755,6 +755,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         first = await host.dispatch("pi_view", params, source)
         self.assertEqual(first["next_cursor"], len(raw[0]))
         self.assertEqual(first["tool_renderers"], {"read": "builtin", "codemode": "builtin"})
+        self.assertEqual(first["agent"]["access"], "read")
         self.assertEqual(first["messages"][0]["message"]["content"][0], {"type": "thinking", "thinking": "检查依赖"})
         params["after"] = first["next_cursor"]
         self.assertEqual((await host.dispatch("pi_view", params, source))["messages"], [])
