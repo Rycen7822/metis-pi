@@ -224,9 +224,10 @@ function clickRegion(component: Component, context: ViewContext, toggle?: () => 
 }
 
 const CALL_PREVIEW_COUNT = 8; // Keep Pi’s compact call-list limit, with an explicit control for earlier actions.
+const SCRIPT_PREVIEW_ROWS = 12; // Follow the latest generated visual rows without filling the transcript with the whole script.
 
-/** Frame explicitly opened source rows without copying the rail. */
-function scriptBody(component: Component, glyph: string): Component {
+/** Frame streaming or explicitly opened source without copying the rail or a hidden preview prefix. */
+function scriptBody(component: Component, glyph: string, preview: boolean): Component {
   let cache: { width: number; source: string[]; rows: string[] } | undefined;
   return {
     render(width) {
@@ -234,11 +235,19 @@ function scriptBody(component: Component, glyph: string): Component {
       const shift = Math.min(2, Math.max(0, Math.floor(width) - 2));
       const inner = Math.max(1, Math.floor(width) - shift), all = component.render(inner);
       if (cache?.width === width && cache.source === all) return cache.rows;
-      const product = productFor(all);
+      let body = all, product = productFor(all);
+      if (preview && all.length > SCRIPT_PREVIEW_ROWS) {
+        body = all.slice(-SCRIPT_PREVIEW_ROWS);
+        if (product && !product.children) {
+          const copy = product.rows.slice(-SCRIPT_PREVIEW_ROWS);
+          copy[0] = { ...copy[0]!, breakBefore: "gap" };
+          product = { width: inner, rows: copy };
+        } else product = undefined;
+      }
       const prefix = shift ? `${glyph}${shift === 2 ? " " : ""}` : "";
-      const rows = all.map(line => `${prefix}${line}`);
+      const rows = body.map(line => `${prefix}${line}`);
       if (product) registerProduct(rows, {
-        width, rows: [], children: all.map((_, rowIndex) => ({ product, rowIndex, colShift: shift })),
+        width, rows: [], children: body.map((_, rowIndex) => ({ product, rowIndex, colShift: shift })),
       });
       cache = { width, source: all, rows };
       return rows;
@@ -247,7 +256,7 @@ function scriptBody(component: Component, glyph: string): Component {
   };
 }
 
-/** Show execution actions by default; source and output have independent, explicit expansion. */
+/** Preview source during generation, then show actions; completed source and output expand independently. */
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
   highlight?: Highlight;
@@ -287,12 +296,16 @@ export function makeCodemodeRenderers(input: {
       if (typeof code !== "string")
         return clickRegion(input.makeText(receiving ? title : `${title} ${theme.fg("error", "[invalid arg]")}`), context);
       const expanded = view.script ?? view.expanded;
-      const script = expanded && code ? safeText(code) : "";
+      // Automatic streaming visibility ends with generation, without resetting explicit expansion choices.
+      const script = (receiving || expanded) && code ? safeText(code) : "";
       let component: Component = input.makeText(title);
       if (script) {
-        const styled = input.highlight?.(script, "javascript") ?? script;
+        let styled = script;
+        if (receiving) {
+          if (colorLevel.kind !== "none") styled = theme.fg("muted", script);
+        } else styled = input.highlight?.(script, "javascript") ?? script;
         component = stackComponents([
-          component, scriptBody(input.makeText(styled), scriptGlyph),
+          component, scriptBody(input.makeText(styled), scriptGlyph, receiving && !expanded),
         ], "child-placements");
       }
       const preparing = receiving || context.argsComplete === true && context.executionStarted === false;

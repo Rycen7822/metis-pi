@@ -141,7 +141,8 @@ test("concurrent native scripts isolate helper metadata and release retained exe
   assert.equal(after.details.codemodeActions, undefined, "a retained old wrapper is a native passthrough after unload");
 });
 
-test("generation completion preserves explicit and global expansion without adding a default JS preview", (t) => {
+test("generation streams a bounded source preview, then folds it without overwriting explicit expansion", (t) => {
+  installCopyPrototypes(t);
   class StreamingHost extends ToolExecutionComponent {
     constructor(name, definition, args) {
       super(name, parent, args, { showImages: false }, definition, { requestRender() {} }, process.cwd());
@@ -149,22 +150,39 @@ test("generation completion preserves explicit and global expansion without addi
   }
   for (const key of ["getCallRenderer", "getResultRenderer", "getRenderShell", "render"])
     Object.defineProperty(StreamingHost.prototype, key, Object.getOwnPropertyDescriptor(ToolExecutionComponent.prototype, key));
-  const { row, context } = setup(t, {}, false, {}, { host: StreamingHost });
+  const { row, context } = setup(t, {}, false, {}, {
+    host: StreamingHost, bindings: { makeText: text => new Tui.Text(text, 0, 0) },
+  });
   row.updateArgs({ code: 'const EARLY_SOURCE_MARKER = 1;\n' + code });
-  assert.doesNotMatch(plain(row), /EARLY_SOURCE_MARKER|JS_ONLY_MARKER/, "generation does not add a raw JS preview");
-  assert.match(plain(row), /Preparing script/);
+  assert.match(plain(row), /JS_ONLY_MARKER/, "source streams without an explicit expansion");
+  assert.doesNotMatch(plain(row), /EARLY_SOURCE_MARKER|Preparing script/, "the automatic preview shows only the source tail");
+  const sourceRows = plain(row).split("\n").filter(line => /^\s*[│|]/.test(line));
+  assert.equal(sourceRows.length, 12, "the automatic preview is bounded to twelve visual source rows");
+  const wrapped = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), {
+    code: 'const HIDDEN_PREFIX = "' + "x".repeat(500) + 'VISIBLE_TAIL";',
+  });
+  const copied = select(copyFrame(wrapped, 24)).text;
+  assert.match(copied, /^codemode\n/, "a clipped soft row does not merge into the title");
+  assert.match(copied, /VISIBLE_TAIL/);
+  assert.doesNotMatch(copied, /HIDDEN_PREFIX|[│▏]/, "copy excludes hidden source and the decorative rail");
   clickRow(row, "codemode");
   row.setArgsComplete();
-  assert.match(plain(row), /EARLY_SOURCE_MARKER/, "the user's open source stays open when generation finishes");
+  assert.match(plain(row), /EARLY_SOURCE_MARKER/, "the user's explicit expansion survives completion");
   row.markExecutionStarted();
   row.updateResult({ content: [], details: { calls: [] } }, false);
   assert.match(plain(row), /EARLY_SOURCE_MARKER/);
   const global = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code });
   global.setExpanded(true);
   global.setArgsComplete();
-  assert.match(plain(global), /JS_ONLY_MARKER/, "a local automatic false must not override global expansion");
-  const folded = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code });
+  assert.match(plain(global), /JS_ONLY_MARKER/, "automatic preview does not overwrite global expansion");
+  const folded = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code: "" });
+  folded.updateArgs({ code: code.slice(0, 40) });
+  assert.match(plain(folded), /JS_ONLY_MARKER/);
+  assert.doesNotMatch(plain(folded), /tools\.read/);
+  folded.updateArgs({ code });
+  assert.match(plain(folded), /tools\.read/, "each arriving source update is visible before completion");
   folded.setArgsComplete();
+  assert.doesNotMatch(plain(folded), /JS_ONLY_MARKER/, "source folds as soon as generation ends, before execution starts");
   assert.match(plain(folded), /Preparing script/);
   folded.markExecutionStarted();
   folded.updateResult({ content: [], details: { calls: [] } }, true);
@@ -174,20 +192,31 @@ test("generation completion preserves explicit and global expansion without addi
   assert.doesNotMatch(plain(folded), /JS_ONLY_MARKER/);
 });
 
-test("codemode start and timing labels use dark orange with terminal color fallbacks", (t) => {
+test("codemode streams gray text inside the unchanged orange rail with terminal color fallbacks", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
   const shell = makeTestRenderers().bash;
   const scriptOutput = { content: [{ type: "text", text: "KEEP SCRIPT OUTPUT" }] };
   const body = render(shell.renderResult(scriptOutput, {}, theme, { args: {} }));
-  for (const [kind, prefix] of [["truecolor", "\x1b[38;2;217;119;6m"], ["ansi256", "\x1b[38;5;172m"], ["none", ""]]) {
+  for (const [kind, prefix, gray] of [
+    ["truecolor", "\x1b[38;2;217;119;6m", "\x1b[38;2;163;163;163m"],
+    ["ansi256", "\x1b[38;5;172m", "\x1b[38;5;248m"], ["none", "", ""],
+  ]) {
     const codemode = makeCodemodeRenderers({ ...bindings, store: new CodemodeViewStore(), shell,
-      colorLevel: { kind }, resolve: () => undefined });
+      colorLevel: { kind }, highlight: source => `HIGHLIGHT(${source})`, resolve: () => undefined });
     const context = { state: {}, executionStarted: true, durationMs: 100 };
     const colored = text => prefix ? `${prefix}${text}\x1b[39m` : text;
+    const rail = kind === "none" ? "|" : colored("│");
+    const streamTheme = { ...theme, fg(role, text) {
+      if (role !== "muted") return theme.fg(role, text);
+      return gray ? `${gray}${text}\x1b[39m` : text;
+    } };
+    const streaming = { state: {}, argsComplete: false, executionStarted: false, isPartial: true };
+    assert.equal(render(codemode.renderCall({ code: "text(1)" }, streamTheme, streaming)),
+      `${colored("codemode")}\n${rail} ${gray ? `${gray}text(1)\x1b[39m` : "text(1)"}`,
+      "generation uses gray source, not syntax highlighting");
     assert.equal(render(codemode.renderCall({ code: "text(1)" }, theme, context)), colored("codemode"), kind);
     const expanded = render(codemode.renderCall({ code: "text(1)" }, theme, { ...context, expanded: true }));
-    const rail = kind === "none" ? "|" : colored("│");
-    assert.equal(expanded, `${colored("codemode")}\n${rail} text(1)`, "script keeps its own styling inside the orange rail");
+    assert.equal(expanded, `${colored("codemode")}\n${rail} HIGHLIGHT(text(1))`, "completed source retains explicit highlighting");
     assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)),
       `• Running script\n${colored("Elapsed 0.0s")}`, kind);
     assert.equal(render(codemode.renderResult(scriptOutput, {}, theme, context)),
