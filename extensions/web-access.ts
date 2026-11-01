@@ -18,18 +18,12 @@ export default function webAccess(pi: ExtensionAPI): void {
       actions.has("fetch") && "fetch content",
       actions.has("content") && "retrieve stored content",
     ].filter(Boolean).join(", ");
-    const tool = createDeferredActionTool("web_access", `Web access: ${capabilities}.`, actions);
-    const renderCall = tool.renderCall, renderResult = tool.renderResult;
+    const tool = createDeferredActionTool("web_access", `Web access: ${capabilities}.`, actions, webToolBody);
+    const renderCall = tool.renderCall;
     if (renderCall) tool.renderCall = (input, theme, context) => {
       if (actions.get(input.action)?.renderCall) return renderCall(input, theme, context);
       const title = theme.fg("toolTitle", `web_access ${input.action ?? ""}`);
       return webToolCall(title, input.target ? [theme.fg("accent", input.target)] : []);
-    };
-    if (renderResult) tool.renderResult = (result, options, theme, context) => {
-      const component = renderResult(result, options, theme, context);
-      const action = result.details?.metisAction;
-      const hasActionRenderer = typeof action === "string" && actions.get(action)?.renderResult;
-      return hasActionRenderer ? component : webToolBody(component);
     };
     pi.registerTool(tool);
   }

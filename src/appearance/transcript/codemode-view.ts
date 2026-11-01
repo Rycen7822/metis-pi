@@ -235,11 +235,12 @@ function scriptBody(component: Component, glyph: string, preview: boolean): Comp
       const shift = Math.min(2, Math.max(0, Math.floor(width) - 2));
       const inner = Math.max(1, Math.floor(width) - shift), all = component.render(inner);
       if (cache?.width === width && cache.source === all) return cache.rows;
-      let body = all, product = productFor(all);
-      if (preview && all.length > SCRIPT_PREVIEW_ROWS) {
-        body = all.slice(-SCRIPT_PREVIEW_ROWS);
+      const startRow = preview ? Math.max(0, all.length - SCRIPT_PREVIEW_ROWS) : 0;
+      const body = startRow ? all.slice(startRow) : all;
+      let product = productFor(all);
+      if (startRow) {
         if (product && !product.children) {
-          const copy = product.rows.slice(-SCRIPT_PREVIEW_ROWS);
+          const copy = product.rows.slice(startRow);
           copy[0] = { ...copy[0]!, breakBefore: "gap" };
           product = { width: inner, rows: copy };
         } else product = undefined;

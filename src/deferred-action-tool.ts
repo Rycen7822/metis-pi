@@ -1,6 +1,6 @@
 import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 export type ActionTool = ToolDefinition<any, any>;
@@ -9,6 +9,7 @@ export function createDeferredActionTool(
   name: string,
   description: string,
   actions: ReadonlyMap<string, ActionTool>,
+  layoutFallbackResult?: (body: Component) => Component,
 ) {
   const names = [...actions.keys()];
   const parameters = Type.Object({
@@ -69,7 +70,8 @@ export function createDeferredActionTool(
       const text = action === "describe" && !options.expanded
         ? `${name}: ${target} parameters`
         : result.content.filter(item => item.type === "text").map(item => item.text).join("\n");
-      return new Text(theme.fg(ctx?.isError ? "error" : "toolOutput", text), 0, 0);
+      const body = new Text(theme.fg(ctx?.isError ? "error" : "toolOutput", text), 0, 0);
+      return layoutFallbackResult ? layoutFallbackResult(body) : body;
     },
   };
   return tool;
