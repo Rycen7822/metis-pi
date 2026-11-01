@@ -355,7 +355,7 @@ function clickRow(row, target, occurrence = 0, width = 80) {
   assert.equal(row.handleMouse(event)?.handled, true, "click consumed by this block");
 }
 
-test("clicks independently expand duplicate nested calls, source and script output via Took", (t) => {
+test("clicks independently toggle nested calls, source and script output through Took or its body", (t) => {
   const { row, capture } = setup(t);
   const args = { path: "same.md" };
   for (const [id, text] of [[1, "FIRST BODY"], [2, "SECOND BODY"]])
@@ -377,6 +377,10 @@ test("clicks independently expand duplicate nested calls, source and script outp
   assert.doesNotMatch(plain(row), /FIRST BODY|SCRIPT_OUTPUT_/);
   clickRow(row, "Took");
   assert.match(plain(row), /SCRIPT_OUTPUT_8/);
+  clickRow(row, "SCRIPT_OUTPUT_17");
+  assert.doesNotMatch(plain(row), /Script output|SCRIPT_OUTPUT_/, "a script output body click closes its output");
+  assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*SECOND BODY/, "output collapse leaves source and nested calls open");
+  clickRow(row, "Took");
   clickRow(row, "SECOND BODY");
   assert.doesNotMatch(plain(row), /FIRST BODY|SECOND BODY/, "a body click closes only its own child call");
   assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*SCRIPT_OUTPUT_8/, "script and output stay open");
@@ -384,7 +388,9 @@ test("clicks independently expand duplicate nested calls, source and script outp
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER/);
   assert.match(plain(row), /SCRIPT_OUTPUT_8/);
   clickRow(row, "SCRIPT_OUTPUT_17");
-  assert.match(plain(row), /SCRIPT_OUTPUT_8/, "script output body clicks do not collapse it");
+  assert.doesNotMatch(plain(row), /Script output|SCRIPT_OUTPUT_/);
+  clickRow(row, "Took");
+  assert.match(plain(row), /SCRIPT_OUTPUT_8/, "Took can reopen output collapsed through its body");
   clickRow(row, "Took");
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FIRST BODY|SECOND BODY|Script output|SCRIPT_OUTPUT_/);
 });
@@ -475,10 +481,23 @@ test("fullscreen clicks and copied text follow child geometry across wrapping an
   click("Took");
   assert.match(plain(row, 36), /SCRIPT_COPY_START[\s\S]*SCRIPT_COPY_END/);
   assert.match(select(copyFrame(row, 36)).text, /SCRIPT_COPY_START[\s\S]*SCRIPT_COPY_END/);
-  click("Took");
+  tui.doRender();
+  const outputY = screenLines(tui).findIndex(line => line.includes("SCRIPT_COPY_START"));
+  assert.ok(outputY >= 0);
+  drag(tui, 4, outputY + 1, 12, outputY + 1);
+  tui.doRender();
+  assert.match(plain(row, 36), /SCRIPT_COPY_END/, "drag selection does not collapse script output");
+  // Xterm SGR keyboard modifier flags: Shift, Alt and Ctrl must not toggle the output.
+  for (const modifier of [4, 8, 16]) {
+    tui.handleTerminalInput(sgr(modifier, 4, outputY + 1));
+    tui.handleTerminalInput(sgr(modifier, 4, outputY + 1, true));
+    tui.doRender();
+    assert.match(plain(row, 36), /SCRIPT_COPY_END/, "modified clicks preserve script output");
+  }
+  click("SCRIPT_COPY_END");
   assert.doesNotMatch(plain(row, 36), /Script output|SCRIPT_COPY_/);
   assert.doesNotMatch(select(copyFrame(row, 36)).text, /SCRIPT_COPY_/);
-  assert.match(plain(row, 36), /FIRST WRAPPED BODY/, "the footer does not change nested expansion");
+  assert.match(plain(row, 36), /FIRST WRAPPED BODY/, "the output body does not change nested expansion");
 });
 
 test("nested bat calls use Read exploration while mixed execution retains Ran", (t) => {

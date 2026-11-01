@@ -475,15 +475,16 @@ export function makeCodemodeRenderers(input: {
         const expanded = view.output ?? view.expanded;
         if (hasText || typeof details.fullOutputPath === "string") toggleOutput = () => { view.output = !expanded; };
         if (toggleOutput && expanded) {
-          parts.push(input.makeText(theme.fg("dim", "Script output")));
-          if (hasText) parts.push(input.shell.renderResult({ ...value, content }, { ...options, expanded: true }, theme, {
+          const outputParts: Component[] = [input.makeText(theme.fg("dim", "Script output"))];
+          if (hasText) outputParts.push(input.shell.renderResult({ ...value, content }, { ...options, expanded: true }, theme, {
             ...context,
             expanded: true,
             args: {},
             lastComponent: undefined,
           }));
           if (typeof details.fullOutputPath === "string")
-            parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
+            outputParts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
+          parts.push(clickRegion(stackComponents(outputParts, "child-placements"), context, toggleOutput));
         }
       }
       if (timerText || toggleOutput || context.isError) {
