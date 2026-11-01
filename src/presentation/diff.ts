@@ -3,8 +3,8 @@
 // write-tracker or parseDisplayDiff. Display-only.
 
 import {
-  DIFF_ADD_BG, DIFF_DEL_BG,
-  backgroundAnsi, DIM_ON, INTENSITY_RESET, BG_RESET,
+  DIFF_ADD_BG, DIFF_DEL_BG, DIFF_ADD_MARKER_COLOR, DIFF_DEL_MARKER_COLOR,
+  backgroundAnsi, foregroundAnsi, DIM_ON, INTENSITY_RESET, BG_RESET,
   type ColorLevel,
 } from "./palette.ts";
 
@@ -98,6 +98,7 @@ export interface DiffRenderInput {
 interface SurfaceStyle {
   readonly lineBg: string;
   readonly signFg: string;
+  readonly markerFg: string;
   readonly contentFg: (text: string) => string;
 }
 
@@ -111,21 +112,23 @@ export function diffSignFg(kind: "add" | "remove", level: ColorLevel): string {
 
 function surface(kind: "add" | "remove" | "context", level: ColorLevel): SurfaceStyle {
   if (kind === "context") {
-    return { lineBg: "", signFg: "", contentFg: (text) => text };
+    return { lineBg: "", signFg: "", markerFg: "", contentFg: (text) => text };
   }
   const fg = diffSignFg(kind, level);
   if (!fg) {
-    return { lineBg: "", signFg: "", contentFg: (text) => text };
+    return { lineBg: "", signFg: "", markerFg: "", contentFg: (text) => text };
   }
   const rgb = kind === "add" ? DIFF_ADD_BG : DIFF_DEL_BG;
   const bg = backgroundAnsi(rgb, level);
   if (!bg) {
     // ANSI-16: foreground-only cue (Codex behavior).
-    return { lineBg: "", signFg: fg, contentFg: (text) => `${fg}${text}\x1b[39m` };
+    return { lineBg: "", signFg: fg, markerFg: "", contentFg: (text) => `${fg}${text}\x1b[39m` };
   }
+  const markerColor = kind === "add" ? DIFF_ADD_MARKER_COLOR : DIFF_DEL_MARKER_COLOR;
   return {
     lineBg: bg,
     signFg: `${fg}${bg}`,
+    markerFg: foregroundAnsi(markerColor, level),
     contentFg: (text) => `${fg}${text}\x1b[39m`,
   };
 }
@@ -267,7 +270,7 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         const visible = layout.visibleWidth(head + body);
         const pad = " ".repeat(Math.max(0, usable - visible));
         // Replace one inset cell with a half-width foreground stroke; background and copy columns stay unchanged.
-        const markedHead = `${style.signFg}▌\x1b[39m${head.slice(1)}`;
+        const markedHead = `${style.markerFg}▌\x1b[39m${head.slice(1)}`;
         out.push(`${style.lineBg}${markedHead}${body}${pad}${BG_RESET}`);
       } else {
         out.push(`${head}${body}`.trimEnd());

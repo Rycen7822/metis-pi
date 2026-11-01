@@ -128,7 +128,8 @@ test("a 12-cell diff has literal hanging rows and complete add/remove background
     for (const row of group) {
       assert.ok(row.startsWith(`\x1b[48;2;${rgb}m`));
       const prefix = row.slice(0, row.indexOf("▌"));
-      assert.ok(prefix.includes(rgb === "74;34;29" ? "\x1b[31m" : "\x1b[32m"), "marker uses the sign foreground");
+      const markerRgb = rgb === "74;34;29" ? "244;71;71" : "54;148;50";
+      assert.ok(prefix.includes(`\x1b[38;2;${markerRgb}m`), "marker uses the screenshot edge color");
       assert.doesNotMatch(prefix, /\x1b\[(?:0|7|39|49)m/, "the marker keeps the existing background without inverse");
       assert.ok(row.endsWith("\x1b[49m"), "even a blank added row closes its background");
       assert.equal(layout.visibleWidth(row), 12);
@@ -138,11 +139,21 @@ test("a 12-cell diff has literal hanging rows and complete add/remove background
 
 test("diff marker follows tinted rows and remains copy decoration across color levels", () => {
   const rows = parseDisplayDiff("+ 1 foo\n- 1 old\n  1 same");
-  for (const kind of ["ansi256", "ansi16", "none"]) {
+  for (const kind of ["truecolor", "ansi256", "ansi16", "none"]) {
     const copyOut = [];
     const rendered = renderDiffLines({ rows, width: 20, layout, colorLevel: { kind }, copyOut });
-    assert.equal(stripVTControlCharacters(rendered[0]).startsWith("▌"), kind === "ansi256");
-    assert.equal(stripVTControlCharacters(rendered[1]).startsWith("▌"), kind === "ansi256");
+    const tinted = kind === "truecolor" || kind === "ansi256";
+    assert.equal(stripVTControlCharacters(rendered[0]).startsWith("▌"), tinted);
+    assert.equal(stripVTControlCharacters(rendered[1]).startsWith("▌"), tinted);
+    if (tinted) {
+      const colors = kind === "truecolor" ? ["38;2;54;148;50", "38;2;244;71;71"] : ["38;5;65", "38;5;203"];
+      for (const [index, color] of colors.entries()) {
+        const prefix = rendered[index].slice(0, rendered[index].indexOf("▌"));
+        assert.ok(prefix.includes(`\x1b[${color}m`), "only marker colors use the independent palette");
+      }
+      assert.match(rendered[0], /\x1b\[32m(?:\x1b\[[0-9;]*m)*\+/, "addition sign keeps its previous foreground");
+      assert.match(rendered[1], /\x1b\[31m(?:\x1b\[[0-9;]*m)*-/, "removal sign keeps its previous foreground");
+    }
     assert.ok(stripVTControlCharacters(rendered[2]).startsWith("  "), "context retains its original inset");
     assert.deepEqual(copyOut[0], { spans: [
       { colStart: 0, colEnd: 4, kind: "decoration" },
