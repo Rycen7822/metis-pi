@@ -27,6 +27,7 @@ function makeHost(t: TestContext) {
     on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler),
     registerCommand: (name: string, definition: unknown) => commands.set(name, definition),
     registerTool: (definition: { name: string }) => tools.set(definition.name, definition),
+    registerMessageRenderer() {},
     sendMessage: (message: unknown) => sent.push(message),
   };
 
@@ -308,9 +309,10 @@ test("goal keeps unfinished targets, permits completed replacement and guides co
   assert.match(prompt, /at least three consecutive goal turns/);
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [] }, h.ctx);
-  const continuation = (h.sent.at(-1) as { content: string }).content;
-  assert.match(continuation, /call goal with action "update" and status "complete"/);
-  assert.match(continuation, /goal with action "update" and status "blocked"/);
+  const continuation = h.sent.at(-1) as { content: string; display: boolean };
+  assert.equal(continuation.display, true, "automatic continuation is visible between assistant stages");
+  assert.match(continuation.content, /call goal with action "update" and status "complete"/);
+  assert.match(continuation.content, /goal with action "update" and status "blocked"/);
   await h.tool("update", { status: "blocked" });
   assert.equal((await h.tool("get")).details.goal.status, "blocked");
   await assert.rejects(() => h.tool("create", { objective: "must not replace blocked" }), /unfinished goal/);

@@ -19,6 +19,7 @@ import type { GoalPopup } from "./view.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const STATE_TYPE = "goal";
@@ -297,6 +298,8 @@ function goalStopStatusForAssistantError(message: { errorMessage?: string } | un
 }
 
 export default function goalExtension(pi: ExtensionAPI) {
+  pi.registerMessageRenderer(CONTINUATION_MESSAGE_TYPE, (_message, { outputPad }, theme) =>
+    new Text(theme.fg("muted", "Goal continue"), outputPad, 0));
   const state = new GoalState();
   let revision = 0;
   let inputGeneration = 0;
@@ -485,7 +488,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     const message = {
       customType: CONTINUATION_MESSAGE_TYPE,
       content: continuationPrompt(snapshot),
-      display: false,
+      display: true,
       details: { goalId: snapshot.id },
     };
     try {
