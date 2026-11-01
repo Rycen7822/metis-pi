@@ -121,18 +121,19 @@ test("a 12-cell diff has literal hanging rows and complete add/remove background
   const strip = (value) => value.replace(/\x1b\[[0-9;]*m/g, "");
   // Three-digit numbers make a seven-cell gutter, leaving five content cells.
   assert.deepEqual(rendered.map(strip), [
-    "  124", "▌ 125 -12345", "▌      67890",
-    "▌ 125 +abcde", "▌      fghij", "▌ 126 +     ", "  127",
+    "  124", "▎ 125 -12345", "▎      67890",
+    "▎ 125 +abcde", "▎      fghij", "▎ 126 +     ", "  127",
   ]);
-  for (const [group, rgb] of [[rendered.slice(1, 3), "74;34;29"], [rendered.slice(3, 6), "33;58;43"]]) {
+  for (const [group, rgb] of [[rendered.slice(1, 3), "40;20;15"], [rendered.slice(3, 6), "20;30;24"]]) {
     for (const row of group) {
       assert.ok(row.startsWith(`\x1b[48;2;${rgb}m`));
-      const prefix = row.slice(0, row.indexOf("▌"));
-      const markerRgb = rgb === "74;34;29" ? "244;71;71" : "62;170;58";
+      const prefix = row.slice(0, row.indexOf("▎"));
+      const markerRgb = rgb === "40;20;15" ? "244;71;71" : "62;170;58";
       assert.ok(prefix.includes(`\x1b[38;2;${markerRgb}m`), "marker uses the independent edge color");
       assert.doesNotMatch(prefix, /\x1b\[(?:0|7|39|49)m/, "the marker keeps the existing background without inverse");
       assert.ok(row.endsWith("\x1b[49m"), "even a blank added row closes its background");
       assert.equal(layout.visibleWidth(row), 12);
+      assert.doesNotMatch(row, /\x1b\[2m/, "diff backgrounds do not fade code foregrounds");
     }
   }
 });
@@ -143,12 +144,12 @@ test("diff marker follows tinted rows and remains copy decoration across color l
     const copyOut = [];
     const rendered = renderDiffLines({ rows, width: 20, layout, colorLevel: { kind }, copyOut });
     const tinted = kind === "truecolor" || kind === "ansi256";
-    assert.equal(stripVTControlCharacters(rendered[0]).startsWith("▌"), tinted);
-    assert.equal(stripVTControlCharacters(rendered[1]).startsWith("▌"), tinted);
+    assert.equal(stripVTControlCharacters(rendered[0]).startsWith("▎"), tinted);
+    assert.equal(stripVTControlCharacters(rendered[1]).startsWith("▎"), tinted);
     if (tinted) {
       const colors = kind === "truecolor" ? ["38;2;62;170;58", "38;2;244;71;71"] : ["38;5;71", "38;5;203"];
       for (const [index, color] of colors.entries()) {
-        const prefix = rendered[index].slice(0, rendered[index].indexOf("▌"));
+        const prefix = rendered[index].slice(0, rendered[index].indexOf("▎"));
         assert.ok(prefix.includes(`\x1b[${color}m`), "only marker colors use the independent palette");
       }
       assert.match(rendered[0], /\x1b\[32m(?:\x1b\[[0-9;]*m)*\+/, "addition sign keeps its previous foreground");

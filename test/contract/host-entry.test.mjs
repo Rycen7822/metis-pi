@@ -367,7 +367,7 @@ test("streamed write executes through the entry and real padded edits reach the 
   const rows = edit.render(80);
   assert.ok(rows.every((line) => visibleWidth(line) <= 80));
   // The color-dependent marker replaces one inset cell; keep checking the same logical gutter and content columns.
-  const text = rows.map(line => stripVTControlCharacters(line).replace(/^▌/, " "));
+  const text = rows.map(line => stripVTControlCharacters(line).replace(/^▎/, " "));
   for (const expected of ["     4 -  123 value_4", "     4 +  456 value_4", "  1000 -  123 value_1000", "  1000 +  456 value_1000"]) {
     assert.ok(text.some((line) => line.startsWith(expected)), expected);
   }

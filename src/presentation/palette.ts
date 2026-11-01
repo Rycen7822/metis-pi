@@ -28,13 +28,13 @@ export const CODEMODE_ORANGE = "#d97706";
 /** Neutral dark surface shared by the composer and popups (#1f1f1f). */
 export const DARK_SURFACE_BG: Rgb = { r: 31, g: 31, b: 31 };
 
-/** Codex diff dark surfaces (exec_cell/diff_render.rs). */
-export const DIFF_ADD_BG: Rgb = { r: 33, g: 58, b: 43 };   // #213A2B
-export const DIFF_DEL_BG: Rgb = { r: 74, g: 34, b: 29 };   // #4A221D
+/** Calibrated dark diff surfaces; syntax foregrounds keep their normal intensity. */
+export const DIFF_ADD_BG: Rgb = { r: 20, g: 30, b: 24 };   // #141E18
+export const DIFF_DEL_BG: Rgb = { r: 40, g: 20, b: 15 };   // #28140F
 /** Diff edge accents, independent of the terminal's ANSI sign palette. */
 export const DIFF_ADD_MARKER_COLOR = "#3eaa3a";
 export const DIFF_DEL_MARKER_COLOR = "#f44747";
-/** ANSI-256 fallback indexes for the same surfaces (diff_render.rs). */
+/** ANSI-256 keeps distinct green/red approximations when exact dark RGB colors are unavailable. */
 export const DIFF_ADD_BG_256 = 22;
 export const DIFF_DEL_BG_256 = 52;
 

@@ -4,7 +4,7 @@
 
 import {
   DIFF_ADD_BG, DIFF_DEL_BG, DIFF_ADD_MARKER_COLOR, DIFF_DEL_MARKER_COLOR,
-  backgroundAnsi, foregroundAnsi, DIM_ON, INTENSITY_RESET, BG_RESET,
+  backgroundAnsi, foregroundAnsi, BG_RESET,
   type ColorLevel,
 } from "./palette.ts";
 
@@ -241,22 +241,17 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
     const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
     // The marker occupies an existing inset cell; all content and copy columns stay fixed.
     const inset = style.markerFg
-      ? `${style.markerFg}▌\x1b[39m${" ".repeat(DIFF_LEFT_INSET - 1)}` : " ".repeat(DIFF_LEFT_INSET);
+      ? `${style.markerFg}▎\x1b[39m${" ".repeat(DIFF_LEFT_INSET - 1)}` : " ".repeat(DIFF_LEFT_INSET);
     const gutter = `${inset}${numberText.padStart(numberWidth)} `;
 
-    // Highlight the whole row once, then ANSI-aware wrap (never a naive slice
-    // mid-sequence). Delete rows keep syntax colors under an overlay dim.
-    let content = highlightBody(
+    // Highlight once before ANSI-aware wrapping. Background and sign convey
+    // deletions without fading or tinting the syntax foregrounds.
+    const content = highlightBody(
       row.content,
       input.language,
       input.paint,
       style.contentFg,
     );
-    if (row.kind === "remove" && content) {
-      // Codex dims delete-line syntax so the removal cue wins (overlay dim,
-      // never dropping the language colors).
-      content = `${DIM_ON}${content}${INTENSITY_RESET}`;
-    }
     const chunks = wrapStyledContent(content, contentWidth);
 
     for (let i = 0; i < chunks.length; i++) {
