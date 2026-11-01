@@ -97,8 +97,9 @@ test("owned web entrypoint registers tools from the existing Metis TOML", async 
   assert.deepEqual(result.structuredContent.parameters.properties.mode.enum, ["readable", "raw", "answer"]);
   assert.match(result.structuredContent.description, /web_access action=content/);
   await assert.rejects(web.execute("invalid", { action: "content", params: {} }), /responseId/);
+  const theme = { fg: (_style, text) => text, bold: text => text };
   const error = web.renderResult({ content: [{ type: "text", text: "Missing responseId" }], details: {} },
-    { expanded: false, isPartial: false }, { fg: (_style, text) => text }, { isError: true });
+    { expanded: false, isPartial: false }, theme, { isError: true });
   assert.match(error.render(80).join("\n"), /Missing responseId/);
   const requests = [];
   const server = createServer((request, response) => {
@@ -112,6 +113,15 @@ test("owned web entrypoint registers tools from the existing Metis TOML", async 
   const fetched = await web.execute("fetch", { action: "fetch", params: { url, mode: "raw" } });
   assert.deepEqual(requests, [{ method: "GET", path: "/grouped-fixture" }]);
   assert.notEqual(fetched.isError, true);
+  for (const component of [
+    error,
+    web.renderResult(result, { expanded: false, isPartial: false }, theme, {}),
+    web.renderResult(fetched, { expanded: false, isPartial: false }, theme, {}),
+  ]) {
+    const rows = component.render(40).filter(row => row.trim());
+    assert.match(rows[0], /^ {2}\S/, "grouped fallback and action results use exactly one content inset");
+    assert.ok(rows.every(row => /^ {2}/.test(row)), "continuations retain their inset through the real entrypoint");
+  }
   const text = fetched.content.filter(item => item.type === "text").map(item => item.text).join("\n");
   assert.match(text, /tools\.web_access\(\{ action: "content", params:/);
   assert.doesNotMatch(text, /get_search_content\(/);

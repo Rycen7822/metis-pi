@@ -10166,7 +10166,23 @@ var init_extract = __esm({
 // src/pi-web-access/index.ts
 init_media_errors();
 init_proxy_transport();
-import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box as Box2, Text as Text2, truncateToWidth } from "@earendil-works/pi-tui";
+
+// src/pi-web-access/tool-layout.ts
+import { Box, Text, TruncatedText } from "@earendil-works/pi-tui";
+function webToolBody(component) {
+  const box = new Box(2, 0);
+  box.addChild(component);
+  return box;
+}
+function webToolCall(title, details) {
+  const box = new Box(0, 0);
+  box.addChild(new TruncatedText(title, 0, 0));
+  if (details.length) box.addChild(webToolBody(new Text(details.join("\n"), 0, 0)));
+  return box;
+}
+
+// src/pi-web-access/index.ts
 import { Type as Type2 } from "typebox";
 
 // src/pi-web-access/fetch-params.ts
@@ -23339,15 +23355,15 @@ var fetchContentOutputSchema = Type2.Object({
 });
 function renderSearchErrorPlan(plan, expanded, theme) {
   if (expanded) {
-    return new Text(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
+    return new Text2(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
   }
-  const box = new Box(1, 0, (t) => theme.bg("toolErrorBg", t));
-  box.addChild(new Text(theme.fg("error", plan.expanded[0]), 0, 0));
+  const box = new Box2(0, 0, (t) => theme.bg("toolErrorBg", t));
+  box.addChild(new Text2(theme.fg("error", plan.expanded[0]), 0, 0));
   for (const line of plan.collapsed) {
-    box.addChild(new Text(theme.fg("dim", line), 0, 0));
+    box.addChild(new Text2(theme.fg("dim", line), 0, 0));
   }
   if (plan.expandHint) {
-    box.addChild(new Text(theme.fg("muted", plan.expandHint), 0, 0));
+    box.addChild(new Text2(theme.fg("muted", plan.expandHint), 0, 0));
   }
   return box;
 }
@@ -23502,6 +23518,8 @@ function index_default(pi, options = {}) {
   }
   const initConfig = loadConfigForExtensionInit();
   const registerTool = (action, tool) => {
+    const render = tool.renderResult;
+    if (render) tool.renderResult = (...args) => webToolBody(render.apply(tool, args));
     if (options.registerTool) options.registerTool(action, tool);
     else pi.registerTool(tool);
   };
@@ -24191,64 +24209,56 @@ Open manually: ${handle.url}` }],
       const input = args;
       const rawQueryList = Array.isArray(input.queries) ? input.queries : input.query !== void 0 ? expandQueryString(input.query) : [];
       const queryList = normalizeQueryList(rawQueryList);
-      if (queryList.length === 0) {
-        return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
-      }
-      if (queryList.length === 1) {
-        const q = queryList[0];
-        return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `"${q}"`), 0, 0);
-      }
-      const lines = [theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `${queryList.length} queries`)];
-      for (const q of queryList.slice(0, 5)) {
-        lines.push(theme.fg("muted", `  "${q}"`));
-      }
-      if (queryList.length > 5) {
-        lines.push(theme.fg("muted", `  ... and ${queryList.length - 5} more`));
-      }
-      return new Text(lines.join("\n"), 0, 0);
+      const title = theme.fg("toolTitle", theme.bold("search "));
+      if (queryList.length === 0) return webToolCall(title, [theme.fg("error", "(no query)")]);
+      const count = `${queryList.length} ${queryList.length === 1 ? "query" : "queries"}`;
+      const color = queryList.length === 1 ? "accent" : "muted";
+      const lines = queryList.slice(0, 5).map((q) => theme.fg(color, `"${q}"`));
+      if (queryList.length > 5) lines.push(theme.fg("muted", `... and ${queryList.length - 5} more`));
+      return webToolCall(title + theme.fg("accent", count), lines);
     },
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details;
       if (isPartial) {
         if (details?.phase === "curator-fallback") {
           const lines2 = [theme.fg("warning", "Open the search curator manually:")];
-          if (details?.curatorUrl) lines2.push(theme.fg("muted", `  ${details.curatorUrl}`));
-          if (details?.browserOpenError) lines2.push(theme.fg("dim", `  auto-open failed: ${details.browserOpenError}`));
+          if (details?.curatorUrl) lines2.push(theme.fg("muted", details.curatorUrl));
+          if (details?.browserOpenError) lines2.push(theme.fg("dim", `auto-open failed: ${details.browserOpenError}`));
           const timeout = typeof details?.timeoutSeconds === "number" ? details.timeoutSeconds : void 0;
           const shortcut = typeof details?.shortcut === "string" ? details.shortcut : curateKey;
-          lines2.push(theme.fg("dim", timeout ? `  auto-submits after ${timeout}s idle; ${shortcut} reopens` : `  ${shortcut} reopens`));
-          return new Text(lines2.join("\n"), 0, 0);
+          lines2.push(theme.fg("dim", timeout ? `auto-submits after ${timeout}s idle; ${shortcut} reopens` : `${shortcut} reopens`));
+          return new Text2(lines2.join("\n"), 0, 0);
         }
         if (details?.phase === "curating" || details?.phase === "waiting-for-approval" || details?.phase === "generating-summary") {
           const phaseText = details?.phase === "generating-summary" ? "generating summary draft..." : details?.phase === "waiting-for-approval" ? "summary draft ready; approve in browser..." : "waiting for summary approval in browser...";
           const lines2 = [theme.fg("accent", phaseText)];
           if (details?.curatorUrl) {
-            lines2.push(theme.fg("muted", `  ${details.curatorUrl}`));
+            lines2.push(theme.fg("muted", details.curatorUrl));
           }
           const timeout = typeof details?.timeoutSeconds === "number" ? details.timeoutSeconds : void 0;
           const shortcut = typeof details?.shortcut === "string" ? details.shortcut : curateKey;
           if (timeout) {
-            lines2.push(theme.fg("dim", `  auto-submits after ${timeout}s idle; ${shortcut} reopens`));
+            lines2.push(theme.fg("dim", `auto-submits after ${timeout}s idle; ${shortcut} reopens`));
           } else {
-            lines2.push(theme.fg("dim", `  ${shortcut} reopens`));
+            lines2.push(theme.fg("dim", `${shortcut} reopens`));
           }
-          return new Text(lines2.join("\n"), 0, 0);
+          return new Text2(lines2.join("\n"), 0, 0);
         }
         if (details?.phase === "searching") {
           const progress2 = details?.progress ?? 0;
           const bar2 = "\u2588".repeat(Math.floor(progress2 * 10)) + "\u2591".repeat(10 - Math.floor(progress2 * 10));
           const query = details?.currentQuery || "";
           const display = query.length > 40 ? query.slice(0, 37) + "..." : query;
-          return new Text(theme.fg("accent", `[${bar2}] ${display}`), 0, 0);
+          return new Text2(theme.fg("accent", `[${bar2}] ${display}`), 0, 0);
         }
         const progress = details?.progress ?? 0;
         const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
-        return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "searching"}`), 0, 0);
+        return new Text2(theme.fg("accent", `[${bar}] ${details?.phase || "searching"}`), 0, 0);
       }
       if (details?.error) {
         const plan = buildSearchErrorPlan(details);
         if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-        return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+        return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
       }
       let statusLine;
       const queryInfo = details?.queryCount === 1 ? "" : `${details?.successfulQueries}/${details?.queryCount} queries, `;
@@ -24267,7 +24277,7 @@ Open manually: ${handle.url}` }],
         lines.push(theme.fg("accent", `\u2500\u2500 Summary (${details.summary.workflow}) ` + "\u2500".repeat(32)));
         lines.push("");
         for (const line of details.summary.text.split("\n")) {
-          lines.push(`  ${line}`);
+          lines.push(line);
         }
         lines.push("");
         const metaParts = [
@@ -24281,7 +24291,7 @@ Open manually: ${handle.url}` }],
         if (details.summary.fallbackReason) {
           metaParts.push(`reason=${details.summary.fallbackReason}`);
         }
-        lines.push(theme.fg("dim", "  " + metaParts.filter(Boolean).join(" \xB7 ")));
+        lines.push(theme.fg("dim", metaParts.filter(Boolean).join(" \xB7 ")));
       }
       const queryDetails = details?.curatedQueries;
       if (queryDetails?.length) {
@@ -24293,13 +24303,13 @@ Open manually: ${handle.url}` }],
           lines.push("");
           const dq = cq.query.length > 65 ? cq.query.slice(0, 62) + "..." : cq.query;
           const providerLabel2 = cq.provider ? ` (${cq.provider})` : "";
-          lines.push(theme.fg("accent", `  "${dq}"${providerLabel2}`));
+          lines.push(theme.fg("accent", `"${dq}"${providerLabel2}`));
           if (cq.error) {
-            lines.push(theme.fg("error", `  ${cq.error}`));
+            lines.push(theme.fg("error", cq.error));
           } else if (cq.answer) {
             lines.push("");
             for (const line of cq.answer.split("\n")) {
-              lines.push(`  ${line}`);
+              lines.push(line);
             }
           }
           if (cq.sources.length > 0) {
@@ -24307,7 +24317,7 @@ Open manually: ${handle.url}` }],
             for (const s of cq.sources) {
               const domain = s.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
               const title = s.title.length > 50 ? s.title.slice(0, 47) + "..." : s.title;
-              lines.push(theme.fg("muted", `  \u25B8 ${title}`) + theme.fg("dim", ` \xB7 ${domain}`));
+              lines.push(theme.fg("muted", `\u25B8 ${title}`) + theme.fg("dim", ` \xB7 ${domain}`));
             }
           }
         }
@@ -24326,33 +24336,33 @@ Open manually: ${handle.url}` }],
           lines.push(theme.fg("muted", "Fetching:"));
           for (const u of details.fetchUrls.slice(0, 5)) {
             const display = u.length > 60 ? u.slice(0, 57) + "..." : u;
-            lines.push(theme.fg("dim", "  " + display));
+            lines.push(theme.fg("dim", display));
           }
           if (details.fetchUrls.length > 5) {
-            lines.push(theme.fg("dim", `  ... and ${details.fetchUrls.length - 5} more`));
+            lines.push(theme.fg("dim", `... and ${details.fetchUrls.length - 5} more`));
           }
         }
       }
       const totalLines = lines.length;
       if (!expanded) {
-        const box = new Box(1, 0);
-        box.addChild(new Text(statusLine, 0, 0));
+        const box = new Box2(0, 0);
+        box.addChild(new Text2(statusLine, 0, 0));
         let collapsedLines = 1;
         const summaryPreview = details?.summary?.text?.trim() || "";
         if (summaryPreview) {
           const preview = summaryPreview.length > 120 ? summaryPreview.slice(0, 117) + "..." : summaryPreview;
-          box.addChild(new Text(theme.fg("dim", preview), 0, 0));
+          box.addChild(new Text2(theme.fg("dim", preview), 0, 0));
           collapsedLines++;
         } else if (details?.curatedQueries?.length) {
           for (const cq of details.curatedQueries.slice(0, 3)) {
             const dq = cq.query.length > 55 ? cq.query.slice(0, 52) + "..." : cq.query;
             const srcCount = cq.sources?.length ?? 0;
             const suffix = cq.error ? theme.fg("error", " (error)") : theme.fg("dim", ` \xB7 ${srcCount} sources`);
-            box.addChild(new Text(theme.fg("accent", `  "${dq}"`) + suffix, 0, 0));
+            box.addChild(new Text2(theme.fg("accent", `"${dq}"`) + suffix, 0, 0));
             collapsedLines++;
           }
           if (details.curatedQueries.length > 3) {
-            box.addChild(new Text(theme.fg("dim", `  ... and ${details.curatedQueries.length - 3} more`), 0, 0));
+            box.addChild(new Text2(theme.fg("dim", `... and ${details.curatedQueries.length - 3} more`), 0, 0));
             collapsedLines++;
           }
         } else {
@@ -24364,18 +24374,18 @@ Open manually: ${handle.url}` }],
           const fallbackLine = (firstContentLine?.trim() || "").replace(/\*\*/g, "");
           if (fallbackLine) {
             const preview = fallbackLine.length > 120 ? fallbackLine.slice(0, 117) + "..." : fallbackLine;
-            box.addChild(new Text(theme.fg("dim", preview), 0, 0));
+            box.addChild(new Text2(theme.fg("dim", preview), 0, 0));
             collapsedLines++;
           }
         }
         const moreLines = Math.max(0, totalLines - collapsedLines);
         if (moreLines > 0) {
-          box.addChild(new Text(theme.fg("muted", `
+          box.addChild(new Text2(theme.fg("muted", `
 ... (${moreLines} more lines, ${totalLines} total, ctrl+o to expand)`), 0, 0));
         }
         return box;
       }
-      return new Text(lines.join("\n"), 0, 0);
+      return new Text2(lines.join("\n"), 0, 0);
     }
   });
   if (sourceCheckEnabled) registerTool("source_check", {
@@ -24448,55 +24458,46 @@ Open manually: ${handle.url}` }],
       try {
         normalized = normalizeFetchContentParams(args);
       } catch {
-        return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(invalid parameters)"), 0, 0);
+        return webToolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")]);
       }
       const { urlList, options: options2 } = normalized;
       const { prompt, timestamp, frames, model, mode, answerModel, auth } = options2;
-      if (urlList.length === 0) {
-        return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
-      }
-      const lines = [];
-      if (urlList.length === 1) {
-        lines.push(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", urlList[0]));
-      } else {
-        lines.push(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", `${urlList.length} URLs`));
-        for (const u of urlList.slice(0, 5)) {
-          lines.push(theme.fg("muted", "  " + u));
-        }
-        if (urlList.length > 5) {
-          lines.push(theme.fg("muted", `  ... and ${urlList.length - 5} more`));
-        }
-      }
+      const title = theme.fg("toolTitle", theme.bold("fetch "));
+      if (urlList.length === 0) return webToolCall(title, [theme.fg("error", "(no URL)")]);
+      const count = `${urlList.length} ${urlList.length === 1 ? "URL" : "URLs"}`;
+      const color = urlList.length === 1 ? "accent" : "muted";
+      const lines = urlList.slice(0, 5).map((url) => theme.fg(color, url));
+      if (urlList.length > 5) lines.push(theme.fg("muted", `... and ${urlList.length - 5} more`));
       if (mode && mode !== "readable") {
-        lines.push(theme.fg("dim", "  mode: ") + theme.fg("warning", mode));
+        lines.push(theme.fg("dim", "mode: ") + theme.fg("warning", mode));
       }
       if (timestamp) {
-        lines.push(theme.fg("dim", "  timestamp: ") + theme.fg("warning", timestamp));
+        lines.push(theme.fg("dim", "timestamp: ") + theme.fg("warning", timestamp));
       }
       if (typeof frames === "number") {
-        lines.push(theme.fg("dim", "  frames: ") + theme.fg("warning", String(frames)));
+        lines.push(theme.fg("dim", "frames: ") + theme.fg("warning", String(frames)));
       }
       if (prompt) {
         const display = prompt.length > 250 ? prompt.slice(0, 247) + "..." : prompt;
-        lines.push(theme.fg("dim", "  prompt: ") + theme.fg("muted", `"${display}"`));
+        lines.push(theme.fg("dim", "prompt: ") + theme.fg("muted", `"${display}"`));
       }
       if (model) {
-        lines.push(theme.fg("dim", "  model: ") + theme.fg("warning", model));
+        lines.push(theme.fg("dim", "model: ") + theme.fg("warning", model));
       }
       if (answerModel) {
-        lines.push(theme.fg("dim", "  answer model: ") + theme.fg("warning", answerModel));
+        lines.push(theme.fg("dim", "answer model: ") + theme.fg("warning", answerModel));
       }
       if (auth !== void 0) {
-        lines.push(theme.fg("dim", "  auth: ") + theme.fg("warning", auth === true ? "true" : auth));
+        lines.push(theme.fg("dim", "auth: ") + theme.fg("warning", auth === true ? "true" : auth));
       }
-      return new Text(lines.join("\n"), 0, 0);
+      return webToolCall(title + theme.fg("accent", count), lines);
     },
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details;
       if (isPartial) {
         const progress = details?.progress ?? 0;
         const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
-        return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "fetching"}`), 0, 0);
+        return new Text2(theme.fg("accent", `[${bar}] ${details?.phase || "fetching"}`), 0, 0);
       }
       if (details?.error) {
         const fd = details;
@@ -24511,7 +24512,7 @@ Open manually: ${handle.url}` }],
         }
         const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
         if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-        return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+        return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
       }
       if (details?.urlCount === 1) {
         const title = details?.title || "Untitled";
@@ -24527,31 +24528,31 @@ Open manually: ${handle.url}` }],
         const textContent2 = result.content.find((c) => c.type === "text")?.text || "";
         if (!expanded) {
           const brief = textContent2.length > 200 ? textContent2.slice(0, 200) + "..." : textContent2;
-          return new Text(statusLine2 + "\n" + theme.fg("dim", brief), 0, 0);
+          return new Text2(statusLine2 + "\n" + theme.fg("dim", brief), 0, 0);
         }
         const lines = [statusLine2];
         if (details?.prompt) {
           const display = details.prompt.length > 250 ? details.prompt.slice(0, 247) + "..." : details.prompt;
-          lines.push(theme.fg("dim", `  prompt: "${display}"`));
+          lines.push(theme.fg("dim", `prompt: "${display}"`));
         }
         if (details?.timestamp) {
-          lines.push(theme.fg("dim", `  timestamp: ${details.timestamp}`));
+          lines.push(theme.fg("dim", `timestamp: ${details.timestamp}`));
         }
         if (typeof details?.frames === "number") {
-          lines.push(theme.fg("dim", `  frames: ${details.frames}`));
+          lines.push(theme.fg("dim", `frames: ${details.frames}`));
         }
         const preview2 = textContent2.length > 500 ? textContent2.slice(0, 500) + "..." : textContent2;
         lines.push(theme.fg("dim", preview2));
-        return new Text(lines.join("\n"), 0, 0);
+        return new Text2(lines.join("\n"), 0, 0);
       }
       const countColor = (details?.successful ?? 0) > 0 ? "success" : "error";
       const statusLine = theme.fg(countColor, `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", getSearchContentEnabled ? " (content stored)" : " (content fetched)");
       if (!expanded) {
-        return new Text(statusLine, 0, 0);
+        return new Text2(statusLine, 0, 0);
       }
       const textContent = result.content.find((c) => c.type === "text")?.text || "";
       const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-      return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+      return new Text2(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
     }
   });
   if (getSearchContentEnabled) {
@@ -24590,7 +24591,8 @@ Open manually: ${handle.url}` }],
           const queries = Array.isArray(findText) ? findText : [findText];
           target += `${target ? " \xB7 " : ""}find ${queries.length}`;
         }
-        return new Text(theme.fg("toolTitle", theme.bold("get_content ")) + theme.fg("accent", target || responseId.slice(0, 8)), 0, 0);
+        const label = target || (typeof responseId === "string" ? responseId.slice(0, 8) : "(waiting for responseId)");
+        return webToolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)]);
       },
       renderResult(result, { expanded }, theme) {
         const details = result.details;
@@ -24601,7 +24603,7 @@ Open manually: ${handle.url}` }],
           else if (details.title) extras.push(`resource: ${details.title}`);
           const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
           if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-          return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+          return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
         }
         let statusLine;
         if (typeof details?.matchCount === "number") {
@@ -24616,11 +24618,11 @@ Open manually: ${handle.url}` }],
           statusLine = theme.fg("success", details?.title || "Content") + theme.fg("muted", ` (${details?.contentLength ?? 0} chars${slice})`);
         }
         if (!expanded) {
-          return new Text(statusLine, 0, 0);
+          return new Text2(statusLine, 0, 0);
         }
         const textContent = result.content.find((c) => c.type === "text")?.text || "";
         const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-        return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+        return new Text2(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
       }
     });
   }

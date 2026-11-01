@@ -10,6 +10,11 @@ reference material and is neither tracked nor used for installation.
 
 Local compatibility changes:
 
+- Web-tool titles and content use a shared layout: parameters and results have a
+  two-column inset on every visual row, including wrapped URLs and queries.
+  Single and batch inputs use the same content area. Real action renderers own
+  their inset; the grouped entry adds it only to fallback/description output.
+
 - The Metis entrypoint registers only `web_access`, with deferred exposure and
   per-action parameter discovery. The registration callback retains enabled
   operations internally; nested search tracking and stored-content guidance use

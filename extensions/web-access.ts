@@ -2,6 +2,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import initialize from "../src/pi-web-access/dist/index.js";
 import { createDeferredActionTool, type ActionTool } from "../src/deferred-action-tool.ts";
+import { webToolBody, webToolCall } from "../src/pi-web-access/tool-layout.ts";
 
 export default function webAccess(pi: ExtensionAPI): void {
   const actions = new Map<string, ActionTool>();
@@ -17,6 +18,19 @@ export default function webAccess(pi: ExtensionAPI): void {
       actions.has("fetch") && "fetch content",
       actions.has("content") && "retrieve stored content",
     ].filter(Boolean).join(", ");
-    pi.registerTool(createDeferredActionTool("web_access", `Web access: ${capabilities}.`, actions));
+    const tool = createDeferredActionTool("web_access", `Web access: ${capabilities}.`, actions);
+    const renderCall = tool.renderCall, renderResult = tool.renderResult;
+    if (renderCall) tool.renderCall = (input, theme, context) => {
+      if (actions.get(input.action)?.renderCall) return renderCall(input, theme, context);
+      const title = theme.fg("toolTitle", `web_access ${input.action ?? ""}`);
+      return webToolCall(title, input.target ? [theme.fg("accent", input.target)] : []);
+    };
+    if (renderResult) tool.renderResult = (result, options, theme, context) => {
+      const component = renderResult(result, options, theme, context);
+      const action = result.details?.metisAction;
+      const hasActionRenderer = typeof action === "string" && actions.get(action)?.renderResult;
+      return hasActionRenderer ? component : webToolBody(component);
+    };
+    pi.registerTool(tool);
   }
 }

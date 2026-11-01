@@ -15,8 +15,8 @@ var __export = (target, all) => {
 };
 
 // src/configuration/store.ts
-import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { lockSync } from "proper-lockfile";
 function parseMetisConfig(text, path = METIS_CONFIG_FILE) {
@@ -415,7 +415,7 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
   const signal = init.signal ?? null;
   let stdout;
   try {
-    stdout = await new Promise((resolve2, reject) => {
+    stdout = await new Promise((resolve3, reject) => {
       if (signal?.aborted) {
         reject(new DOMException("The operation was aborted.", "AbortError"));
         return;
@@ -452,7 +452,7 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
           const pinHint = addresses?.length && ["http:", "https:"].includes(new URL(proxyUrl).protocol) && /CONNECT/i.test(stderr) ? ". Strict DNS pinning requires CONNECT support; for an operator-controlled remote-DNS proxy, set ssrf.trustEnvProxy=true." : "";
           return reject(new CurlTransportError(`curl exited with code ${code ?? "unknown"} via ${redactProxyUrl(proxyUrl)}${stderr.trim() ? `: ${stderr.trim()}` : ""}${pinHint}`));
         }
-        resolve2(out);
+        resolve3(out);
       });
       child.stdin?.end(`${config.join("\n")}
 `);
@@ -1954,36 +1954,36 @@ async function readWindowsEncryptionKey(config, home) {
   }
 }
 function unprotectWindowsData(protectedData) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     const script = "Add-Type -AssemblyName System.Security;$data=[Convert]::FromBase64String($env:PIWA_PROTECTED);$clear=[System.Security.Cryptography.ProtectedData]::Unprotect($data,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser);[Console]::Write([Convert]::ToBase64String($clear))";
     const encoded = Buffer.from(script, "utf16le").toString("base64");
     execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { timeout: 5e3, maxBuffer: 1024 * 1024, env: { ...process.env, PIWA_PROTECTED: protectedData.toString("base64") } }, (err, stdout) => {
       if (err) {
-        resolve2(null);
+        resolve3(null);
         return;
       }
       try {
-        resolve2(Buffer.from(stdout.trim(), "base64"));
+        resolve3(Buffer.from(stdout.trim(), "base64"));
       } catch {
-        resolve2(null);
+        resolve3(null);
       }
     });
   });
 }
 function readKeychainPassword(account, service) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile("security", ["find-generic-password", "-w", "-a", account, "-s", service], { timeout: 5e3 }, (err, stdout) => {
       if (err) {
-        resolve2(null);
+        resolve3(null);
         return;
       }
-      resolve2(stdout.trim() || null);
+      resolve3(stdout.trim() || null);
     });
   });
 }
 function readLinuxCommandPassword(command, args) {
-  return new Promise((resolve2) => {
-    execFile(command, args, { timeout: 5e3 }, (err, stdout) => resolve2({ value: err ? null : stdout.trim() || null, failed: Boolean(err) }));
+  return new Promise((resolve3) => {
+    execFile(command, args, { timeout: 5e3 }, (err, stdout) => resolve3({ value: err ? null : stdout.trim() || null, failed: Boolean(err) }));
   });
 }
 function isKdeSession() {
@@ -2050,34 +2050,34 @@ async function runSqliteQuery(dbPath, sql) {
   return { status: "failure", failure: queryFailed ? "query" : "unavailable" };
 }
 function runSqliteCli(dbPath, sql) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile("sqlite3", ["-readonly", "-json", dbPath, sql], { timeout: 5e3, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) {
-        resolve2({ status: "failure", failure: err.code === "ENOENT" ? "unavailable" : "query" });
+        resolve3({ status: "failure", failure: err.code === "ENOENT" ? "unavailable" : "query" });
         return;
       }
       try {
         const parsed = JSON.parse(stdout || "[]");
-        resolve2(Array.isArray(parsed) ? { status: "success", rows: parsed } : { status: "failure", failure: "query" });
+        resolve3(Array.isArray(parsed) ? { status: "success", rows: parsed } : { status: "failure", failure: "query" });
       } catch {
-        resolve2({ status: "failure", failure: "query" });
+        resolve3({ status: "failure", failure: "query" });
       }
     });
   });
 }
 function runPythonSqlite(dbPath, sql) {
   const script = "import json,sqlite3,sys\ntry:\n c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)\n c.row_factory=sqlite3.Row\n print(json.dumps([dict(r) for r in c.execute(sys.argv[2]).fetchall()]))\nexcept Exception:\n sys.exit(1)";
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile("python3", ["-c", script, dbPath, sql], { timeout: 5e3, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) {
-        resolve2({ status: "failure", failure: err.code === "ENOENT" ? "unavailable" : "query" });
+        resolve3({ status: "failure", failure: err.code === "ENOENT" ? "unavailable" : "query" });
         return;
       }
       try {
         const parsed = JSON.parse(stdout || "[]");
-        resolve2(Array.isArray(parsed) ? { status: "success", rows: parsed } : { status: "failure", failure: "query" });
+        resolve3(Array.isArray(parsed) ? { status: "success", rows: parsed } : { status: "failure", failure: "query" });
       } catch {
-        resolve2({ status: "failure", failure: "query" });
+        resolve3({ status: "failure", failure: "query" });
       }
     });
   });
@@ -4920,9 +4920,9 @@ var init_feature_config = __esm({
 // src/pi-web-access/video-extract.ts
 import { execFile as execFile2 } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
-import { existsSync as existsSync3, readdirSync as readdirSync3, statSync } from "node:fs";
+import { existsSync as existsSync3, readdirSync as readdirSync3, statSync as statSync2 } from "node:fs";
 import { readFile as readFile2 } from "node:fs/promises";
-import { resolve, extname, basename as basename2, join as join8, dirname as dirname2, isAbsolute as isAbsolute2 } from "node:path";
+import { resolve as resolve2, extname, basename as basename2, join as join8, dirname as dirname2, isAbsolute as isAbsolute2 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shouldRethrow(err) {
   const message = err instanceof Error ? err.message : String(err);
@@ -4971,7 +4971,7 @@ function isVideoFile(input) {
   if (!absolutePath) return null;
   let stat;
   try {
-    stat = statSync(absolutePath);
+    stat = statSync2(absolutePath);
   } catch {
     return null;
   }
@@ -4986,7 +4986,7 @@ function isVideoFile(input) {
   };
 }
 function resolveFilePath(filePath) {
-  const absolutePath = resolve(filePath);
+  const absolutePath = resolve2(filePath);
   if (existsSync3(absolutePath)) return absolutePath;
   const dir = dirname2(absolutePath);
   const base = basename2(absolutePath);
@@ -6172,12 +6172,12 @@ function withTimeout3(signal, timeoutMs) {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 function sleep(ms, signal) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     let timer;
     const cleanup = () => signal?.removeEventListener("abort", onAbort);
     const onTimeout = () => {
       cleanup();
-      resolve2();
+      resolve3();
     };
     const onAbort = () => {
       clearTimeout(timer);
@@ -6612,11 +6612,11 @@ var init_pdf_extract = __esm({
 import { execFile as execFile4 } from "node:child_process";
 async function checkGhAvailable(signal) {
   if (ghAvailable !== null) return ghAvailable;
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile4("gh", ["--version"], { timeout: 5e3, ...signal ? { signal } : {} }, (err) => {
       const available = !err;
       if (!signal?.aborted) ghAvailable = available;
-      resolve2(available);
+      resolve3(available);
     });
   });
 }
@@ -6628,50 +6628,50 @@ function showGhHint() {
 }
 async function checkRepoSize(owner, repo) {
   if (!await checkGhAvailable()) return null;
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile4("gh", ["api", `repos/${owner}/${repo}`, "--jq", ".size"], { timeout: 1e4 }, (err, stdout) => {
       if (err) {
-        resolve2(null);
+        resolve3(null);
         return;
       }
       const kb = parseInt(stdout.trim(), 10);
-      resolve2(Number.isNaN(kb) ? null : kb);
+      resolve3(Number.isNaN(kb) ? null : kb);
     });
   });
 }
 async function getDefaultBranch(owner, repo) {
   if (!await checkGhAvailable()) return null;
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile4("gh", ["api", `repos/${owner}/${repo}`, "--jq", ".default_branch"], { timeout: 1e4 }, (err, stdout) => {
       if (err) {
-        resolve2(null);
+        resolve3(null);
         return;
       }
       const branch = stdout.trim();
-      resolve2(branch || null);
+      resolve3(branch || null);
     });
   });
 }
 async function fetchTreeViaApi(owner, repo, ref) {
   if (!await checkGhAvailable()) return null;
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile4(
       "gh",
       ["api", `repos/${owner}/${repo}/git/trees/${ref}?recursive=1`, "--jq", ".tree[].path"],
       { timeout: 15e3, maxBuffer: 5 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {
-          resolve2(null);
+          resolve3(null);
           return;
         }
         const paths = stdout.trim().split("\n").filter(Boolean);
         if (paths.length === 0) {
-          resolve2(null);
+          resolve3(null);
           return;
         }
         const truncated = paths.length > MAX_TREE_ENTRIES;
         const display = paths.slice(0, MAX_TREE_ENTRIES).join("\n");
-        resolve2(truncated ? display + `
+        resolve3(truncated ? display + `
 ... (${paths.length} total entries)` : display);
       }
     );
@@ -6679,21 +6679,21 @@ async function fetchTreeViaApi(owner, repo, ref) {
 }
 async function fetchReadmeViaApi(owner, repo, ref) {
   if (!await checkGhAvailable()) return null;
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile4(
       "gh",
       ["api", `repos/${owner}/${repo}/readme?ref=${ref}`, "--jq", ".content"],
       { timeout: 1e4 },
       (err, stdout) => {
         if (err) {
-          resolve2(null);
+          resolve3(null);
           return;
         }
         try {
           const decoded = Buffer.from(stdout.trim(), "base64").toString("utf-8");
-          resolve2(decoded.length > 8192 ? decoded.slice(0, 8192) + "\n\n[README truncated at 8K chars]" : decoded);
+          resolve3(decoded.length > 8192 ? decoded.slice(0, 8192) + "\n\n[README truncated at 8K chars]" : decoded);
         } catch {
-          resolve2(null);
+          resolve3(null);
         }
       }
     );
@@ -6701,20 +6701,20 @@ async function fetchReadmeViaApi(owner, repo, ref) {
 }
 async function fetchFileViaApi(owner, repo, path, ref) {
   if (!await checkGhAvailable()) return null;
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile4(
       "gh",
       ["api", `repos/${owner}/${repo}/contents/${path}?ref=${ref}`, "--jq", ".content"],
       { timeout: 1e4, maxBuffer: 2 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {
-          resolve2(null);
+          resolve3(null);
           return;
         }
         try {
-          resolve2(Buffer.from(stdout.trim(), "base64").toString("utf-8"));
+          resolve3(Buffer.from(stdout.trim(), "base64").toString("utf-8"));
         } catch {
-          resolve2(null);
+          resolve3(null);
         }
       }
     );
@@ -6795,7 +6795,7 @@ import {
   readdirSync as readdirSync4,
   realpathSync as realpathSync2,
   rmSync as rmSync2,
-  statSync as statSync2,
+  statSync as statSync3,
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync3
 } from "node:fs";
@@ -7162,7 +7162,7 @@ function terminateProcessTree(child) {
   forceKill.unref();
 }
 function execClone(args, destination, timeoutMs, signal) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     const { localPath } = destination;
     let settled = false;
     let timeout;
@@ -7174,10 +7174,10 @@ function execClone(args, destination, timeoutMs, signal) {
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
       if (!success) {
         removeCloneDestination(destination);
-        resolve2(null);
+        resolve3(null);
         return;
       }
-      resolve2(localPath);
+      resolve3(localPath);
     };
     const child = spawn2(args[0], args.slice(1), {
       detached: process.platform !== "win32",
@@ -7294,7 +7294,7 @@ function buildTree(rootPath) {
       }
       let stat;
       try {
-        stat = statSync2(safePath);
+        stat = statSync3(safePath);
       } catch {
         continue;
       }
@@ -7335,7 +7335,7 @@ function buildDirListing(rootPath, subPath) {
       continue;
     }
     try {
-      const stat = statSync2(safePath);
+      const stat = statSync3(safePath);
       if (stat.isDirectory()) {
         lines.push(`  ${item}/`);
       } else {
@@ -7406,7 +7406,7 @@ function generateContent(localPath, info) {
     }
     let stat;
     try {
-      stat = statSync2(fullFilePath);
+      stat = statSync3(fullFilePath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       lines.push(`Could not inspect \`${filePath}\`: ${message}`);
@@ -7713,7 +7713,7 @@ function parseGitHubIssuePrUrl(url) {
   return { owner, repo, kind: route === "pull" ? "pull" : "issue", number, ...anchor ? { anchor } : {} };
 }
 function runGh(args, timeoutMs = GH_TIMEOUT_MS, signal) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     execFile6("gh", args, {
       timeout: timeoutMs,
       maxBuffer: 10 * 1024 * 1024,
@@ -7721,7 +7721,7 @@ function runGh(args, timeoutMs = GH_TIMEOUT_MS, signal) {
       env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" }
     }, (err, stdout, stderr) => {
       const nodeErr = err;
-      resolve2({
+      resolve3({
         ok: !err,
         stdout,
         stderr,
@@ -20680,11 +20680,11 @@ function exhaustedBuckets(headers) {
 }
 function defaultSleep(ms, signal) {
   if (signal?.aborted) return Promise.reject(new Error("Aborted"));
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     const cleanup = () => signal?.removeEventListener("abort", onAbort);
     const timer = setTimeout(() => {
       cleanup();
-      resolve2();
+      resolve3();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
@@ -20724,10 +20724,10 @@ var BraveRateLimitCoordinator = class {
     this.queue = scheduled.then(() => void 0, () => void 0);
     if (!signal) return scheduled;
     if (signal.aborted) return Promise.reject(new Error("Aborted"));
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const onAbort = () => reject(new Error("Aborted"));
       signal.addEventListener("abort", onAbort, { once: true });
-      scheduled.then(resolve2, reject).finally(() => signal.removeEventListener("abort", onAbort));
+      scheduled.then(resolve3, reject).finally(() => signal.removeEventListener("abort", onAbort));
     });
   }
   observe(headers) {

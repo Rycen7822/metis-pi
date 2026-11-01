@@ -6,6 +6,7 @@ import { runWithProxy } from "./proxy-transport.ts";
 
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Text, truncateToWidth, type KeyId } from "@earendil-works/pi-tui";
+import { webToolBody, webToolCall } from "./tool-layout.ts";
 import { Type, type TSchema } from "typebox";
 import type { ExtractedContent } from "./content.ts";
 import { normalizeFetchContentParams } from "./fetch-params.ts";
@@ -117,7 +118,7 @@ function renderSearchErrorPlan(plan: SearchErrorPlan, expanded: boolean, theme: 
 	if (expanded) {
 		return new Text(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
 	}
-	const box = new Box(1, 0, (t) => theme.bg("toolErrorBg", t));
+	const box = new Box(0, 0, (t) => theme.bg("toolErrorBg", t));
 	box.addChild(new Text(theme.fg("error", plan.expanded[0]), 0, 0));
 	for (const line of plan.collapsed) {
 		box.addChild(new Text(theme.fg("dim", line), 0, 0));
@@ -335,6 +336,8 @@ export default function (pi: ExtensionAPI, options: {
 
 	const initConfig = loadConfigForExtensionInit();
 	const registerTool = <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => {
+		const render = tool.renderResult;
+		if (render) tool.renderResult = (...args) => webToolBody(render.apply(tool, args));
 		if (options.registerTool) options.registerTool(action, tool);
 		else pi.registerTool(tool);
 	};
@@ -1105,21 +1108,13 @@ export default function (pi: ExtensionAPI, options: {
 				? input.queries
 				: (input.query !== undefined ? expandQueryString(input.query) : []);
 			const queryList = normalizeQueryList(rawQueryList);
-			if (queryList.length === 0) {
-				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("error", "(no query)"), 0, 0);
-			}
-			if (queryList.length === 1) {
-				const q = queryList[0];
-				return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `"${q}"`), 0, 0);
-			}
-			const lines = [theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", `${queryList.length} queries`)];
-			for (const q of queryList.slice(0, 5)) {
-				lines.push(theme.fg("muted", `  "${q}"`));
-			}
-			if (queryList.length > 5) {
-				lines.push(theme.fg("muted", `  ... and ${queryList.length - 5} more`));
-			}
-			return new Text(lines.join("\n"), 0, 0);
+			const title = theme.fg("toolTitle", theme.bold("search "));
+			if (queryList.length === 0) return webToolCall(title, [theme.fg("error", "(no query)")]);
+			const count = `${queryList.length} ${queryList.length === 1 ? "query" : "queries"}`;
+			const color = queryList.length === 1 ? "accent" : "muted";
+			const lines = queryList.slice(0, 5).map(q => theme.fg(color, `"${q}"`));
+			if (queryList.length > 5) lines.push(theme.fg("muted", `... and ${queryList.length - 5} more`));
+			return webToolCall(title + theme.fg("accent", count), lines);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme) {
@@ -1168,11 +1163,11 @@ export default function (pi: ExtensionAPI, options: {
 			if (isPartial) {
 				if (details?.phase === "curator-fallback") {
 					const lines = [theme.fg("warning", "Open the search curator manually:")];
-					if (details?.curatorUrl) lines.push(theme.fg("muted", `  ${details.curatorUrl}`));
-					if (details?.browserOpenError) lines.push(theme.fg("dim", `  auto-open failed: ${details.browserOpenError}`));
+					if (details?.curatorUrl) lines.push(theme.fg("muted", details.curatorUrl));
+					if (details?.browserOpenError) lines.push(theme.fg("dim", `auto-open failed: ${details.browserOpenError}`));
 					const timeout = typeof details?.timeoutSeconds === "number" ? details.timeoutSeconds : undefined;
 					const shortcut = typeof details?.shortcut === "string" ? details.shortcut : curateKey;
-					lines.push(theme.fg("dim", timeout ? `  auto-submits after ${timeout}s idle; ${shortcut} reopens` : `  ${shortcut} reopens`));
+					lines.push(theme.fg("dim", timeout ? `auto-submits after ${timeout}s idle; ${shortcut} reopens` : `${shortcut} reopens`));
 					return new Text(lines.join("\n"), 0, 0);
 				}
 				if (details?.phase === "curating" || details?.phase === "waiting-for-approval" || details?.phase === "generating-summary") {
@@ -1183,14 +1178,14 @@ export default function (pi: ExtensionAPI, options: {
 							: "waiting for summary approval in browser...";
 					const lines = [theme.fg("accent", phaseText)];
 					if (details?.curatorUrl) {
-						lines.push(theme.fg("muted", `  ${details.curatorUrl}`));
+						lines.push(theme.fg("muted", details.curatorUrl));
 					}
 					const timeout = typeof details?.timeoutSeconds === "number" ? details.timeoutSeconds : undefined;
 					const shortcut = typeof details?.shortcut === "string" ? details.shortcut : curateKey;
 					if (timeout) {
-						lines.push(theme.fg("dim", `  auto-submits after ${timeout}s idle; ${shortcut} reopens`));
+						lines.push(theme.fg("dim", `auto-submits after ${timeout}s idle; ${shortcut} reopens`));
 					} else {
-						lines.push(theme.fg("dim", `  ${shortcut} reopens`));
+						lines.push(theme.fg("dim", `${shortcut} reopens`));
 					}
 					return new Text(lines.join("\n"), 0, 0);
 				}
@@ -1233,7 +1228,7 @@ export default function (pi: ExtensionAPI, options: {
 				lines.push(theme.fg("accent", `── Summary (${details.summary.workflow}) ` + "─".repeat(32)));
 				lines.push("");
 				for (const line of details.summary.text.split("\n")) {
-					lines.push(`  ${line}`);
+					lines.push(line);
 				}
 				lines.push("");
 				const metaParts = [
@@ -1247,7 +1242,7 @@ export default function (pi: ExtensionAPI, options: {
 				if (details.summary.fallbackReason) {
 					metaParts.push(`reason=${details.summary.fallbackReason}`);
 				}
-				lines.push(theme.fg("dim", "  " + metaParts.filter(Boolean).join(" · ")));
+				lines.push(theme.fg("dim", metaParts.filter(Boolean).join(" · ")));
 			}
 
 			const queryDetails = details?.curatedQueries;
@@ -1261,14 +1256,14 @@ export default function (pi: ExtensionAPI, options: {
 					lines.push("");
 					const dq = cq.query.length > 65 ? cq.query.slice(0, 62) + "..." : cq.query;
 					const providerLabel = cq.provider ? ` (${cq.provider})` : "";
-					lines.push(theme.fg("accent", `  "${dq}"${providerLabel}`));
+					lines.push(theme.fg("accent", `"${dq}"${providerLabel}`));
 
 					if (cq.error) {
-						lines.push(theme.fg("error", `  ${cq.error}`));
+						lines.push(theme.fg("error", cq.error));
 					} else if (cq.answer) {
 						lines.push("");
 						for (const line of cq.answer.split("\n")) {
-							lines.push(`  ${line}`);
+							lines.push(line);
 						}
 					}
 
@@ -1277,7 +1272,7 @@ export default function (pi: ExtensionAPI, options: {
 						for (const s of cq.sources) {
 							const domain = s.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 							const title = s.title.length > 50 ? s.title.slice(0, 47) + "..." : s.title;
-							lines.push(theme.fg("muted", `  \u25b8 ${title}`) + theme.fg("dim", ` \u00b7 ${domain}`));
+							lines.push(theme.fg("muted", `\u25b8 ${title}`) + theme.fg("dim", ` \u00b7 ${domain}`));
 						}
 					}
 				}
@@ -1297,10 +1292,10 @@ export default function (pi: ExtensionAPI, options: {
 					lines.push(theme.fg("muted", "Fetching:"));
 					for (const u of details.fetchUrls.slice(0, 5)) {
 						const display = u.length > 60 ? u.slice(0, 57) + "..." : u;
-						lines.push(theme.fg("dim", "  " + display));
+						lines.push(theme.fg("dim", display));
 					}
 					if (details.fetchUrls.length > 5) {
-						lines.push(theme.fg("dim", `  ... and ${details.fetchUrls.length - 5} more`));
+						lines.push(theme.fg("dim", `... and ${details.fetchUrls.length - 5} more`));
 					}
 				}
 			}
@@ -1308,7 +1303,7 @@ export default function (pi: ExtensionAPI, options: {
 			const totalLines = lines.length;
 
 			if (!expanded) {
-				const box = new Box(1, 0);
+				const box = new Box(0, 0);
 				box.addChild(new Text(statusLine, 0, 0));
 
 				let collapsedLines = 1; // statusLine
@@ -1322,11 +1317,11 @@ export default function (pi: ExtensionAPI, options: {
 						const dq = cq.query.length > 55 ? cq.query.slice(0, 52) + "..." : cq.query;
 						const srcCount = cq.sources?.length ?? 0;
 						const suffix = cq.error ? theme.fg("error", " (error)") : theme.fg("dim", ` · ${srcCount} sources`);
-						box.addChild(new Text(theme.fg("accent", `  "${dq}"`) + suffix, 0, 0));
+						box.addChild(new Text(theme.fg("accent", `"${dq}"`) + suffix, 0, 0));
 						collapsedLines++;
 					}
 					if (details.curatedQueries.length > 3) {
-						box.addChild(new Text(theme.fg("dim", `  ... and ${details.curatedQueries.length - 3} more`), 0, 0));
+						box.addChild(new Text(theme.fg("dim", `... and ${details.curatedQueries.length - 3} more`), 0, 0));
 						collapsedLines++;
 					}
 				} else {
@@ -1429,48 +1424,39 @@ export default function (pi: ExtensionAPI, options: {
 			try {
 				normalized = normalizeFetchContentParams(args);
 			} catch {
-				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(invalid parameters)"), 0, 0);
+				return webToolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")]);
 			}
 			const { urlList, options } = normalized;
 			const { prompt, timestamp, frames, model, mode, answerModel, auth } = options;
-			if (urlList.length === 0) {
-				return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
-			}
-			const lines: string[] = [];
-			if (urlList.length === 1) {
-				lines.push(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", urlList[0]));
-			} else {
-				lines.push(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", `${urlList.length} URLs`));
-				for (const u of urlList.slice(0, 5)) {
-					lines.push(theme.fg("muted", "  " + u));
-				}
-				if (urlList.length > 5) {
-					lines.push(theme.fg("muted", `  ... and ${urlList.length - 5} more`));
-				}
-			}
+			const title = theme.fg("toolTitle", theme.bold("fetch "));
+			if (urlList.length === 0) return webToolCall(title, [theme.fg("error", "(no URL)")]);
+			const count = `${urlList.length} ${urlList.length === 1 ? "URL" : "URLs"}`;
+			const color = urlList.length === 1 ? "accent" : "muted";
+			const lines = urlList.slice(0, 5).map(url => theme.fg(color, url));
+			if (urlList.length > 5) lines.push(theme.fg("muted", `... and ${urlList.length - 5} more`));
 			if (mode && mode !== "readable") {
-				lines.push(theme.fg("dim", "  mode: ") + theme.fg("warning", mode));
+				lines.push(theme.fg("dim", "mode: ") + theme.fg("warning", mode));
 			}
 			if (timestamp) {
-				lines.push(theme.fg("dim", "  timestamp: ") + theme.fg("warning", timestamp));
+				lines.push(theme.fg("dim", "timestamp: ") + theme.fg("warning", timestamp));
 			}
 			if (typeof frames === "number") {
-				lines.push(theme.fg("dim", "  frames: ") + theme.fg("warning", String(frames)));
+				lines.push(theme.fg("dim", "frames: ") + theme.fg("warning", String(frames)));
 			}
 			if (prompt) {
 				const display = prompt.length > 250 ? prompt.slice(0, 247) + "..." : prompt;
-				lines.push(theme.fg("dim", "  prompt: ") + theme.fg("muted", `"${display}"`));
+				lines.push(theme.fg("dim", "prompt: ") + theme.fg("muted", `"${display}"`));
 			}
 			if (model) {
-				lines.push(theme.fg("dim", "  model: ") + theme.fg("warning", model));
+				lines.push(theme.fg("dim", "model: ") + theme.fg("warning", model));
 			}
 			if (answerModel) {
-				lines.push(theme.fg("dim", "  answer model: ") + theme.fg("warning", answerModel));
+				lines.push(theme.fg("dim", "answer model: ") + theme.fg("warning", answerModel));
 			}
 			if (auth !== undefined) {
-				lines.push(theme.fg("dim", "  auth: ") + theme.fg("warning", auth === true ? "true" : auth));
+				lines.push(theme.fg("dim", "auth: ") + theme.fg("warning", auth === true ? "true" : auth));
 			}
-			return new Text(lines.join("\n"), 0, 0);
+			return webToolCall(title + theme.fg("accent", count), lines);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme) {
@@ -1537,13 +1523,13 @@ export default function (pi: ExtensionAPI, options: {
 				const lines = [statusLine];
 				if (details?.prompt) {
 					const display = details.prompt.length > 250 ? details.prompt.slice(0, 247) + "..." : details.prompt;
-					lines.push(theme.fg("dim", `  prompt: "${display}"`));
+					lines.push(theme.fg("dim", `prompt: "${display}"`));
 				}
 				if (details?.timestamp) {
-					lines.push(theme.fg("dim", `  timestamp: ${details.timestamp}`));
+					lines.push(theme.fg("dim", `timestamp: ${details.timestamp}`));
 				}
 				if (typeof details?.frames === "number") {
-					lines.push(theme.fg("dim", `  frames: ${details.frames}`));
+					lines.push(theme.fg("dim", `frames: ${details.frames}`));
 				}
 				const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
 				lines.push(theme.fg("dim", preview));
@@ -1608,7 +1594,8 @@ export default function (pi: ExtensionAPI, options: {
 				const queries = Array.isArray(findText) ? findText : [findText];
 				target += `${target ? " · " : ""}find ${queries.length}`;
 			}
-			return new Text(theme.fg("toolTitle", theme.bold("get_content ")) + theme.fg("accent", target || responseId.slice(0, 8)), 0, 0);
+			const label = target || (typeof responseId === "string" ? responseId.slice(0, 8) : "(waiting for responseId)");
+			return webToolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)]);
 		},
 
 		renderResult(result, { expanded }, theme) {
