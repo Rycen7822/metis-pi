@@ -1,3 +1,5 @@
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createCodemodeObserver } from "./codemode-observer.ts";
 import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "../presentation/tool-names.ts";
 import type { Component, Palette, Renderers, ViewContext, ViewOptions } from "../presentation/contracts.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "../selection-copy/model.ts";
@@ -5,8 +7,8 @@ import { toolPresentation } from "../presentation/tool-source.mjs";
 import { fusionRenderers } from "./transcript/fusion-view.ts";
 import type { NestedRendererLookup } from "./transcript/codemode-view.ts";
 
-// Display-only adapter for Pi’s native ToolExecutionComponent.
-// No tool registration, execution replacement, context middleware or TUI root patch.
+// Compact presentation for Pi’s native ToolExecutionComponent, with observation-only codemode helper metadata.
+// No tool registration, source rewriting, replacement executor, context middleware or TUI root patch.
 const SLOT = Symbol.for("Rycen7822.metis-pi.tool-view.v2");
 const SELECTORS = ["getCallRenderer", "getResultRenderer", "getRenderShell"] as const;
 const METHODS = [...SELECTORS, "render"] as const;
@@ -168,6 +170,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (active) LOOKUP_CONTEXTS.set(definitionPrototype!, new WeakRef(this));
     return sessionGetter!.get!.call(this);
   };
+  const codemodeObserver = createCodemodeObserver(() => active && ownsMethods() && options.enabled());
   const registered = new WeakMap<object, RegisteredRenderers>();
   const registeredRenderers = (context: unknown, name: string): RegisteredRenderers | undefined => {
     try {
@@ -175,6 +178,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       const definition = typeof session.getToolDefinition === "function" ? session.getToolDefinition(name) : undefined;
       if (!definition) return;
       const base = asRecord(definition);
+      if (options.makeCodemode && name === "codemode" && typeof base.execute === "function") {
+        const info = asRecord(options.getTools().find(tool => asRecord(tool).name === name));
+        if (toolPresentation(name, info.sourceInfo) === "builtin")
+          codemodeObserver.observe(definition as Pick<ToolDefinition, "execute">);
+      }
       return { name, call: base.renderCall, result: base.renderResult, shell: base.renderShell ?? "default" };
     } catch { /* A stale/disposed native context cannot prove ownership. */ }
   };
@@ -430,6 +438,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     reason: "Codex-style compact tool transcript enabled; third-party renderers preserved",
     dispose() {
       active = false;
+      codemodeObserver.dispose();
       restoreOwned();
       // Our deferred self-shell activation kept each original default child tree.
       // Refill it now; do not require a tool event to repair previously drawn rows.

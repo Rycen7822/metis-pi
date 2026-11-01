@@ -1,3 +1,4 @@
+import { CODEMODE_HELPERS, readCodemodeActions, type CodemodeAction } from "./codemode-actions.ts";
 import { asRecord } from "../../presentation/tool-names.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
 import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext } from "../../presentation/contracts.ts";
@@ -202,7 +203,6 @@ interface NestedSlot {
 }
 interface ExpansionState {
   expanded: boolean;
-  receiving?: boolean;
   script?: boolean;
   output?: boolean;
   allCalls?: boolean;
@@ -223,10 +223,10 @@ function clickRegion(component: Component, context: ViewContext, toggle?: () => 
   });
 }
 
-const SCRIPT_PREVIEW_ROWS = 12;
+const CALL_PREVIEW_COUNT = 8; // Keep Pi’s compact call-list limit, with an explicit control for earlier actions.
 
-/** Frame source rows without copying the rail or restoring a hidden preview prefix. */
-function scriptBody(component: Component, glyph: string, preview: boolean): Component {
+/** Frame explicitly opened source rows without copying the rail. */
+function scriptBody(component: Component, glyph: string): Component {
   let cache: { width: number; source: string[]; rows: string[] } | undefined;
   return {
     render(width) {
@@ -234,19 +234,11 @@ function scriptBody(component: Component, glyph: string, preview: boolean): Comp
       const shift = Math.min(2, Math.max(0, Math.floor(width) - 2));
       const inner = Math.max(1, Math.floor(width) - shift), all = component.render(inner);
       if (cache?.width === width && cache.source === all) return cache.rows;
-      let body = all, product = productFor(all);
-      if (preview && all.length > SCRIPT_PREVIEW_ROWS) {
-        body = all.slice(-SCRIPT_PREVIEW_ROWS);
-        if (product && !product.children) {
-          const copy = product.rows.slice(-SCRIPT_PREVIEW_ROWS);
-          copy[0] = { ...copy[0]!, breakBefore: "gap" };
-          product = { width: inner, rows: copy };
-        } else product = undefined;
-      }
+      const product = productFor(all);
       const prefix = shift ? `${glyph}${shift === 2 ? " " : ""}` : "";
-      const rows = body.map(line => `${prefix}${line}`);
+      const rows = all.map(line => `${prefix}${line}`);
       if (product) registerProduct(rows, {
-        width, rows: [], children: body.map((_, rowIndex) => ({ product, rowIndex, colShift: shift })),
+        width, rows: [], children: all.map((_, rowIndex) => ({ product, rowIndex, colShift: shift })),
       });
       cache = { width, source: all, rows };
       return rows;
@@ -255,7 +247,7 @@ function scriptBody(component: Component, glyph: string, preview: boolean): Comp
   };
 }
 
-/** Stream a bounded source preview; completed source folds independently of results. */
+/** Show execution actions by default; source and output have independent, explicit expansion. */
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
   highlight?: Highlight;
@@ -291,23 +283,21 @@ export function makeCodemodeRenderers(input: {
       const title = label(theme.bold("codemode")), view = expansion(context);
       const receiving = context.argsComplete === false && !context.executionStarted
         && context.isPartial !== false && !context.hasResult && !context.isError;
-      // Fold once when generation ends; later execution updates must preserve clicks.
-      if (view.receiving && !receiving) view.script = false;
-      view.receiving = receiving;
       const code = asRecord(args).code;
       if (typeof code !== "string")
         return clickRegion(input.makeText(receiving ? title : `${title} ${theme.fg("error", "[invalid arg]")}`), context);
       const expanded = view.script ?? view.expanded;
-      const script = (receiving || expanded) && code ? safeText(code) : "";
+      const script = expanded && code ? safeText(code) : "";
       let component: Component = input.makeText(title);
       if (script) {
-        const styled = receiving
-          ? colorLevel.kind === "none" ? script : theme.fg("thinkingText", script)
-          : input.highlight?.(script, "javascript") ?? script;
+        const styled = input.highlight?.(script, "javascript") ?? script;
         component = stackComponents([
-          component, scriptBody(input.makeText(styled), scriptGlyph, receiving && !expanded),
+          component, scriptBody(input.makeText(styled), scriptGlyph),
         ], "child-placements");
       }
+      const preparing = receiving || context.argsComplete === true && context.executionStarted === false;
+      if (!script && preparing && context.isPartial !== false && !context.isError)
+        component = stackComponents([component, input.makeText(`${theme.fg("dim", "•")} Preparing script`)], "child-placements");
       return clickRegion(component, context, () => { view.script = !expanded; });
     },
     renderResult(result, options, theme, context) {
@@ -343,17 +333,35 @@ export function makeCodemodeRenderers(input: {
         }
       }
       for (const [id, call] of liveCalls) if (!used.has(id)) calls.push(call);
+      const actions = readCodemodeActions(details);
+      const steps = commandSteps(calls, actions.calls);
       const allCalls = view.allCalls ?? view.expanded;
-      // Keep explicitly opened older calls visible while new calls stream in.
-      const shown = allCalls ? calls : calls.filter((call, index) => index >= calls.length - 8
-        || typeof call.id === "string" && view.slots.get(call.id)?.expanded === true);
+      // Keep explicitly opened older actions visible while new calls stream in.
+      const shown = allCalls ? steps : steps.filter((step, index) => index >= steps.length - CALL_PREVIEW_COUNT
+        || typeof step.call.id === "string" && view.slots.get(step.call.id)?.expanded === true);
       const parts: Component[] = [];
-      if (shown.length < calls.length || allCalls && calls.length > 8) {
-        const notice = allCalls ? "Show fewer calls" : `… ${calls.length - shown.length} earlier calls (${input.expandHint()})`;
+      if (shown.length < steps.length || allCalls && steps.length > CALL_PREVIEW_COUNT) {
+        const notice = allCalls ? "Show fewer calls" : `… ${steps.length - shown.length} earlier calls (${input.expandHint()})`;
         parts.push(clickRegion(input.makeText(theme.fg("dim", notice)), context, () => { view.allCalls = !allCalls; }));
       }
+      if (actions.omitted) parts.push(input.makeText(theme.fg("dim", `… ${actions.omitted} earlier helper actions not retained`)));
+      if (!steps.length) {
+        const title = context.isError ? "Script failed" : options.isPartial ? "Running script" : "Ran script";
+        parts.push(input.makeText(`${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(title))}`));
+      }
       let missingResults = false;
-      for (const call of shown) {
+      for (const step of shown) {
+        if (step.kind === "helper") {
+          const action = step.call;
+          const expanded = view.slots.get(action.id)?.expanded ?? view.expanded;
+          parts.push(clickRegion(input.makeText(helperSummary(action, theme, expanded)), context, () => {
+            const slot = view.slots.get(action.id) ?? { state: {} };
+            slot.expanded = !expanded;
+            view.slots.set(action.id, slot);
+          }));
+          continue;
+        }
+        const call = step.call;
         if (typeof call.id !== "string" || typeof call.name !== "string") continue;
         // Preview /? ids are not identities and must never share click state.
         const preview = call.id.endsWith("/?");
@@ -471,6 +479,32 @@ export function makeCodemodeRenderers(input: {
       return clickRegion(stackComponents(parts, "child-placements"), context);
     },
   };
+}
+
+type CommandStep = { kind: "tool"; call: Readonly<Record<string, unknown>> } | { kind: "helper"; call: CodemodeAction };
+
+function commandSteps(calls: Readonly<Record<string, unknown>>[], helpers: CodemodeAction[]): CommandStep[] {
+  const steps: CommandStep[] = [];
+  let helper = 0;
+  for (let index = 0; index <= calls.length; index++) {
+    while (helper < helpers.length && helpers[helper]!.beforeCall <= index)
+      steps.push({ kind: "helper", call: helpers[helper++]! });
+    if (index < calls.length) steps.push({ kind: "tool", call: calls[index]! });
+  }
+  for (; helper < helpers.length; helper++) steps.push({ kind: "helper", call: helpers[helper]! });
+  return steps;
+}
+
+function helperSummary(action: CodemodeAction, theme: Palette, expanded: boolean): string {
+  const failed = action.status === "error" || action.status === "cancelled";
+  const icon = failed ? theme.fg("error", "✗") : theme.fg("dim", action.status === "running" ? "…" : "•");
+  const target = safeText(action.arguments.join(" "));
+  const previewLimit = 80; // Match the native compact argument preview; details stay independently expandable.
+  const preview = !expanded && target.length > previewLimit ? `${target.slice(0, previewLimit - 1)}…` : target;
+  const title = theme.fg("toolTitle", theme.bold(CODEMODE_HELPERS[action.name]));
+  const details = expanded ? `\n  ${theme.fg("dim", `Status: ${action.status}`)}` : "";
+  const error = expanded && action.error ? `\n  ${theme.fg("error", safeText(action.error))}` : "";
+  return `${icon} ${title}${preview ? ` ${preview}` : ""}${details}${error}`;
 }
 
 function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expanded: boolean): string {

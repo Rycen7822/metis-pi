@@ -75,6 +75,7 @@
     "@earendil-works/pi-agent-core": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-codemode": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^22.20.2",
     "@types/proper-lockfile": "4.1.4",
@@ -137,6 +138,7 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-codemode": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
     "typebox": "*"
   },
@@ -145,6 +147,9 @@
       "optional": true
     },
     "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@earendil-works/pi-codemode": {
       "optional": true
     }
   },

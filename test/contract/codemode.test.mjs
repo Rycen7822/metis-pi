@@ -7,6 +7,7 @@ import { createFullscreenLayout } from "../../src/appearance/chrome/fullscreen-l
 import {
   initTheme,
   InteractiveMode,
+  ToolExecutionComponent,
   createCodemodeExtension,
   createReadToolDefinition,
   createBashToolDefinition,
@@ -23,13 +24,16 @@ const parent = "native-test";
 const code = 'const JS_ONLY_MARKER = "script";\n'.repeat(14) + 'text(await tools.read({path:"note.md"}));';
 const render = (component, width = 80) => component.render(width).join("\n");
 const plain = (component, width = 80) => stripVTControlCharacters(render(component, width));
-const makeTestRenderers = (textBindings = bindings) => makeRenderers(textBindings.makeText, textBindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+const makeTestRenderers = (textBindings = bindings) =>
+  makeRenderers(textBindings.makeText, textBindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
 const call = (id, name, args, status = "ok") => ({ id: `${parent}/${id}`, name, args: JSON.stringify(args), status });
 function setup(t, overrides = {}, lifecycle = false, sources = {}, options = {}) {
   const textBindings = { ...bindings, ...options.bindings };
-  const Host = isolatedToolHost(options.ui), store = new CodemodeViewStore();
+  const Host = options.host ?? isolatedToolHost(options.ui), store = new CodemodeViewStore();
   let codemode;
-  createCodemodeExtension()({ registerTool: (tool) => { codemode = tool; } });
+  createCodemodeExtension()({ registerTool: (tool) => { codemode = tool; },
+    getAllTools: () => Object.values(definitions), appendEntry() {} });
+  const originalExecute = codemode.execute;
   const definitions = { codemode, read: createReadToolDefinition(process.cwd()), bash: createBashToolDefinition(process.cwd()), ...overrides };
   const prototype = {};
   for (const name of ["session", "getRegisteredToolDefinition"]) Object.defineProperty(prototype, name,
@@ -72,8 +76,103 @@ function setup(t, overrides = {}, lifecycle = false, sources = {}, options = {})
       else store.finish(end);
     }
   }
-  return { row, handle, capture, context, handlers, ctx };
+  return { row, handle, capture, context, handlers, ctx, definition: codemode, definitions, originalExecute };
 }
+
+test("native helper execution records actual actions, preserves output and replays without JS", async (t) => {
+  const fixture = { name: "fixture_lookup", description: "Fixture tool", parameters: { type: "object", properties: {} },
+    namespace: { name: "fixtures" }, execute() { assert.fail("metadata discovery must not execute tools"); } };
+  const { row, context, definition, definitions, originalExecute } = setup(t, { fixture_lookup: fixture });
+  const script = [
+    'const namespace = ["fix", "tures"].join(""); const describe = describeTool;',
+    'if (false) await describeTool("UNEXECUTED");',
+    'text(await describeNamespace(namespace));',
+    'text(await Promise.all([describe("read"), searchTools("read file", {limit:2})]));',
+  ].join("\n");
+  const toolContext = { tools: Object.values(definitions), sessionManager: { getBranch: () => [] }, modelRegistry: {},
+    executeTool() { assert.fail("helper metadata must not fabricate a nested tool call"); } };
+  const native = await originalExecute(parent, { code: script }, undefined, undefined, toolContext);
+  const updates = [];
+  row.updateArgs({ code: script });
+  const result = await definition.execute(parent, { code: script }, undefined, partial => {
+    updates.push(partial);
+    row.updateResult(partial, true);
+  }, toolContext);
+  assert.deepEqual(result.content.slice(1), native.content.slice(1), "only the wall-time header may differ");
+  assert.deepEqual(result.details.calls, [], "helpers are not fake native child events");
+  assert.deepEqual(result.details.codemodeActions.calls.map(action => [action.name, action.arguments, action.status]), [
+    ["describeNamespace", ["fixtures"], "ok"], ["describeTool", ["read"], "ok"],
+    ["searchTools", ["read file", "limit=2"], "ok"],
+  ]);
+  assert.ok(updates.some(update => update.details.codemodeActions?.calls.some(action => action.status === "running")));
+  row.updateResult(result, false);
+  assert.match(plain(row), /Describe namespace fixtures[\s\S]*Describe tool read[\s\S]*Search tools read file limit=2/);
+  assert.doesNotMatch(plain(row), /UNEXECUTED|const namespace|Promise\.all|Script output|Nested results unavailable/);
+  clickRow(row, "Describe tool read");
+  assert.match(plain(row), /Describe tool read\n  Status: ok/);
+  const replay = new row.constructor("codemode", context.getRegisteredToolDefinition("codemode"), { code: script });
+  replay.updateResult(JSON.parse(JSON.stringify(result)), false);
+  assert.match(plain(replay), /Describe namespace fixtures/);
+  assert.doesNotMatch(plain(replay), /UNEXECUTED|const namespace|Nested results unavailable/);
+});
+
+test("concurrent native scripts isolate helper metadata and release retained execution wrappers", async (t) => {
+  const { CodemodeSandboxBase } = await import("@earendil-works/pi-codemode");
+  const originalSandbox = CodemodeSandboxBase.prototype.execute;
+  const { definition, definitions, handle, originalExecute } = setup(t);
+  const gate = Promise.withResolvers();
+  let arrivals = 0;
+  const toolContext = { tools: Object.values(definitions), sessionManager: { getBranch: () => [] },
+    modelRegistry: { async getAvailableOfType() { if (++arrivals === 2) gate.resolve(); await gate.promise; return []; } } };
+  const run = (id, tool) => definition.execute(id, { code: '// @options: {"timeout_ms":10000}\n'
+    + `await models.getAvailableOfType("chat"); await describeTool("${tool}"); text("done");` },
+  undefined, undefined, toolContext);
+  const results = await Promise.all([run("first-parent", "read"), run("second-parent", "bash")]);
+  for (const [index, result] of results.entries()) {
+    const id = index ? "second-parent" : "first-parent", name = index ? "bash" : "read";
+    assert.ok(result.details.codemodeActions.calls.every(action => action.id.startsWith(`${id}/helper/`)));
+    assert.deepEqual(result.details.codemodeActions.calls.map(action => action.arguments), [["chat"], [name]]);
+  }
+  assert.equal(CodemodeSandboxBase.prototype.execute, originalSandbox, "the last execution releases the shared sandbox hook");
+  const retained = definition.execute;
+  handle.dispose();
+  assert.equal(definition.execute, originalExecute, "unload restores the native definition");
+  const after = await retained("after-unload", { code: 'await describeTool("read");' }, undefined, undefined, toolContext);
+  assert.equal(after.details.codemodeActions, undefined, "a retained old wrapper is a native passthrough after unload");
+});
+
+test("generation completion preserves explicit and global expansion without adding a default JS preview", (t) => {
+  class StreamingHost extends ToolExecutionComponent {
+    constructor(name, definition, args) {
+      super(name, parent, args, { showImages: false }, definition, { requestRender() {} }, process.cwd());
+    }
+  }
+  for (const key of ["getCallRenderer", "getResultRenderer", "getRenderShell", "render"])
+    Object.defineProperty(StreamingHost.prototype, key, Object.getOwnPropertyDescriptor(ToolExecutionComponent.prototype, key));
+  const { row, context } = setup(t, {}, false, {}, { host: StreamingHost });
+  row.updateArgs({ code: 'const EARLY_SOURCE_MARKER = 1;\n' + code });
+  assert.doesNotMatch(plain(row), /EARLY_SOURCE_MARKER|JS_ONLY_MARKER/, "generation does not add a raw JS preview");
+  assert.match(plain(row), /Preparing script/);
+  clickRow(row, "codemode");
+  row.setArgsComplete();
+  assert.match(plain(row), /EARLY_SOURCE_MARKER/, "the user's open source stays open when generation finishes");
+  row.markExecutionStarted();
+  row.updateResult({ content: [], details: { calls: [] } }, false);
+  assert.match(plain(row), /EARLY_SOURCE_MARKER/);
+  const global = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code });
+  global.setExpanded(true);
+  global.setArgsComplete();
+  assert.match(plain(global), /JS_ONLY_MARKER/, "a local automatic false must not override global expansion");
+  const folded = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code });
+  folded.setArgsComplete();
+  assert.match(plain(folded), /Preparing script/);
+  folded.markExecutionStarted();
+  folded.updateResult({ content: [], details: { calls: [] } }, true);
+  assert.match(plain(folded), /Running script/);
+  folded.updateResult({ content: [], details: { calls: [] } }, false);
+  assert.match(plain(folded), /Ran script/);
+  assert.doesNotMatch(plain(folded), /JS_ONLY_MARKER/);
+});
 
 test("codemode start and timing labels use dark orange with terminal color fallbacks", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
@@ -89,11 +188,12 @@ test("codemode start and timing labels use dark orange with terminal color fallb
     const expanded = render(codemode.renderCall({ code: "text(1)" }, theme, { ...context, expanded: true }));
     const rail = kind === "none" ? "|" : colored("│");
     assert.equal(expanded, `${colored("codemode")}\n${rail} text(1)`, "script keeps its own styling inside the orange rail");
-    assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)), colored("Elapsed 0.0s"), kind);
+    assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)),
+      `• Running script\n${colored("Elapsed 0.0s")}`, kind);
     assert.equal(render(codemode.renderResult(scriptOutput, {}, theme, context)),
-      colored("Took 0.1s"), "script output is hidden until explicitly expanded");
+      `• Ran script\n${colored("Took 0.1s")}`, "execution summary remains visible while output stays independently folded");
     assert.equal(render(codemode.renderResult(scriptOutput, { expanded: true }, theme, context)),
-      `Script output\n${body}\n${colored("Took 0.1s")}`, "expanded script output keeps ordinary shell styling");
+      `• Ran script\nScript output\n${body}\n${colored("Took 0.1s")}`, "expanded output keeps ordinary shell styling");
   }
 });
 
@@ -141,7 +241,7 @@ test("replayed codemode uses recorded minute and hour durations without starting
   for (const [durationMs, expected] of [[90_500, "1m 30s"], [7_384_000, "2h 3m 4s"]]) {
     const context = { state: {}, executionStarted: false, durationMs, invalidate() {} };
     codemode.renderCall({ code: "text(1)" }, theme, context);
-    assert.equal(plain(codemode.renderResult({ content: [], details: { calls: [] } }, {}, theme, context)), `Took ${expected}`);
+    assert.equal(plain(codemode.renderResult({ content: [], details: { calls: [] } }, {}, theme, context)), `• Ran script\nTook ${expected}`);
   }
   t.mock.timers.tick(5_000);
   assert.equal(intervals.mock.callCount(), 0, "history rows must not create live intervals");
