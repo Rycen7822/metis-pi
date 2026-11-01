@@ -25,7 +25,7 @@ export const CODEX_CYAN = "#3a96dd";
 export const CODEX_CYAN_RGB = "58;150;221";
 /** Shared codemode label/rail orange; do not substitute the theme's blue accent. */
 export const CODEMODE_ORANGE = "#d97706";
-/** Neutral dark surface shared by the composer and subagent popup (#1f1f1f). */
+/** Neutral dark surface shared by the composer and popups (#1f1f1f). */
 export const DARK_SURFACE_BG: Rgb = { r: 31, g: 31, b: 31 };
 
 /** Codex diff dark surfaces (exec_cell/diff_render.rs). */

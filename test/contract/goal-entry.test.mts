@@ -107,6 +107,88 @@ function tick(t: TestContext, seconds: number): void {
   for (let i = 0; i < seconds; i += 1) t.mock.timers.tick(1000);
 }
 
+test("goal popup fills the viewer viewport with the same orange rail and dark surface", async t => {
+  const previous = { NO_COLOR: process.env.NO_COLOR, FORCE_COLOR: process.env.FORCE_COLOR };
+  delete process.env.NO_COLOR;
+  process.env.FORCE_COLOR = "3";
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const h = makeHost(t), ui = popupHost(h);
+  await h.command("a short goal still fills the popup");
+  const opened = h.command("");
+  await ui.ready();
+  const rows = ui.popup.render(90);
+  assert.equal(rows.length, 28, "the popup fills 70% of the 40-row terminal even for a short objective");
+  const background = "\x1b[48;2;31;31;31m", rail = "\x1b[38;2;217;119;6m▏\x1b[39m";
+  assert.ok(rows.every(row => row.startsWith(background + rail) && row.endsWith("\x1b[49m")));
+  assert.ok(rows.every(row => visibleWidth(row) === 90), "the whole native overlay width is painted");
+  assert.match(ui.frame().join("\n"), /Goal.*\[X\]/);
+  assert.doesNotMatch(ui.frame().join("\n"), /[╭╮╰╯─│]/, "there is no enclosing frame outside the left rail");
+  ui.click("[Edit]");
+  const editing = ui.popup.render(90);
+  assert.equal(editing.length, 28, "editing keeps the same viewport");
+  assert.ok(editing.every(row => row.startsWith(background + rail) && visibleWidth(row) === 90));
+  ui.click("[Cancel]");
+  ui.click("[X]");
+  await opened;
+});
+
+test("goal popup controls use live state, persist pause and resume, and only clear paused or completed goals", async t => {
+  const h = makeHost(t), ui = popupHost(h);
+  await h.tool("create", { objective: "keep this objective and budget", token_budget: 100 });
+  tick(t, 3);
+  const opened = h.command("");
+  const initial = await ui.ready();
+  assert.match(initial, /\[Pause\]/);
+  assert.doesNotMatch(initial, /\[Resume\]|\[Clear\]/);
+  assert.match(ui.click("[Pause]"), /Paused[\s\S]*\[Resume\].*\[Clear\]/);
+  let goal = (await h.tool("get")).details.goal;
+  assert.equal(goal.status, "paused");
+  assert.equal(goal.timeUsedSeconds, 3);
+  assert.equal(h.entries.at(-1)?.data.action, "status");
+  const sent = h.sent.length;
+  tick(t, 5);
+  assert.equal(h.sent.length, sent, "pausing never queues another goal continuation");
+  assert.doesNotMatch(ui.click("[Edit]"), /\[Pause\]|\[Resume\]|\[Clear\]/, "draft editing hides lifecycle controls");
+  ui.click("[Cancel]");
+  assert.match(ui.click("[Resume]"), /Pursuing[\s\S]*\[Pause\]/);
+  goal = (await h.tool("get")).details.goal;
+  assert.equal(goal.status, "active");
+  assert.equal(goal.objective, "keep this objective and budget");
+  assert.equal(goal.tokenBudget, 100);
+  assert.equal(goal.timeUsedSeconds, 3, "resume excludes time spent paused");
+  assert.equal(h.lastStatus(), "Pursuing goal (0 / 100)");
+  ui.click("[Pause]");
+  ui.click("[Clear]", () => { void h.command("resume"); });
+  assert.equal((await h.tool("get")).details.goal.status, "active", "a stale Clear target cannot clear a resumed goal");
+  assert.doesNotMatch(ui.frame().join("\n"), /\[Clear\]/);
+  await h.tool("update", { status: "blocked" });
+  assert.match(ui.frame().join("\n"), /\[Pause\].*\[Resume\]/);
+  assert.doesNotMatch(ui.frame().join("\n"), /\[Clear\]/, "blocked is not an implicit pause");
+  ui.click("[Pause]");
+  ui.click("[Clear]");
+  await opened;
+  assert.equal((await h.tool("get")).details.goal, null);
+  assert.equal(h.entries.at(-1)?.data.action, "clear");
+  assert.equal(ui.tui.hasOverlay(), false);
+  assert.equal(ui.composer.focused, true, "clear restores focus instead of refocusing the disposed popup");
+  await h.command("complete then clear");
+  const reopened = h.command("");
+  await ui.ready();
+  await h.tool("update", { status: "complete" });
+  const completed = ui.frame().join("\n");
+  assert.match(completed, /\[Clear\]/);
+  assert.doesNotMatch(completed, /\[Pause\]|\[Resume\]/);
+  ui.click("[Clear]");
+  await reopened;
+  assert.equal((await h.tool("get")).details.goal, null);
+  assert.equal(ui.composer.focused, true);
+  assert.equal(ui.composer.getValue(), "keep the main input");
+});
+
 test("goal popup keeps live usage, edits through native input and leaves Cancel and close read-only", async t => {
   const h = makeHost(t), ui = popupHost(h);
   await h.tool("create", { objective: "\u001b]52;c;Y2xpcGJvYXJk\u0007original objective", token_budget: 100 });
@@ -148,7 +230,7 @@ test("goal popup keeps live usage, edits through native input and leaves Cancel 
   ui.terminal.rows = 12;
   assert.match(ui.click("[Edit]"), /\[Editing\].*\[Cancel\].*\[Save\]/);
   assert.ok(ui.popup.render(90).some(line => line.includes(CURSOR_MARKER)), "resize keeps the editor cursor, not just the toolbar");
-  for (const width of [1, 4, 12, 90]) {
+  for (const width of [1, 4, 5, 7, 12, 90]) {
     const rows = ui.popup.render(width);
     assert.ok(rows.length <= 8 && rows.every(row => visibleWidth(row) <= width), "narrow overlays stay inside their viewport");
   }

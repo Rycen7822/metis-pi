@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { METIS_EVENTS, METIS_STATUS_IDS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest } from "../collaboration.ts";
-import { GoalState, validateObjective, formatElapsedSeconds, type Goal, type GoalStatus } from "./state.ts";
+import { GoalState, validateObjective, formatElapsedSeconds, type Goal, type GoalControlAction, type GoalStatus } from "./state.ts";
 import type { GoalPopup } from "./view.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -348,11 +348,17 @@ export default function goalExtension(pi: ExtensionAPI) {
     viewAbort = controller;
     const goalId = state.current.id;
     try {
-      const { GoalPopup } = await import("./view.ts");
+      const { GoalPopup, goalPopupControls } = await import("./view.ts");
       if (controller.signal.aborted || state.current?.id !== goalId) return;
       await ctx.ui.custom<void>((tui, theme, _keys, done) => {
         popup = new GoalPopup(tui, theme, state.snapshot()!, {
           done: () => done(undefined), signal: controller.signal,
+          control: action => {
+            if (controller.signal.aborted || state.current?.id !== goalId || !goalPopupControls(state.current.status).includes(action)) {
+              throw new Error("The goal changed. Reopen the popup to use its current controls.");
+            }
+            controlGoal(action, ctx);
+          },
           save: (objective, original) => {
             if (controller.signal.aborted || state.current?.id !== goalId || state.current.objective !== original) {
               throw new Error("The goal changed while editing. Cancel and reopen Edit to load the current goal.");
@@ -375,6 +381,22 @@ export default function goalExtension(pi: ExtensionAPI) {
     showGoalMessage(`Goal ${statusLabel(state.current!.status)}\n\n${goalSummary(state.snapshot()!)}`);
     updateStatus(ctx);
     if (state.current?.status === "active") queueContinuation(ctx);
+  }
+
+  function controlGoal(action: GoalControlAction, ctx: ExtensionContext): void {
+    if (action === "clear") {
+      const cleared = state.clear();
+      persist("clear");
+      showGoalMessage(cleared ? "Goal cleared" : "No goal to clear\n\nThis thread does not currently have a goal.");
+      updateStatus(ctx);
+      return;
+    }
+    const status = action === "pause" ? "paused" : "active";
+    state.transition(status);
+    persist("status");
+    showGoalMessage(`Goal ${status}\n\n${goalSummary(state.snapshot()!)}`);
+    updateStatus(ctx);
+    if (status === "active") queueContinuation(ctx);
   }
 
   function stopStatusTimer(): void {
@@ -671,22 +693,13 @@ export default function goalExtension(pi: ExtensionAPI) {
       }
 
       switch (trimmed.toLowerCase()) {
-        case "clear": {
-          const cleared = state.clear();
-          persist("clear");
-          showGoalMessage(cleared ? "Goal cleared" : "No goal to clear\n\nThis thread does not currently have a goal.");
-          updateStatus(ctx);
+        case "clear":
+          controlGoal("clear", ctx);
           return;
-        }
         case "pause":
         case "resume": {
-          const status = trimmed.toLowerCase() === "pause" ? "paused" : "active";
           try {
-            state.transition(status);
-            persist("status");
-            showGoalMessage(`Goal ${status}\n\n${goalSummary(state.snapshot()!)}`);
-            updateStatus(ctx);
-            if (status === "active") queueContinuation(ctx);
+            controlGoal(trimmed.toLowerCase() === "pause" ? "pause" : "resume", ctx);
           } catch (err) {
             showGoalMessage(`Failed to update thread goal: ${err instanceof Error ? err.message : String(err)}`);
           }

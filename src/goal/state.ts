@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 
 export type GoalStatus = "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete";
+export type GoalControlAction = "pause" | "resume" | "clear";
 
 export interface Goal {
   id: string;
