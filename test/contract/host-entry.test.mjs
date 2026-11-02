@@ -89,7 +89,8 @@ test("npm FFF direct calls join read exploration and retain native execution", (
   assert.match(plain(rows[0].render(100)), /SEARCH CONTENT/);
 });
 
-test("thought summaries follow the live host theme across native rebuilds", (t) => {
+test("live thought headings tick through the shipped entry and completed summaries follow the host theme", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
   const h = entry(t);
   let color = "FIRST", calls = 0;
   const theme = { style(text, options) {
@@ -102,6 +103,12 @@ test("thought summaries follow the live host theme across native rebuilds", (t) 
   const message = { role: "assistant", content: [] };
   h.fire({ type: "message_start", message }, h.ctx);
   const component = new Core.AssistantMessageComponent(message);
+  message.content = [{ type: "thinking", thinking: "ACTIVE EVIDENCE" }];
+  h.fire({ type: "message_update", message }, h.ctx);
+  component.updateContent(message, true);
+  assert.match(plain(component.render(80)), /thinking 0s/);
+  t.mock.timers.tick(2_000);
+  assert.match(plain(component.render(80)), /thinking 2s/, "the shipped factory reads the clock without a delta");
   message.content = [{ type: "thinking", thinking: "HIDDEN EVIDENCE" }, { type: "text", text: "Answer" }];
   h.fire({ type: "message_update", message }, h.ctx);
   h.fire({ type: "message_end", message }, h.ctx);

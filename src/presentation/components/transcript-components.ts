@@ -1,5 +1,5 @@
-// Codex transcript display components: the separator, the live write call, and
-// the three wrappers around a thinking run (rail, peek window, click layer).
+// Codex transcript display components: the separator, the live write call,
+// and the thinking header, rail, peek window and click layer.
 //
 // These are the leaf display classes the appearance entry used to own; they
 // moved here so the entry stays a thin host-wiring file. Every host TYPE they
@@ -7,7 +7,8 @@
 // injects the pipeline ColorLevel, so this module never imports the host
 // packages (src/ rule) while rendering exactly what it rendered before.
 
-import { registerProduct, productFor, publishRows } from "../../selection-copy/model.ts";
+import { decorationRow, registerProduct, productFor, publishRows } from "../../selection-copy/model.ts";
+import { clipLine, formatDuration } from "../segments.ts";
 import { stripAnsi } from "../../selection-copy/wrap.ts";
 import type { CopyRow } from "../../selection-copy/model.ts";
 import { peekHintText } from "../thinking-view.ts";
@@ -144,6 +145,28 @@ export class CodexWriteCallComponent implements Component {
     this.#cache = undefined;
     this.#lastWidth = -1;
   }
+}
+
+/** Live run label. The shared activity ticker repaints it; it owns no timer. */
+export class ThinkingHeaderComponent implements Component {
+  readonly #elapsedMs: () => number | undefined;
+  readonly #paint: (text: string) => string;
+
+  constructor(elapsedMs: () => number | undefined, paint: (text: string) => string) {
+    this.#elapsedMs = elapsedMs;
+    this.#paint = paint;
+  }
+
+  render(width: number): string[] {
+    const elapsed = this.#elapsedMs();
+    const text = elapsed === undefined ? "thinking" : `thinking ${formatDuration(elapsed)}`;
+    const rows = [this.#paint(clipLine(text, width))];
+    registerProduct(rows, { width, rows: [decorationRow(width)] });
+    publishRows(this, rows);
+    return rows;
+  }
+
+  invalidate(): void {}
 }
 
 /** Narrow static rail left of a thinking run. Wraps the host's thinking

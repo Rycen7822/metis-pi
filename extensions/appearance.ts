@@ -13,7 +13,7 @@ import { readOptionalConfigFile } from "../src/configuration/store.ts";
 import { thoughtSummaryText } from "../src/presentation/thinking-summary.ts";
 import {
   CodexSeparatorComponent, CodexWriteCallComponent, ThinkingRailComponent,
-  ThinkingPeekComponent, ThinkingClickableComponent,
+  ThinkingPeekComponent, ThinkingClickableComponent, ThinkingHeaderComponent,
 } from "../src/presentation/components/transcript-components.ts";
 
 function layoutOps(): LayoutOps {
@@ -102,6 +102,9 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     makeClickable: (input) => {
       const child = new Tui.Container();
       if (input.before) child.addChild(input.before as Tui.Component);
+      if (input.elapsedMs) {
+        child.addChild(new ThinkingHeaderComponent(input.elapsedMs, (text) => surface.paintGlyph(text, "dim")));
+      }
       child.addChild(input.inner as Tui.Component);
       if (input.after) child.addChild(input.after as Tui.Component);
       return new ThinkingClickableComponent(child, input.control, input.fallback, input.apply);

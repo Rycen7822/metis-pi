@@ -5,7 +5,9 @@ import { Container, Markdown, MouseRegion, Spacer, Text } from "@earendil-works/
 import { TranscriptState } from "../../src/appearance/transcript/state.ts";
 import { installTranscriptDecorations } from "../../src/appearance/transcript/adapter.ts";
 import { thoughtSummaryText } from "../../src/presentation/thinking-summary.ts";
-import { ThinkingRailComponent, ThinkingPeekComponent, ThinkingClickableComponent } from "../../src/presentation/components/transcript-components.ts";
+import {
+  ThinkingRailComponent, ThinkingPeekComponent, ThinkingClickableComponent, ThinkingHeaderComponent,
+} from "../../src/presentation/components/transcript-components.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 
@@ -81,9 +83,10 @@ const regionsOf = (component) => component.contentContainer.children.filter((chi
 
 const regionText = (region) => region.child.render(80).join("\n");
 
-const makeClickable = ({ inner, before, after, control, fallback, apply }) => {
+const makeClickable = ({ inner, before, after, elapsedMs, control, fallback, apply }) => {
   const child = new Container();
   if (before) child.addChild(before);
+  if (elapsedMs) child.addChild(new ThinkingHeaderComponent(elapsedMs, text => `\x1b[2m${text}\x1b[22m`));
   child.addChild(inner);
   if (after) child.addChild(after);
   return new ThinkingClickableComponent(child, control, fallback, apply);
@@ -93,6 +96,38 @@ const gestureType = button => button === "right" && process.platform !== "win32"
 const click = (region) => {
   region.handleMouse({ type: "click", button: "left" });
 };
+
+test("live heading reads the current run clock without deltas and never enters copied reasoning", t => {
+  installCopyPrototypes(t);
+  let clock = 5_000;
+  const state = new TranscriptState(() => clock);
+  setup(t, state, { streaming: "full", completed: "collapsed" }, { makeClickable });
+  const { component, message, update } = streamingAssistant(state);
+  const frame = () => component.render(80).join("\n");
+  update([{ type: "thinking", thinking: "FIRST_BODY" }]);
+  assert.match(frame(), /\x1b\[2mthinking 0s\x1b\[22m/);
+  clock += 12_500;
+  assert.match(frame(), /thinking 12s/, "a repaint advances the heading without another model event");
+  for (let i = 0; i < 3; i++) component.updateContent(message, true);
+  assert.equal([...frame().matchAll(/thinking 12s/g)].length, 1, "native rebuilds do not stack headings");
+  const copied = select(copyFrame(component, 80)).text;
+  assert.match(copied, /FIRST_BODY/);
+  assert.doesNotMatch(copied, /thinking 12s/, "the heading is display decoration, not model reasoning");
+
+  update([...message.content, { type: "text", text: "BETWEEN" }, { type: "thinking", thinking: "SECOND_BODY" }]);
+  assert.match(frame(), /Thought for 12s/);
+  assert.match(frame(), /thinking 0s/, "a new run starts its own clock, not the interaction total");
+  clock += 1_000;
+  assert.match(frame(), /thinking 1s/);
+  state.apply({ type: "message_end", message }, message);
+  component.updateContent(message, false);
+  assert.match(frame(), /Thought for 1s/);
+  assert.doesNotMatch(frame(), /thinking \d/, "completion removes the live heading");
+  component.setHideThinkingBlock(false);
+  component.updateContent(message, false);
+  assert.match(frame(), /SECOND_BODY/);
+  assert.doesNotMatch(frame(), /thinking \d/, "reopening completed reasoning does not restart a live clock");
+});
 
 test("two native runs fold once independently, copy visible content and preserve manual choices", (t) => {
   installCopyPrototypes(t);

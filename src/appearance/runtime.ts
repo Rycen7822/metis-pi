@@ -208,12 +208,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         // agent works, so an edit lands in the footer in ~debounce time
         // instead of waiting for the next poll.
         gitChanges.touch();
-        if (chrome.state.widgetInstalled) {
-          // The widget component reads the snapshot at render; a 1s tick just
-          // asks the host for a frame. No per-token reinstalls.
-          requestRender();
-          return;
-        }
+        // Working and live thinking headings share this 1s frame request,
+        // including when the Working widget itself is disabled.
+        requestRender();
+        if (chrome.state.widgetInstalled) return;
         if (chrome.state.fallbackMessage && config.working.elapsed) {
           const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
           const label = snapshot.phase === "writing" ? "Writing" : snapshot.phase === "waiting-for-input" ? "Waiting for input" : "Working";

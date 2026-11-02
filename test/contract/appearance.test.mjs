@@ -9,7 +9,9 @@ import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import * as Tui from "@earendil-works/pi-tui";
 import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
-import { ThinkingRailComponent } from "../../src/presentation/components/transcript-components.ts";
+import {
+  ThinkingRailComponent, ThinkingClickableComponent, ThinkingHeaderComponent,
+} from "../../src/presentation/components/transcript-components.ts";
 import { stringify } from "smol-toml";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -163,7 +165,8 @@ const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
 
 for (const rail of [false, true]) {
-  test(`rail setting ${rail} reaches the native assistant and diagnostics`, async t => {
+  test(`rail setting ${rail} preserves live headings, diagnostics and shared tick cleanup`, async t => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000 });
     class Assistant extends AssistantMessageComponent {
       updateContent(message, isStreaming = this.isStreaming) { super.updateContent(message, isStreaming); }
     }
@@ -171,21 +174,45 @@ for (const rail of [false, true]) {
     const commands = new Map();
     const { handlers, slots } = await session(t, {
       getAgentDir: () => "/unused",
-      readFile: appearanceFile({ thinking: { rail, streaming: "full", completed: "full" } }),
+      readFile: appearanceFile({ thinking: { rail, streaming: "full", completed: "full" }, working: { enabled: false } }),
       assistantPrototype: Assistant.prototype,
       makeSeparator: () => new Text("separator", 0, 0),
       makeSpacer: () => new Spacer(1),
       makeRail: child => { rails++; return new ThinkingRailComponent(child, { kind: "none" }); },
+      makeClickable: ({ inner, before, after, elapsedMs, control, fallback, apply }) => {
+        const child = new Tui.Container();
+        if (before) child.addChild(before);
+        if (elapsedMs) child.addChild(new ThinkingHeaderComponent(elapsedMs, text => text));
+        child.addChild(inner);
+        if (after) child.addChild(after);
+        return new ThinkingClickableComponent(child, control, fallback, apply);
+      },
       api: { registerCommand: (name, command) => commands.set(name, command) },
+    });
+    const assistant = new Assistant();
+    const frames = [];
+    slots.footerFactories.at(-1)({ requestRender: () => frames.push(plain(assistant.render(80).join("\n"))) }, theme, {
+      getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
     });
     handlers.get("agent_start")();
     const message = { role: "assistant", content: [{ type: "thinking", thinking: "RAIL_BODY" }] };
     handlers.get("message_start")({ message });
     handlers.get("message_update")({ message });
-    const assistant = new Assistant();
     assistant.updateContent(message, true);
     assert.match(plain(assistant.render(80).join("\n")), /RAIL_BODY/, "the native body is shown in both configurations");
     assert.equal(rails, rail ? 1 : 0, "disabled rail must not construct a wrapper");
+    assert.match(plain(assistant.render(80).join("\n")), /thinking 0s/);
+    const beforeTick = frames.length;
+    t.mock.timers.tick(1_000);
+    assert.ok(frames.length > beforeTick, "the existing ticker requests a frame with Working disabled");
+    assert.match(frames.at(-1), /thinking 1s/, "a real activity tick repaints without another model delta");
+    handlers.get("message_end")({ message });
+    assistant.updateContent(message, false);
+    assert.doesNotMatch(plain(assistant.render(80).join("\n")), /thinking \d/);
+    handlers.get("agent_settled")({});
+    const afterSettle = frames.length;
+    t.mock.timers.tick(5_000);
+    assert.equal(frames.length, afterSettle, "settlement stops the shared heading refresh");
     const report = [];
     commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
     assert.match(report.join("\n"), rail ? /thinking-rail=applied/ : /thinking-rail=disabled\(config\)/);

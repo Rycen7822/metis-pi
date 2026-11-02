@@ -20,6 +20,8 @@ Header 显示实际 Pi/metis 版本。Working 从 `agent_start` 到 `agent_settl
 
 时长每秒更新，shimmer 仅 truecolor 使用；settle、关闭与重载清理计时器。交互时长与各 thinking run 时长分别计算。`working.elapsed/thought/tool/tokens` 分别控制时长、思考、工具和 token 段，`working.animation` 与 `working.animationIntervalMs` 控制动画（帧间隔 32–1000 ms）。
 
+展开的流式思考正文上方显示灰色 `thinking 12s`，复用活动时钟每秒刷新当前 run 时长；标题不占 peek 正文行数、不进入复制，完成后移除，折叠摘要仍为 `Thought for …`。
+
 长思考的纯 thinking 流在实际处于 peek 视图且达到 16 Ki 字符后，按 100 ms 合并预览更新；暂停输入时仍会刷新最后一批。保留完整宿主 Markdown 排版，不截断源码来拼尾部。点击、滚动、切换视图、普通文字/工具调用与最终完成立即处理；卸载取消待刷新的预览。
 
 codemode 工具行运行时显示 `Elapsed`，结束后显示 `Took`，没有嵌套工具调用的脚本也显示。历史记录使用已保存的执行时长；嵌套工具显示自己的时长。

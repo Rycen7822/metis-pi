@@ -71,6 +71,8 @@ export interface TranscriptAdapterInput {
     /** Existing adjacent spacers moved inside the hit area, without adding rows. */
     before?: unknown;
     after?: unknown;
+    /** Current active run only; read at render time, not when deltas arrive. */
+    elapsedMs?: () => number | undefined;
     control: ThinkingViewControl;
     fallback: ThinkingView;
     apply: (next: ThinkingView) => void;
@@ -575,6 +577,9 @@ function coordinateSubtree(
         const after = index >= 0 && isSpacer(children[index + 1]) ? children[index + 1] : undefined;
         const clickable = input.makeClickable({
           inner: node, before, after,
+          elapsedMs: !ended && isExpandedMarkdown ? () => {
+            if (planKey !== undefined) return input.state.thinkingRunPlan(planKey, ordinal ?? 0)?.thinkingMs;
+          } : undefined,
           control,
           fallback: view,
           apply: (next) => applyThinkingView(component, ordinal ?? 0, next, rebuild),
