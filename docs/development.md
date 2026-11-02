@@ -44,13 +44,22 @@ CI 在 Ubuntu / Windows 的 Pi 1.4.0 基线上运行 verify；Linux 另跑 tmux/
 
 CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由 `test/package.test.mjs` 调用 `npm pack --dry-run --json --ignore-scripts`，不把未实际运行的安装当验证。
 
+## Pi SDK 源码补丁
+
+`sdk-patches/pi-1.4.0/`维护针对官方 Pi v1.4.0 的显式构建/CPU优化补丁与实体依赖准备工具，
+应用顺序、构建命令和验证边界见[补丁说明](../sdk-patches/pi-1.4.0/README.md)。
+这些不是扩展运行时猴子补丁，不会在安装 Metis、postinstall 或 `/reload` 时自动修改 SDK；
+只有显式重建并另行安装自定义 SDK 后才生效。源码准备/验证与用户安装分离，不能把源码测试通过当作当前会话已经启用。
+
 ## 源码与交付
 
 模块所有权见[架构](architecture.md)。运行和测试消费同一 TS 模块，导入显式写 `.ts`；共享类型配置位于 `config/typescript/`，Ask 配置位于 `config/vitest/`，Web/Recall 保留各自类型入口并继承共享规则。
 
 根 manifest 管理构建依赖。`scripts/build-web-access.mjs` 构建两个 Web bundle；子代理 `prepack` 从 Python schema 生成工具目录载荷。
 
-发布包含运行时 TS、Web bundle、Python/JS 子代理核心、shell WASM、Linux / Windows x64 PTY helper 与搜索共享库、主题、skills 和许可。测试、构建工具及 Rust 源码保留在 Git。发布范围变化时，实际打包、解包核对入口、动态资源、二进制与执行权限；安装使用随包资产，不在用户目录构建。
+发布包含运行时 TS、Web bundle、Python/JS 子代理核心、shell WASM、Linux / Windows x64 PTY helper 与搜索共享库、主题、skills 和许可。
+显式 SDK 补丁与准备工具随包提供但不自动执行；其他测试、构建工具及 Rust 源码保留在 Git。
+发布范围变化时，实际打包、解包核对入口、动态资源、二进制与执行权限；安装使用随包资产，不在用户目录构建。
 
 PTY helper 的测试与构建：
 

@@ -8,3 +8,5 @@
 src/neural-search/assets/*NOTICES* -text -whitespace
 # Unified patch blank context lines contain a required single space.
 src/neural-search/semantic/native/patches/*.patch whitespace=-blank-at-eol
+# SDK context also preserves upstream tabs after the diff's leading space.
+sdk-patches/**/*.patch whitespace=-blank-at-eol,-space-before-tab

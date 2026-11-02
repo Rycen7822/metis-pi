@@ -1,0 +1,186 @@
+diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
+index 897c51d..14a8381 100644
+--- a/packages/tui/src/layout.ts
++++ b/packages/tui/src/layout.ts
+@@ -50,6 +50,20 @@ export interface ScrollbarGeometry {
+ 	maxScrollTop: number;
+ }
+ 
++interface RowComposition {
++	sourceLine: string;
++	baseLine: string;
++	x: number;
++	width: number;
++	totalWidth: number;
++	outputLine: string;
++}
++
++type FrameCompositions = Map<Component, Map<number, RowComposition>>;
++
++// Each layout root retains only its immediately previous visible row compositions.
++const frameCompositions = new WeakMap<Component, FrameCompositions>();
++
+ interface LayoutContext {
+ 	viewport: { width: number; height: number };
+ 	renderCache: Map<Component, Map<number, string[]>>;
+@@ -327,14 +341,37 @@ function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): v
+ 	}
+ }
+ 
+-function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
++function paintBox(
++	box: LayoutBox,
++	screen: string[],
++	totalWidth: number,
++	previousCompositions: FrameCompositions | undefined,
++	nextCompositions: FrameCompositions,
++): void {
+ 	if (box.lines) {
++		const previousRows = previousCompositions?.get(box.component);
++		let nextRows: Map<number, RowComposition> | undefined;
+ 		const offset = box.lineOffset ?? 0;
+ 		const firstRow = Math.max(box.rect.y, box.clip.y, 0);
+ 		const lastRow = Math.min(box.rect.y + box.rect.height, box.clip.y + box.clip.height, screen.length);
+ 		for (let row = firstRow; row < lastRow; row++) {
+ 			const sourceLine = box.lines[offset + row - box.rect.y];
+ 			if (sourceLine === undefined) continue;
++			const baseLine = screen[row] ?? "";
++			const cached = previousRows?.get(row);
++			if (
++				cached &&
++				cached.sourceLine === sourceLine &&
++				cached.baseLine === baseLine &&
++				cached.x === box.rect.x &&
++				cached.width === box.rect.width &&
++				cached.totalWidth === totalWidth
++			) {
++				screen[row] = cached.outputLine;
++				nextRows ??= new Map();
++				nextRows.set(row, cached);
++				continue;
++			}
+ 			let line = sourceLine.replace(OSC133_ZONE_PREFIX, "");
+ 			const imageMetadata = getKittyImageMetadata(line);
+ 			if (imageMetadata) {
+@@ -350,11 +387,24 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
+ 			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
+ 				screen[row] = line;
+ 			} else {
+-				screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
++				const outputLine = compositeTuiLine(baseLine, line, box.rect.x, box.rect.width, totalWidth);
++				screen[row] = outputLine;
++				if (!isImageLine(line) && !isImageLine(baseLine)) {
++					nextRows ??= new Map();
++					nextRows.set(row, {
++						sourceLine,
++						baseLine,
++						x: box.rect.x,
++						width: box.rect.width,
++						totalWidth,
++						outputLine,
++					});
++				}
+ 			}
+ 		}
++		if (nextRows) nextCompositions.set(box.component, nextRows);
+ 	}
+-	for (const child of box.children) paintBox(child, screen, totalWidth);
++	for (const child of box.children) paintBox(child, screen, totalWidth, previousCompositions, nextCompositions);
+ 
+ 	if (box.scrollView && box.scrollContentLines && box.scrollView.scrollTop > 0 && box.rect.height > 0) {
+ 		for (let imageRow = box.scrollView.scrollTop - 1; imageRow >= 0; imageRow--) {
+@@ -397,7 +447,9 @@ export function renderLayoutFrame(
+ 		height: safeHeight,
+ 	});
+ 	const lines = Array.from({ length: safeHeight }, () => "");
+-	paintBox(rootBox, lines, safeWidth);
++	const nextCompositions: FrameCompositions = new Map();
++	paintBox(rootBox, lines, safeWidth, frameCompositions.get(root), nextCompositions);
++	frameCompositions.set(root, nextCompositions);
+ 	return {
+ 		root: rootBox,
+ 		width: safeWidth,
+diff --git a/packages/tui/test/layout.test.ts b/packages/tui/test/layout.test.ts
+index 5aa1cd3..2a152f7 100644
+--- a/packages/tui/test/layout.test.ts
++++ b/packages/tui/test/layout.test.ts
+@@ -135,14 +135,12 @@ describe("viewport layout", () => {
+ 			render: () => ["one", "two", imageLine, "", ""],
+ 			invalidate: () => {},
+ 		});
+-		const frame = renderLayoutFrame(
+-			new VStack([{ component: transcript, basis: 0, grow: 1 }, new Text("dock", 0, 0)]),
+-			20,
+-			4,
+-			() => {},
+-		);
++		const root = new VStack([{ component: transcript, basis: 0, grow: 1 }, new Text("dock", 0, 0)]);
++		const frame = renderLayoutFrame(root, 20, 4, () => {});
+ 
+ 		assert.ok(frame.lines[2]?.includes("y=0,h=34,r=1"));
++		assert.deepStrictEqual(renderLayoutFrame(root, 20, 4, () => {}).lines, frame.lines);
++		assert.ok(renderLayoutFrame(root, 20, 5, () => {}).lines[2]?.includes("y=0,h=67,r=2"));
+ 	});
+ 
+ 	it("composes horizontal children at allocated widths", () => {
+@@ -354,6 +352,60 @@ describe("viewport layout", () => {
+ 		assert.strictEqual(outer.scrollTop, 1);
+ 	});
+ 
++	it("repaints unchanged components when underlying style, source, or geometry changes", () => {
++		let showPrefix = true;
++		let bodyLine = "界正文";
++		let renderCount = 0;
++		const prefix = new Text("\x1b[31mAA\x1b[0m", 0, 0);
++		const body = {
++			render: () => {
++				renderCount++;
++				return [bodyLine];
++			},
++			invalidate: () => {},
++		};
++		const root = new HStack([
++			{ component: prefix, basis: 2, shrink: 0, visible: () => showPrefix },
++			{ component: body, basis: 0, grow: 1 },
++		]);
++		const render = (width = 12) => renderLayoutFrame(root, width, 1, () => {});
++		const first = render();
++		assert.deepStrictEqual(visibleLines(first.lines), ["AA界正文"]);
++		assert.deepStrictEqual(render().lines, first.lines);
++		assert.strictEqual(renderCount, 2, "component rendering must still publish the current frame");
++
++		prefix.setText("\x1b[34mAA\x1b[0m");
++		const restyled = render();
++		assert.deepStrictEqual(visibleLines(restyled.lines), ["AA界正文"]);
++		assert.ok(restyled.lines[0]?.includes("\x1b[34m"));
++		assert.ok(!restyled.lines[0]?.includes("\x1b[31m"));
++
++		bodyLine = "新文";
++		assert.deepStrictEqual(visibleLines(render(6).lines), ["AA新文"]);
++		showPrefix = false;
++		assert.deepStrictEqual(visibleLines(render(6).lines), ["新文"]);
++		showPrefix = true;
++		assert.deepStrictEqual(visibleLines(render().lines), ["AA新文"]);
++	});
++
++	it("repaints clipped rows after scrolling and offscreen content changes", () => {
++		const lines = ["row0", "row1", "row2", "row3"];
++		const transcript = new ScrollView({ render: () => lines, invalidate: () => {} }, { scrollbar: "hidden" });
++		const root = new HStack([
++			{ component: new Text("", 0, 0), basis: 2, shrink: 0 },
++			{ component: transcript, basis: 0, grow: 1 },
++		]);
++		const render = (height = 2) => visibleLines(renderLayoutFrame(root, 10, height, () => {}).lines);
++		assert.deepStrictEqual(render(), ["  row0", "  row1"]);
++		assert.deepStrictEqual(render(), ["  row0", "  row1"]);
++		transcript.scrollBy(1);
++		assert.deepStrictEqual(render(), ["  row1", "  row2"]);
++		lines[0] = "changed";
++		assert.deepStrictEqual(render(1), ["  row1"]);
++		transcript.scrollToStart();
++		assert.deepStrictEqual(render(3), ["  changed", "  row1", "  row2"]);
++	});
++
+ 	it("rebuilds geometry after content changes", () => {
+ 		const text = new Text("one", 0, 0);
+ 		const root = new VStack([text]);

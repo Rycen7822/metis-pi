@@ -1,0 +1,58 @@
+diff --git a/scripts/build-coding-agent-bundle.mjs b/scripts/build-coding-agent-bundle.mjs
+index d2f622d..7b74258 100644
+--- a/scripts/build-coding-agent-bundle.mjs
++++ b/scripts/build-coding-agent-bundle.mjs
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env node
+ 
+-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
++import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+ import { isBuiltin } from "node:module";
+ import { dirname, join, relative, resolve } from "node:path";
+ import { fileURLToPath } from "node:url";
+@@ -15,6 +15,36 @@ const bundleDir = join(codingAgentDistDir, "bundle");
+ const banner = {
+ 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
+ };
++// Package self-resolution preserves exports/subpath conditions without requiring workspace symlinks.
++const workspacePackages = new Map();
++for (const entry of readdirSync(join(repoRoot, "packages"), { withFileTypes: true })) {
++	const directory = join(repoRoot, "packages", entry.name);
++	const manifest = join(directory, "package.json");
++	if (!entry.isDirectory() || !existsSync(manifest)) continue;
++	const metadata = JSON.parse(readFileSync(manifest, "utf8"));
++	workspacePackages.set(metadata.name, { directory, hasExports: metadata.exports !== undefined });
++}
++const workspacePackagesPlugin = {
++	name: "physical-workspace-packages",
++	setup(build) {
++		build.onResolve({ filter: /^@earendil-works\// }, async (args) => {
++			if (args.pluginData?.skipWorkspace) return;
++			const parts = args.path.split("/");
++			const workspace = workspacePackages.get(parts.slice(0, 2).join("/"));
++			if (!workspace) return;
++			const { directory, hasExports } = workspace;
++			// Packages without exports do not support self-reference; resolve their main/deep paths directly.
++			const specifier = hasExports ? args.path : join(directory, ...parts.slice(2));
++			const result = await build.resolve(specifier, {
++				kind: args.kind,
++				importer: join(directory, "package.json"),
++				resolveDir: directory,
++				pluginData: { skipWorkspace: true },
++			});
++			return { ...result, pluginData: undefined };
++		});
++	},
++};
+ const allowedExternalPackages = new Set([
+ 	"@silvia-odwyer/photon-node",
+ 	"jiti",
+@@ -93,7 +123,7 @@ function commonBuildOptions() {
+ 		// package replaces it with a synchronous lazy require so jiti loads only
+ 		// when importing an extension; Babel remains deferred until a cache miss
+ 		// needs transformation.
+-		plugins: [lazyJitiPlugin, httpsProxyAgentNamedExportPlugin],
++		plugins: [workspacePackagesPlugin, lazyJitiPlugin, httpsProxyAgentNamedExportPlugin],
+ 		sourcemap: false,
+ 		target: "node22.19",
+ 		// Do not apply the monorepo's source-oriented path aliases while bundling

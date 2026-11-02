@@ -117,6 +117,7 @@
     "LICENSE-APACHE-2.0",
     "NOTICE",
     "docs/**/*.md",
+    "sdk-patches",
     "docs/provenance/execution/LICENSE",
     "docs/provenance/execution/musl-NOTICES",
     "docs/provenance/condense/LICENSE",

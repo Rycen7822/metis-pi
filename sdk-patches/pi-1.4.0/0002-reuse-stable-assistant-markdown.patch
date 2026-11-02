@@ -1,0 +1,148 @@
+diff --git a/packages/coding-agent/src/modes/interactive/components/assistant-message.ts b/packages/coding-agent/src/modes/interactive/components/assistant-message.ts
+index c02e371..054351b 100644
+--- a/packages/coding-agent/src/modes/interactive/components/assistant-message.ts
++++ b/packages/coding-agent/src/modes/interactive/components/assistant-message.ts
+@@ -8,16 +8,24 @@ const OSC133_ZONE_START = "\x1b]133;A\x07";
+ const OSC133_ZONE_END = "\x1b]133;B\x07";
+ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+ 
++interface AssistantTextBlock {
++	text: string;
++	outputPad: number;
++	isStreaming: boolean;
++	markdown: Markdown;
++}
++
+ /**
+  * Component that renders a complete assistant message
+  */
+ export class AssistantMessageComponent extends Container {
+ 	private contentContainer: Container;
+ 	private hideThinkingBlock: boolean;
+-	private markdownTheme: MarkdownTheme;
++	private readonly markdownTheme: MarkdownTheme;
+ 	private hiddenThinkingLabel: string;
+ 	private outputPad: number;
+-	private markdownTransformers: readonly MarkdownTransformer[];
++	private readonly markdownTransformers: readonly MarkdownTransformer[];
++	private textBlocks: AssistantTextBlock[] = [];
+ 	private lastMessage?: AssistantMessage;
+ 	private hasToolCalls = false;
+ 	private isStreaming = false;
+@@ -92,6 +100,8 @@ export class AssistantMessageComponent extends Container {
+ 		this.lastMessage = message;
+ 		this.isStreaming = isStreaming;
+ 
++		const previousTextBlocks = this.textBlocks;
++		this.textBlocks = [];
+ 		// Clear content container
+ 		this.contentContainer.clear();
+ 
+@@ -107,14 +117,26 @@ export class AssistantMessageComponent extends Container {
+ 		let thinkingRunIndex = 0;
+ 		for (let i = 0; i < message.content.length; i++) {
+ 			const content = message.content[i];
+-			if (content.type === "text" && content.text.trim()) {
+-				// Assistant text messages with no background - trim the text
+-				// Set paddingY=0 to avoid extra spacing before tool executions
+-				this.contentContainer.addChild(
+-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
+-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+-					}),
+-				);
++			if (content.type === "text") {
++				const text = content.text.trim();
++				if (!text) continue;
++				let block = previousTextBlocks[this.textBlocks.length];
++				// Theme/transformer ownership is fixed; padding and streaming are captured by each leaf.
++				if (block?.text === text && block.outputPad === this.outputPad && block.isStreaming === this.isStreaming) {
++					// Keep token reuse eligible, but rerun dynamic transforms and style layout.
++					block.markdown.invalidate();
++				} else {
++					block = {
++						text,
++						outputPad: this.outputPad,
++						isStreaming: this.isStreaming,
++						markdown: new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
++							transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
++						}),
++					};
++				}
++				this.textBlocks.push(block);
++				this.contentContainer.addChild(block.markdown);
+ 			} else if (content.type === "thinking") {
+ 				const thinkingBlocks: string[] = [];
+ 				for (; i < message.content.length; i++) {
+diff --git a/packages/coding-agent/test/assistant-message.test.ts b/packages/coding-agent/test/assistant-message.test.ts
+index ea2618a..fea1578 100644
+--- a/packages/coding-agent/test/assistant-message.test.ts
++++ b/packages/coding-agent/test/assistant-message.test.ts
+@@ -213,6 +213,68 @@ describe("AssistantMessageComponent", () => {
+ 		expect(availableWidths).toEqual([78, 58]);
+ 	});
+ 
++	test("refreshes unchanged text transforms across metadata, streaming, and padding changes", () => {
++		initTheme("dark");
++		let suffix = "initial";
++		const contexts: Array<{ isStreaming: boolean; availableWidth: number }> = [];
++		const message = createAssistantMessage([{ type: "text", text: "answer" }]);
++		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
++			(markdown, { isStreaming, availableWidth }) => {
++				contexts.push({ isStreaming, availableWidth });
++				return `${markdown} ${suffix}`;
++			},
++		]);
++		component.updateContent(message, true);
++		expect(stripAnsi(component.render(40).join("\n"))).toContain("answer initial");
++
++		suffix = "updated";
++		const metadataUpdate = { ...message, timestamp: message.timestamp + 1 };
++		component.updateContent(metadataUpdate, true);
++		expect(stripAnsi(component.render(40).join("\n"))).toContain("answer updated");
++		component.updateContent(metadataUpdate, false);
++		component.render(40);
++		component.setOutputPad(0);
++		expect(
++			component
++				.render(40)
++				.map(stripAnsi)
++				.some((line) => line.startsWith("answer updated")),
++		).toBe(true);
++		expect(contexts).toEqual([
++			{ isStreaming: true, availableWidth: 38 },
++			{ isStreaming: true, availableWidth: 38 },
++			{ isStreaming: false, availableWidth: 38 },
++			{ isStreaming: false, availableWidth: 40 },
++		]);
++	});
++
++	test("updates tool and stop markers even when the assistant body is unchanged", () => {
++		initTheme("dark");
++		const text = { type: "text" as const, text: "answer" };
++		const component = new AssistantMessageComponent(createAssistantMessage([text]));
++		expect(component.render(60)[0]).toContain(OSC133_ZONE_START);
++
++		component.updateContent(
++			createAssistantMessage(
++				[text, { type: "toolCall", id: "tool-1", name: "read", arguments: { path: "file.txt" } }],
++				{ stopReason: "length" },
++			),
++		);
++		const toolOutput = component.render(60).join("\n");
++		expect(toolOutput).not.toContain(OSC133_ZONE_START);
++		expect(stripAnsi(toolOutput)).toContain("Response was truncated before completion.");
++
++		component.updateContent(createAssistantMessage([text], { stopReason: "error" }));
++		const errorOutput = component.render(60).join("\n");
++		expect(errorOutput).toContain(OSC133_ZONE_START);
++		expect(stripAnsi(errorOutput)).toContain("Error: Unknown error");
++		expect(stripAnsi(errorOutput)).not.toContain("Response was truncated");
++		component.updateContent(createAssistantMessage([]));
++		expect(component.render(60)).toEqual([]);
++		component.updateContent(createAssistantMessage([{ type: "text", text: "replacement" }]));
++		expect(stripAnsi(component.render(60).join("\n"))).not.toContain("answer");
++	});
++
+ 	test("continues the Markdown transformer chain when a transformer throws", () => {
+ 		initTheme("dark");
+ 		const calls: string[] = [];
