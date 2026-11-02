@@ -788,6 +788,7 @@ test("goal continuation counters change only the appended message, preserving sy
     on: (name, fn) => hooks.set(name, fn),
     registerCommand() {},
     registerTool: (t) => tools.set(t.name, t),
+    registerMessageRenderer() {},
     appendEntry: (type, data) => sm.appendCustomEntry(type, data),
     sendMessage() {},
   };
