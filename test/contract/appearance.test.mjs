@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate as nextDelivery } from "node:timers/promises";
 import { activate } from "../../src/appearance/runtime.ts";
 import { GIT_CHANGES_INTERVAL_MS } from "../../src/appearance/git-changes.ts";
 import { theme, toolInfo } from "../helpers.mjs";
@@ -470,11 +471,12 @@ test("one interaction wires usage previews, generation rates, Working and the pe
     timestamp: 1,
     usage: { reasoning: 0, ...usage }, durationMs,
   });
-  const update = (id, usage, delta) => {
+  const update = async (id, usage, delta) => {
     const m = message(id, usage);
     providerEvent(handlers, m, id === "first" ? "response.function_call_arguments.delta" : "response.output_text.delta", delta);
     handlers.get("message_update")({ message: m,
       assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { content: [] } } });
+    await nextDelivery();
   };
 
   assert.equal(slots.workingVisible.at(-1), false, "native loader hidden after widget install");
@@ -487,9 +489,9 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   assert.doesNotMatch(frame(), /tok\/s/, "no rate before a completed response");
   providerEvent(handlers, message("first"), "response.created");
   now += 3000; // initial waiting/reasoning must not dilute generation speed
-  update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, '{"command":');
+  await update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, '{"command":');
   now += 400;
-  update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, '"echo ready"}');
+  await update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, '"echo ready"}');
   assert.doesNotMatch(frame(), /tok\/s/, "partial cumulative usage is not a live speed measurement");
   const confirmed = { ...message("first", { input: 100, output: 80, cacheRead: 900, cacheWrite: 0, reasoning: 60 }, 3400),
     stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo ready" } }] };
@@ -517,9 +519,9 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   assert.equal(speed(frame()), 47.5, "retry does not erase the previous valid sample");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   providerEvent(handlers, message("second"), "response.created");
-  update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
+  await update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
   now += 400;
-  update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
+  await update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
   assert.equal(speed(frame()), 47.5, "incomplete usage retains the previous sample, without inventing a live estimate");
   finishResponse(handlers, message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400));
   now += 2_000; // background maintenance finishes after the final reply
@@ -549,8 +551,8 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   const next = message("third", { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }, 1000);
   handlers.get("message_start")({ message: next });
   providerEvent(handlers, next, "response.created");
-  update("third", { output: 0 }, "a"); now += 400;
-  update("third", { output: 20 }, "b");
+  await update("third", { output: 0 }, "a"); now += 400;
+  await update("third", { output: 20 }, "b");
   finishResponse(handlers, next);
   handlers.get("agent_end")({}, {});
   handlers.get("agent_settled")({}, {});
@@ -590,6 +592,7 @@ test("SDK producer timing survives queued deltas and pre-request compaction", as
       now = 11000;
       output.content.push({ type: "thinking", thinking: "", thinkingSignature: "opaque" }, { type: "text", text: "first" });
       stream.push({ type: "text_delta", contentIndex: 1, delta: "first", partial: output });
+      await nextDelivery();
       now = 11500;
       output.content[1].text += "last";
       stream.push({ type: "text_delta", contentIndex: 1, delta: "last", partial: output });
@@ -630,6 +633,7 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   handlers.get("message_start")({ message: first }, ctx);
   providerEvent(handlers, first, "response.created");
   now = 1010; providerEvent(handlers, first, "response.function_call_arguments.delta", "{");
+  await nextDelivery();
   now = 2000; providerEvent(handlers, first, "response.function_call_arguments.delta", "}");
   finishResponse(handlers, first, ctx);
   const beforeTool = frame();
@@ -666,27 +670,29 @@ test("selection changes cancel generation sampling, including late producer even
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
   let message = { role: "assistant", provider: "p", api: "openai-responses", model: "m", responseId: "r",
-    timestamp: 1, content: [], stopReason: "stop", durationMs: 10_025, usage: { output: 2, reasoning: 0 } };
-  const produce = () => {
+    timestamp: 1, content: [], stopReason: "stop", durationMs: 10_100, usage: { output: 2, reasoning: 0 } };
+  const produce = async () => {
     providerEvent(handlers, message, "response.created");
     now += 10_000; providerEvent(handlers, message, "response.output_text.delta", "a");
-    now += 25; providerEvent(handlers, message, "response.output_text.delta", "b");
+    await nextDelivery();
+    now += 100; providerEvent(handlers, message, "response.output_text.delta", "b");
   };
   for (const event of ["model_select", "thinking_level_select"]) {
     message = { ...message, content: [] }; // each SDK request owns a new completed object
     handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
-    handlers.get("message_start")({ message }, ctx); produce(); finishResponse(handlers, message, ctx);
+    handlers.get("message_start")({ message }, ctx); await produce(); finishResponse(handlers, message, ctx);
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
-    assert.match(frame(), /40 tok\/s/);
+    assert.match(frame(), /10 tok\/s/);
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
-    assert.match(report, /gen\(last\) 40 tok\/s \(output=2 tokens, reasoning excluded=0, window=25ms, events=2, samples=1, scope=last completed\)/);
+    assert.match(report,
+      /gen\(last\) 10 tok\/s \(output=2 tokens, reasoning excluded=0, window=100ms, events=2, samples=1, scope=last completed\)/);
     assert.match(report, /excludes initial wait\/TTFT, reasoning and completion callbacks/);
     handlers.get(event)({}, ctx);
     assert.doesNotMatch(frame(), /tok\/s/);
     handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
     handlers.get(event)({}, ctx); // change selection while response headers are pending
-    handlers.get("message_start")({ message }, ctx); produce(); finishResponse(handlers, message, ctx);
+    handlers.get("message_start")({ message }, ctx); await produce(); finishResponse(handlers, message, ctx);
     assert.doesNotMatch(frame(), /tok\/s/, "late old-selection headers must not reopen the invalidated response slot");
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
   }

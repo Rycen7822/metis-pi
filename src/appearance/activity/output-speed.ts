@@ -19,6 +19,8 @@ interface ContentWindow {
   first?: number;
   last?: number;
   events: number;
+  batches: number;
+  batchTimer?: ReturnType<typeof setImmediate>;
   blocks: Map<number, ContentCoverage>;
   invalid?: boolean;
 }
@@ -51,6 +53,8 @@ export function formatSpeed(tps: number | undefined, sampleCount = 1): string {
 }
 
 const OWNER = Symbol.for("Rycen7822.metis-pi.output-timing");
+// A UI confidence floor, not a rate cap: sub-100ms windows mostly expose delivery/CPU jitter.
+const MIN_GENERATION_WINDOW_MS = 100;
 const record = (value: unknown): Record<string, any> =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 interface Installation {
@@ -73,19 +77,28 @@ export function observeOutputTiming(prototype: object = Object.getPrototypeOf(cr
       return { read: () => undefined, dispose() {} };
     }
     const windows = new WeakMap<object, ContentWindow>();
+    const batchTimers = new Set<ReturnType<typeof setImmediate>>();
     const completed = new WeakMap<object, ProducerTiming | undefined>();
-    const complete = (stream: object, message: unknown) => {
+    const takeWindow = (stream: object) => {
       const window = windows.get(stream);
       windows.delete(stream);
+      if (window?.batchTimer) {
+        clearImmediate(window.batchTimer);
+        batchTimers.delete(window.batchTimer);
+      }
+      return window;
+    };
+    const complete = (stream: object, message: unknown) => {
+      const window = takeWindow(stream);
       if (message === null || typeof message !== "object" || completed.has(message)) return;
       // Presence seals even an unmeasurable first completion. Forwarding must
       // not replace it with delivery delays; only this producer may fill it.
       completed.set(message, undefined);
-      if (!window || window.invalid || window.events < 2 || window.first === undefined || window.last === undefined) return;
+      if (!window || window.invalid || window.batches < 2 || window.first === undefined || window.last === undefined) return;
       const final = record(message);
       if (final.stopReason !== "stop" && final.stopReason !== "length" && final.stopReason !== "toolUse") return;
       const content = final.content;
-      if (!Array.isArray(content) || window.last <= window.first) return;
+      if (!Array.isArray(content) || window.last - window.first < MIN_GENERATION_WINDOW_MS) return;
       let blocks = 0;
       for (const [index, block] of content.entries()) {
         const value = record(block);
@@ -114,15 +127,27 @@ export function observeOutputTiming(prototype: object = Object.getPrototypeOf(cr
         const block = record(record(value.partial).content?.[value.contentIndex]);
         if (typeof block.name !== "string" || !block.name) return;
       } else if (!delta) return;
-      const window = windows.get(stream) ?? { events: 0, blocks: new Map<number, ContentCoverage>() };
+      const window = windows.get(stream) ?? { events: 0, batches: 0, blocks: new Map<number, ContentCoverage>() };
       windows.set(stream, window);
       const seen = window.blocks.get(value.contentIndex) ?? (type === "text" ? { type, chars: 0 } : { type, json: "" });
       if (seen.type !== type) { window.invalid = true; return; }
       window.blocks.set(value.contentIndex, seen);
+      if (!delta) return; // A name may arrive first, but it is not an argument delta.
       const now = performance.now();
       window.first ??= now;
-      if (!delta) return; // A name may arrive first, but it is not an argument delta.
       window.last = now; window.events++;
+      // One wire chunk may yield many synchronous or microtask-drained SDK events.
+      // Keep them in one delivery batch until control returns to the event loop.
+      if (!window.batchTimer) {
+        window.batches++;
+        const timer = setImmediate(() => {
+          batchTimers.delete(timer);
+          delete window.batchTimer;
+        });
+        window.batchTimer = timer;
+        batchTimers.add(timer);
+        timer.unref();
+      }
       if (seen.type === "text") seen.chars += delta.length;
       else seen.json += delta;
     };
@@ -132,17 +157,19 @@ export function observeOutputTiming(prototype: object = Object.getPrototypeOf(cr
         const value = record(event);
         if (value.type === "done") complete(this, value.message);
         else if (value.type === "error") {
-          windows.delete(this);
+          takeWindow(this);
           if (value.error !== null && typeof value.error === "object" && !completed.has(value.error)) completed.set(value.error, undefined);
         } else observeContent(this, value);
       } catch { /* Timing must never interfere with provider delivery. */ }
       return push.value.call(this, event);
     };
     const endWrapper = function (this: object, message?: unknown) {
-      try { if (installation?.users && message !== undefined) complete(this, message); else windows.delete(this); } catch { /* best effort */ }
+      try { if (installation?.users && message !== undefined) complete(this, message); else takeWindow(this); } catch { /* best effort */ }
       return end.value.call(this, message);
     };
     installation = { users: 0, completed, release() {
+      for (const timer of batchTimers) clearImmediate(timer);
+      batchTimers.clear();
       const currentPush = Object.getOwnPropertyDescriptor(prototype, "push");
       const currentEnd = Object.getOwnPropertyDescriptor(prototype, "end");
       if (currentPush?.value === wrapper) Reflect.defineProperty(prototype, "push", { ...currentPush, value: push.value });
