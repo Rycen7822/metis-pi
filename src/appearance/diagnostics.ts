@@ -112,10 +112,13 @@ const speedLine = (deps: DiagnosticsDeps): string => {
   const speed = deps.outputSpeed.snapshot();
   const count = speed?.sampleCount ?? 1;
   const speedText = formatSpeed(speed?.tokensPerSecond, count);
+  const scope = count > 1 ? `last ${count} completed; short-response smoothing` : "last completed";
   const detail = speed && speedText
-    ? `${speedText} (output=${speed.outputTokens} tokens, reasoning excluded=${speed.reasoningTokens}, window=${speed.windowMs}ms, events=${speed.contentEvents}, samples=${count}, scope=${count > 1 ? `last ${count} completed; short-response smoothing` : "last completed"})`
-    : "— (no completed response with a measurable provider content window)";
-  return `  output speed: ${detail} — Σ(non-reasoning output − 1) ÷ Σ first-to-last SDK producer content windows (text + tool arguments); excludes initial wait/TTFT, reasoning and completion callbacks`;
+    ? `${speedText} (output=${speed.outputTokens} tokens, reasoning excluded=${speed.reasoningTokens}, `
+      + `duration=${speed.durationMs}ms, samples=${count}, scope=${scope})`
+    : "— (no completed response with valid SDK usage and duration)";
+  return `  output throughput: ${detail} — Σ(non-reasoning output) ÷ Σ SDK response durations; `
+    + "includes initial wait/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays";
 };
 
 const interactionLine = (snap: ReturnType<UiMetrics["snapshot"]>): string =>

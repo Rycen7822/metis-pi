@@ -1,7 +1,7 @@
 // Product status footer below the editor. Metrics stay visible; location and
 // ordinary prune messages have independent, component-local disclosures.
 // Snapshot scopes: session cumulative I/O, latest confirmed cache rate,
-// last completed generation speed, and work-tree changes against HEAD.
+// last completed output throughput, and work-tree changes against HEAD.
 // Narrow widths wrap whole fields; painting happens after plain-text layout.
 
 import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
