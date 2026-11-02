@@ -12,6 +12,7 @@
 // Intentionally no per-line '›' prefix beyond the first row (deliberate Codex deviation).
 
 import { renderFakeCursor } from "@earendil-works/pi-tui";
+import { EditorSelection } from "./editor-selection.ts";
 import { CODEX_CYAN_RGB } from "../../presentation/palette.ts";
 import { isSkillPrefixOnly } from "../../skills/tokens.ts";
 import { cellWidth, clipLine } from "../../presentation/segments.ts";
@@ -118,11 +119,13 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
   const placeholder = input.placeholder ?? "Ask anything...";
 
   class CodexSurfaceEditor extends input.host.CustomEditor {
+    private readonly selection: EditorSelection;
     private nativeStatus: CodexStatusIndicator | undefined;
     private compactionStartedAt: number | undefined;
 
     constructor(tui: unknown, theme: unknown, keybindings: unknown, options: { embedWorkingStatus?: boolean; paddingX?: number }) {
       super(tui, theme, keybindings, options);
+      this.selection = new EditorSelection(this, tui);
       input.hardwareCursor?.(tui);
     }
 
@@ -152,10 +155,10 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
       super.setPaddingX(Math.max(2, value));
     }
 
-    // Selection-aware Ctrl+C. Runs BEFORE the app-action dispatch so a
-    // selection copies instead of clearing the draft; without a selection the
-    // stock path (including the double-press-to-exit logic) is untouched.
+    // Composer range deletion and selection-aware copy run before native
+    // cursor/app actions; all unclaimed input keeps its existing behavior.
     override handleInput(data: string): void {
+      if (this.selection.tryDelete(data)) return;
       const hook = input.selectionCopy;
       if (hook && hook.tryConsume(data, this)) return;
       super.handleInput(data);
@@ -195,7 +198,10 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
 
     override render(width: number): string[] {
       const rows = super.render(width);
-      if (!surface || rows.length === 0) return rows;
+      if (!surface || rows.length === 0) {
+        this.selection.capture(rows, width);
+        return rows;
+      }
       // Base Editor.render row structure (verified in pi-tui editor.js):
       // [topBorder, ...body rows..., bottomBorder, ...autocomplete rows...].
       // The first BODY row is therefore always index 1 — structural, not a
@@ -224,6 +230,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
         }
         painted[1] = surface.paintRow(decorated, width);
       }
+      this.selection.capture(painted, width);
       return painted;
     }
   }
