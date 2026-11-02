@@ -59,11 +59,11 @@ test("full native response throughput is invariant to first-batch size, includin
 
 test("initial wait and thinking are included, while queued completion callbacks cannot extend native duration", t => {
   const { tracker, producer, tick } = fixture(t);
-  for (const wait of [0, 10_000]) {
-    tracker.reset(); tracker.requestStart(); const p = producer(1100, 1000);
+  for (const [wait, tokens, reasoning] of [[0, 100, 0], [10_000, 1100, 1000]]) {
+    tracker.reset(); tracker.requestStart(); const p = producer(tokens, reasoning);
     p.text(wait + 20, "first"); p.text(wait + 2000, "last"); p.done(wait + 2000);
     tick(20_000); tracker.finish(p.message);
-    assert.equal(tracker.snapshot()?.tokensPerSecond, 100 / ((wait + 2000) / 1000));
+    assert.equal(tracker.snapshot()?.tokensPerSecond, tokens / ((wait + 2000) / 1000));
     assert.equal(tracker.snapshot()?.durationMs, wait + 2000);
   }
 });
@@ -83,8 +83,8 @@ test("short outputs pool complete raw counts and durations, never averages of av
   const previous = tracker.snapshot();
   tracker.requestStart(); tracker.finish({ ...response(), stopReason: "error" });
   assert.equal(tracker.snapshot(), previous);
-  const short = complete(1005, 1000, 1000);
-  assert.deepEqual(short, { outputTokens: 1505, durationMs: 16_000, reasoningTokens: 1000,
+  const short = complete(5, 1000, 3);
+  assert.deepEqual(short, { outputTokens: 1505, durationMs: 16_000, reasoningTokens: 3,
     tokensPerSecond: 1505 / 16, sampleCount: 3 });
   const next = complete(5, 400);
   assert.equal(next.tokensPerSecond, 510 / 6.4, "evict the oldest raw response, not feed back a pooled rate");
@@ -95,10 +95,14 @@ test("only short current outputs pool history; routed model, API, provider and e
   const { tracker, complete, response } = fixture(t);
   for (const tokens of [64, 65]) {
     tracker.reset(); complete(1000, 10_000); complete(500, 5000);
-    const sample = complete(1000 + tokens, 100, 1000);
+    const sample = complete(tokens, 100, 32);
     assert.equal(sample.tokensPerSecond, tokens === 64 ? 1564 / 15.1 : 650);
     assert.equal(sample.sampleCount, tokens === 64 ? 3 : 1);
   }
+  tracker.reset(); complete(1000, 10_000);
+  const thinking = complete(1005, 1000, 1000);
+  assert.equal(thinking.tokensPerSecond, 1005, "total output already includes reasoning; do not add or subtract it");
+  assert.equal(thinking.sampleCount, 1, "a long reasoning response is not a short response merely because its body is short");
   for (const field of ["provider", "api", "model", "reportedModel", "thinkingLevel", "missing model"] as const) {
     tracker.reset(); complete(1000, 10_000); tracker.requestStart();
     const current = response(5, 100);
@@ -122,10 +126,6 @@ test("unsafe pooled counts and durations fall back to the valid current response
   const long = complete(1, Number.MAX_VALUE);
   assert.equal(long.tokensPerSecond, computeSpeed(1, Number.MAX_VALUE));
   assert.equal(long.sampleCount, 1, "an infinite summed duration is not a measurable pooled response");
-  tracker.reset(); complete(Number.MAX_SAFE_INTEGER, 1000, Number.MAX_SAFE_INTEGER - 1);
-  const current = complete(Number.MAX_SAFE_INTEGER, 1000, Number.MAX_SAFE_INTEGER - 1);
-  assert.equal(current.tokensPerSecond, 1, "reasoning metadata cannot overflow silently during pooling");
-  assert.equal(current.sampleCount, 1);
 });
 
 test("invalid durations, usage and incomplete responses preserve the previous valid sample", t => {
@@ -142,20 +142,36 @@ test("invalid durations, usage and incomplete responses preserve the previous va
   }
 });
 
-test("hidden reasoning is excluded from tokens, not time; missing breakdown is not assumed zero", t => {
+test("total output includes reasoning exactly once; a missing breakdown does not block a known total", t => {
   const { tracker, response } = fixture(t);
   for (const reasoning of [1000, undefined, null, "0", -1, 1101, 1.5, NaN]) {
     tracker.reset(); tracker.requestStart();
     const message = response(1100, 12_000, reasoning); message.usage.reasoning = reasoning;
     message.content.push({ type: "thinking", thinking: "summary" });
     tracker.finish(message);
-    assert.equal(tracker.snapshot()?.tokensPerSecond, reasoning === 1000 ? 100 / 12 : undefined);
+    const valid = reasoning === 1000 || reasoning === undefined;
+    assert.equal(tracker.snapshot()?.tokensPerSecond, valid ? 1100 / 12 : undefined);
+    if (valid) {
+      assert.equal(tracker.snapshot()?.outputTokens, 1100);
+      assert.equal(tracker.snapshot()?.reasoningTokens, reasoning);
+    }
   }
   for (const level of [undefined, "high", "off"]) {
     tracker.reset(); tracker.requestStart(); const message = response();
     message.usage.reasoning = undefined; message.thinkingLevel = level; tracker.finish(message);
-    assert.equal(tracker.snapshot()?.tokensPerSecond, level === "off" ? 50 : undefined);
+    assert.equal(tracker.snapshot()?.tokensPerSecond, 50, "total output does not require inferring whether reasoning was off");
+    assert.equal(tracker.snapshot()?.reasoningTokens, undefined);
   }
+});
+
+test("pooled total throughput remains valid when any reasoning breakdown is unknown", t => {
+  const { tracker, response } = fixture(t);
+  tracker.requestStart(); const first = response(1000, 10_000); first.usage.reasoning = undefined;
+  tracker.finish(first);
+  tracker.requestStart(); tracker.finish(response(10, 1000, 3));
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 1010 / 11);
+  assert.equal(tracker.snapshot()?.sampleCount, 2);
+  assert.equal(tracker.snapshot()?.reasoningTokens, undefined, "do not report a partial sum as the full reasoning total");
 });
 
 test("tool results and older warmers with identical IDs cannot consume the pending main response", t => {

@@ -1,10 +1,11 @@
-// Completed non-reasoning output throughput over the SDK's full response time.
+// Completed model output throughput over the SDK's full response time, including reasoning.
 // Native durationMs owns request timing; transport chunks never define the window.
 
 interface ResponseCounts {
   outputTokens: number;
   durationMs: number;
-  reasoningTokens: number;
+  /** Breakdown of outputTokens, not an extra count. Undefined means unreported. */
+  reasoningTokens: number | undefined;
 }
 /** Counts and duration cover the same complete responses, including pooled samples. */
 export interface OutputSpeedSample extends ResponseCounts {
@@ -38,7 +39,7 @@ const record = (value: unknown): Record<string, unknown> =>
 const isTokenCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
-// Short visible outputs have noisy per-request throughput; pool at most three full responses.
+// Short total outputs have noisy per-request throughput; pool at most three full responses.
 const SHORT_OUTPUT_TOKENS = 64;
 
 export class OutputSpeedTracker {
@@ -61,13 +62,12 @@ export class OutputSpeedTracker {
     if (message.stopReason !== "stop" && message.stopReason !== "length" && message.stopReason !== "toolUse") return;
     const durationMs = message.durationMs;
     if (typeof durationMs !== "number") return;
-    const usage = record(message.usage), content = message.content;
-    const sawThinking = Array.isArray(content) && content.some(block => record(block).type === "thinking");
-    // Undefined is not a reported zero. Trust the unified SDK counters, not text length.
-    const reasoning = usage.reasoning === undefined
-      ? (message.thinkingLevel === "off" && !sawThinking ? 0 : undefined) : usage.reasoning;
-    if (!isTokenCount(usage.output) || !isTokenCount(reasoning) || reasoning > usage.output) return;
-    const tokens = usage.output - reasoning;
+    const usage = record(message.usage);
+    if (!isTokenCount(usage.output)) return;
+    const reasoning = usage.reasoning;
+    if (reasoning !== undefined && (!isTokenCount(reasoning) || reasoning > usage.output)) return;
+    // Unified SDK output already includes reasoning. Never add or subtract it again.
+    const tokens = usage.output;
     const tps = computeSpeed(tokens, durationMs);
     if (tps === undefined) return;
     const current: ResponseCounts = { outputTokens: tokens, durationMs, reasoningTokens: reasoning };
@@ -86,10 +86,11 @@ export class OutputSpeedTracker {
     for (const sample of this.#recent) {
       total.outputTokens += sample.outputTokens;
       total.durationMs += sample.durationMs;
-      total.reasoningTokens += sample.reasoningTokens;
+      total.reasoningTokens = total.reasoningTokens !== undefined && sample.reasoningTokens !== undefined
+        ? total.reasoningTokens + sample.reasoningTokens : undefined;
     }
     const pooled = computeSpeed(total.outputTokens, total.durationMs);
-    if (pooled === undefined || !Number.isSafeInteger(total.reasoningTokens)) this.#recent = [current];
+    if (pooled === undefined) this.#recent = [current];
     else this.#sample = { ...total, tokensPerSecond: pooled, sampleCount: this.#recent.length };
   }
 

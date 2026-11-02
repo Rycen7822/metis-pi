@@ -528,7 +528,7 @@ test("one interaction wires usage previews, output throughput, Working and the p
   const final = frame();
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
-  assert.equal(speed(final), 5.9, "the tool response updates speed before tool execution or interaction completion");
+  assert.equal(speed(final), 23.5, "the tool response updates speed before tool execution or interaction completion");
   handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
   const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
   assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
@@ -542,20 +542,20 @@ test("one interaction wires usage previews, output throughput, Working and the p
   handlers.get("message_start")({ message: failed });
   handlers.get("message_end")({ message: failed });
   handlers.get("agent_end")({});
-  assert.equal(speed(frame()), 5.9, "connection failure retains the previous tool response rate");
+  assert.equal(speed(frame()), 23.5, "connection failure retains the previous tool response rate");
   handlers.get("agent_start")({}); handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 5.9, "retry does not erase the previous valid sample");
+  assert.equal(speed(frame()), 23.5, "retry does not erase the previous valid sample");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   providerEvent(handlers, message("second"), "response.created");
   await update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
   now += 400;
   await update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.equal(speed(frame()), 5.9, "incomplete usage retains the previous sample, without inventing a live estimate");
+  assert.equal(speed(frame()), 23.5, "incomplete usage retains the previous sample, without inventing a live estimate");
   finishResponse(handlers, message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400));
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 16.8, "(20 + 44) / (3.4 + 0.4) stays visible after settle");
+  assert.equal(speed(frame()), 32.6, "(80 + 44) / (3.4 + 0.4) stays visible after settle");
   assert.match(frame(), /out\(avg2\)/);
   assert.equal(appended.length, 1, "duplicate settled events append one summary");
   assert.equal(appended[0].type, "metis-pi:interaction-summary:v1");
@@ -573,9 +573,9 @@ test("one interaction wires usage previews, output throughput, Working and the p
   assert.equal(slots.widgetCalls.at(-1).content, undefined);
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persisted summary stays in CustomEntry");
   handlers.get("agent_start")({}, {});
-  assert.equal(speed(frame()), 16.8, "a new interaction retains the completed throughput");
+  assert.equal(speed(frame()), 32.6, "a new interaction retains the completed throughput");
   handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 16.8, "the first request of a new interaction retains it too");
+  assert.equal(speed(frame()), 32.6, "the first request of a new interaction retains it too");
   const next = message("third", { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }, 400);
   handlers.get("message_start")({ message: next });
   providerEvent(handlers, next, "response.created");
@@ -584,7 +584,7 @@ test("one interaction wires usage previews, output throughput, Working and the p
   finishResponse(handlers, next);
   handlers.get("agent_end")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 20, "(20 + 44 + 20) / (3.4 + 0.4 + 0.4) pools complete responses without counting errors");
+  assert.equal(speed(frame()), 34.3, "(80 + 44 + 20) / (3.4 + 0.4 + 0.4) pools total output without counting errors");
   assert.match(frame(), /out\(avg3\)/, "the weighted history is disclosed rather than called the last raw rate");
 });
 
@@ -644,7 +644,7 @@ test("SDK producer timing survives queued deltas and pre-request compaction", as
   handlers.get("agent_settled")({}, ctx);
   assert.deepEqual(receivedCounts, [1050, 1050], "fixture reaches the shared-partial queue hazard");
   assert.equal(output.durationMs, 10500, "native producer clock excludes the later consumer delays");
-  assert.match(frame(), /out\(last\) 4\.8 tok\/s/, "50/10.5 includes TTFT, not compaction or queued callbacks");
+  assert.match(frame(), /out\(last\) 100 tok\/s/, "1050/10.5 includes reasoning once and TTFT, not compaction or callbacks");
 });
 
 test("tool-model usage cannot alter main-model totals, cache or persisted summaries before or after reconstruction", async t => {
@@ -716,7 +716,7 @@ test("selection changes cancel throughput sampling, including late producer even
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
     assert.match(report,
-      /out\(last\) 0\.2 tok\/s \(output=2 tokens, reasoning excluded=0, duration=10100ms, samples=1, scope=last completed\)/);
+      /out\(last\) 0\.2 tok\/s \(output=2 tokens, reasoning included=0, duration=10100ms, samples=1, scope=last completed\)/);
     assert.match(report, /includes initial wait\/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays/);
     handlers.get(event)({}, ctx);
     assert.doesNotMatch(frame(), /tok\/s/);
