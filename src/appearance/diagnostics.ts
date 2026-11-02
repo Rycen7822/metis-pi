@@ -114,8 +114,7 @@ const speedLine = (deps: DiagnosticsDeps): string => {
   const speedText = formatSpeed(speed?.tokensPerSecond, count);
   const scope = count > 1 ? `last ${count} completed; short-response smoothing` : "last completed";
   const detail = speed && speedText
-    ? `${speedText} (output=${speed.outputTokens} tokens, reasoning included=${speed.reasoningTokens ?? "unknown"}, `
-      + `duration=${speed.durationMs}ms, samples=${count}, scope=${scope})`
+    ? `${speedText} (output=${speed.outputTokens} tokens, duration=${speed.durationMs}ms, samples=${count}, scope=${scope})`
     : "— (no completed response with valid SDK usage and duration)";
   return `  output throughput: ${detail} — Σ(SDK total output, including reasoning) ÷ Σ SDK response durations; `
     + "includes initial wait/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays";

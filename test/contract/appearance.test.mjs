@@ -716,7 +716,7 @@ test("selection changes cancel throughput sampling, including late producer even
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
     assert.match(report,
-      /out\(last\) 0\.2 tok\/s \(output=2 tokens, reasoning included=0, duration=10100ms, samples=1, scope=last completed\)/);
+      /out\(last\) 0\.2 tok\/s \(output=2 tokens, duration=10100ms, samples=1, scope=last completed\)/);
     assert.match(report, /includes initial wait\/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays/);
     handlers.get(event)({}, ctx);
     assert.doesNotMatch(frame(), /tok\/s/);

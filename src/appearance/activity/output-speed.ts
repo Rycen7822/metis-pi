@@ -4,8 +4,6 @@
 interface ResponseCounts {
   outputTokens: number;
   durationMs: number;
-  /** Breakdown of outputTokens, not an extra count. Undefined means unreported. */
-  reasoningTokens: number | undefined;
 }
 /** Counts and duration cover the same complete responses, including pooled samples. */
 export interface OutputSpeedSample extends ResponseCounts {
@@ -36,9 +34,6 @@ export function formatSpeed(tps: number | undefined, sampleCount = 1): string {
 
 const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-const isTokenCount = (value: unknown): value is number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-
 // Short total outputs have noisy per-request throughput; pool at most three full responses.
 const SHORT_OUTPUT_TOKENS = 64;
 
@@ -62,15 +57,13 @@ export class OutputSpeedTracker {
     if (message.stopReason !== "stop" && message.stopReason !== "length" && message.stopReason !== "toolUse") return;
     const durationMs = message.durationMs;
     if (typeof durationMs !== "number") return;
-    const usage = record(message.usage);
-    if (!isTokenCount(usage.output)) return;
-    const reasoning = usage.reasoning;
-    if (reasoning !== undefined && (!isTokenCount(reasoning) || reasoning > usage.output)) return;
-    // Unified SDK output already includes reasoning. Never add or subtract it again.
-    const tokens = usage.output;
-    const tps = computeSpeed(tokens, durationMs);
+    // The SDK's reported total already includes reasoning. Its breakdown,
+    // summaries and encrypted state are not inputs to throughput.
+    const outputTokens = record(message.usage).output;
+    if (typeof outputTokens !== "number") return;
+    const tps = computeSpeed(outputTokens, durationMs);
     if (tps === undefined) return;
-    const current: ResponseCounts = { outputTokens: tokens, durationMs, reasoningTokens: reasoning };
+    const current: ResponseCounts = { outputTokens, durationMs };
     // Actual routing can change without a UI selection event. Unknown identity stays unpooled.
     const identity = [message.provider, message.api, message.model];
     const source = identity.every(value => typeof value === "string" && value.length > 0)
@@ -81,13 +74,11 @@ export class OutputSpeedTracker {
     this.#recent.push(current);
     if (this.#recent.length > 3) this.#recent.shift();
     this.#sample = { ...current, tokensPerSecond: tps, sampleCount: 1 };
-    if (tokens > SHORT_OUTPUT_TOKENS || this.#recent.length === 1) return;
-    const total: ResponseCounts = { outputTokens: 0, durationMs: 0, reasoningTokens: 0 };
+    if (outputTokens > SHORT_OUTPUT_TOKENS || this.#recent.length === 1) return;
+    const total: ResponseCounts = { outputTokens: 0, durationMs: 0 };
     for (const sample of this.#recent) {
       total.outputTokens += sample.outputTokens;
       total.durationMs += sample.durationMs;
-      total.reasoningTokens = total.reasoningTokens !== undefined && sample.reasoningTokens !== undefined
-        ? total.reasoningTokens + sample.reasoningTokens : undefined;
     }
     const pooled = computeSpeed(total.outputTokens, total.durationMs);
     if (pooled === undefined) this.#recent = [current];

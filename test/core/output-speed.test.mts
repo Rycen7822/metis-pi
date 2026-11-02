@@ -52,7 +52,7 @@ test("full native response throughput is invariant to first-batch size, includin
     if (firstTokens < 100) p.text(2000, "x".repeat(100 - firstTokens));
     p.done(2000);
     tracker.finish(p.message);
-    assert.deepEqual(tracker.snapshot(), { outputTokens: 100, durationMs: 2000, reasoningTokens: 0,
+    assert.deepEqual(tracker.snapshot(), { outputTokens: 100, durationMs: 2000,
       tokensPerSecond: 50, sampleCount: 1 }, `first batch contains ${firstTokens} tokens`);
   }
 });
@@ -84,7 +84,7 @@ test("short outputs pool complete raw counts and durations, never averages of av
   tracker.requestStart(); tracker.finish({ ...response(), stopReason: "error" });
   assert.equal(tracker.snapshot(), previous);
   const short = complete(5, 1000, 3);
-  assert.deepEqual(short, { outputTokens: 1505, durationMs: 16_000, reasoningTokens: 3,
+  assert.deepEqual(short, { outputTokens: 1505, durationMs: 16_000,
     tokensPerSecond: 1505 / 16, sampleCount: 3 });
   const next = complete(5, 400);
   assert.equal(next.tokensPerSecond, 510 / 6.4, "evict the oldest raw response, not feed back a pooled rate");
@@ -133,7 +133,8 @@ test("invalid durations, usage and incomplete responses preserve the previous va
   complete(100, 2000); const previous = tracker.snapshot();
   const invalid = [
     ...[undefined, null, "2000", 0, -1, NaN, Infinity].map(durationMs => ({ ...response(), durationMs })),
-    ...[0, -1, NaN, 1.5, Number.MAX_SAFE_INTEGER + 1].map(output => response(output)),
+    ...[undefined, null, "100", 0, -1, NaN, 1.5, Number.MAX_SAFE_INTEGER + 1]
+      .map(output => ({ ...response(), usage: { output } })),
     ...["error", "aborted", "deferred", "pending"].map(stopReason => ({ ...response(), stopReason })),
   ];
   for (const message of invalid) {
@@ -142,36 +143,33 @@ test("invalid durations, usage and incomplete responses preserve the previous va
   }
 });
 
-test("total output includes reasoning exactly once; a missing breakdown does not block a known total", t => {
+test("only total usage and duration determine throughput, not opaque reasoning or its breakdown", t => {
   const { tracker, response } = fixture(t);
-  for (const reasoning of [1000, undefined, null, "0", -1, 1101, 1.5, NaN]) {
-    tracker.reset(); tracker.requestStart();
-    const message = response(1100, 12_000, reasoning); message.usage.reasoning = reasoning;
-    message.content.push({ type: "thinking", thinking: "summary" });
-    tracker.finish(message);
-    const valid = reasoning === 1000 || reasoning === undefined;
-    assert.equal(tracker.snapshot()?.tokensPerSecond, valid ? 1100 / 12 : undefined);
-    if (valid) {
-      assert.equal(tracker.snapshot()?.outputTokens, 1100);
-      assert.equal(tracker.snapshot()?.reasoningTokens, reasoning);
+  for (const reasoning of [1000, 0, undefined, null, "0", -1, 1101, 1.5, NaN]) {
+    for (const signature of ["opaque", "opaque".repeat(128)]) {
+      tracker.reset(); tracker.requestStart();
+      const message = response(1100, 12_000, reasoning); message.usage.reasoning = reasoning;
+      message.content.push({ type: "thinking", thinking: "summary", thinkingSignature: signature });
+      tracker.finish(message);
+      assert.equal(tracker.snapshot()?.tokensPerSecond, 1100 / 12);
+      assert.equal(tracker.snapshot()?.outputTokens, 1100, "do not infer total output from ciphertext or reasoning detail");
     }
   }
   for (const level of [undefined, "high", "off"]) {
     tracker.reset(); tracker.requestStart(); const message = response();
     message.usage.reasoning = undefined; message.thinkingLevel = level; tracker.finish(message);
     assert.equal(tracker.snapshot()?.tokensPerSecond, 50, "total output does not require inferring whether reasoning was off");
-    assert.equal(tracker.snapshot()?.reasoningTokens, undefined);
   }
 });
 
-test("pooled total throughput remains valid when any reasoning breakdown is unknown", t => {
+test("pooling uses only reported totals and durations when reasoning detail is missing", t => {
   const { tracker, response } = fixture(t);
   tracker.requestStart(); const first = response(1000, 10_000); first.usage.reasoning = undefined;
   tracker.finish(first);
   tracker.requestStart(); tracker.finish(response(10, 1000, 3));
   assert.equal(tracker.snapshot()?.tokensPerSecond, 1010 / 11);
   assert.equal(tracker.snapshot()?.sampleCount, 2);
-  assert.equal(tracker.snapshot()?.reasoningTokens, undefined, "do not report a partial sum as the full reasoning total");
+  assert.deepEqual(tracker.snapshot(), { outputTokens: 1010, durationMs: 11_000, tokensPerSecond: 1010 / 11, sampleCount: 2 });
 });
 
 test("tool results and older warmers with identical IDs cannot consume the pending main response", t => {
