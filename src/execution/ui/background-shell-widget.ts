@@ -69,7 +69,8 @@ export function renderBackgroundBashWidget(ctx: ExtensionContext, state: Backgro
 	const theme = ctx.ui.theme;
 	const sessionNumbers = snapshots.map((session) => sessionLabel(ctx, session, active.id)).join(" ");
 	const lines = [
-		`${theme.fg("accent", "╭─ codex shell")} ${theme.fg(activeStatus.tone, activeStatus.text)} ${theme.fg("dim", `sessions ${sessionNumbers}`)}`,
+		`${theme.fg("accent", "╭─ background shell")} ${theme.fg(activeStatus.tone, activeStatus.text)} ` +
+			theme.fg("dim", `sessions ${sessionNumbers}`),
 	];
 
 	if (!state.folded) {

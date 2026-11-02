@@ -58,6 +58,7 @@ test("native widget gestures and shortcuts preserve selection, folding and clean
   assert.equal(component(), undefined);
   ctx.mode = "tui";
   render();
+  assert.match(frame(), /background shell running/);
   assert.doesNotMatch(frame(), /OUTPUT_20/);
   for (const [type, button] of [["click", "right"], ["press", "left"]]) {
     assert.equal(component().handleMouse(mouseEvent(type, button)), undefined);
@@ -87,5 +88,5 @@ test("native widget gestures and shortcuts preserve selection, folding and clean
   render();
   assert.equal(component(), undefined);
   assert.equal(state.activeSessionId, undefined);
-  assert.doesNotMatch(frame(), /codex shell/, "removing the final session clears Pi's actual widget container");
+  assert.doesNotMatch(frame(), /background shell/, "removing the final session clears Pi's actual widget container");
 });
