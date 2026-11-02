@@ -260,12 +260,11 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         : `${inset}${" ".repeat(numberWidth + 2)}`;
       const body = chunks[i]!;
       if (style.lineBg) {
-        // Padding BEFORE the background reset: the surface reaches the right
-        // edge (Codex line-level bg). Layout: bg on, gutter+sign, content,
-        // pad, bg off.
+        // A syntax reset may clear the background. Restore it before padding
+        // so every trailing cell stays tinted, including CJK wrap gaps.
         const visible = layout.visibleWidth(head + body);
         const pad = " ".repeat(Math.max(0, usable - visible));
-        out.push(`${style.lineBg}${head}${body}${pad}${BG_RESET}`);
+        out.push(`${style.lineBg}${head}${body}${style.lineBg}${pad}${BG_RESET}`);
       } else {
         out.push(`${head}${body}`.trimEnd());
       }

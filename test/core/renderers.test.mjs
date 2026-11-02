@@ -8,6 +8,7 @@ import { layout } from "../helpers/layout.mjs";
 import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
 import { MouseRegion, Text } from "@earendil-works/pi-tui";
 import { publishedRowsOf } from "../../src/selection-copy/model.ts";
+import { AnsiTracker, styledParts } from "../../src/selection-copy/wrap.ts";
 
 const result = (text) => ({ content: [{ type: "text", text }] });
 const renderers = makeRenderers(text => new FakeText(text), () => "expand");
@@ -134,6 +135,30 @@ test("a 12-cell diff has literal hanging rows and complete add/remove background
       assert.ok(row.endsWith("\x1b[49m"), "even a blank added row closes its background");
       assert.equal(layout.visibleWidth(row), 12);
       assert.doesNotMatch(row, /\x1b\[2m/, "diff backgrounds do not fade code foregrounds");
+    }
+  }
+});
+
+test("diff padding stays tinted after syntax resets on short and CJK-wrapped rows", () => {
+  for (const kind of ["add", "remove"]) {
+    for (const level of ["truecolor", "ansi256"]) {
+      for (const reset of ["\x1b[0m", "\x1b[m", "\x1b[0;39m", "\x1b[39;49m"]) {
+        for (const width of [12, 40]) {
+          const rows = renderDiffLines({ rows: [{ kind, lineNumber: 1, content: "甲乙丙丁戊己" }], width,
+            layout, colorLevel: { kind: level }, language: "typescript", paint: text => `\x1b[31m${text}${reset}` });
+          for (const row of rows) {
+            assert.equal(layout.visibleWidth(row), width);
+            const expected = /^\x1b\[(48;[^m]+)m/.exec(row)?.[1];
+            assert.ok(expected, "the row starts its own diff background");
+            const state = new AnsiTracker();
+            for (const part of styledParts(row)) {
+              if (part.ansi) state.process(part.ansi);
+              else assert.equal(state.bgColor, expected, "every cell, including trailing spaces, keeps the diff surface");
+            }
+            assert.equal(state.bgColor, null, "background does not leak into the next row");
+          }
+        }
+      }
     }
   }
 });
