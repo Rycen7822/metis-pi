@@ -236,17 +236,18 @@ function retainedUsers(input: Item[]): Item[] {
 }
 
 export function registerCodexCompaction(pi: ExtensionAPI) {
-  const contextBudget = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext,
-    outputReserve = ctx.model?.maxTokens ?? 0, subject = "Restored history", additionalInputTokens = 0) => {
+  // maxTokens is an output ceiling, not a mandatory reservation. Pi/provider
+  // owns per-request output clamping and overflow recovery; we guard visible input.
+  const inputBudget = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext,
+    subject: string, additionalInputTokens = 0) => {
     const system = getCurrentSystemMessage(messages);
     const overhead = system ? 0 : Math.ceil((ctx.getSystemPrompt().length
       + JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name))).length) / 4);
     const inputTokensEstimate = messages.reduce((n, m) => n + estimateTokens(m), overhead) + additionalInputTokens;
     const window = ctx.model?.contextWindow;
-    const budget = outputReserve ? "including output reserve" : "for compaction input";
-    return { inputTokensEstimate, inputWindow: window, outputReserve,
-      error: window && inputTokensEstimate + outputReserve > window
-        ? `${subject} needs approximately ${inputTokensEstimate + outputReserve} tokens ${budget}; context window is ${window}`
+    return { inputTokensEstimate, inputWindow: window,
+      error: window && inputTokensEstimate > window
+        ? `${subject} needs approximately ${inputTokensEstimate} input tokens; context window is ${window}`
         : undefined };
   };
   let generation = 0;
@@ -423,7 +424,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       } else {
         if (summaries[0].summary !== summary)
           messages = messages.map(message => message.role === "compactionSummary" ? { ...message, summary } : message);
-        const reason = contextBudget(messages, ctx, undefined, "Portable checkpoint context").error;
+        const reason = inputBudget(messages, ctx, "Portable checkpoint context").error;
         if (reason) cancelRequest(ctx, `${reason}. Request cancelled; history was preserved. `
           + "Use /compact to rebuild, or /tree to resume before the oversized input.");
       }
@@ -539,14 +540,13 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       pi.events.emit(METIS_EVENTS.condenseProject, projection);
       if (projection.busy) throw new Error("Context projection is busy; retry compaction after it settles");
       prefix = projection.messages as typeof prefix;
-      // This is a local visible-prefix estimate, not provider tokenization;
-      // opaque checkpoint contents are unknown. Never count ciphertext bytes
-      // as ordinary text or reserve ordinary generation's maxTokens remotely.
-      const budget = contextBudget(prefix, ctx, remote ? 0 : undefined,
+      // This is a local visible-prefix estimate, not provider tokenization.
+      // Opaque checkpoint contents are unknown; never count ciphertext as text.
+      const budget = inputBudget(prefix, ctx,
         rebuilding ? "Restored history" : previous && !reusable ? "Portable checkpoint context" : "Projected compaction input",
         Math.ceil((event.customInstructions?.length ?? 0) / 4));
       Object.assign(diagnostic, { projectedInputTokensEstimate: budget.inputTokensEstimate,
-        inputWindow: budget.inputWindow, outputReserve: budget.outputReserve, hasOpaqueCheckpoint: Boolean(reusable) });
+        inputWindow: budget.inputWindow, outputReserve: 0, hasOpaqueCheckpoint: Boolean(reusable) });
       if (budget.error) throw new Error(`${budget.error}. Use the original model with a sufficient context window and retry /compact, `
         + "or /tree to resume before the oversized input; the original branch remains available");
       const files = record(previous?.entry.details);

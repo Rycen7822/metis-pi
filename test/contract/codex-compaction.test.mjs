@@ -1238,12 +1238,14 @@ test("editing covered source requires explicit repair without expanding ordinary
   assert.equal(JSON.stringify(body.input).includes("Metis Codex remote checkpoint"), false);
 });
 
-test("model changes persist portable summaries and switching back preserves encrypted replay", async t => {
+test("model changes persist portable summaries, clamp output ceilings and preserve encrypted replay", async t => {
   for (const [name, routeModel, oauth] of [["Codex", model, true], ["OAuth Responses", responsesModel, true],
     ["API Responses", responsesModel, false]]) await t.test(name, async t => {
-    const h = await host(t, { routeModel, oauth });
+    const credential = oauth ? undefined : { type: "api_key", key: "sk-offline-portable-output" };
+    const h = await host(t, { routeModel, oauth, credential });
+    const targetModel = { ...routeModel, id: "gpt-6-sol", contextWindow: 32_000, maxTokens: 24_000 };
     await h.session.compact();
-    await h.session.setModel({ ...routeModel, id: "gpt-6-sol" });
+    await h.session.setModel(targetModel);
     const calls = h.bodies.length;
     await h.session.prompt("CHANGED MODEL");
     assert.equal(h.bodies.length, calls + 2, "one original-model summary and one target-model inference");
@@ -1257,11 +1259,23 @@ test("model changes persist portable summaries and switching back preserves encr
     await h.session.setModel(routeModel);
     await h.session.prompt("ORIGINAL MODEL AGAIN");
     assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
-    await h.session.setModel({ ...routeModel, id: "gpt-6-sol" });
+    await h.session.setModel(targetModel);
     const after = h.bodies.length;
     await h.session.prompt("REUSE PORTABLE SUMMARY");
     assert.equal(h.bodies.length, after + 1);
     assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+    // This tail alone is about 14k visible tokens: it fits in 32k, but not beside a full 24k output reservation.
+    h.sm.appendMessage(user("PORTABLE TAIL ".repeat(4_000)));
+    const beforeTail = h.bodies.length;
+    await h.session.prompt("CONTINUE WITHIN THE REMAINING CONTEXT");
+    assert.equal(h.bodies.length, beforeTail + 1, "valid input reaches inference without regenerating the saved summary");
+    assert.equal(h.session.messages.at(-1).stopReason, "stop");
+    assert.match(JSON.stringify(h.bodies.at(-1)), /PORTABLE TAIL/);
+    assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+    if (!oauth) {
+      const limit = h.bodies.at(-1).max_output_tokens;
+      assert.ok(limit > 0 && limit < targetModel.maxTokens, "Pi reduces the API output ceiling to the available space");
+    }
   });
 });
 
@@ -1437,6 +1451,34 @@ test("a saved portable summary survives loss of original credentials without exp
   assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|opaque-1|Metis Codex remote checkpoint/);
 });
 
+test("portable context overflow uses native compaction and retries without expanding history", async t => {
+  const sourceModel = { ...responsesModel, id: "gpt-6.1-sol" };
+  const targetModel = { ...responsesModel, contextWindow: 32_000, maxTokens: 24_000 };
+  let overflowReturned = false;
+  const h = await host(t, {
+    routeModel: sourceModel, credential: { type: "api_key", key: "sk-offline-portable-overflow" },
+    normalResponse: ({ body }) => {
+      if (body.model === targetModel.id && !overflowReturned) {
+        overflowReturned = true;
+        return Response.json({ error: { code: "context_length_exceeded", message: "maximum context length exceeded" } },
+          { status: 400 });
+      }
+      return answer();
+    },
+  });
+  await h.session.compact();
+  await h.session.setModel(targetModel);
+  h.sm.appendMessage(user("PORTABLE TAIL ".repeat(4_000)));
+  const before = h.bodies.length;
+  await h.session.prompt("RECOVER THE PORTABLE REQUEST");
+  assert.equal(overflowReturned, true, "valid portable input reaches the provider rather than being locally aborted");
+  assert.equal(compactions(h).length, 2, "a real provider overflow invokes native checkpoint recovery");
+  assert.equal(h.session.messages.at(-1).stopReason, "stop");
+  assert.equal(h.bodies.at(-1).model, targetModel.id);
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.doesNotMatch(JSON.stringify(h.bodies.slice(before)), /old work|Metis Codex remote checkpoint/);
+});
+
 test("automatic compaction after a model switch migrates the checkpoint without raw history", async t => {
   const h = await host(t);
   h.sm.appendMessage(user("HUGE HISTORICAL INPUT ".repeat(5000)));
@@ -1577,7 +1619,10 @@ test("a different provider compacts a portable summary without recovering raw Co
   const h = await host(t, { other: true });
   await h.session.compact();
   const { ModelRegistry } = await import("@earendil-works/pi-coding-agent");
-  await h.session.setModel(new ModelRegistry(h.runtime).find("other-codex", "other"));
+  const targetModel = new ModelRegistry(h.runtime).find("other-codex", "other");
+  await h.session.setModel({ ...targetModel, contextWindow: 32_000, maxTokens: 24_000 });
+  h.sm.appendMessage(user("DOCUMENTED TAIL ".repeat(4_000)));
+  h.sm.appendMessage(assistant("completed tail"));
   h.sm.appendMessage(user("OTHER TAIL"));
   const start = h.bodies.length;
   const result = await h.session.compact();
@@ -1585,6 +1630,7 @@ test("a different provider compacts a portable summary without recovering raw Co
   assert.equal(h.bodies.at(-1).input.some(i => i.type === "compaction_trigger" || i.type === "compaction"), false);
   assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work/);
   assert.match(JSON.stringify(h.bodies.at(-1)), /OK/);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /DOCUMENTED TAIL/);
   assert.equal(result.summary, "OK");
   assert.equal(compactions(h).at(-1).details?.[key], undefined);
 });
