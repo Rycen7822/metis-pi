@@ -15,6 +15,10 @@ CODEX_STATE.md
 # Project-local Pi state and configuration.
 .pi/
 
+# Project-local third-party skills installed by the skills CLI (bundled skills live in skills/).
+.agents/
+skills-lock.json
+
 .worktree/
 
 # Local native build outputs; packaged binaries stay tracked with their component.
