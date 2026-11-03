@@ -49,6 +49,7 @@ function run({ messages = [], hook = "" } = {}) {
 			const originalWarn = console.warn;
 			console.warn = (...args) => warnings.push(args.map(String).join(" "));
 			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
+			const { buildSessionProjection } = await import("@earendil-works/pi-coding-agent");
 			const tools = new Map();
 			const handlers = new Map();
 			let active = ["read"];
@@ -65,7 +66,9 @@ function run({ messages = [], hook = "" } = {}) {
 				type: "message", id: "message-" + index, parentId: index ? "message-" + (index - 1) : null,
 				timestamp: new Date(index).toISOString(), message,
 			}));
-			const ctx = { sessionManager: { getBranch: () => entries } };
+			const ctx = { sessionManager: {
+				getBranch: () => entries, buildSessionProjection: () => buildSessionProjection(entries),
+			} };
 			for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start", reason: "startup" }, ctx);
 			await new Promise(resolve => setTimeout(resolve, 0));
 			console.warn = originalWarn;
