@@ -98,8 +98,9 @@ export async function searchLines(query: string, path: string, limit: number, ca
 	}
 	const matches: string[] = [];
 	try {
+		const needle = query.toLowerCase();
 		for await (const line of readSessionLines(path, signal)) {
-			if (line.toLowerCase().includes(query.toLowerCase())) matches.push(line);
+			if (line.toLowerCase().includes(needle)) matches.push(line);
 			if (matches.length === limit) break;
 		}
 	} catch { signal.throwIfAborted(); }
