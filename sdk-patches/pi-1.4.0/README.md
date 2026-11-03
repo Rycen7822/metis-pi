@@ -14,6 +14,7 @@
 | `0001-reuse-visible-row-composition.patch` | 每个 layout root 只保留上一帧可见行合成结果；精确匹配源行、底层行、x、组件宽度和终端宽度。 |
 | `0002-reuse-stable-assistant-markdown.patch` | Assistant 持有最近正文槽位的 Markdown 实例；文本、padding、streaming 一致才复用。 |
 | `0003-load-session-bodies-on-demand.patch` | JSONL 常驻轻元数据及字节位置，正文按需读取；同步迁移 SDK 启动、统计、计费、模型恢复与边界预览消费者。 |
+| `0004-preview-session-trees-without-history-bodies.patch` | `/tree` 使用元数据树和扫描时生成的短预览；正文、复制与全文查询显式按需读，查询可取消。 |
 
 行缓存不跳过组件 render、布局、复制来源发布、scrollbar、选区、overlay 或图片处理；保留全宽快路径，不缓存图片行。
 正文复用仍 invalidate，让动态 transform、宽度和主题样式重新求值；原生 token WeakRef 可能被 GC 回收，不改成强引用。
@@ -28,6 +29,12 @@ thinking、手动折叠、tool/error/abort/length、OSC133 和消息更新流程
 
 Metis 已通过 `src/session-history.ts` 做一处能力适配：stock SDK 回退完整读取；打补丁 SDK 先按 metadata 选择再解码必要记录。
 第三方若继续调用并长期持有完整历史，仍会占内存；`0003` 不会自动替它们卸载正文。所有补丁均无扩展运行时猴子补丁。
+
+`0004` 在已经必需的 JSON 扫描中顺带提取每条消息至多 200 个 UTF-16 单元的文本预览、hasText 和工具调用 ID/位置，
+单独存在 store，不让原 metadata API 带正文。短文本明确脱离大 parent，不能靠 slice 假装释放原文。
+`getTreeSource` 绑定原 store，旧 `getTree`、完整树输入、显式 selected subtree 和完整复制继续可用。
+message 搜索仍按原生 200 字符范围；custom 字符串、bash command、branch summary 的原全文搜索范围不缩短。
+元数据查询按 8ms 工作片让出线程，新输入或关闭使旧查询失效；缺失正文明确报错，不冒充空结果。
 
 ## 隔离准备与应用
 
@@ -119,7 +126,36 @@ readiness 有单次异常，不把最快一次或轮询时间当输入 P95。额
 
 同步读 Buffer 的独立全历史扫描：23911 次 / 251.18 MiB 分配降为 11 次 / 17.69 MiB，读循环 493–561 → 459–467 ms；
 没有证明该 Buffer 单项减少 CLI RSS 或冷启动时间。临时脚本、原始对照和已修正的失败保留在
-`.work/pi-memory-baseline-20261103/implementation/`。`/tree` 懒读和最终键盘/CPU 矩阵尚未完成，本阶段未安装。
+`.work/pi-memory-baseline-20261103/implementation/`。这一组是 `0003` 阶段数据，不能替代下面的最终矩阵。
+
+### 最终树与资源验收
+
+`0000–0004` 的最终 32 个变更/新增源码、测试、构建文件与隔离重现结果逐一 `cmp` 相等。
+最终 SDK 25 文件 313 项合同、完整 check、正式构建通过；真实 23911 条记录及模型投影仍与原版相等。
+新树与旧 bundle 对照 102 个完整 ANSI 帧和 12 个搜索场景，保留标签、排序、折叠、完整复制、Unicode 和跨分支重复 tool ID。
+真实新 CLI 的离线 PTY E2（shell 与后续请求）、E4（复制/草稿/提交）通过，剪贴板写入隔离 sink；没有调用真实模型。
+这些测试只在临时 HOME 登记本地 Metis 源引用，不替换用户 SDK、配置或当前会话。
+
+固定 251 MiB 快照、6 次树开关及 36 次输入回显，主进程数值如下；RSS 是 GC 后 5 秒观察值，CPU 是该工作负载进程时间。
+
+| 配置 | 旧基线 | 最终候选 |
+| --- | --- | --- |
+| pruning OFF，V8 heap | 381.90–381.95 MiB | 167.61–168.06 MiB |
+| pruning OFF，RSS | 547.79–550.16 MiB | 330.11–520.95 MiB |
+| pruning OFF，峰值 RSS | 771.27–794.14 MiB | 544.84–555.30 MiB |
+| pruning OFF，CPU 均值 | 4.61 秒 | 3.86 秒 |
+| pruning ON，V8 heap | 382.34 MiB | 181.04–181.10 MiB |
+| pruning ON，RSS | 551.08 MiB | **628.49–632.02 MiB** |
+| pruning ON，峰值 RSS | 781.61 MiB | 666.46–668.32 MiB |
+
+**尚有边界：pruning ON 的 RSS 仍高于旧基线，不能只报活跃堆下降就声称所有 RAM 指标改善。**
+OFF 有 2 次每臂数据；ON 旧基线 1 次、候选 2 次。输入是 Linux/tmux 回显往返，P95 候选有 7–11ms 离群，不能保证优于基线，
+也未复现 24 小时 Windows Terminal 场景。源快照中的旧 subagent scope 在临时 HOME 无对应后台记录，两臂均出现同步警告；
+故矩阵不证明真实 subagent 任务恢复成功，相关状态读取另由合同和真实历史对照验证。
+
+仅在 `.work` 对候选试验了 semi-space 8/16 MiB；8 MiB 降低部分峰值，但持续工具/GC 停顿净收益证据不完整，
+**不修改默认 GC 参数或用户启动器，不引入定时 force GC**。未做全库 verify、所有 PTY journey 或真实 provider/Windows 验收。
+完整结果与失败修正、未采纳变体保留在上述工作目录；本阶段未安装用户 SDK。
 
 ## 后续维护与撤回
 

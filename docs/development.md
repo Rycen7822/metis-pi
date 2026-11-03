@@ -46,7 +46,7 @@ CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由
 
 ## Pi SDK 源码补丁
 
-`sdk-patches/pi-1.4.0/`维护针对官方 Pi v1.4.0 的显式构建/CPU优化补丁与实体依赖准备工具，
+`sdk-patches/pi-1.4.0/`维护针对官方 Pi v1.4.0 的显式构建、CPU/会话内存优化补丁与实体依赖准备工具，
 应用顺序、构建命令和验证边界见[补丁说明](../sdk-patches/pi-1.4.0/README.md)。
 这些不是扩展运行时猴子补丁，不会在安装 Metis、postinstall 或 `/reload` 时自动修改 SDK；
 只有显式重建并另行安装自定义 SDK 后才生效。源码准备/验证与用户安装分离，不能把源码测试通过当作当前会话已经启用。

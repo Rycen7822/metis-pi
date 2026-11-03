@@ -1,0 +1,917 @@
+diff --git a/packages/coding-agent/src/core/session-entry-metadata.ts b/packages/coding-agent/src/core/session-entry-metadata.ts
+index 37a2e46..8269222 100644
+--- a/packages/coding-agent/src/core/session-entry-metadata.ts
++++ b/packages/coding-agent/src/core/session-entry-metadata.ts
+@@ -42,7 +42,7 @@ export type SessionEntryMetadata = Readonly<
+ 	| (SessionEntryBase & { type: "unknown"; sourceType: string })
+ >;
+ 
+-export function toSessionEntryMetadata(entry: SessionEntry): SessionEntryMetadata {
++export function toSessionEntryMetadata(entry: SessionEntry, knownToolCallCount?: number): SessionEntryMetadata {
+ 	const base = { id: entry.id, parentId: entry.parentId, timestamp: entry.timestamp };
+ 	const sourceType = entry.type;
+ 	switch (entry.type) {
+@@ -56,9 +56,11 @@ export function toSessionEntryMetadata(entry: SessionEntry): SessionEntryMetadat
+ 					model: entry.message.model,
+ 					responseModel: entry.message.responseModel,
+ 					responseId: entry.message.responseId,
+-					toolCallCount: Array.isArray(entry.message.content)
+-						? entry.message.content.reduce((count, block) => count + (block.type === "toolCall" ? 1 : 0), 0)
+-						: 0,
++					toolCallCount:
++						knownToolCallCount ??
++						(Array.isArray(entry.message.content)
++							? entry.message.content.reduce((count, block) => count + (block.type === "toolCall" ? 1 : 0), 0)
++							: 0),
+ 					usage: entry.message.usage,
+ 					stopReason: entry.message.stopReason,
+ 					timestamp: entry.message.timestamp,
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index 346b144..b849a38 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -1,6 +1,7 @@
+ import { appendFileSync, closeSync, openSync, readSync, statSync, writeFileSync } from "fs";
+ import { type SessionEntryMetadata, toSessionEntryMetadata } from "./session-entry-metadata.ts";
+ import { type SessionEntryLocation, scanSessionFile } from "./session-file-reader.ts";
++import { createSessionTreeMessagePreview, type SessionTreeMessagePreview } from "./session-tree-preview.ts";
+ import type { FileEntry, SessionEntry, SessionHeader } from "./session-types.ts";
+ 
+ // Serialized UTF-8 bytes, not a JS heap limit; the measured active context is about 4.4 MiB.
+@@ -11,6 +12,7 @@ const MAX_REUSED_ENTRY_READ_BYTES = 1024 * 1024;
+ interface StoredSessionEntry {
+ 	kind: "entry";
+ 	metadata: SessionEntryMetadata;
++	treePreview?: SessionTreeMessagePreview;
+ 	body?: SessionEntry;
+ 	location?: SessionEntryLocation;
+ }
+@@ -43,9 +45,11 @@ export class SessionEntryStore {
+ 			this.records.push({ kind: "header", header: entry });
+ 			return;
+ 		}
++		const treePreview = entry.type === "message" ? createSessionTreeMessagePreview(entry.message) : undefined;
+ 		const record: StoredSessionEntry = {
+ 			kind: "entry",
+-			metadata: toSessionEntryMetadata(entry),
++			metadata: toSessionEntryMetadata(entry, treePreview?.toolCalls.length),
++			...(treePreview ? { treePreview } : {}),
+ 			location,
+ 			...(location ? {} : { body: entry }),
+ 		};
+@@ -88,6 +92,10 @@ export class SessionEntryStore {
+ 		return this.byId.get(id)?.metadata;
+ 	}
+ 
++	getTreeMessagePreview(id: string): SessionTreeMessagePreview | undefined {
++		return this.byId.get(id)?.treePreview;
++	}
++
+ 	getEntriesMetadata(): SessionEntryMetadata[] {
+ 		const entries: SessionEntryMetadata[] = [];
+ 		for (const record of this.records) if (record.kind === "entry") entries.push(record.metadata);
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 76da56c..734a6c0 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -37,6 +37,7 @@ import {
+ import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
+ import { SessionEntryStore } from "./session-entry-store.ts";
+ import { parseSessionEntryLine, scanSessionFile } from "./session-file-reader.ts";
++import type { SessionTreeMessagePreview } from "./session-tree-preview.ts";
+ 
+ export type { SessionEntryMetadata, SessionMessageMetadata } from "./session-entry-metadata.ts";
+ export const CURRENT_SESSION_VERSION = 3;
+@@ -86,9 +87,17 @@ export type ReadonlySessionManager = Pick<
+ 	| "getHeader"
+ 	| "getEntries"
+ 	| "getTree"
++	| "getTreeSource"
+ 	| "getSessionName"
+ >;
+ 
++/** A body-free tree snapshot; complete entries are read explicitly from its original store. */
++export interface SessionTreeSource {
++	roots: SessionTreeNode<SessionEntryMetadata>[];
++	readEntry(id: string): SessionEntry | undefined;
++	readMessagePreview(id: string): SessionTreeMessagePreview | undefined;
++}
++
+ function createSessionId(): string {
+ 	return uuidv7();
+ }
+@@ -1312,9 +1321,23 @@ export class SessionManager {
+ 	 * Orphaned entries (broken parent chain) are also returned as roots.
+ 	 */
+ 	getTree(): SessionTreeNode[] {
+-		const entries = this.getEntries();
+-		const nodeMap = new Map<string, SessionTreeNode>();
+-		const roots: SessionTreeNode[] = [];
++		return this.buildTree(this.getEntries());
++	}
++
++	getTreeSource(): SessionTreeSource {
++		const store = this.store;
++		return {
++			roots: this.buildTree(this.getEntriesMetadata()),
++			readEntry: (id) => store.getEntry(id),
++			readMessagePreview: (id) => store.getTreeMessagePreview(id),
++		};
++	}
++
++	private buildTree<T extends { id: string; parentId: string | null; timestamp: string }>(
++		entries: readonly T[],
++	): SessionTreeNode<T>[] {
++		const nodeMap = new Map<string, SessionTreeNode<T>>();
++		const roots: SessionTreeNode<T>[] = [];
+ 
+ 		// Create nodes with resolved labels
+ 		for (const entry of entries) {
+@@ -1341,7 +1364,7 @@ export class SessionManager {
+ 
+ 		// Sort children by timestamp (oldest first, newest at bottom)
+ 		// Use iterative approach to avoid stack overflow on deep trees
+-		const stack: SessionTreeNode[] = [...roots];
++		const stack: SessionTreeNode<T>[] = [...roots];
+ 		while (stack.length > 0) {
+ 			const node = stack.pop()!;
+ 			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
+diff --git a/packages/coding-agent/src/core/session-types.ts b/packages/coding-agent/src/core/session-types.ts
+index 69fa9a8..c9e82da 100644
+--- a/packages/coding-agent/src/core/session-types.ts
++++ b/packages/coding-agent/src/core/session-types.ts
+@@ -167,9 +167,9 @@ export type SessionEntry =
+ export type FileEntry = SessionHeader | SessionEntry;
+ 
+ /** Tree node for getTree() - defensive copy of session structure */
+-export interface SessionTreeNode {
+-	entry: SessionEntry;
+-	children: SessionTreeNode[];
++export interface SessionTreeNode<TEntry = SessionEntry> {
++	entry: TEntry;
++	children: SessionTreeNode<TEntry>[];
+ 	/** Resolved label for this entry, if any */
+ 	label?: string;
+ 	/** Timestamp of the latest label change for this entry, if any */
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 0df3a40..c89cadc 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -305,6 +305,7 @@ export {
+ 	type SessionMessageMetadata,
+ 	type SessionProjection,
+ 	type SessionTreeNode,
++	type SessionTreeSource,
+ 	sessionEntryToContextMessages,
+ 	type ThinkingLevelChangeEntry,
+ } from "./core/session-manager.ts";
+diff --git a/packages/coding-agent/src/modes/interactive/components/tree-selector.ts b/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
+index 767740c..53067ec 100644
+--- a/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
++++ b/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
+@@ -1,3 +1,4 @@
++import { setImmediate } from "node:timers/promises";
+ import {
+ 	type Component,
+ 	Container,
+@@ -12,7 +13,21 @@ import {
+ 	visibleWidth,
+ 	wrapTextWithAnsi,
+ } from "@earendil-works/pi-tui";
+-import type { SessionTreeNode } from "../../../core/session-manager.ts";
++import type {
++	SessionTreeNode as CompleteTreeNode,
++	SessionEntry,
++	SessionEntryMetadata,
++	SessionTreeSource,
++} from "../../../core/session-manager.ts";
++
++type SessionTreeNode = CompleteTreeNode<SessionEntry | SessionEntryMetadata>;
++
++import {
++	createSessionTreeMessagePreview,
++	extractSessionText,
++	SESSION_TREE_PREVIEW_CHARS,
++	type SessionTreeMessagePreview,
++} from "../../../core/session-tree-preview.ts";
+ import { formatReadLineRange } from "../../../core/tools/render-utils.ts";
+ import { theme } from "../theme/theme.ts";
+ import { DynamicBorder } from "./dynamic-border.ts";
+@@ -48,6 +63,7 @@ interface HorizontalViewportRow {
+ }
+ 
+ const TREE_GUTTER_WIDTH = 2;
++const TREE_FILTER_SLICE_MS = 8; // Yield between source reads so new input can cancel an obsolete query.
+ const MIN_VISIBLE_ANCHOR_CONTENT_WIDTH = 4;
+ const MAX_VISIBLE_ANCHOR_CONTENT_WIDTH = 20;
+ const MIN_ANCHOR_CONTEXT_WIDTH = 2;
+@@ -100,8 +116,8 @@ export type FilterMode = "default" | "no-tools" | "user-only" | "labeled-only" |
+  */
+ /** Tool call info for lookup */
+ interface ToolCallInfo {
+-	name: string;
+-	arguments: Record<string, unknown>;
++	entryId: string;
++	contentIndex: number;
+ }
+ 
+ class TreeList implements Component {
+@@ -113,6 +129,14 @@ class TreeList implements Component {
+ 	private filterMode: FilterMode = "default";
+ 	private searchQuery = "";
+ 	private toolCallMap: Map<string, ToolCallInfo> = new Map();
++	private legacyNodes = new Map<string, CompleteTreeNode>();
++	private entryReader: (id: string) => SessionEntry | undefined;
++	private messagePreviews = new Map<string, SessionTreeMessagePreview>();
++	private messagePreviewReader?: (id: string) => SessionTreeMessagePreview | undefined;
++	private filterVersion = 0;
++	private searching = false;
++	private searchError: string | undefined;
++	private requestRender?: () => void;
+ 	private multipleRoots = false;
+ 	private showLabelTimestamps = false;
+ 	private activePathIds: Set<string> = new Set();
+@@ -127,17 +151,33 @@ class TreeList implements Component {
+ 	public onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
+ 
+ 	constructor(
+-		tree: SessionTreeNode[],
++		tree: CompleteTreeNode[] | SessionTreeSource,
+ 		currentLeafId: string | null,
+ 		maxVisibleLines: number,
+ 		initialSelectedId?: string,
+ 		initialFilterMode?: FilterMode,
++		requestRender?: () => void,
+ 	) {
++		this.requestRender = requestRender;
++		let roots: SessionTreeNode[];
++		if (Array.isArray(tree)) {
++			const stack = [...tree];
++			for (let node = stack.pop(); node; node = stack.pop()) {
++				this.legacyNodes.set(node.entry.id, node);
++				stack.push(...node.children);
++			}
++			this.entryReader = (id) => this.legacyNodes.get(id)?.entry;
++			roots = tree;
++		} else {
++			this.entryReader = (id) => tree.readEntry(id);
++			this.messagePreviewReader = (id) => tree.readMessagePreview(id);
++			roots = tree.roots;
++		}
+ 		this.currentLeafId = currentLeafId;
+ 		this.maxVisibleLines = maxVisibleLines;
+ 		this.filterMode = initialFilterMode ?? "default";
+-		this.multipleRoots = tree.length > 1;
+-		this.flatNodes = this.flattenTree(tree);
++		this.multipleRoots = roots.length > 1;
++		this.flatNodes = this.flattenTree(roots);
+ 		this.buildActivePath();
+ 		this.applyFilter();
+ 
+@@ -252,18 +292,11 @@ class TreeList implements Component {
+ 		while (stack.length > 0) {
+ 			const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] = stack.pop()!;
+ 
+-			// Extract tool calls from assistant messages for later lookup
+ 			const entry = node.entry;
+-			if (entry.type === "message" && entry.message.role === "assistant") {
+-				const content = (entry.message as { content?: unknown }).content;
+-				if (Array.isArray(content)) {
+-					for (const block of content) {
+-						if (typeof block === "object" && block !== null && "type" in block && block.type === "toolCall") {
+-							const tc = block as { id: string; name: string; arguments: Record<string, unknown> };
+-							this.toolCallMap.set(tc.id, { name: tc.name, arguments: tc.arguments });
+-						}
+-					}
+-				}
++			if (entry.type === "message") {
++				const preview = this.messagePreview(entry.id);
++				for (const call of preview.toolCalls)
++					this.toolCallMap.set(call.id, { entryId: entry.id, contentIndex: call.contentIndex });
+ 			}
+ 
+ 			result.push({ node, indent, showConnector, isLast, gutters, isVirtualRootChild });
+@@ -329,6 +362,7 @@ class TreeList implements Component {
+ 	}
+ 
+ 	private applyFilter(): void {
++		const version = ++this.filterVersion;
+ 		// Update lastSelectedId only when we have a valid selection (non-empty list)
+ 		// This preserves the selection when switching through empty filter results
+ 		if (this.filteredNodes.length > 0) {
+@@ -337,7 +371,7 @@ class TreeList implements Component {
+ 
+ 		const searchTokens = this.searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+ 
+-		this.filteredNodes = this.flatNodes.filter((flatNode) => {
++		const candidates = this.flatNodes.filter((flatNode) => {
+ 			const entry = flatNode.node.entry;
+ 			if (entry.type === "usage") return false;
+ 			const isCurrentLeaf = entry.id === this.currentLeafId;
+@@ -345,8 +379,8 @@ class TreeList implements Component {
+ 			// Skip assistant messages with only tool calls (no text) unless error/aborted
+ 			// Always show current leaf so active position is visible
+ 			if (entry.type === "message" && entry.message.role === "assistant" && !isCurrentLeaf) {
+-				const msg = entry.message as { stopReason?: string; content?: unknown };
+-				const hasText = this.hasTextContent(msg.content);
++				const msg = entry.message;
++				const hasText = this.messagePreview(entry.id).hasText;
+ 				const isErrorOrAborted = msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
+ 				// Only hide if no text AND not an error/aborted message
+ 				if (!hasText && !isErrorOrAborted) {
+@@ -390,15 +424,59 @@ class TreeList implements Component {
+ 
+ 			if (!passesFilter) return false;
+ 
+-			// Apply search filter
+-			if (searchTokens.length > 0) {
+-				const nodeText = this.getSearchableText(flatNode.node).toLowerCase();
+-				return searchTokens.every((token) => nodeText.includes(token));
+-			}
+-
+ 			return true;
+ 		});
+ 
++		this.searchError = undefined;
++		if (searchTokens.length > 0 && this.requestRender) {
++			this.searching = true;
++			this.filteredNodes = [];
++			this.finishFilter();
++			void this.searchCandidates(candidates, searchTokens, version);
++		} else {
++			this.searching = false;
++			this.filteredNodes =
++				searchTokens.length === 0
++					? candidates
++					: candidates.filter((node) => {
++							const text = this.getSearchableText(node.node).toLowerCase();
++							return searchTokens.every((token) => text.includes(token));
++						});
++			this.finishFilter();
++		}
++	}
++
++	cancelSearch(): void {
++		this.filterVersion++;
++		this.searching = false;
++	}
++
++	private async searchCandidates(candidates: FlatNode[], tokens: string[], version: number): Promise<void> {
++		const matches: FlatNode[] = [];
++		let slice = performance.now();
++		try {
++			for (const node of candidates) {
++				if (version !== this.filterVersion) return;
++				const text = this.getSearchableText(node.node).toLowerCase();
++				if (tokens.every((token) => text.includes(token))) matches.push(node);
++				if (performance.now() - slice >= TREE_FILTER_SLICE_MS) {
++					await setImmediate();
++					slice = performance.now();
++				}
++			}
++			if (version !== this.filterVersion) return;
++			this.filteredNodes = matches;
++		} catch (error) {
++			if (version !== this.filterVersion) return;
++			this.filteredNodes = [];
++			this.searchError = `Search failed: ${error instanceof Error ? error.message : String(error)}`;
++		}
++		this.searching = false;
++		this.finishFilter();
++		this.requestRender?.();
++	}
++
++	private finishFilter(): void {
+ 		// Filter out descendants of folded nodes.
+ 		if (this.foldedNodes.size > 0) {
+ 			const skipSet = new Set<string>();
+@@ -559,6 +637,28 @@ class TreeList implements Component {
+ 		this.visibleChildrenMap = visibleChildren;
+ 	}
+ 
++	private readEntry(id: string): SessionEntry {
++		const entry = this.entryReader(id);
++		if (!entry) throw new Error(`Session tree entry is unavailable: ${id}`);
++		return entry;
++	}
++
++	private messagePreview(id: string): SessionTreeMessagePreview {
++		if (this.messagePreviewReader) {
++			const preview = this.messagePreviewReader(id);
++			if (!preview) throw new Error(`Session tree message preview is unavailable: ${id}`);
++			return preview;
++		}
++		let preview = this.messagePreviews.get(id);
++		if (!preview) {
++			const body = this.readEntry(id);
++			if (body.type !== "message") throw new Error(`Session tree message changed: ${id}`);
++			preview = createSessionTreeMessagePreview(body.message);
++			this.messagePreviews.set(id, preview);
++		}
++		return preview;
++	}
++
+ 	/** Get searchable text content from a node */
+ 	private getSearchableText(node: SessionTreeNode): string {
+ 		const entry = node.entry;
+@@ -572,30 +672,34 @@ class TreeList implements Component {
+ 			case "message": {
+ 				const msg = entry.message;
+ 				parts.push(msg.role);
+-				if ("content" in msg && msg.content) {
+-					parts.push(this.extractContent(msg.content));
+-				}
++				parts.push(this.messagePreview(entry.id).content);
+ 				if (msg.role === "bashExecution") {
+-					const bashMsg = msg as { command?: string };
+-					if (bashMsg.command) parts.push(bashMsg.command);
++					const body = this.readEntry(entry.id);
++					if (body.type !== "message" || body.message.role !== "bashExecution") {
++						throw new Error(`Session tree command changed: ${entry.id}`);
++					}
++					if (body.message.command) parts.push(body.message.command);
+ 				}
+ 				break;
+ 			}
+ 			case "custom_message": {
+-				parts.push(entry.customType);
+-				if (typeof entry.content === "string") {
+-					parts.push(entry.content);
+-				} else {
+-					parts.push(this.extractContent(entry.content));
+-				}
++				const body = this.readEntry(entry.id);
++				if (body.type !== "custom_message") throw new Error(`Session tree custom message changed: ${entry.id}`);
++				parts.push(
++					entry.customType,
++					typeof body.content === "string" ? body.content : this.extractContent(body.content),
++				);
+ 				break;
+ 			}
+ 			case "compaction":
+ 				parts.push("compaction");
+ 				break;
+-			case "branch_summary":
+-				parts.push("branch summary", entry.summary);
++			case "branch_summary": {
++				const body = this.readEntry(entry.id);
++				if (body.type !== "branch_summary") throw new Error(`Session tree summary changed: ${entry.id}`);
++				parts.push("branch summary", body.summary);
+ 				break;
++			}
+ 			case "session_info":
+ 				parts.push("title");
+ 				if (entry.name) parts.push(entry.name);
+@@ -609,9 +713,12 @@ class TreeList implements Component {
+ 			case "custom":
+ 				parts.push("custom", entry.customType);
+ 				break;
+-			case "context_edit":
+-				parts.push("context edit", entry.replacement === null ? "omit" : "replace", entry.targetId);
++			case "context_edit": {
++				const body = this.readEntry(entry.id);
++				if (body.type !== "context_edit") throw new Error(`Session tree context edit changed: ${entry.id}`);
++				parts.push("context edit", body.replacement === null ? "omit" : "replace", entry.targetId);
+ 				break;
++			}
+ 			case "label":
+ 				parts.push("label", entry.label ?? "");
+ 				break;
+@@ -626,12 +733,36 @@ class TreeList implements Component {
+ 		return this.searchQuery;
+ 	}
+ 
+-	getSelectedNode(): SessionTreeNode | undefined {
++	getSelectedReference(): SessionTreeNode | undefined {
+ 		return this.filteredNodes[this.selectedIndex]?.node;
+ 	}
+ 
++	/** Explicit legacy API: materialize the selected subtree, not just its preview. */
++	getSelectedNode(): CompleteTreeNode | undefined {
++		const selected = this.getSelectedReference();
++		if (!selected) return undefined;
++		const legacy = this.legacyNodes.get(selected.entry.id);
++		if (legacy) return legacy;
++		const create = (node: SessionTreeNode): CompleteTreeNode => ({
++			entry: this.readEntry(node.entry.id),
++			children: [],
++			label: node.label,
++			labelTimestamp: node.labelTimestamp,
++		});
++		const root = create(selected);
++		const stack: [SessionTreeNode, CompleteTreeNode][] = [[selected, root]];
++		for (let pair = stack.pop(); pair; pair = stack.pop()) {
++			for (const child of pair[0].children) {
++				const complete = create(child);
++				pair[1].children.push(complete);
++				stack.push([child, complete]);
++			}
++		}
++		return root;
++	}
++
+ 	copySelected(): void {
+-		const node = this.getSelectedNode();
++		const node = this.getSelectedReference();
+ 		this.onCopy?.(node ? this.getEntryCopyText(node) : undefined);
+ 	}
+ 
+@@ -671,7 +802,8 @@ class TreeList implements Component {
+ 		const lines: string[] = [];
+ 
+ 		if (this.filteredNodes.length === 0) {
+-			lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
++			const status = this.searchError ?? (this.searching ? "Searching session…" : "No entries found");
++			lines.push(truncateToWidth(theme.fg(this.searchError ? "error" : "muted", `  ${status}`), width));
+ 			lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.getStatusLabels()}`), width));
+ 			return lines;
+ 		}
+@@ -772,7 +904,7 @@ class TreeList implements Component {
+ 	}
+ 
+ 	private getEntryDisplayText(node: SessionTreeNode, isSelected: boolean): string {
+-		const entry = node.entry;
++		const entry = this.readEntry(node.entry.id);
+ 		let result: string;
+ 
+ 		const normalize = (s: string) => s.replace(/[\n\t]/g, " ").trim();
+@@ -802,7 +934,14 @@ class TreeList implements Component {
+ 					const toolMsg = msg as { toolCallId?: string; toolName?: string };
+ 					const toolCall = toolMsg.toolCallId ? this.toolCallMap.get(toolMsg.toolCallId) : undefined;
+ 					if (toolCall) {
+-						result = theme.fg("muted", this.formatToolCall(toolCall.name, toolCall.arguments));
++						const source = this.readEntry(toolCall.entryId);
++						if (source.type !== "message" || source.message.role !== "assistant") {
++							throw new Error(`Session tree tool source changed: ${toolCall.entryId}`);
++						}
++						const block = source.message.content[toolCall.contentIndex];
++						if (block?.type !== "toolCall")
++							throw new Error(`Session tree tool call changed: ${toolCall.entryId}`);
++						result = theme.fg("muted", this.formatToolCall(block.name, block.arguments));
+ 					} else {
+ 						result = theme.fg("muted", `[${toolMsg.toolName ?? "tool"}]`);
+ 					}
+@@ -886,24 +1025,11 @@ class TreeList implements Component {
+ 	}
+ 
+ 	private extractContent(content: unknown): string {
+-		return this.extractFullContent(content).slice(0, 200);
+-	}
+-
+-	private extractFullContent(content: unknown): string {
+-		if (typeof content === "string") return content;
+-		if (!Array.isArray(content)) return "";
+-
+-		let result = "";
+-		for (const block of content) {
+-			if (typeof block === "object" && block !== null && "type" in block && block.type === "text") {
+-				result += (block as { text: string }).text;
+-			}
+-		}
+-		return result;
++		return extractSessionText(content).slice(0, SESSION_TREE_PREVIEW_CHARS);
+ 	}
+ 
+ 	private getEntryCopyText(node: SessionTreeNode): string | undefined {
+-		const entry = node.entry;
++		const entry = this.readEntry(node.entry.id);
+ 		let text: string | undefined;
+ 
+ 		switch (entry.type) {
+@@ -911,14 +1037,14 @@ class TreeList implements Component {
+ 				if (entry.message.role === "bashExecution") {
+ 					text = entry.message.command;
+ 				} else if ("content" in entry.message) {
+-					text = this.extractFullContent(entry.message.content);
++					text = extractSessionText(entry.message.content);
+ 					if (!text && entry.message.role === "assistant") {
+ 						text = entry.message.errorMessage;
+ 					}
+ 				}
+ 				break;
+ 			case "custom_message":
+-				text = this.extractFullContent(entry.content);
++				text = extractSessionText(entry.content);
+ 				break;
+ 			case "compaction":
+ 				text = entry.summary;
+@@ -931,19 +1057,6 @@ class TreeList implements Component {
+ 		return text?.trim() ? text : undefined;
+ 	}
+ 
+-	private hasTextContent(content: unknown): boolean {
+-		if (typeof content === "string") return content.trim().length > 0;
+-		if (Array.isArray(content)) {
+-			for (const c of content) {
+-				if (typeof c === "object" && c !== null && "type" in c && c.type === "text") {
+-					const text = (c as { text?: string }).text;
+-					if (text && text.trim().length > 0) return true;
+-				}
+-			}
+-		}
+-		return false;
+-	}
+-
+ 	private formatToolCall(name: string, args: Record<string, unknown>): string {
+ 		const shortenPath = (p: string): string => {
+ 			const home = process.env.HOME || process.env.USERPROFILE || "";
+@@ -1348,7 +1461,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
+ 	}
+ 
+ 	constructor(
+-		tree: SessionTreeNode[],
++		tree: CompleteTreeNode[] | SessionTreeSource,
+ 		currentLeafId: string | null,
+ 		terminalHeight: number,
+ 		onSelect: (entryId: string) => void,
+@@ -1356,15 +1469,29 @@ export class TreeSelectorComponent extends Container implements Focusable {
+ 		onLabelChange?: (entryId: string, label: string | undefined) => void,
+ 		initialSelectedId?: string,
+ 		initialFilterMode?: FilterMode,
++		requestRender?: () => void,
+ 	) {
+ 		super();
+ 
+ 		this.onLabelChangeCallback = onLabelChange;
+ 		const maxVisibleLines = Math.max(5, Math.floor(terminalHeight / 2));
+ 
+-		this.treeList = new TreeList(tree, currentLeafId, maxVisibleLines, initialSelectedId, initialFilterMode);
+-		this.treeList.onSelect = onSelect;
+-		this.treeList.onCancel = onCancel;
++		this.treeList = new TreeList(
++			tree,
++			currentLeafId,
++			maxVisibleLines,
++			initialSelectedId,
++			initialFilterMode,
++			requestRender,
++		);
++		this.treeList.onSelect = (id) => {
++			this.treeList.cancelSearch();
++			onSelect(id);
++		};
++		this.treeList.onCancel = () => {
++			this.treeList.cancelSearch();
++			onCancel();
++		};
+ 		this.treeList.onCopy = (text) => this.onCopy?.(text);
+ 		this.treeList.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
+ 
+@@ -1385,8 +1512,8 @@ export class TreeSelectorComponent extends Container implements Focusable {
+ 		this.addChild(new Spacer(1));
+ 		this.addChild(new DynamicBorder());
+ 
+-		if (tree.length === 0) {
+-			setTimeout(() => onCancel(), 100);
++		if ((Array.isArray(tree) ? tree : tree.roots).length === 0) {
++			setTimeout(() => this.treeList.onCancel?.(), 100);
+ 		}
+ 	}
+ 
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 9fc3846..2bc1710 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -5541,11 +5541,11 @@ export class InteractiveMode {
+ 	}
+ 
+ 	private showTreeSelector(initialSelectedId?: string): void {
+-		const tree = this.sessionManager.getTree();
++		const tree = this.sessionManager.getTreeSource();
+ 		const realLeafId = this.sessionManager.getLeafId();
+ 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
+ 
+-		if (tree.length === 0) {
++		if (tree.roots.length === 0) {
+ 			this.showStatus("No entries in session");
+ 			return;
+ 		}
+@@ -5672,6 +5672,7 @@ export class InteractiveMode {
+ 				},
+ 				initialSelectedId,
+ 				initialFilterMode,
++				() => this.ui.requestRender(),
+ 			);
+ 			selector.onCopy = async (text) => {
+ 				if (!text) {
+diff --git a/packages/coding-agent/test/session-manager/tree-traversal.test.ts b/packages/coding-agent/test/session-manager/tree-traversal.test.ts
+index 50980f7..5de02ad 100644
+--- a/packages/coding-agent/test/session-manager/tree-traversal.test.ts
++++ b/packages/coding-agent/test/session-manager/tree-traversal.test.ts
+@@ -173,6 +173,29 @@ describe("SessionManager append and tree traversal", () => {
+ 		});
+ 	});
+ 
++	describe("getTreeSource", () => {
++		it("keeps metadata body-free and binds previews and complete reads to the original store", () => {
++			const session = SessionManager.inMemory();
++			const text = "PRIVATE_FULL_BODY".repeat(100);
++			const root = session.appendMessage(userMsg(text));
++			const first = session.appendMessage(assistantMsg("first"));
++			session.branch(root);
++			const second = session.appendMessage(userMsg("second branch"));
++			session.appendLabelChange(second, "bookmark");
++			const source = session.getTreeSource();
++			expect(source.roots.map((node) => node.entry.id)).toEqual([root]);
++			expect(source.roots[0]?.children.map((node) => node.entry.id)).toEqual([first, second]);
++			expect(source.roots[0]?.children[1]?.label).toBe("bookmark");
++			expect(JSON.stringify(source.roots)).not.toContain("PRIVATE_FULL_BODY");
++			expect(source.readMessagePreview(root)?.content).toBe(text.slice(0, 200));
++			const original = session.getEntry(root);
++			session.newSession();
++			expect(session.getEntry(root)).toBeUndefined();
++			expect(source.readEntry(root)).toEqual(original);
++			expect(source.readMessagePreview(root)?.hasText).toBe(true);
++		});
++	});
++
+ 	describe("getTree", () => {
+ 		it("returns empty array for empty session", () => {
+ 			const session = SessionManager.inMemory();
+diff --git a/packages/coding-agent/test/tree-selector.test.ts b/packages/coding-agent/test/tree-selector.test.ts
+index 579511b..a926774 100644
+--- a/packages/coding-agent/test/tree-selector.test.ts
++++ b/packages/coding-agent/test/tree-selector.test.ts
+@@ -1,12 +1,13 @@
+ import { stripVTControlCharacters } from "node:util";
+ import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+-import { beforeAll, beforeEach, describe, expect, test } from "vitest";
++import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+ import { KeybindingsManager } from "../src/core/keybindings.ts";
+-import type {
+-	ModelChangeEntry,
+-	SessionEntry,
+-	SessionMessageEntry,
+-	SessionTreeNode,
++import {
++	type ModelChangeEntry,
++	type SessionEntry,
++	SessionManager,
++	type SessionMessageEntry,
++	type SessionTreeNode,
+ } from "../src/core/session-manager.ts";
+ import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
+ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+@@ -126,6 +127,105 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
+ }
+ 
+ describe("TreeSelectorComponent", () => {
++	describe("metadata-backed source", () => {
++		test("copies complete messages while previewing without unrelated custom bodies", () => {
++			const session = SessionManager.inMemory();
++			const text = "complete source ".repeat(500);
++			const userId = session.appendMessage({ role: "user", content: text, timestamp: 1 });
++			const stateId = session.appendCustomEntry("state", { large: "unrelated".repeat(1000) });
++			const source = session.getTreeSource();
++			const reader = vi.spyOn(source, "readEntry");
++			const selector = new TreeSelectorComponent(
++				source,
++				stateId,
++				24,
++				() => {},
++				() => {},
++			);
++			const list = selector.getTreeList();
++			expect(list.getSelectedReference()?.entry.id).toBe(userId);
++			expect(reader).not.toHaveBeenCalled();
++			let copied: string | undefined;
++			selector.onCopy = (value) => {
++				copied = value;
++			};
++			selector.handleInput("\x18");
++			expect(copied).toBe(text);
++			expect(reader.mock.calls.map(([id]) => id)).toEqual([userId]);
++			const complete = list.getSelectedNode();
++			expect(complete?.children[0]?.entry).toEqual(session.getEntry(stateId));
++		});
++
++		test("cancels superseded and closed searches and reports body read failures", async () => {
++			const session = SessionManager.inMemory();
++			for (let i = 0; i < 60; i++) session.appendCustomMessageEntry("memo", `x content ${i}`, true);
++			const target = session.appendCustomMessageEntry("memo", "y target", true);
++			const source = session.getTreeSource();
++			let clock = 0;
++			const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
++			const read = source.readEntry;
++			const reader = vi.spyOn(source, "readEntry").mockImplementation((id) => {
++				clock += 100;
++				return read(id);
++			});
++			let complete = () => {};
++			let timeout: ReturnType<typeof setTimeout> | undefined;
++			const rendered = new Promise<void>((resolve, reject) => {
++				complete = resolve;
++				timeout = setTimeout(() => reject(new Error("Tree search did not finish")), 2000);
++			});
++			const redraw = vi.fn(complete);
++			const selector = new TreeSelectorComponent(
++				source,
++				target,
++				24,
++				() => {},
++				() => {},
++				undefined,
++				undefined,
++				undefined,
++				redraw,
++			);
++			try {
++				selector.handleInput("x");
++				selector.handleInput("\x1b");
++				selector.handleInput("y");
++				await rendered;
++				expect(selector.getTreeList().getSelectedReference()?.entry.id).toBe(target);
++				expect(redraw).toHaveBeenCalledTimes(1);
++				selector.handleInput("x");
++				selector.handleInput("\x1b");
++				selector.handleInput("\x1b");
++				const stoppedAt = reader.mock.calls.length;
++				await new Promise<void>((resolve) => setImmediate(resolve));
++				await new Promise<void>((resolve) => setImmediate(resolve));
++				expect(reader).toHaveBeenCalledTimes(stoppedAt);
++				expect(redraw).toHaveBeenCalledTimes(1);
++				const broken = session.getTreeSource();
++				broken.readEntry = () => {
++					throw new Error("fixture body unavailable");
++				};
++				const failed = new TreeSelectorComponent(
++					broken,
++					target,
++					24,
++					() => {},
++					() => {},
++					undefined,
++					undefined,
++					undefined,
++					() => {},
++				);
++				failed.handleInput("z");
++				expect(failed.render(200).join("\n")).toContain("Search failed: fixture body unavailable");
++				expect(failed.getTreeList().getSelectedReference()).toBeUndefined();
++			} finally {
++				clearTimeout(timeout);
++				selector.getTreeList().cancelSearch();
++				now.mockRestore();
++			}
++		});
++	});
+ 	describe("initial selection with metadata entries", () => {
+ 		test("focuses nearest visible ancestor when currentLeafId is a model_change with sibling branch", () => {
+ 			// Tree structure:
+diff --git a/packages/coding-agent/src/core/session-tree-preview.ts b/packages/coding-agent/src/core/session-tree-preview.ts
+new file mode 100644
+index 0000000..04be69b
+--- /dev/null
++++ b/packages/coding-agent/src/core/session-tree-preview.ts
+@@ -0,0 +1,51 @@
++import type { AgentMessage } from "@earendil-works/pi-agent-core";
++
++// Preserve the native tree's message search/display prefix, measured in UTF-16 code units.
++export const SESSION_TREE_PREVIEW_CHARS = 200;
++
++export interface SessionTreeMessagePreview {
++	readonly content: string;
++	readonly hasText: boolean;
++	readonly toolCalls: readonly { readonly id: string; readonly contentIndex: number }[];
++}
++
++/** Build only bounded text and tool locations while the scanner already has the complete message. */
++export function createSessionTreeMessagePreview(message: AgentMessage): SessionTreeMessagePreview {
++	const content = "content" in message ? message.content : undefined;
++	let prefix = "";
++	let hasText = false;
++	const toolCalls: { id: string; contentIndex: number }[] = [];
++	if (typeof content === "string") {
++		prefix = content.slice(0, SESSION_TREE_PREVIEW_CHARS);
++		hasText = content.trim().length > 0;
++	} else if (Array.isArray(content)) {
++		for (let index = 0; index < content.length; index++) {
++			const block = content[index];
++			if (typeof block !== "object" || block === null || !("type" in block)) continue;
++			if (block.type === "text") {
++				const text = (block as { text?: string }).text;
++				if (typeof text === "string" && text.trim().length > 0) hasText = true;
++				if (prefix.length < SESSION_TREE_PREVIEW_CHARS) {
++					prefix += String(text).slice(0, SESSION_TREE_PREVIEW_CHARS - prefix.length);
++				}
++			} else if (message.role === "assistant" && block.type === "toolCall") {
++				toolCalls.push({ id: (block as { id: string }).id, contentIndex: index });
++			}
++		}
++	}
++	// Detach a possible slice from a large parent; UTF-16 also preserves a cut surrogate exactly.
++	return { content: Buffer.from(prefix, "utf16le").toString("utf16le"), hasText, toolCalls };
++}
++
++/** Native tree copy semantics: concatenate text blocks without truncating or normalizing their contents. */
++export function extractSessionText(content: unknown): string {
++	if (typeof content === "string") return content;
++	if (!Array.isArray(content)) return "";
++	let result = "";
++	for (const block of content) {
++		if (typeof block === "object" && block !== null && "type" in block && block.type === "text") {
++			result += (block as { text: string }).text;
++		}
++	}
++	return result;
++}
