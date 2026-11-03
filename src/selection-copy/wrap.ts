@@ -1,5 +1,4 @@
-// Provenance-tracking replica of pi-tui's wrapTextWithAnsi (host 0.85.1,
-// utils.js). Produces the same visual rows plus, per row, the visible-text
+// Provenance-tracking replica of Pi 1.5.0's wrapTextWithAnsi. Produces the same visual rows plus, per row, the visible-text
 // spans and kinds needed to reconstruct logical text on copy.
 //
 // Fidelity contract: callers diff our styled rows against the host's own
@@ -206,6 +205,7 @@ export class AnsiTracker {
   getLineEndReset(): string {
     let result = "";
     if (this.underline) result += "\x1b[24m";
+    if (this.strikethrough) result += "\x1b[29m";
     if (this.hyperlink) result += `\x1b]8;;${this.hyperlink.terminator}`;
     return result;
   }
@@ -243,7 +243,7 @@ function tokenize(
       styled,
       graphemes,
       width: graphemes.reduce((sum, g) => sum + g.cells, 0),
-      whitespace: styled.trim() === "",
+      whitespace: graphemes.every(g => g.text.trim() === ""),
     });
     graphemes = [];
     styled = "";
@@ -408,9 +408,12 @@ function wrapSubLine(
   let bridgeAccum = "";
 
   // Host restarts the line with the active codes materialized immediately.
-  const emitRow = (styledSuffix: string): void => {
-    rows.push({ styled: styled + styledSuffix, graphemes, bridge: bridgeAccum });
-    bridgeAccum = "";
+  const emitRow = (closingCodes = ""): void => {
+    const trimmed = styled.trimEnd();
+    const trailing = stripAnsi(styled.slice(trimmed.length));
+    const { kept } = dropTrailingPlain(graphemes, trailing.length);
+    rows.push({ styled: trimmed + closingCodes + tracker.getLineEndReset(), graphemes: kept, bridge: bridgeAccum });
+    bridgeAccum = trailing;
     styled = tracker.getActiveCodes();
     graphemes = [];
     widthSoFar = 0;
@@ -419,8 +422,7 @@ function wrapSubLine(
   for (const token of tokens) {
     if (token.width > width && !token.whitespace) {
       if (styled) {
-        // Host flushes the accumulated line WITHOUT trimEnd in this branch.
-        emitRow(tracker.getLineEndReset());
+        emitRow();
       }
       // breakLongWord: per-grapheme fragments with resets between rows. The
       // token's styled parts interleave ANSI and graphemes; grapheme parts zip
@@ -457,18 +459,9 @@ function wrapSubLine(
       continue;
     }
     if (widthSoFar + token.width > width && widthSoFar > 0) {
-      const trimmed = styled.trimEnd();
-      const removed = styled.length - trimmed.length;
-      const suffixPlain = stripAnsi(styled.slice(styled.length - removed));
-      const trimmedBridge = removed > 0 && suffixPlain.trim() === "" ? suffixPlain : "";
-      const { kept } = dropTrailingPlain(graphemes, suffixPlain.length);
-      emitRow(tracker.getLineEndReset());
-      // The row just emitted gets the trimmed styled; the trimmed whitespace
-      // (plus a dropped whitespace token below) bridges to the NEXT row.
-      const emitted = rows[rows.length - 1]!;
-      emitted.styled = trimmed + tracker.getLineEndReset();
-      emitted.graphemes = kept;
-      bridgeAccum += trimmedBridge;
+      const closingCodes = token.whitespace ? ansiCodesOf(token.styled) : [];
+      for (const code of closingCodes) tracker.process(code);
+      emitRow(closingCodes.join(""));
       if (token.whitespace) {
         bridgeAccum += token.graphemes.map((g) => g.text).join("");
         continue;
@@ -479,10 +472,16 @@ function wrapSubLine(
       for (const code of ansiCodesOf(token.styled)) tracker.process(code);
       continue;
     }
-    styled += token.styled;
-    graphemes = graphemes.concat(token.graphemes);
-    widthSoFar += token.width;
-    for (const code of ansiCodesOf(token.styled)) tracker.process(code);
+    const codes = ansiCodesOf(token.styled);
+    if (token.whitespace && widthSoFar + token.width > width && token.styled.includes("\x1b")) {
+      styled += codes.join("");
+      bridgeAccum += token.graphemes.map(g => g.text).join("");
+    } else {
+      styled += token.styled;
+      graphemes = graphemes.concat(token.graphemes);
+      widthSoFar += token.width;
+    }
+    for (const code of codes) tracker.process(code);
   }
   // Host pushes the final line only when non-empty (ANSI-only counts).
   if (styled) rows.push({ styled, graphemes, bridge: bridgeAccum });

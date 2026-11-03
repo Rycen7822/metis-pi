@@ -21,6 +21,8 @@ test("collected host tokens and a throttled stream rebuild exact fallback proven
     ["strict del", "Use ~not struck~ and ~~struck~~", "Use ~not struck~ and struck", 40],
     ["pending math table", "Intro\n\n$$\nx = 1\n\n| A |\n:---:\n| 1 |\n\nAfter", undefined, 40],
     ["closed math", "$$\na + b\n$$", "a + b", 40],
+    ["CJK bare URL", "See https://example.com/path，后面", "See https://example.com/path，后面", 12],
+    ["nested quotes without border space", "> ".repeat(8) + "word", "word", 1],
     ["bracket table", "Intro\n\n\\[\nx^2\n\n| A |\n| --- |\n| 1 |\n\nAfter", undefined, 40],
   ];
   // Warm native rows before the process-owned wrappers exist. Dropping the
@@ -87,6 +89,18 @@ test("real Markdown copies prose, formatted blocks and hard breaks without mirro
   changing.invalidate();
   assert.equal(select(copyFrame(changing, 40)).text, "bravo", "copy follows native transform invalidation");
   assert.equal(select(committed).text, "alpha", "previously committed selection keeps its own frame");
+});
+
+test("oversized display math copies raw source without adding hard breaks", t => {
+  installCopyPrototypes(t);
+  const latex = "\\frac{a+b}{c+d} + \\frac{e+f}{g+h} = \\sum_{i=1}^{n} i^2";
+  const source = `\\[\n${latex}\n\\]`;
+  for (const width of [12, 80]) {
+    const frame = copyFrame(new Tui.Markdown(source, 0, 0, theme), width);
+    const copied = select(frame);
+    assert.equal(copied.nativeRows, 0, "both raw and rendered formula paths publish exact provenance");
+    assert.equal(copied.text, width === 12 ? source : Tui.renderLatex(latex, { display: true }));
+  }
 });
 
 test("stack copy uses the displayed render pass without rerendering dynamic children", (t) => {

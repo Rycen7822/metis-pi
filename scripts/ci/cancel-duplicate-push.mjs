@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const CI_PATH = ".github/workflows/ci.yml";
 const ADMISSION_JOB = "Check duplicate feature push";
-const VALIDATION_JOB = "Pi 1.4.0";
+const VALIDATION_JOB_PREFIX = "Pi 1.5.0 · ";
 
 export async function cancelDuplicatePush({ repository, runId, pullNumber, trustedRef, mergeRef, request, sleep = delay, log = console.log }) {
   let cancellationAttempted = false;
@@ -42,7 +42,7 @@ export async function cancelDuplicatePush({ repository, runId, pullNumber, trust
     if (trusted.type !== "file" || proposed.type !== "file" || merged.type !== "file"
       || !/^[a-f0-9]{40}$/.test(trusted.sha) || trusted.sha !== proposed.sha || trusted.sha !== merged.sha) return false;
     const jobs = async id => (await request("GET", `${base}/actions/runs/${id}/jobs`, { filter: "latest", per_page: "100" })).jobs;
-    const hasActiveValidation = (values, id) => values.some(job => job.name === VALIDATION_JOB && job.run_id === id
+    const hasActiveValidation = (values, id) => values.some(job => job.name.startsWith(VALIDATION_JOB_PREFIX) && job.run_id === id
       && job.run_attempt === 1 && job.head_sha === head && job.status === "in_progress" && job.runner_id > 0);
     let active = false;
     for (let attempt = 0; attempt < 3; attempt++) {

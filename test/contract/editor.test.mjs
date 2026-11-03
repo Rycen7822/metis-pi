@@ -95,7 +95,7 @@ function compactionHost(t, surfaceEnabled = true) {
     isInitialized: true, ui: tui, keybindings, defaultEditor, editor: defaultEditor,
     editorContainer: new Tui.Container(), statusContainer: new Tui.Container(),
     chatContainer: new Tui.Container(), compactionQueuedMessages: [], outputPad: 1,
-    options: { tuiMode: "fullscreen" }, footer: { invalidate() {} },
+    options: { tuiMode: "fullscreen" }, extensionDialogs: [], footer: { invalidate() {} },
     programStatus: { handleEvent() {} }, // Pi1.1 terminal-program status, unrelated to editor rendering
     runtimeHost: { session: {
       settingsManager: { getShowTerminalProgress: () => false },
@@ -153,7 +153,8 @@ test("native manual/auto compaction shares the editor row with elapsed time, wit
       await host.handleEvent({ type: "compaction_end", reason, aborted: true });
       assert.doesNotMatch(row(100), /compacting|Compacting|1h 01m 05s/);
       editor.handleInput("\x1b");
-      assert.equal(counts().idleEscapes, ["manual", "threshold", "overflow"].indexOf(reason) + 1, "native Escape handler is restored after cancellation");
+      assert.equal(counts().idleEscapes, ["manual", "threshold", "overflow"].indexOf(reason) + 1,
+        "native Escape handler is restored after cancellation");
     }
   }
   for (const [prototype, descriptors] of originals) assert.deepEqual(Object.getOwnPropertyDescriptors(prototype), descriptors);
@@ -167,7 +168,8 @@ test("compaction elapsed survives native retry swaps and resets after failure or
   const row = () => Tui.stripTerminalSequences(host.editor.render(100)[0]);
   await host.handleEvent({ type: "compaction_start", reason: "manual" });
   now += 5_000;
-  await host.handleEvent({ type: "summarization_retry_scheduled", source: "compaction", reason: "manual", attempt: 1, maxAttempts: 2, delayMs: 10_000, errorMessage: "Temporary offline failure" });
+  await host.handleEvent({ type: "summarization_retry_scheduled", source: "compaction", reason: "manual",
+    attempt: 1, maxAttempts: 2, delayMs: 10_000, errorMessage: "Temporary offline failure" });
   assert.match(row(), /Retrying/);
   assert.doesNotMatch(row(), / · 5s/, "only compaction receives an elapsed suffix");
   now += 10_000;
@@ -185,7 +187,8 @@ test("compaction elapsed survives native retry swaps and resets after failure or
   now += 50_000;
   await host.handleEvent({ type: "compaction_start", reason: "overflow" });
   assert.match(row(), /Auto-compacting.* · 0s/, "a fresh editor owns a fresh clock");
-  await host.handleEvent({ type: "summarization_retry_scheduled", source: "branchSummary", attempt: 1, maxAttempts: 2, delayMs: 1_000, errorMessage: "Offline branch retry" });
+  await host.handleEvent({ type: "summarization_retry_scheduled", source: "branchSummary",
+    attempt: 1, maxAttempts: 2, delayMs: 1_000, errorMessage: "Offline branch retry" });
   await host.handleEvent({ type: "summarization_retry_attempt_start", source: "branchSummary" });
   assert.match(row(), /Summarizing branch/);
   assert.doesNotMatch(row(), / · \d+s/, "other native status kinds remain visible without compaction timing");

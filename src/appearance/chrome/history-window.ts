@@ -615,7 +615,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     const restoreEnd = observe(scroll, ["scrollToEnd"], () => {
       if (navigationActive && scroll.child === window && window.jump("newer")) tui.requestRender?.();
     });
-    // Pi 1.4's private pointer helper supplies actual scrollbar provenance.
+    // Pi 1.5's private pointer helper supplies actual scrollbar provenance.
     // Generic scrollTo also serves prompt/search navigation and stays native.
     // An absent/locked helper disables only this optional enhancement.
     const pointerName = "scrollScrollbarToPointer";

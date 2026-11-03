@@ -40,7 +40,7 @@ function currentHook(): Hook {
 }
 
 /** One activation owns weak request registrations, not a single current request.
- * Pi 1.4 forwards each native summary's signal and cacheRetention:none through
+ * Pi 1.5 forwards each native summary's signal and cacheRetention:none through
  * this public runtime. Weak keys survive overlapping history/prefix/retry calls
  * without retaining completed signals or depending on signal-less end events. */
 export function createCompactionOutputLimiter() {

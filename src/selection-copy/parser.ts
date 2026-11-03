@@ -1,4 +1,4 @@
-// Fallback lexer aligned with Pi 1.4.0: marked 18.0.11 +
+// Fallback lexer aligned with Pi 1.5.0: marked 18.0.11 +
 // marked-cjk-friendly 0.1.2 emStrong, strict strikethrough and latex extensions.
 // Narrow adaptation of pi-tui src/components/markdown.ts (MIT). Keep native
 // tokens authoritative; fallback rows are checked against the actual render so
@@ -9,7 +9,21 @@ import markedCjkFriendly from "marked-cjk-friendly";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
-class StrictStrikethroughTokenizer extends Tokenizer {
+// Match native Pi bare-URL punctuation without importing private pi-tui modules.
+const CJK_URL_PUNCTUATION = new RegExp(
+  "(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}" +
+  "\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]" +
+  "|[，．：；！？（）［］｛｝“”‘’…—])", "u",
+);
+
+class MarkdownTokenizer extends Tokenizer {
+  override url(src: string): ReturnType<Tokenizer["url"]> {
+    const token = super.url(src);
+    if (!token) return undefined;
+    const punctuation = token.raw.search(CJK_URL_PUNCTUATION);
+    return punctuation < 0 ? token : super.url(token.raw.slice(0, punctuation));
+  }
+
   override del(src: string, maskedSrc: string, prevChar?: string): ReturnType<Tokenizer["del"]> {
     void maskedSrc;
     void prevChar;
@@ -210,7 +224,7 @@ export interface CopyLexer {
 
 export function createCopyLexer(): CopyLexer {
   const parser = new Marked();
-  parser.setOptions({ tokenizer: new StrictStrikethroughTokenizer() as never });
+  parser.setOptions({ tokenizer: new MarkdownTokenizer() as never });
   parser.use({
     tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
     extensions: [...LATEX_MARKDOWN_EXTENSIONS] as never,

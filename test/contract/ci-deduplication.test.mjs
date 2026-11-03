@@ -27,7 +27,7 @@ function fixture() {
   const push = { ...run, id: 100, event: "push", created_at: "2026-10-16T07:03:24Z" };
   const pull = { number: 7, state: "open", mergeable: true, merge_commit_sha: mergeRef,
     head: { repo, ref: "feature", sha: head }, base: { repo, ref: "main" } };
-  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head, name: "Pi 1.4.0", status: "in_progress", runner_id: 3 });
+  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head, name: "Pi 1.5.0 · ubuntu-latest", status: "in_progress", runner_id: 3 });
   const sourceJobs = [validation(200)];
   const pushJobs = [validation(100), { run_id: 100, run_attempt: 1, head_sha: head,
     name: "Check duplicate feature push", status: "completed", conclusion: "success" }];
@@ -58,12 +58,15 @@ function fixture() {
   return f;
 }
 
-test("PR validation retires only the exact older internal feature push", async () => {
-  const f = fixture();
-  assert.equal(await f.run(), true);
-  assert.deepEqual(f.writes(), [{ method: "POST", path: `${pushPath}/cancel`, query: undefined }]);
-  assert.deepEqual(f.sleeps, []);
-  assert.equal(f.calls.find(c => c.path.endsWith("/runs")).query.head_sha, head);
+test("PR matrix validation retires only the exact older internal feature push", async t => {
+  for (const os of ["ubuntu-latest", "windows-latest"]) await t.test(os, async () => {
+    const f = fixture();
+    f.sourceJobs[0].name = f.pushJobs[0].name = `Pi 1.5.0 · ${os}`;
+    assert.equal(await f.run(), true);
+    assert.deepEqual(f.writes(), [{ method: "POST", path: `${pushPath}/cancel`, query: undefined }]);
+    assert.deepEqual(f.sleeps, []);
+    assert.equal(f.calls.find(c => c.path.endsWith("/runs")).query.head_sha, head);
+  });
 });
 
 test("workflow CLI binds its PR event, merge snapshot and token at the HTTP boundary", async t => {
@@ -123,6 +126,7 @@ test("source scope, PR state and all three CI policies must authorize cleanup", 
 
 test("target needs matching branch/head, first attempt, older creation and branch-only admission", async t => {
   const cases = {
+    "older SDK validation": f => { f.sourceJobs[0].name = "Pi 1.4.0 · ubuntu-latest"; },
     "default branch": f => { f.push.head_branch = "main"; },
     "different head": f => { f.push.head_sha = "e".repeat(40); },
     "newer push": f => { f.push.created_at = "2026-10-16T07:03:35Z"; },

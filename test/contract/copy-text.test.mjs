@@ -64,16 +64,15 @@ test("fusion composition retains exact diff and command copy across narrow wraps
   }
 });
 
-test("copy provenance: styled whitespace stays in the row; CJK, combining and emoji columns stay exact", () => {
-  // The reset makes the following space token non-whitespace to the host:
-  // these spaces survive wrapping and must NOT move into a bridge.
+test("copy provenance: styled whitespace bridges wraps; CJK, combining and emoji columns stay exact", () => {
+  // Pi drops the styled spaces at this boundary; copy restores them through the soft-wrap bridge.
   const frame = renderFrame(new Tui.Text("\x1b[1m你e\u0301 👩‍👩‍👦\x1b[22m  fin", 0, 0), 6);
   assert.deepEqual(select(frame), { text: "你e\u0301 👩‍👩‍👦  fin", mappedRows: 2, nativeRows: 0 });
   for (const [start, end, expected] of [[0, 2, "你"], [2, 3, "e\u0301"], [4, 6, "👩‍👩‍👦"]]) {
     assert.equal(select(frame, 0, 0, () => ({ start, end })).text, expected);
   }
-  assert.equal(select(frame, 1, 1, () => ({ start: 0, end: 2 })).text, "  ");
-  assert.equal(select(frame, 0, 1, (row) => row === 0 ? { start: 4, end: 6 } : { start: 0, end: 3 }).text, "👩‍👩‍👦  f");
+  assert.equal(select(frame, 1, 1, () => ({ start: 0, end: 2 })).text, "fi");
+  assert.equal(select(frame, 0, 1, (row) => row === 0 ? { start: 4, end: 6 } : { start: 0, end: 3 }).text, "👩‍👩‍👦  fin");
 });
 
 test("copy provenance: hard boundaries, tab expansion and stripped control spans remain distinct", () => {

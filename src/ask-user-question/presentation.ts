@@ -65,7 +65,7 @@ export interface Presentation {
 	rowBudget: RowBudget;
 }
 
-// Pi 1.4 owns inline dialog stacking, focus restoration and per-dialog removal.
+// Pi 1.5 owns inline dialog stacking, focus restoration and per-dialog removal.
 export const INLINE_PRESENTATION: Presentation = Object.freeze({
 	overlay: false,
 	rowBudget: inlineRowBudget,

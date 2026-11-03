@@ -173,9 +173,11 @@ function renderTokenMirror(
       return [contentLine(renderInline(instance, [token], styleContext))];
     }
     case "latexBlock": {
-      const rendered = token.pending !== true && instance.options?.renderLatex !== false
-        ? (latexPainter?.(token.text ?? "", { display: true }) ?? (token.raw ?? "").trim())
-        : (token.raw ?? "").trim();
+      let rendered = token.pending !== true && instance.options?.renderLatex !== false
+        ? latexPainter?.(token.text ?? "", { display: true })
+        : undefined;
+      if (rendered == null || rendered.split("\n").some(line => ctx.fns.visibleWidth(line) > width))
+        rendered = (token.raw ?? "").trim();
       const lines = rendered.split("\n").map((line) => contentLine(applyDefaultStyle(instance, line)));
       lines.push(...spacing(nextTokenType, ["space"]));
       return lines;
@@ -215,7 +217,7 @@ function renderTokenMirror(
       return renderListMirror(ctx, token, 0, width, styleContext);
     }
     case "blockquote": {
-      const lines = renderQuoteMirror(ctx, token, width);
+      const lines = renderQuoteMirror(ctx, token, width, styleContext);
       lines.push(...spacing(nextTokenType, ["space"]));
       return lines;
     }
@@ -345,7 +347,11 @@ function unorderedMarker(item: MarkdownToken): string | undefined {
   return match ? `${match[1]!} ` : undefined;
 }
 
-function renderQuoteMirror(ctx: MirrorContext, token: MarkdownToken, width: number): LogicalLine[] {
+function renderQuoteMirror(ctx: MirrorContext, token: MarkdownToken, width: number, styleContext: unknown): LogicalLine[] {
+  const quoteTokens = token.tokens ?? [];
+  // A border needs two cells plus content. Native Pi omits it at narrower widths instead of rewrapping exponentially.
+  if (width < 3) return quoteTokens.flatMap((child, index) =>
+    renderTokenMirror(ctx, child, width, quoteTokens[index + 1]?.type, styleContext));
   const instance = ctx.instance as MarkdownInstance;
   const fns = ctx.fns;
   const quote = painter(instance, "quote");
@@ -356,9 +362,8 @@ function renderQuoteMirror(ctx: MirrorContext, token: MarkdownToken, width: numb
     if (!quoteStylePrefix) return quoteStyle(line);
     return quoteStyle(line.replace(/\x1b\[0m/g, `\x1b[0m${quoteStylePrefix}`));
   };
-  const quoteContentWidth = Math.max(1, width - 2);
+  const quoteContentWidth = width - 2;
   const quoteInlineStyleContext = { applyText: (text: string) => text, stylePrefix: quoteStylePrefix };
-  const quoteTokens = token.tokens ?? [];
   const rendered: LogicalLine[] = [];
   for (let i = 0; i < quoteTokens.length; i++) {
     rendered.push(...renderTokenMirror(ctx, quoteTokens[i]!, quoteContentWidth, quoteTokens[i + 1]?.type, quoteInlineStyleContext));
@@ -559,7 +564,8 @@ export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolea
   const tokenDescriptor = Object.getOwnPropertyDescriptor(prototype, "renderToken");
   const capture = tokenDescriptor && typeof tokenDescriptor.value === "function" && tokenDescriptor.configurable && tokenDescriptor.writable;
   const wrapped = wrapRenderPrototype<MarkdownInstance>(prototype, MARKDOWN_COPY_OWNER, deps,
-    buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" }, !!capture);
+    buildMarkdownProduct,
+    { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" }, !!capture);
   if (wrapped && capture) {
     const original = tokenDescriptor.value as NonNullable<MarkdownInstance["renderToken"]>;
     Object.defineProperty(prototype, "renderToken", { ...tokenDescriptor,

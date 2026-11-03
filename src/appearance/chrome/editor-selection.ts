@@ -32,7 +32,7 @@ interface EditorRow { frame: EditorFrame; row: number; left: number; width: numb
 type SelectionPoint = { row: number; col: number; boundary?: boolean };
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-// Pi 1.4 has no public range edit. Isolate the adapter here and reuse native
+// Pi 1.5 has no public range edit. Isolate the adapter here and reuse native
 // wrapping, paste segmentation and undo rather than duplicating the editor.
 function nativeEditor(value: unknown): NativeEditor | undefined {
   if (!value || typeof value !== "object") return;

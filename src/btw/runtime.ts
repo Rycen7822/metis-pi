@@ -117,12 +117,12 @@ function createBtwResourceLoader(ctx: ExtensionContext, appendSystemPrompt: stri
 }
 
 function parentModelRuntime(ctx: ExtensionContext): ModelRuntime {
-	// Pi 1.4 exposes a registry facade to extensions but requires its native
+	// Pi 1.5 exposes a registry facade to extensions but requires its native
 	// runtime for child sessions. Borrow that owner read-only; never copy auth
 	// or silently fall back to a new runtime when this host contract changes.
 	const runtime = Reflect.get(ctx.modelRegistry, "runtime");
 	if (!(runtime instanceof ModelRuntime)) {
-		throw new Error("BTW requires the Pi 1.4 model runtime.");
+		throw new Error("BTW requires the Pi 1.5 model runtime.");
 	}
 	return runtime;
 }

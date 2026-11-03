@@ -2,7 +2,10 @@
 
 ## 环境与常用命令
 
-开发依赖与锁文件固定 Pi 1.4.0；Node 和原生资产要求见[兼容性](compatibility.md)。使用完整 checkout 与根工具链，不在 `src/` 内另装依赖。
+开发依赖与锁文件固定 Pi 1.5.0；Node 和原生资产要求见[兼容性](compatibility.md)。
+使用完整 checkout 与根工具链，不在 `src/` 内另装依赖。
+依赖安装使用 `npm ci --ignore-scripts --bin-links=false`；检查脚本直接调用 TypeScript 实体入口，
+PTY 使用同版 SDK 的真实 CLI，不依赖 `.bin` 软链接。
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
@@ -40,14 +43,14 @@ Python 子代理运行核心使用标准库；测试另需 [requirements.txt](ht
 | E3 / E4 | 思考手势 / 复制、草稿和实际提交。 |
 | E6 | 多 skill 补全、payload 和折叠。 |
 
-CI 在 Ubuntu / Windows 的 Pi 1.4.0 基线上运行 verify；Linux 另跑 tmux/严格 PTY，并由独立 job 重建 Rust 搜索引擎、核对二进制与单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
+CI 在 Ubuntu / Windows 的 Pi 1.5.0 基线上运行 verify；Linux 另跑 tmux/严格 PTY，并由独立 job 重建 Rust 搜索引擎、核对二进制与单元检查。功能分支若已有同 SHA、开放可合并的 PR，会跳过重复 push 全测；状态未知仍完整执行。同一 PR 新提交取消旧运行，main/tag/手动运行各自分组。
 
 CI verify 使用 Node compile cache，进程和配置隔离保留。包检查由 `test/package.test.mjs` 调用 `npm pack --dry-run --json --ignore-scripts`，不把未实际运行的安装当验证。
 
 ## Pi SDK 源码补丁
 
-`sdk-patches/pi-1.4.0/`维护针对官方 Pi v1.4.0 的显式构建、CPU/会话内存优化补丁与实体依赖准备工具，
-应用顺序、构建命令和验证边界见[补丁说明](../sdk-patches/pi-1.4.0/README.md)。
+`sdk-patches/pi-1.5.0/`维护针对官方 Pi v1.5.0 的显式构建、CPU/会话内存优化补丁与实体依赖准备工具，
+应用顺序、构建命令和验证边界见[补丁说明](../sdk-patches/pi-1.5.0/README.md)。
 这些不是扩展运行时猴子补丁，不会在安装 Metis、postinstall 或 `/reload` 时自动修改 SDK；
 只有显式重建并另行安装自定义 SDK 后才生效。源码准备/验证与用户安装分离，不能把源码测试通过当作当前会话已经启用。
 

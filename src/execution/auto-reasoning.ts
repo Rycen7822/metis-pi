@@ -1,4 +1,5 @@
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { auxiliaryToolRenderers, displayRecord } from "./ui/auxiliary-tool.ts";
 

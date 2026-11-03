@@ -1,5 +1,5 @@
 diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
-index 897c51d..14a8381 100644
+index a64c262..ffa4a9d 100644
 --- a/packages/tui/src/layout.ts
 +++ b/packages/tui/src/layout.ts
 @@ -50,6 +50,20 @@ export interface ScrollbarGeometry {
@@ -88,8 +88,8 @@ index 897c51d..14a8381 100644
 +	for (const child of box.children) paintBox(child, screen, totalWidth, previousCompositions, nextCompositions);
  
  	if (box.scrollView && box.scrollContentLines && box.scrollView.scrollTop > 0 && box.rect.height > 0) {
- 		for (let imageRow = box.scrollView.scrollTop - 1; imageRow >= 0; imageRow--) {
-@@ -397,7 +447,9 @@ export function renderLayoutFrame(
+ 		// Find the nearest image line above the viewport. Placeholder rows below an
+@@ -401,7 +451,9 @@ export function renderLayoutFrame(
  		height: safeHeight,
  	});
  	const lines = Array.from({ length: safeHeight }, () => "");

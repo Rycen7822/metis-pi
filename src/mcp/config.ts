@@ -137,6 +137,13 @@ function isLoopbackRedirectUri(value: string): boolean {
 	return url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname) && url.search === "" && url.hash === "";
 }
 
+// Public-client documents list only these native Pi loopback callback paths.
+export function isClientMetadataDocumentCallback(callbackUrl: string | undefined): boolean {
+  if (callbackUrl === undefined) return true;
+  const url = new URL(callbackUrl);
+  return url.hostname !== "[::1]" && url.pathname === "/callback";
+}
+
 function validateOAuth(value: unknown): string | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) return "oauth must be an object";
@@ -160,6 +167,15 @@ function validateOAuth(value: unknown): string | undefined {
 	if (value.scope !== undefined && typeof value.scope !== "string") return "oauth.scope must be a string";
 	if (value.clientName !== undefined && (typeof value.clientName !== "string" || !value.clientName.trim())) {
 		return "oauth.clientName must be a non-empty string";
+	}
+	const registration = value.clientRegistration;
+	if (registration !== undefined && registration !== "auto" && registration !== "dcr" && registration !== "cimd")
+		return 'oauth.clientRegistration must be "auto", "dcr", or "cimd"';
+	if (registration === "cimd") {
+		if (value.clientId !== undefined || value.clientName !== undefined)
+			return 'oauth.clientRegistration "cimd" cannot be combined with oauth.clientId or oauth.clientName';
+		if (!isClientMetadataDocumentCallback(typeof value.callbackUrl === "string" ? value.callbackUrl : undefined))
+			return 'oauth.clientRegistration "cimd" requires a native Pi loopback /callback URI';
 	}
 	const metadataUrl = value.authServerMetadataUrl;
 	if (metadataUrl !== undefined) {

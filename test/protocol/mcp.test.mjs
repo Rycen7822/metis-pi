@@ -5,15 +5,14 @@ import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
-import { VERSION } from "@earendil-works/pi-coding-agent";
+import { getPackageDir, VERSION } from "@earendil-works/pi-coding-agent";
 import { McpServerSession } from "../../src/mcp/session.ts";
-import { readMcpConfiguration } from "../../src/mcp/config.ts";
+import { readMcpConfiguration, validateMcpServerConfig } from "../../src/mcp/config.ts";
 import { CatalogCache } from "../../src/mcp/catalog.ts";
 import { McpCredentials, createAuth } from "../../src/mcp/auth.ts";
 import { convertResult, syncTools } from "../../src/mcp/tools.ts";
 import { startHttp, image } from "../helpers/mcp-server.mjs";
-const run = promisify(execFile), cli = fileURLToPath(new URL("../../node_modules/.bin/pi", import.meta.url));
+const run = promisify(execFile), cli = join(getPackageDir(), "dist/bundle/cli.js");
 const withBom = (value) => `\uFEFF${JSON.stringify(value)}`;
 const serverEntries = (result) => result.servers.map((entry) => [entry.name, entry.scope]);
 
@@ -178,6 +177,64 @@ test("nested MCP output schemas relocate local refs without changing literal dat
   assert.equal(output.properties.remote.$ref, "https://example.invalid/schema");
   assert.deepEqual(output.properties.literal, { const: literal, default: literal, examples: [literal] });
   assert.deepEqual(owner.catalog.tools[0].outputSchema, fixture.state.outputSchema, "registration does not mutate the server catalog");
+});
+
+test("MCP refresh keeps the native document or registered client identity", async t => {
+  const serverUrl = "https://fixture.invalid/mcp", issuer = "https://auth.fixture.invalid";
+  const cases = [
+    { name: "default auto document", iss: true },
+    { name: "server-bound document without iss", iss: false },
+    { name: "explicit cimd", iss: true, oauth: { clientRegistration: "cimd" } },
+    { name: "auto keeps DCR", iss: true, clientId: "registered" },
+    { name: "explicit dcr", iss: true, clientId: "registered", oauth: { clientRegistration: "dcr" } },
+    { name: "explicit client", iss: true, oauth: { clientId: "configured" } },
+    { name: "unsupported explicit cimd", iss: true, unsupported: true, oauth: { clientRegistration: "cimd" } },
+  ];
+  for (const scenario of cases) await t.test(scenario.name, async t => {
+    const dir = mkdtempSync(join(tmpdir(), "metis-mcp-client-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const entry = { name: "fixture", scope: "global", source: "fixture", config: { url: serverUrl, oauth: scenario.oauth } };
+    const credentials = new McpCredentials(dir, entry);
+    const metadata = { issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
+      registration_endpoint: issuer + "/register", response_types_supported: ["code"],
+      token_endpoint_auth_methods_supported: ["none"], client_id_metadata_document_supported: !scenario.unsupported,
+      authorization_response_iss_parameter_supported: scenario.iss };
+    const state = { serverUrl, tokens: { access_token: "old", refresh_token: "refresh", token_type: "Bearer" },
+      discovery: { authorizationServerUrl: issuer, authorizationServerMetadata: metadata } };
+    if (scenario.clientId) state.clientInformation = { client_id: scenario.clientId };
+    writeFileSync(credentials.path, JSON.stringify({ [credentials.key]: state }));
+    let calls = 0;
+    const refresh = createAuth(entry, credentials).onUnauthorized({ token: "old", response: new Response(null, { status: 401 }),
+      fetch: async (input, init) => {
+        calls++;
+        assert.equal(String(input), issuer + "/token", "a logged-in document client must not register a different identity");
+        const params = new URLSearchParams(String(init.body));
+        const id = params.get("client_id");
+        if (scenario.clientId || scenario.oauth?.clientId) assert.equal(id, scenario.clientId ?? scenario.oauth.clientId);
+        else if (scenario.iss) assert.equal(id, "https://pi.dev/oauth/client.json");
+        else assert.match(id, /^https:\/\/pi\.dev\/oauth\/[A-Za-z0-9_-]{12}\/client\.json$/);
+        assert.equal(params.get("refresh_token"), "refresh");
+        return Response.json({ access_token: "new", refresh_token: "rotated", token_type: "Bearer" });
+      } });
+    if (scenario.unsupported) {
+      await assert.rejects(refresh, /does not support Client ID Metadata Documents/);
+      assert.equal(calls, 0);
+    } else {
+      await refresh;
+      assert.equal(calls, 1);
+      assert.equal((await credentials.load()).tokens.refresh_token, "rotated");
+      if (!scenario.clientId) assert.equal((await credentials.load()).clientInformation, undefined);
+    }
+  });
+});
+
+test("MCP client registration config rejects unsupported identities before auth", () => {
+  const valid = oauth => validateMcpServerConfig("fixture", { url: "https://fixture.invalid/mcp", oauth });
+  for (const clientRegistration of ["auto", "dcr", "cimd"]) assert.equal(typeof valid({ clientRegistration }), "object");
+  for (const oauth of [{ clientRegistration: "invalid" }, { clientRegistration: "cimd", clientId: "fixed" },
+    { clientRegistration: "cimd", clientName: "custom" },
+    { clientRegistration: "cimd", callbackUrl: "http://[::1]/callback" },
+    { clientRegistration: "cimd", callbackUrl: "http://127.0.0.1/other" }]) assert.equal(typeof valid(oauth), "string");
 });
 
 test(

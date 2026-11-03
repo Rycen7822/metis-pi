@@ -5,9 +5,43 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import type { AuthProvider, McpFetch } from "@earendil-works/pi-mcp";
 import { authorizeMcp, McpOAuthProvider, McpOAuthAuthorizationRequiredError, parseWwwAuthenticate,
-  type McpOAuthState, type McpOAuthStateStore, type OAuthChallenge } from "@earendil-works/pi-mcp/oauth";
-import type { McpServerEntry } from "@earendil-works/pi-coding-agent";
-import { canonical, isRecord, mcpNamespace, resolveValue } from "./config.ts";
+  type McpOAuthState, type McpOAuthStateStore, type McpOAuthProviderOptions, type OAuthChallenge } from "@earendil-works/pi-mcp/oauth";
+import { getPackageDir, type McpServerEntry } from "@earendil-works/pi-coding-agent";
+import { canonical, isClientMetadataDocumentCallback, isRecord, mcpNamespace, resolveValue } from "./config.ts";
+
+const appName = readSdkAppName();
+type OAuthSettings = NonNullable<Extract<McpServerEntry["config"], { url: string }>["oauth"]>;
+
+function readSdkAppName(): string {
+  const manifest: unknown = JSON.parse(readFileSync(join(getPackageDir(), "package.json"), "utf8"));
+  const config = isRecord(manifest) && isRecord(manifest.piConfig) ? manifest.piConfig : undefined;
+  return typeof config?.name === "string" && config.name ? config.name : "pi";
+}
+
+// Pi 1.5 client-document policy; retain its server binding when the authorization response lacks iss.
+function clientMetadataDocument(
+  serverUrl: string, redirectUrl: string, settings: OAuthSettings,
+): McpOAuthProviderOptions["clientMetadataDocument"] {
+  const registration = settings.clientRegistration ?? "auto";
+  const useDocument = registration === "cimd" || (registration === "auto" && !settings.clientId && !settings.clientName
+    && appName === "pi" && isClientMetadataDocumentCallback(settings.callbackUrl));
+  if (!useDocument) return undefined;
+  return metadata => {
+    if (!metadata?.client_id_metadata_document_supported || !metadata.token_endpoint_auth_methods_supported?.includes("none")) {
+      if (registration === "cimd") throw new Error("The authorization server does not support Client ID Metadata Documents");
+      return undefined;
+    }
+    if (metadata.authorization_response_iss_parameter_supported)
+      return { url: "https://pi.dev/oauth/client.json", redirectUrl };
+    const server = new URL(serverUrl);
+    server.hash = "";
+    // Native Pi uses the first 9 digest bytes: a 12-character server-specific callback ID, not a content integrity check.
+    const id = createHash("sha256").update(server.href).digest().subarray(0, 9).toString("base64url");
+    const callback = new URL(redirectUrl);
+    callback.pathname = `/callback/${id}`;
+    return { url: `https://pi.dev/oauth/${id}/client.json`, redirectUrl: callback.href };
+  };
+}
 
 export class McpCredentials {
   readonly path: string;
@@ -91,17 +125,20 @@ export function createAuth(entry: McpServerEntry, credentials: McpCredentials) {
     refreshing ??= credentials.refresh(async (store, state) => {
       if (state?.tokens?.access_token !== staleToken) return;
       if (!state?.tokens?.refresh_token) throw new McpOAuthAuthorizationRequiredError();
-      const settings = config.oauth;
+      const settings = config.oauth ?? {};
       const client = state.clientInformation;
       const registered = client && "redirect_uris" in client ? client.redirect_uris?.[0] : undefined;
-      const provider = new McpOAuthProvider({ serverUrl: config.url,
-        redirectUrl: settings?.callbackUrl ?? registered ?? "http://127.0.0.1/callback",
-        clientMetadata: { client_name: settings?.clientName ?? "pi" }, clientId: settings?.clientId,
-        clientSecret: settings?.clientSecret === undefined ? undefined : resolveValue(settings.clientSecret, "oauth.clientSecret"),
+      const callback = new URL(settings.callbackUrl ?? "http://127.0.0.1/callback");
+      if (!callback.port && settings.callbackPort !== undefined) callback.port = String(settings.callbackPort);
+      const redirectUrl = callback.port ? callback.href : registered ?? "http://127.0.0.1/callback";
+      const provider = new McpOAuthProvider({ serverUrl: config.url, redirectUrl,
+        clientMetadata: { client_name: settings.clientName ?? appName }, clientId: settings.clientId,
+        clientMetadataDocument: clientMetadataDocument(config.url, redirectUrl, settings),
+        clientSecret: settings.clientSecret === undefined ? undefined : resolveValue(settings.clientSecret, "oauth.clientSecret"),
         store, onRedirect: () => {} });
       const result = await authorizeMcp(provider, { serverUrl: config.url,
         resourceMetadataUrl: challenge?.resourceMetadataUrl,
-        authorizationServerMetadataUrl: settings?.authServerMetadataUrl ? new URL(settings.authServerMetadataUrl) : undefined,
+        authorizationServerMetadataUrl: settings.authServerMetadataUrl ? new URL(settings.authServerMetadataUrl) : undefined,
         scope: challenge?.scope,
         fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(15_000) }) });
       if (result === "REDIRECT") throw new McpOAuthAuthorizationRequiredError();

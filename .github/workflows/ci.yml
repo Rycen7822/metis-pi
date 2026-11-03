@@ -61,7 +61,7 @@ jobs:
           console.log(duplicate ? 'Matching mergeable PR covers this push; skipping duplicate tests.' : 'Full push validation required.');
           NODE
   test:
-    name: Pi 1.4.0 · ${{ matrix.os }}
+    name: Pi 1.5.0 · ${{ matrix.os }}
     needs: admission
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:
@@ -80,7 +80,7 @@ jobs:
           python-version: '3.11'
       - uses: astral-sh/setup-uv@v6
       - run: uv pip install --system --python python -r test/subagents/requirements.txt
-      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm ci --ignore-scripts --bin-links=false --no-audit --no-fund
       - name: Cache TypeScript build info
         uses: actions/cache@v4
         with:
@@ -91,12 +91,12 @@ jobs:
       - name: Verify selected host packages
         shell: bash
         env:
-          EXPECTED_PI_VERSION: '1.4.0'
+          EXPECTED_PI_VERSION: '1.5.0'
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
-          for (const name of ['pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-tui', 'pi-mcp']) {
+          for (const name of ['pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-codemode', 'pi-tui', 'pi-mcp', 'pi-schema']) {
             const manifest = JSON.parse(readFileSync(`node_modules/@earendil-works/${name}/package.json`, 'utf8'));
             assert.equal(manifest.version, process.env.EXPECTED_PI_VERSION, name);
           }
@@ -116,7 +116,7 @@ jobs:
       - run: npm run test:pty:strict
         if: runner.os == 'Linux'
         env:
-          PI_BIN: ${{ github.workspace }}/node_modules/.bin/pi
+          PI_BIN: ${{ github.workspace }}/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
   neural-engine:
     name: Owned Rust search · Linux x64
     needs: admission

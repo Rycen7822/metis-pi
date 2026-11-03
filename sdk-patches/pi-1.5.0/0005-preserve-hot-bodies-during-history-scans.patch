@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
-index b849a38..67beb6a 100644
+index 2fad08e..2ebe080 100644
 --- a/packages/coding-agent/src/core/session-entry-store.ts
 +++ b/packages/coding-agent/src/core/session-entry-store.ts
 @@ -127,6 +127,12 @@ export class SessionEntryStore {
@@ -19,12 +19,21 @@ index b849a38..67beb6a 100644
  		this.add(entry);
  	}
  
+-	/** Undo the tail append after persistence fails; never discard a different or committed record. */
++	/** Revert the tail append after persistence fails, including any body cached by that attempt. */
+ 	rollbackAppend(id: string): void {
+ 		const record = this.records.at(-1);
+ 		if (record?.kind !== "entry" || record.metadata.id !== id)
+@@ -155,7 +161,7 @@ export class SessionEntryStore {
+ 		}
+ 	}
+ 
 -	private read(record: StoredSessionEntry): SessionEntry {
 +	private read(record: StoredSessionEntry, cacheMiss: "retain" | "transient" = "retain"): SessionEntry {
  		if (record.body) return record.body;
  		const cached = this.cache.get(record);
  		if (cached) {
-@@ -174,7 +180,7 @@ export class SessionEntryStore {
+@@ -188,7 +194,7 @@ export class SessionEntryStore {
  		if (!entry || entry.id !== record.metadata.id || entry.type !== expectedType) {
  			throw new Error(`Session entry changed on disk: ${record.metadata.id}`);
  		}
@@ -34,10 +43,18 @@ index b849a38..67beb6a 100644
  	}
  
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 734a6c0..044d097 100644
+index f87cd8e..f0aa11f 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
-@@ -76,6 +76,7 @@ export type ReadonlySessionManager = Pick<
+@@ -9,7 +9,6 @@ import {
+ } from "@earendil-works/pi-ai";
+ import { randomUUID } from "crypto";
+ import {
+-	appendFileSync,
+ 	closeSync,
+ 	createReadStream,
+ 	existsSync,
+@@ -76,6 +75,7 @@ export type ReadonlySessionManager = Pick<
  	| "getLeafId"
  	| "getLeafEntry"
  	| "getEntry"
@@ -45,7 +62,7 @@ index 734a6c0..044d097 100644
  	| "getEntryMetadata"
  	| "getEntriesMetadata"
  	| "getBranchMetadata"
-@@ -1180,6 +1181,11 @@ export class SessionManager {
+@@ -1190,6 +1190,11 @@ export class SessionManager {
  		return this.store.getEntry(id);
  	}
  
@@ -58,10 +75,10 @@ index 734a6c0..044d097 100644
  	getEntryMetadata(id: string): SessionEntryMetadata | undefined {
  		return this.store.getMetadata(id);
 diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
-index 65d1906..b9b324b 100644
+index 7925c2a..3974e5a 100644
 --- a/packages/coding-agent/test/session-manager/file-operations.test.ts
 +++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
-@@ -73,6 +73,60 @@ describe("loadEntriesFromFile", () => {
+@@ -74,6 +74,60 @@ describe("loadEntriesFromFile", () => {
  		expect(preview.getEntry(old)).toMatchObject({ message: { content: "old 界🙂 evidence" } });
  	});
  

@@ -10,12 +10,12 @@ if (!sourceArgument || !dependenciesArgument) {
 const source = resolve(sourceArgument);
 const dependencies = resolve(dependenciesArgument);
 const target = resolve(source, "node_modules");
-const version = "1.4.0";
+const version = "1.5.0";
 const manifest = async (directory) => JSON.parse(await readFile(resolve(directory, "package.json"), "utf8"));
 if ((await manifest(resolve(source, "packages/coding-agent"))).version !== version) {
   throw new Error(`This preparation recipe requires Pi ${version} source.`);
 }
-for (const name of ["pi-ai", "pi-tui", "pi-coding-agent"]) {
+for (const name of ["pi-ai", "pi-tui", "pi-coding-agent", "pi-schema"]) {
   if ((await manifest(resolve(dependencies, "@earendil-works", name))).version !== version) {
     throw new Error(`Expected published ${name}@${version} in the supplied dependency tree.`);
   }
@@ -51,7 +51,12 @@ async function copyMissingPackages(from, to) {
 }
 await copyMissingPackages(dependencies, target);
 for (const name of ["pi-ai", "pi-coding-agent"]) {
-  await copyMissingPackages(resolve(dependencies, "@earendil-works", name, "node_modules"), target);
+  const nested = resolve(dependencies, "@earendil-works", name, "node_modules");
+  try { await lstat(nested); } catch (error) {
+    if (error.code === "ENOENT") continue;
+    throw error;
+  }
+  await copyMissingPackages(nested, target);
 }
 
 // Untouched workspace dependencies reuse their same-version published artifacts, not fabricated source outputs.
@@ -75,7 +80,7 @@ await cp(resolve(target, "@earendil-works/pi-ai/dist/providers/data"),
 
 // npm's workspace/bin links are disabled. These regular shell files preserve each tool's actual entry path.
 await mkdir(resolve(target, ".bin"), { recursive: true });
-for (const name of ["typescript", "@biomejs/biome", "shx", "vitest"]) {
+for (const name of ["typescript", "@biomejs/biome", "vitest"]) {
   const metadata = await manifest(resolve(target, name));
   const bins = typeof metadata.bin === "string" ? { [name.split("/").at(-1)]: metadata.bin } : metadata.bin;
   for (const [command, path] of Object.entries(bins)) {

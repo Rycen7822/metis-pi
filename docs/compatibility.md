@@ -4,7 +4,7 @@
 
 | 组件 | 要求 |
 | --- | --- |
-| Pi | **1.4.0**；依赖、锁文件和 CI 使用同一基线。 |
+| Pi | **1.5.0**；依赖、锁文件和 CI 使用同一基线。 |
 | Node.js | **22.19.0+**。 |
 | 子代理 | Linux/WSL 或 Windows，Python **3.11+**；使用父会话的 Pi SDK 和 Node。 |
 | PTY helper | 随包提供 **Linux x64** 静态可执行文件及 **Windows x64** EXE；Windows 需要 ConPTY（Windows 10 1809+ / Windows 11）。 |
@@ -31,6 +31,13 @@ codemode 默认显示实际动作摘要：Describe namespace/tool、Search tools
 ## 托管工具授权
 
 managed 子代理按显式工具白名单排除未授权的 MCP 和资源工具，保留原 excludes；明确 MCP 名称或 `mcp__` glob 交由宿主筛选。无法安全表达补集的普通 wildcard 白名单在启动前拒绝。默认选择和纯 modifier 遵循 Pi；此策略不改写主宿主的工具筛选，详见[原生子代理](subagents/native.md)。
+
+## MCP OAuth
+
+Metis 使用原生 `pi mcp login` 的凭据，并在同一状态与刷新锁下保存旋转 token。
+Pi 1.5 的默认 `oauth.clientRegistration: "auto"` 可选择客户端文档；已有 DCR 注册继续复用。
+显式 `dcr` / `cimd` 遵循原生配置规则，`cimd` 不与固定 clientId/clientName 或非原生回调路径混用。
+需要重新授权时保留原生登录提示；缺少所需服务端能力则明确报错，不自动改成另一客户端身份。
 
 ## 请求与恢复
 
