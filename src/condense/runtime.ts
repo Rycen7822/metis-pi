@@ -322,7 +322,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             .entries.flatMap((entry: any) =>
               entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
             )
-        : readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "message" || entry.type === "custom_message");
+        : readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "message" || entry.type === "custom_message",
+          { cacheAdmission: "bypass" });
       batches = captureUnindexedBatchesFromSession(
         branch,
         { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },

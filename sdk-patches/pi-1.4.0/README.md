@@ -15,6 +15,7 @@
 | `0002-reuse-stable-assistant-markdown.patch` | Assistant 持有最近正文槽位的 Markdown 实例；文本、padding、streaming 一致才复用。 |
 | `0003-load-session-bodies-on-demand.patch` | JSONL 常驻轻元数据及字节位置，正文按需读取；同步迁移 SDK 启动、统计、计费、模型恢复与边界预览消费者。 |
 | `0004-preview-session-trees-without-history-bodies.patch` | `/tree` 使用元数据树和扫描时生成的短预览；正文、复制与全文查询显式按需读，查询可取消。 |
+| `0005-preserve-hot-bodies-during-history-scans.patch` | 提供完整的一次性扫描读：只让 miss 不准入正文 LRU，保留已缓存热记录与原读取合同。 |
 
 行缓存不跳过组件 render、布局、复制来源发布、scrollbar、选区、overlay 或图片处理；保留全宽快路径，不缓存图片行。
 正文复用仍 invalidate，让动态 transform、宽度和主题样式重新求值；原生 token WeakRef 可能被 GC 回收，不改成强引用。
@@ -35,6 +36,11 @@ Metis 已通过 `src/session-history.ts` 做一处能力适配：stock SDK 回�
 `getTreeSource` 绑定原 store，旧 `getTree`、完整树输入、显式 selected subtree 和完整复制继续可用。
 message 搜索仍按原生 200 字符范围；custom 字符串、bash command、branch summary 的原全文搜索范围不缩短。
 元数据查询按 8ms 工作片让出线程，新输入或关闭使旧查询失效；缺失正文明确报错，不冒充空结果。
+
+`0005` 的 `getEntryForScan` 与普通 `getEntry` 共用解码和错误路径，已有缓存命中仍复用同一正文并更新 LRU；
+只有 miss 不准入，不全局关闭缓存、不缩小 16 MiB 预算。内存会话及显式预加载保持原身份，缺失 ID 仍返回 undefined。
+Metis 只在非 OCC 的原始 pending-turn 恢复指定 `cacheAdmission: "bypass"`；常规读取、状态恢复、树和 OCC 正文不变。
+无新配置或环境门控；旧 SDK 缺少此能力时自动沿用普通读取，完整正文及源错误不被替换。
 
 ## 隔离准备与应用
 
@@ -83,6 +89,11 @@ npm --prefix packages/coding-agent run build
   test/suite/regressions/8611-thinking-toggle-pending-bash-output.test.ts \
   test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts \
   test/suite/regressions/10285-mcp-tool-renderers.test.ts)
+(cd packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run --maxWorkers=2 \
+  test/session-manager test/session-context-edit.test.ts test/agent-session-stats.test.ts \
+  test/tree-selector.test.ts test/agent-session-tree-navigation.test.ts test/interactive-mode-tree-navigation.test.ts \
+  test/suite/regressions/9178-tree-during-compaction.test.ts test/suite/regressions/tree-during-streaming.test.ts \
+  test/suite/regressions/2860-replaced-session-context.test.ts test/suite/regressions/3688-tree-cancel-compacting.test.ts)
 ```
 
 修改包的产物分别在 `packages/tui/dist/`、`packages/coding-agent/dist/`，正式 CLI 入口为后者的 `bundle/cli.js`。
@@ -136,7 +147,7 @@ readiness 有单次异常，不把最快一次或轮询时间当输入 P95。额
 真实新 CLI 的离线 PTY E2（shell 与后续请求）、E4（复制/草稿/提交）通过，剪贴板写入隔离 sink；没有调用真实模型。
 这些测试只在临时 HOME 登记本地 Metis 源引用，不替换用户 SDK、配置或当前会话。
 
-固定 251 MiB 快照、6 次树开关及 36 次输入回显，主进程数值如下；RSS 是 GC 后 5 秒观察值，CPU 是该工作负载进程时间。
+以下保留原早窗矩阵：固定 251 MiB 快照、6 次树开关及 36 次输入回显；RSS 是诊断 GC 后 5 秒观察值，**不是自然平台**，CPU 是该工作负载进程时间。
 
 | 配置 | 旧基线 | 最终候选 |
 | --- | --- | --- |
@@ -148,7 +159,10 @@ readiness 有单次异常，不把最快一次或轮询时间当输入 P95。额
 | pruning ON，RSS | 551.08 MiB | **628.49–632.02 MiB** |
 | pruning ON，峰值 RSS | 781.61 MiB | 666.46–668.32 MiB |
 
-**尚有边界：pruning ON 的 RSS 仍高于旧基线，不能只报活跃堆下降就声称所有 RAM 指标改善。**
+**阶段解释更正：原 ON 的 628–632 MiB 只属于约 20 秒早窗，不能据此认定稳态退化。**
+后续正确 SDK 包根、Pi 1.4.0/dark 主题的自然 ON 匹配复核中，旧/新退出前约 45 秒 idle RSS 为 559.92/368.55 MiB，
+峰值为 806.92/658.13 MiB，shutdown RSS 为 645.58/455.70 MiB；候选在约 17 秒自然收缩。
+这是一对整体改造前后对照，带双方一致的 major/reduce trace、无手工 GC；**不是 0005 单项收益或长期保证**。
 OFF 有 2 次每臂数据；ON 旧基线 1 次、候选 2 次。输入是 Linux/tmux 回显往返，P95 候选有 7–11ms 离群，不能保证优于基线，
 也未复现 24 小时 Windows Terminal 场景。源快照中的旧 subagent scope 在临时 HOME 无对应后台记录，两臂均出现同步警告；
 故矩阵不证明真实 subagent 任务恢复成功，相关状态读取另由合同和真实历史对照验证。
@@ -156,6 +170,31 @@ OFF 有 2 次每臂数据；ON 旧基线 1 次、候选 2 次。输入是 Linux/
 仅在 `.work` 对候选试验了 semi-space 8/16 MiB；8 MiB 降低部分峰值，但持续工具/GC 停顿净收益证据不完整，
 **不修改默认 GC 参数或用户启动器，不引入定时 force GC**。未做全库 verify、所有 PTY journey 或真实 provider/Windows 验收。
 完整结果与失败修正、未采纳变体保留在上述工作目录；本阶段未安装用户 SDK。
+
+### 一次性扫描缓存准入的验收（0005）
+
+同机、同 251 MiB 历史，对照 `f30fd2d + 0000–0004` 与其加上本次 Root/0005 切片；每臂两次，ABBA 顺序，
+6 次树开关、36 次输入后固定自然闲置 60 秒。实体包根/版本有断言，每例独立 HOME/JITI 缓存；无 expose-gc、trace、GC 或 trim。
+
+| 主进程指标 | 普通准入 | 仅指定扫描 miss 不准入 |
+| --- | ---: | ---: |
+| shutdown 前峰值 RSS | 714.32–716.47 MiB | 640.63–641.94 MiB |
+| 最后 30 秒自然平台 RSS | 406.71–409.06 MiB | 405.95–407.38 MiB |
+| 自然闲置 heapUsed | 200.55–200.76 MiB | 187.62–188.24 MiB |
+| 每次运行 CPU 总时间 | 7.44–8.16 秒 | 7.31–7.50 秒 |
+| PTY 输入回显 P95 | 4.83–5.51 ms | 4.63–4.76 ms |
+
+峰值均值下降约 74.11 MiB（10.4%）；**自然 RSS 平台基本不变**，不将 used heap 变化当成 RSS 释放。
+同一实际工作集两遍扫描中，保留的 322 个热记录身份不变；随后当前投影恢复的真实 `fs.readSync` 从 152 次/约 1.19 MiB 降至 0。
+这是文件读取调用量，不是操作系统磁盘块 IO、冷盘速度或任意大小上下文的保证。
+
+完整 23911 条正文/树预览、172 模型消息、12634 索引、140 链、5079 用量及 1139 批次一致。
+最近 SDK 合同 186 项通过，10 个真实 API e2e 按上游既有无密钥条件跳过；Root stock/patched SDK 各 174 项 Condense/OCC 合同通过。
+SDK 完整 check、正式构建与 Root 类型/插件构建通过；增量应用后累计 32 个源码/测试/构建文件与测试候选逐一 cmp 相等。
+
+启动连续开树保留一例 217.81 ms；一次只读 GC 诊断未复现，不能确定归因。另加一对自然 idle 30 秒再交互的控制中，
+两臂树操作均约 60–115 ms、输入 P95 均约 4.94 ms；不声称树尾延迟改善，不用补例重算原 ABBA。
+探针/原始数据/失败修正见 `.work/pi-rss-exploration-20261103/execution/`。本补丁仍**未安装用户 SDK**，没有长期 Windows 或真实 provider 验收。
 
 ## 后续维护与撤回
 

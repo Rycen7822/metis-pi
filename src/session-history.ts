@@ -13,6 +13,7 @@ export type SessionEntryReference = Pick<SessionEntry, "id" | "parentId" | "time
 );
 
 interface HistoryReader extends Pick<ExtensionContext["sessionManager"], "getBranch" | "getEntries" | "getEntry"> {
+  getEntryForScan?(id: string): SessionEntry | undefined;
   getBranchMetadata?(): SessionEntryReference[];
   getEntriesMetadata?(): SessionEntryReference[];
   getEntryMetadata?(id: string): SessionEntryReference | undefined;
@@ -56,11 +57,15 @@ export function sessionEntryFacts(reader: {
   return reader.getEntriesMetadata?.() ?? reader.getEntries?.() ?? [];
 }
 
-/** Filter before loading bodies. Required old state is read in full, never replaced with placeholders. */
+/**
+ * Filter before loading complete bodies. One-pass scans can skip cache admission on supporting hosts;
+ * cache hits and older-host reads retain their normal semantics. Never substitute placeholders.
+ */
 export function* readHistoryEntries(
   reader: HistoryReader,
   scope: HistoryScope,
   select: (entry: SessionEntryReference) => boolean,
+  options?: { cacheAdmission: "bypass" },
 ): IterableIterator<SessionEntry> {
   const metadata = scope === "branch" ? reader.getBranchMetadata : reader.getEntriesMetadata;
   if (!metadata) {
@@ -68,9 +73,10 @@ export function* readHistoryEntries(
     for (const entry of entries) if (select(entry)) yield entry;
     return;
   }
+  const readEntry = options?.cacheAdmission === "bypass" && reader.getEntryForScan ? reader.getEntryForScan : reader.getEntry;
   for (const reference of metadata.call(reader)) {
     if (!select(reference)) continue;
-    const entry = reader.getEntry(reference.id);
+    const entry = readEntry.call(reader, reference.id);
     if (!entry) throw new Error(`Session entry not found: ${reference.id}`);
     yield entry;
   }

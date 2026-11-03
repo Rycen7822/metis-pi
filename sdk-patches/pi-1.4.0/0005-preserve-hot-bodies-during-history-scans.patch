@@ -1,0 +1,124 @@
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index b849a38..67beb6a 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -127,6 +127,12 @@ export class SessionEntryStore {
+ 		return record ? this.read(record) : undefined;
+ 	}
+ 
++	/** Scan misses stay transient; existing cache hits retain normal identity and access semantics. */
++	getEntryForScan(id: string): SessionEntry | undefined {
++		const record = this.byId.get(id);
++		return record ? this.read(record, "transient") : undefined;
++	}
++
+ 	getEntries(): SessionEntry[] {
+ 		const entries: SessionEntry[] = [];
+ 		for (const record of this.records) if (record.kind === "entry") entries.push(this.read(record));
+@@ -141,7 +147,7 @@ export class SessionEntryStore {
+ 		this.add(entry);
+ 	}
+ 
+-	private read(record: StoredSessionEntry): SessionEntry {
++	private read(record: StoredSessionEntry, cacheMiss: "retain" | "transient" = "retain"): SessionEntry {
+ 		if (record.body) return record.body;
+ 		const cached = this.cache.get(record);
+ 		if (cached) {
+@@ -174,7 +180,7 @@ export class SessionEntryStore {
+ 		if (!entry || entry.id !== record.metadata.id || entry.type !== expectedType) {
+ 			throw new Error(`Session entry changed on disk: ${record.metadata.id}`);
+ 		}
+-		this.remember(record, entry, length);
++		if (cacheMiss === "retain") this.remember(record, entry, length);
+ 		return entry;
+ 	}
+ 
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 734a6c0..044d097 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -76,6 +76,7 @@ export type ReadonlySessionManager = Pick<
+ 	| "getLeafId"
+ 	| "getLeafEntry"
+ 	| "getEntry"
++	| "getEntryForScan"
+ 	| "getEntryMetadata"
+ 	| "getEntriesMetadata"
+ 	| "getBranchMetadata"
+@@ -1180,6 +1181,11 @@ export class SessionManager {
+ 		return this.store.getEntry(id);
+ 	}
+ 
++	/** Complete one-pass reads: cache hits are reused, but misses do not enter the interactive body cache. */
++	getEntryForScan(id: string): SessionEntry | undefined {
++		return this.store.getEntryForScan(id);
++	}
++
+ 	/** Small, body-free entry facts; metadata must not be used as model content. */
+ 	getEntryMetadata(id: string): SessionEntryMetadata | undefined {
+ 		return this.store.getMetadata(id);
+diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
+index 65d1906..b9b324b 100644
+--- a/packages/coding-agent/test/session-manager/file-operations.test.ts
++++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
+@@ -73,6 +73,60 @@ describe("loadEntriesFromFile", () => {
+ 		expect(preview.getEntry(old)).toMatchObject({ message: { content: "old 界🙂 evidence" } });
+ 	});
+ 
++	it("scan misses do not evict hot interactive bodies or enter the cache", () => {
++		const seed = SessionManager.create(tempDir, tempDir);
++		const hotId = seed.appendMessage(userMsg("hot interactive source"));
++		// Two serialized bodies exceed the 16MiB cache; ordinary admission would evict the hot entry.
++		const firstId = seed.appendCustomEntry("cold", { text: "x".repeat(9 * 1024 * 1024) });
++		const secondId = seed.appendCustomEntry("cold", { text: "界".repeat(3 * 1024 * 1024) });
++		const file = seed.getSessionFile();
++		if (!file) throw new Error("Expected session file");
++		const session = SessionManager.open(file);
++		const hot = session.getEntry(hotId);
++		expect(session.getEntryForScan(hotId)).toBe(hot);
++		const first = session.getEntryForScan(firstId);
++		expect(first).toMatchObject({ type: "custom", customType: "cold", data: { text: "x".repeat(9 * 1024 * 1024) } });
++		expect(session.getEntryForScan(secondId)).toMatchObject({ data: { text: "界".repeat(3 * 1024 * 1024) } });
++		expect(session.getEntry(hotId)).toBe(hot);
++		const retained = session.getEntry(firstId);
++		expect(retained).toEqual(first);
++		expect(retained).not.toBe(first);
++		expect(session.getEntryForScan(firstId)).toBe(retained);
++		session.getEntry(secondId);
++		expect(session.getEntry(hotId)).not.toBe(hot);
++	});
++
++	it("scan reads preserve in-memory identity and missing-entry behavior", () => {
++		const session = SessionManager.inMemory(tempDir);
++		const id = session.appendMessage(userMsg("complete in-memory body"));
++		expect(session.getEntryForScan(id)).toBe(session.getEntry(id));
++		expect(session.getEntryForScan("missing")).toBeUndefined();
++	});
++
++	it.each(["truncated", "changed", "invalid-json"])(
++		"scan reads propagate %s errors without substituting empty data",
++		(kind) => {
++			const seed = SessionManager.create(tempDir, tempDir);
++			const id = seed.appendMessage(userMsg("persisted evidence"));
++			const file = seed.getSessionFile();
++			if (!file) throw new Error("Expected session file");
++			const bytes = readFileSync(file, "utf8");
++			const session = SessionManager.open(file);
++			if (kind === "truncated") {
++				writeFileSync(file, "");
++				expect(() => session.getEntryForScan(id)).toThrow(/truncated/);
++			} else if (kind === "changed") {
++				const replacement = `${id.startsWith("0") ? "1" : "0"}${id.slice(1)}`;
++				writeFileSync(file, bytes.replace(`"id":"${id}"`, `"id":"${replacement}"`));
++				expect(() => session.getEntryForScan(id)).toThrow(/changed on disk/);
++			} else {
++				const bodyStart = bytes.indexOf("\n") + 1;
++				writeFileSync(file, `${bytes.slice(0, bodyStart)}!${bytes.slice(bodyStart + 1)}`);
++				expect(() => session.getEntryForScan(id)).toThrow(SyntaxError);
++			}
++		},
++	);
++
+ 	it("returns empty array for non-existent file", () => {
+ 		const entries = loadEntriesFromFile(join(tempDir, "nonexistent.jsonl"));
+ 		expect(entries).toEqual([]);
