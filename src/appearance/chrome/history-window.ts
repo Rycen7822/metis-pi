@@ -11,6 +11,7 @@ interface Component {
   children?: Component[];
   child?: Component;
   selfRenderContainer?: Component;
+  isStreaming?: boolean;
 }
 interface Scroll extends Component {
   primary: boolean;
@@ -224,7 +225,9 @@ export class HistoryWindow {
     Object.assign(this.#watch(component), { rows, offset, height });
   }
 
-  #block(component: Component, width: number, remaining: number, cursor: number | undefined, forward: boolean): Omit<WindowPiece, "component" | "index"> {
+  #block(
+    component: Component, width: number, remaining: number, cursor: number | undefined, forward: boolean,
+  ): Omit<WindowPiece, "component" | "index"> {
     const range = (height: number) => {
       const edge = cursor === undefined ? forward ? 0 : height : Math.min(cursor, height);
       return { start: forward ? edge : Math.max(0, edge - remaining), end: forward ? Math.min(height, edge + remaining) : edge };
@@ -252,6 +255,16 @@ export class HistoryWindow {
     block.unwatch = () => restores.forEach((restore) => restore());
     this.#blocks.set(component, block);
     return block;
+  }
+
+  invalidateStreaming(): void {
+    if (this.holdSelection()) return;
+    // Refresh time-driven labels without rebuilding native content or completed history.
+    for (const [component, block] of this.#blocks) {
+      if (component.isStreaming !== true || !block.rows?.length) continue;
+      block.rows = undefined;
+      this.#dirty = true;
+    }
   }
 
   render(width: number): string[] {
@@ -660,6 +673,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
   }
   return {
     mount,
+    invalidateStreaming: () => installed?.window.invalidateStreaming(),
     status() {
       return { installed: !!installed, reason, ...installed?.window.status(),
         scrollbarFollow: installed ? { ...installed.scrollbarFollow } : { installed: false, reason: "not installed" } };

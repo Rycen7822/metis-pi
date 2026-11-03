@@ -63,6 +63,25 @@ test("initial replay and resize stop at a 5000-row suffix; warm scroll never ren
   view.render();
   assert.equal(blocks[0].renders, 0);
   assert.equal(renderCount(blocks), 100);
+
+  const live = blocks.at(-1);
+  live.isStreaming = true;
+  live.id = "tick-1";
+  view.system.invalidateStreaming(); view.render();
+  assert.equal(view.lines().at(-1), "tick-1:99");
+  assert.equal(renderCount(blocks), 101, "a tick rerenders only the cached streaming block");
+  const committed = view.lines();
+  view.selection(0);
+  live.id = "tick-2";
+  view.system.invalidateStreaming(); view.render();
+  assert.equal(view.lines(), committed, "a clock tick must not move selected content");
+  view.selection(null);
+  view.system.invalidateStreaming(); view.render();
+  assert.equal(view.lines().at(-1), "tick-2:99");
+  assert.equal(renderCount(blocks), 102);
+  live.isStreaming = false;
+  view.system.invalidateStreaming(); view.render();
+  assert.equal(renderCount(blocks), 102, "completed blocks stay cached on subsequent ticks");
 });
 
 test("paging and native jumps share a bounded window, preserve click coordinates and resume following", (t) => {

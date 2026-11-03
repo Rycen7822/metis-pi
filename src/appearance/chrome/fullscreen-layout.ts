@@ -118,6 +118,7 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
       return true;
     },
     dispose,
+    invalidateStreaming: history.invalidateStreaming,
     status() {
       return {
         installed: !!lease,

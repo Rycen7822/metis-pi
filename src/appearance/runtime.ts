@@ -209,6 +209,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         gitChanges.touch();
         // Working and live thinking headings share this 1s frame request,
         // including when the Working widget itself is disabled.
+        fullscreenLayout?.invalidateStreaming();
         requestRender();
         if (chrome.state.widgetInstalled) return;
         if (chrome.state.fallbackMessage && config.working.elapsed) {

@@ -10,7 +10,7 @@ import * as Tui from "@earendil-works/pi-tui";
 import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import {
-  ThinkingRailComponent, ThinkingClickableComponent, ThinkingHeaderComponent,
+  ThinkingRailComponent, ThinkingClickableComponent, ThinkingHeaderComponent, ThinkingPeekComponent,
 } from "../../src/presentation/components/transcript-components.ts";
 import { stringify } from "smol-toml";
 import { Agent } from "@earendil-works/pi-agent-core";
@@ -165,8 +165,8 @@ const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
 
-for (const rail of [false, true]) {
-  test(`rail setting ${rail} preserves live headings, diagnostics and shared tick cleanup`, async t => {
+for (const [rail, streaming] of [[false, "full"], [true, "full"], [true, "peek"]]) {
+  test(`rail=${rail} ${streaming} headings tick through the real history cache and release cleanly`, async t => {
     t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000 });
     class Assistant extends AssistantMessageComponent {
       updateContent(message, isStreaming = this.isStreaming) { super.updateContent(message, isStreaming); }
@@ -175,11 +175,13 @@ for (const rail of [false, true]) {
     const commands = new Map();
     const { handlers, slots } = await session(t, {
       getAgentDir: () => "/unused",
-      readFile: appearanceFile({ thinking: { rail, streaming: "full", completed: "full" }, working: { enabled: false } }),
+      readFile: appearanceFile({ thinking: { rail, streaming, completed: "full" }, working: { enabled: false } }),
+      fullscreenHost: Tui,
       assistantPrototype: Assistant.prototype,
       makeSeparator: () => new Text("separator", 0, 0),
       makeSpacer: () => new Spacer(1),
       makeRail: child => { rails++; return new ThinkingRailComponent(child, { kind: "none" }); },
+      makePeek: input => new ThinkingPeekComponent(input.inner, input.control, input.windowLines, text => text, input.onScroll),
       makeClickable: ({ inner, before, after, elapsedMs, control, fallback, apply }) => {
         const child = new Tui.Container();
         if (before) child.addChild(before);
@@ -192,24 +194,32 @@ for (const rail of [false, true]) {
     });
     const assistant = new Assistant();
     const frames = [];
-    slots.footerFactories.at(-1)({ requestRender: () => frames.push(plain(assistant.render(80).join("\n"))) }, theme, {
+    const stable = new Text("STATIC_HISTORY", 0, 0);
+    const stableRender = t.mock.method(stable, "render");
+    const { tui } = altScreen(80, 20);
+    tui.setLayoutRoot(new Tui.ScrollView(container(stable, assistant), { primary: true, follow: "end" }));
+    tui.requestRender = () => { tui.doRender(); frames.push(screenLines(tui).join("\n")); };
+    slots.footerFactories.at(-1)(tui, theme, {
       getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
     });
     handlers.get("agent_start")();
     const message = { role: "assistant", content: [{ type: "thinking", thinking: "RAIL_BODY" }] };
     handlers.get("message_start")({ message });
-    handlers.get("message_update")({ message });
+    handlers.get("message_update")({ message, assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message } });
     assistant.updateContent(message, true);
-    assert.match(plain(assistant.render(80).join("\n")), /RAIL_BODY/, "the native body is shown in both configurations");
+    tui.requestRender();
+    assert.match(frames.at(-1), /RAIL_BODY/, "the native body is shown through the real history window");
     assert.equal(rails, rail ? 1 : 0, "disabled rail must not construct a wrapper");
-    assert.match(plain(assistant.render(80).join("\n")), /thinking 0s/);
-    const beforeTick = frames.length;
+    assert.match(frames.at(-1), /thinking 0s/);
+    const staticRenders = stableRender.mock.callCount();
     t.mock.timers.tick(1_000);
-    assert.ok(frames.length > beforeTick, "the existing ticker requests a frame with Working disabled");
-    assert.match(frames.at(-1), /thinking 1s/, "a real activity tick repaints without another model delta");
+    assert.match(frames.at(-1), /thinking 1s/, "the ticker advances the live heading with Working disabled and no new model delta");
+    assert.equal(stableRender.mock.callCount(), staticRenders, "the completed history stays cached");
+    assert.equal(rails, rail ? 1 : 0, "clock ticks must not rebuild the assistant subtree");
     handlers.get("message_end")({ message });
     assistant.updateContent(message, false);
-    assert.doesNotMatch(plain(assistant.render(80).join("\n")), /thinking \d/);
+    tui.requestRender();
+    assert.doesNotMatch(frames.at(-1), /thinking \d/);
     handlers.get("agent_settled")({});
     const afterSettle = frames.length;
     t.mock.timers.tick(5_000);
@@ -217,6 +227,7 @@ for (const rail of [false, true]) {
     const report = [];
     commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
     assert.match(report.join("\n"), rail ? /thinking-rail=applied/ : /thinking-rail=disabled\(config\)/);
+    assert.match(report.join("\n"), /history-window:.*"installed":true/);
     assert.doesNotMatch(slots.notifications.map(n => n.text).join("\n"), /decorations partially unavailable/,
       "intentional disable is not an installation failure");
   });
