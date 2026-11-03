@@ -18,7 +18,7 @@ import { GIT_CHANGES_DEBOUNCE_MS, GIT_CHANGES_INTERVAL_MS } from "./git-changes.
 import type { GlyphPresentationSystem } from "./chrome/glyph-presentation.ts";
 import type { HostData } from "./host-data.ts";
 import type { OutputSpeedTracker } from "./activity/output-speed.ts";
-import { formatSpeed } from "./activity/output-speed.ts";
+import { formatSpeed, formatSpeedValue } from "./activity/output-speed.ts";
 import type { DecorationHandle } from "./transcript/adapter.ts";
 import type { UiMetrics } from "./activity/ui-metrics.ts";
 import type { UsageLedger } from "./activity/usage-ledger.ts";
@@ -114,9 +114,15 @@ const speedLine = (deps: DiagnosticsDeps): string => {
   const speedText = formatSpeed(speed?.tokensPerSecond, count);
   const scope = count > 1 ? `last ${count} completed; short-response smoothing` : "last completed";
   const detail = speed && speedText
-    ? `${speedText} (output=${speed.outputTokens} tokens, duration=${speed.durationMs}ms, samples=${count}, scope=${scope})`
+    ? `${speedText} (estimated=${speed.estimatedTokens} tokens, duration=${speed.durationMs}ms, samples=${count}, scope=${scope})`
+    : "— (no sufficiently observed text-only response with reported reasoning usage)";
+  const total = deps.outputSpeed.throughput();
+  const throughput = total
+    ? `out(last) ${formatSpeedValue(total.tokensPerSecond)} tok/s (output=${total.outputTokens} tokens, `
+      + `duration=${total.durationMs}ms, samples=1, scope=last completed)`
     : "— (no completed response with valid SDK usage and duration)";
-  return `  output throughput: ${detail} — Σ(SDK total output, including reasoning) ÷ Σ SDK response durations; `
+  return `  text generation: ${detail} — estimated body tokens in observed delivery windows; excludes first batches and thinking\n`
+    + `  output throughput: ${throughput} — SDK total output including reasoning ÷ full SDK response duration; `
     + "includes initial wait/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays";
 };
 

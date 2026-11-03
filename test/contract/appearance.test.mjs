@@ -473,7 +473,7 @@ test("static configuration gates Git polling before a footer can start it", asyn
   }
 });
 
-test("one interaction wires usage previews, output throughput, Working and the persisted summary", async (t) => {
+test("one interaction wires usage previews, body generation speed, Working and the persisted summary", async (t) => {
   let now = 1_000;
   t.mock.method(performance, "now", () => now);
   t.mock.method(Date, "now", () => 1_700_000_000_000 + now - 1_000);
@@ -503,7 +503,8 @@ test("one interaction wires usage previews, output throughput, Working and the p
     const m = message(id, usage);
     providerEvent(handlers, m, id === "first" ? "response.function_call_arguments.delta" : "response.output_text.delta", delta);
     handlers.get("message_update")({ message: m,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { content: [] } } });
+      assistantMessageEvent: { type: id === "first" ? "toolcall_delta" : "text_delta", contentIndex: 0, delta,
+        partial: producers.get(handlers).get(id).partial } });
     await nextDelivery();
   };
 
@@ -516,7 +517,7 @@ test("one interaction wires usage previews, output throughput, Working and the p
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   assert.doesNotMatch(frame(), /tok\/s/, "no rate before a completed response");
   providerEvent(handlers, message("first"), "response.created");
-  now += 3000; // End-to-end throughput includes this initial waiting/reasoning.
+  now += 3000; // Waiting/reasoning remains in the diagnostic, never the body generation rate.
   await update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, '{"command":');
   now += 400;
   await update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, '"echo ready"}');
@@ -528,7 +529,7 @@ test("one interaction wires usage previews, output throughput, Working and the p
   const final = frame();
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
-  assert.equal(speed(final), 23.5, "the tool response updates speed before tool execution or interaction completion");
+  assert.doesNotMatch(final, /tok\/s/, "tool arguments are not a measurable body response");
   handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
   const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
   assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
@@ -542,21 +543,21 @@ test("one interaction wires usage previews, output throughput, Working and the p
   handlers.get("message_start")({ message: failed });
   handlers.get("message_end")({ message: failed });
   handlers.get("agent_end")({});
-  assert.equal(speed(frame()), 23.5, "connection failure retains the previous tool response rate");
+  assert.doesNotMatch(frame(), /tok\/s/, "an error does not manufacture a body rate");
   handlers.get("agent_start")({}); handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 23.5, "retry does not erase the previous valid sample");
+  assert.doesNotMatch(frame(), /tok\/s/, "retry does not fall back to full-response throughput");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   providerEvent(handlers, message("second"), "response.created");
-  await update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
+  await update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "a");
   now += 400;
   await update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.equal(speed(frame()), 23.5, "incomplete usage retains the previous sample, without inventing a live estimate");
+  assert.doesNotMatch(frame(), /tok\/s/, "a current body must not display a previous or incomplete response rate");
   finishResponse(handlers, message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400));
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 32.6, "(80 + 44) / (3.4 + 0.4) stays visible after settle");
-  assert.match(frame(), /out\(avg2\)/);
+  assert.equal(speed(frame()), 100, "only the observed body token share is divided by its 400ms generation window");
+  assert.match(frame(), /gen≈\(last\)/);
   assert.equal(appended.length, 1, "duplicate settled events append one summary");
   assert.equal(appended[0].type, "metis-pi:interaction-summary:v1");
   const { data } = appended[0];
@@ -573,19 +574,21 @@ test("one interaction wires usage previews, output throughput, Working and the p
   assert.equal(slots.widgetCalls.at(-1).content, undefined);
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persisted summary stays in CustomEntry");
   handlers.get("agent_start")({}, {});
-  assert.equal(speed(frame()), 32.6, "a new interaction retains the completed throughput");
+  assert.equal(speed(frame()), 100, "a new interaction retains the labeled last completed body rate");
   handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 32.6, "the first request of a new interaction retains it too");
+  assert.equal(speed(frame()), 100, "waiting for a new body retains the last labeled body rate");
   const next = message("third", { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }, 400);
   handlers.get("message_start")({ message: next });
   providerEvent(handlers, next, "response.created");
-  await update("third", { output: 0 }, "a"); now += 400;
+  await update("third", { output: 0 }, "a");
+  assert.doesNotMatch(frame(), /tok\/s/, "streaming a new body hides the previous 100 tok/s sample immediately");
+  now += 400;
   await update("third", { output: 20 }, "b");
   finishResponse(handlers, next);
   handlers.get("agent_end")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 34.3, "(80 + 44 + 20) / (3.4 + 0.4 + 0.4) pools total output without counting errors");
-  assert.match(frame(), /out\(avg3\)/, "the weighted history is disclosed rather than called the last raw rate");
+  assert.equal(speed(frame()), 62.5, "(40 + 10) / (0.4 + 0.4) pools only the two observed body windows");
+  assert.match(frame(), /gen≈\(avg2\)/, "the weighted body history is disclosed");
 });
 
 test("SDK producer timing survives queued deltas and pre-request compaction", async t => {
@@ -619,13 +622,13 @@ test("SDK producer timing survives queued deltas and pre-request compaction", as
   // The producer can complete while an earlier async consumer holds start delivery.
   agent.subscribe(async event => {
     if (event.type === "message_start" && event.message.role === "assistant") {
-      now = producerStartedAt + 10_000;
-      output.content.push({ type: "thinking", thinking: "", thinkingSignature: "opaque" }, { type: "text", text: "first" });
-      stream.push({ type: "text_delta", contentIndex: 1, delta: "first", partial: output });
+      now = producerStartedAt + 10_020;
+      output.content.push({ type: "thinking", thinking: "", thinkingSignature: "opaque" }, { type: "text", text: "x" });
+      stream.push({ type: "text_delta", contentIndex: 1, delta: "x", partial: output });
       await nextDelivery();
-      now = producerStartedAt + 10_500;
-      output.content[1].text += "last";
-      stream.push({ type: "text_delta", contentIndex: 1, delta: "last", partial: output });
+      now = producerStartedAt + 11_000;
+      output.content[1].text += "x".repeat(49);
+      stream.push({ type: "text_delta", contentIndex: 1, delta: "x".repeat(49), partial: output });
       output.usage = { ...output.usage, output: 1050, reasoning: 1000, totalTokens: 1050 };
       output.stopReason = "stop";
       stream.push({ type: "done", reason: "stop", message: output }); stream.end();
@@ -643,8 +646,8 @@ test("SDK producer timing survives queued deltas and pre-request compaction", as
   await agent.prompt("offline timing fixture");
   handlers.get("agent_settled")({}, ctx);
   assert.deepEqual(receivedCounts, [1050, 1050], "fixture reaches the shared-partial queue hazard");
-  assert.equal(output.durationMs, 10500, "native producer clock excludes the later consumer delays");
-  assert.match(frame(), /out\(last\) 100 tok\/s/, "1050/10.5 includes reasoning once and TTFT, not compaction or callbacks");
+  assert.equal(output.durationMs, 11000, "native total response clock excludes the later consumer delays");
+  assert.match(frame(), /gen≈\(last\) 50 tok\/s/, "49 body tokens / 980ms excludes reasoning, compaction and queued callbacks");
 });
 
 test("tool-model usage cannot alter main-model totals, cache or persisted summaries before or after reconstruction", async t => {
@@ -657,7 +660,8 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
   const usage = (input, output, cacheRead) => ({ input, output, cacheRead, cacheWrite: 0, reasoning: 0 });
-  const first = { role: "assistant", provider: "p", api: "openai-responses", model: "m", responseId: "a", timestamp: 1000, stopReason: "toolUse", durationMs: 1000,
+  const first = { role: "assistant", provider: "p", api: "openai-responses", model: "m", responseId: "a", timestamp: 1000,
+    stopReason: "toolUse", durationMs: 1000,
     content: [{ type: "toolCall", id: "tool", name: "codemode", arguments: {} }], usage: usage(100, 100, 900) };
   handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
   handlers.get("message_start")({ message: first }, ctx);
@@ -668,12 +672,13 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   finishResponse(handlers, first, ctx);
   const beforeTool = frame();
   assert.match(beforeTool, /↑100 ↓100.*cache 90%/);
-  assert.match(beforeTool, /100 tok\/s/, "the main model's completed tool call is an output-throughput sample");
+  assert.doesNotMatch(beforeTool, /tok\/s/, "tool-call-only output has diagnostic throughput but no body rate");
   handlers.get("tool_execution_start")({ toolCallId: "tool", toolName: "codemode", args: {} }, ctx);
   now = 4000;
   const tool = { role: "toolResult", toolCallId: "tool", toolName: "codemode", timestamp: 4000, isError: false,
     content: [{ type: "text", text: "tool stdout ".repeat(1000) }], usage: usage(50000, 50000, 0) };
-  handlers.get("tool_execution_end")({ toolCallId: "tool", toolName: "codemode", result: { content: tool.content, usage: tool.usage }, isError: false }, ctx);
+  handlers.get("tool_execution_end")({ toolCallId: "tool", toolName: "codemode",
+    result: { content: tool.content, usage: tool.usage }, isError: false }, ctx);
   handlers.get("message_start")({ message: tool }, ctx); handlers.get("message_end")({ message: tool }, ctx);
   assert.equal(frame(), beforeTool, "reported tool-model usage changes neither cache, I/O nor speed");
   const last = { role: "assistant", provider: "p", responseId: "b", timestamp: 4000, stopReason: "stop", durationMs: 1000,
@@ -712,7 +717,7 @@ test("selection changes cancel throughput sampling, including late producer even
     handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
     handlers.get("message_start")({ message }, ctx); await produce(); finishResponse(handlers, message, ctx);
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
-    assert.match(frame(), /0\.2 tok\/s/);
+    assert.match(frame(), /gen≈\(last\) 10 tok\/s/);
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
     assert.match(report,

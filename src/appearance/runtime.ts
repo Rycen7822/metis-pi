@@ -550,12 +550,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         assistantMessageEvent?: {
           type?: string;
           contentIndex?: number;
+          delta?: string;
           partial?: { content?: Array<Record<string, unknown>> };
         };
       }
     ).assistantMessageEvent;
     const eventType = typeof streamEvent?.type === "string" ? streamEvent.type : undefined;
     if (stateMessage && stateMessage.role === "assistant" && eventType) {
+      if (eventType === "text_delta" && streamEvent?.delta) outputSpeed.textStart();
       const content = streamEvent?.partial?.content ?? [];
       const at = (idx: number | undefined) => (typeof idx === "number" ? content[idx] : undefined);
       switch (eventType) {
