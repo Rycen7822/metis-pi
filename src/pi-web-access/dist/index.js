@@ -15970,10 +15970,42 @@ async function search(query, options = {}) {
 }
 
 // src/pi-web-access/storage.ts
-init_utils();
-import { closeSync as closeSync2, constants, fchmodSync, fstatSync, fsyncSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync5, readdirSync as readdirSync3, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import {
+  closeSync as closeSync2,
+  constants,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync as lstatSync2,
+  mkdirSync as mkdirSync2,
+  openSync as openSync2,
+  readFileSync as readFileSync5,
+  readdirSync as readdirSync3,
+  renameSync,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join as join6 } from "node:path";
+
+// src/session-history.ts
+function* readHistoryEntries(reader, scope, select) {
+  const metadata = scope === "branch" ? reader.getBranchMetadata : reader.getEntriesMetadata;
+  if (!metadata) {
+    const entries = scope === "branch" ? reader.getBranch() : reader.getEntries();
+    for (const entry of entries) if (select(entry)) yield entry;
+    return;
+  }
+  for (const reference of metadata.call(reader)) {
+    if (!select(reference)) continue;
+    const entry = reader.getEntry(reference.id);
+    if (!entry) throw new Error(`Session entry not found: ${reference.id}`);
+    yield entry;
+  }
+}
+
+// src/pi-web-access/storage.ts
+init_utils();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 var FETCH_CACHE_DIR = "web-search-cache";
 var FETCH_CACHE_VERSION = 1;
@@ -16378,7 +16410,7 @@ function loadSessionResults(ctx) {
   const now = Date.now();
   pruneExpiredFetchCache(now);
   const loaded = [];
-  for (const entry of ctx.sessionManager.getBranch()) {
+  for (const entry of readHistoryEntries(ctx.sessionManager, "branch", (reference) => reference.type === "custom" && reference.customType === "web-search-results")) {
     if (entry.type === "custom" && entry.customType === "web-search-results") {
       const data = entry.data;
       if (isValidStoredData(data) && now - data.timestamp < CACHE_TTL_MS) {
@@ -21083,7 +21115,6 @@ function registerCuratorRunLifecycle(pi) {
 }
 
 // src/pi-web-access/tool-activation.ts
-import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 var LOADER_NAME = "web_enable";
 var CAPABILITY_LABELS = {
@@ -21169,7 +21200,7 @@ function registerWebToolActivation(pi, tools, mode) {
   function selectFromSession(ctx) {
     if (!loaderAvailable()) return;
     try {
-      const messages = buildSessionContext(ctx.sessionManager.getBranch()).messages;
+      const messages = ctx.sessionManager.buildSessionProjection().messages;
       const declared = transcriptToolNames(messages);
       const eager = mode === "auto" && !declared && messages.length === 0 && !addsToolsWithoutCheckpoint(ctx.model);
       const recorded = declared ?? new Set(messages.length > 0 || eager ? names : []);
@@ -21179,7 +21210,8 @@ function registerWebToolActivation(pi, tools, mode) {
     } catch (error) {
       if (!warned) {
         warned = true;
-        console.warn(`[pi-web-access] Keeping web tools eagerly available because activation setup failed: ${error instanceof Error ? error.message : String(error)}`);
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`[pi-web-access] Keeping web tools eagerly available because activation setup failed: ${reason}`);
       }
     }
   }

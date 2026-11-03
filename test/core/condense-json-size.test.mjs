@@ -33,21 +33,42 @@ test("JSON size cache is bounded and keeps the stable prefix instead of thrashin
   const sizes = createJsonSizeMeasurer();
   const values = Array.from({ length: 4096 }, (_, i) => `${i}:` + "x".repeat(4096));
   const stringify = JSON.stringify;
-  let firstEncodings = 0;
+  let firstEncodings = 0, lastEncodings = 0;
   t.mock.method(JSON, "stringify", (value, ...args) => {
     if (value === values[0]) firstEncodings++;
+    if (value === values.at(-1)) lastEncodings++;
     return stringify(value, ...args);
   });
-  assert.equal(sizes.full, false);
   const value = { values };
   assert.equal(sizes.measure(value), JSON.stringify(value).length);
-  assert.equal(sizes.full, true);
   const overflow = { content: "outside the prefix".repeat(300) };
   assert.equal(sizes.measure(overflow), JSON.stringify(overflow).length);
   assert.equal(sizes.measure(value), JSON.stringify(value).length);
   assert.equal(firstEncodings, 1, "overflow must not evict and re-encode the stable prefix");
+  assert.equal(lastEncodings, 2, "a 32MiB source set cannot all fit the 16MiB dynamic cache budget");
   sizes.clear();
-  assert.equal(sizes.full, false);
+  sizes.measure({ content: values[0] });
+  assert.equal(firstEncodings, 2, "clear releases the retained prefix");
+});
+
+test("immutable sources cache numeric sizes without masking mutable projection edits", t => {
+  const sizes = createJsonSizeMeasurer();
+  const source = {};
+  const body = { content: "immutable source".repeat(800) };
+  const stringify = JSON.stringify;
+  let encodings = 0;
+  t.mock.method(JSON, "stringify", (...args) => { encodings++; return stringify(...args); });
+  const expected = stringify(body).length;
+  assert.equal(sizes.measureSource(source, body), expected);
+  const first = encodings;
+  assert.equal(sizes.measureSource(source, body), expected);
+  assert.equal(encodings, first, "the same immutable source needs no re-encoding");
+  const edited = { ...body, content: "\\".repeat(7000) };
+  assert.equal(sizes.measure(edited), stringify(edited).length);
+  const beforeClear = encodings;
+  sizes.clear();
+  assert.equal(sizes.measureSource(source, body), expected);
+  assert.ok(encodings > beforeClear, "source facts are reset with the session");
 });
 
 test("clearing JSON sizes releases cached long-string encodings", t => {

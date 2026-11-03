@@ -27,6 +27,14 @@ export function branchEntryReferences(
   return reader.getBranchMetadata?.() ?? reader.getBranch();
 }
 
+/** Stable immutable source identity without retaining a decoded body on the patched SDK. */
+export function sourceEntryReference(
+  reader: Pick<HistoryReader, "getEntry" | "getEntryMetadata">,
+  entry: SessionEntry,
+): SessionEntryReference {
+  return reader.getEntryMetadata?.(entry.id) ?? entry;
+}
+
 /** Walk only as far as a reverse lookup needs; stock Pi uses the same parent walk with complete entries. */
 export function* reverseBranchEntryReferences(
   reader: Pick<ExtensionContext["sessionManager"], "getLeafId" | "getEntry"> & Pick<HistoryReader, "getEntryMetadata">,

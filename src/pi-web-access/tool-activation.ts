@@ -1,4 +1,4 @@
-import { buildSessionContext, type ExtensionAPI, type ExtensionContext, type SessionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 export type WebCapability = "search" | "source-check" | "fetch" | "stored-content";
@@ -58,8 +58,10 @@ export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray
 	pi.registerTool<typeof parameters, Record<string, unknown>>({
 		name: LOADER_NAME,
 		label: "Enable Web Access",
-		description: "Enable configured pi-web-access tools for web research and content retrieval. Does not search or fetch. Enabled tools are available on the next model request; disabled capabilities remain unavailable.",
-		promptSnippet: `If tools for ${capabilities} are not already available, call web_enable first whenever current, external, or linked information could help; the tools appear on the next model request.`,
+		description: "Enable configured pi-web-access tools for web research and content retrieval. Does not search or fetch. "
+			+ "Enabled tools are available on the next model request; disabled capabilities remain unavailable.",
+		promptSnippet: `If tools for ${capabilities} are not already available, call web_enable first whenever current, external, `
+			+ "or linked information could help; the tools appear on the next model request.",
 		parameters,
 		async execute() {
 			const registered = new Set(pi.getAllTools().map(tool => tool.name));
@@ -109,7 +111,7 @@ export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray
 	function selectFromSession(ctx: ExtensionContext): void {
 		if (!loaderAvailable()) return;
 		try {
-			const messages = buildSessionContext(ctx.sessionManager.getBranch()).messages;
+			const messages = ctx.sessionManager.buildSessionProjection().messages;
 			const declared = transcriptToolNames(messages);
 			// "auto" decides once, for a fresh session; recorded sessions keep their tools.
 			const eager = mode === "auto" && !declared && messages.length === 0 && !addsToolsWithoutCheckpoint(ctx.model);
@@ -121,7 +123,8 @@ export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray
 		} catch (error) {
 			if (!warned) {
 				warned = true;
-				console.warn(`[pi-web-access] Keeping web tools eagerly available because activation setup failed: ${error instanceof Error ? error.message : String(error)}`);
+				const reason = error instanceof Error ? error.message : String(error);
+				console.warn(`[pi-web-access] Keeping web tools eagerly available because activation setup failed: ${reason}`);
 			}
 		}
 	}

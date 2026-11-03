@@ -1,4 +1,5 @@
 import { isMetisConfigTable, metisConfigPath, readMetisConfig } from "../configuration/store.ts";
+import { readHistoryEntries } from "../session-history.ts";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "./policy.ts";
@@ -55,7 +56,8 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
 
   const restore = (ctx: ExtensionContext) => {
     sources = new Set(globalPaths(getAgentDir()));
-    for (const entry of ctx.sessionManager.getBranch()) {
+    for (const entry of readHistoryEntries(ctx.sessionManager, "branch", reference => reference.type === "custom"
+      && reference.customType === DYNAMIC_AGENTS_STATE)) {
       if (entry.type !== "custom" || entry.customType !== DYNAMIC_AGENTS_STATE) continue;
       const data = entry.data as { sources?: unknown };
       if (Array.isArray(data?.sources))
@@ -81,10 +83,8 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
       : `Dynamic agents: ${policy.group ?? "native global"}${policy.file ? ` (${policy.file.path})` : ""}`;
     const noticeKey = JSON.stringify([policy.group, policy.error, snapshot.replacement]);
     const paths = [...sources];
-    const previous = ctx.sessionManager
-      .getBranch()
-      .filter((entry) => entry.type === "custom" && entry.customType === DYNAMIC_AGENTS_STATE)
-      .at(-1);
+    const previous = [...readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom"
+      && entry.customType === DYNAMIC_AGENTS_STATE)].at(-1);
     if (JSON.stringify(previous?.type === "custom" ? previous.data : undefined) !== JSON.stringify({ sources: paths }))
       pi.appendEntry(DYNAMIC_AGENTS_STATE, { sources: paths });
     if (noticeKey !== lastNoticeKey && (policy.error || policy.notify))

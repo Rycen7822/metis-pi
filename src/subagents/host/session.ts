@@ -18,6 +18,7 @@ import { SubagentViewer, type AgentInspection } from "../ui/viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
 import type { AppearanceConfig } from "../../appearance/config.ts";
 import { installSamplingMailbox } from "./sampling.ts";
+import { readHistoryEntries } from "../../session-history.ts";
 
 const BINDING = "metis-subagent-scope",
   RECEIPT = "metis-subagent-receipt",
@@ -108,9 +109,8 @@ export class SubagentSession {
     this.readAppearance = readAppearance;
     this.ctx = ctx;
     this.sessionId = ctx.sessionManager.getSessionId();
-    const binding = ctx.sessionManager
-      .getBranch()
-      .findLast(
+    const binding = [...readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom"
+      && entry.customType === BINDING)].findLast(
         (entry) =>
           entry.type === "custom" &&
           entry.customType === BINDING &&
@@ -238,7 +238,10 @@ export class SubagentSession {
   private async reconcile() {
     if (!this.valid()) return;
     const receipts = new Set<string>();
-    for (const entry of this.ctx.sessionManager.getBranch()) {
+    for (const entry of readHistoryEntries(this.ctx.sessionManager, "branch", reference =>
+      (reference.type === "custom" && reference.customType === RECEIPT)
+      || (reference.type === "custom_message" && reference.customType === ATTENTION)
+      || (reference.type === "message" && reference.message.role === "toolResult"))) {
       if (entry.type === "custom" && entry.customType === RECEIPT) {
         const data = entry.data as { sessionId?: string; scope?: string; receipt?: string };
         if (data?.sessionId === this.sessionId && data.scope === this.client.scope && data.receipt) receipts.add(data.receipt);
@@ -338,7 +341,9 @@ export class SubagentSession {
           if (unconfirmed !== this.unconfirmed) {
             this.unconfirmed = unconfirmed;
             this.ctx.ui.setStatus("metis-subagent-recovery", unconfirmed ? `${unconfirmed} subagent deliveries unconfirmed · /subagents` : undefined);
-            if (unconfirmed) this.ctx.ui.notify(`${unconfirmed} subagent deliveries unconfirmed; use /subagents to read saved sessions. Reading does not acknowledge delivery.`, "warning");
+            if (unconfirmed) this.ctx.ui.notify(
+              `${unconfirmed} subagent deliveries unconfirmed; use /subagents to read saved sessions. `
+                + "Reading does not acknowledge delivery.", "warning");
           }
           if (!notifications.length) recovering = false;
           for (const notice of notifications) if (notice.event === "question" && !this.notifiedQuestions.has(notice.notification_id)) {
@@ -498,7 +503,10 @@ export class SubagentSession {
     return { cwd: path, trusted: choice.startsWith("Trust resources") };
   }
   private deliveredQuestion(target: unknown): QuestionIdentity {
-    for (const entry of [...this.ctx.sessionManager.getBranch()].reverse()) {
+    const entries = [...readHistoryEntries(this.ctx.sessionManager, "branch", reference =>
+      (reference.type === "custom_message" && reference.customType === ATTENTION)
+      || (reference.type === "message" && reference.message.role === "toolResult"))];
+    for (const entry of entries.reverse()) {
       let proof: (Partial<ReceiptProof> & { questions?: QuestionIdentity[] }) | undefined;
       if (entry.type === "custom_message" && entry.customType === ATTENTION) {
         proof = this.attentionProof(entry.content, entry.details);
@@ -554,9 +562,8 @@ export class SubagentSession {
         extra = { project_trust: await this.trust(agent.cwd) };
       }
       if (mutation) {
-        const saved = ctx.sessionManager
-          .getBranch()
-          .findLast(
+        const saved = [...readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom"
+          && entry.customType === OPERATION)].findLast(
             (entry) =>
               entry.type === "custom" &&
               entry.customType === OPERATION &&

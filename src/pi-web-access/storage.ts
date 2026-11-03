@@ -1,7 +1,11 @@
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, type Stats, unlinkSync, writeFileSync } from "node:fs";
+import {
+	closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync,
+	readFileSync, readdirSync, renameSync, type Stats, unlinkSync, writeFileSync,
+} from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readHistoryEntries } from "../session-history.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { QueryResultData } from "./search-types.ts";
 import { getWebSearchConfigDir, loadWebAccessConfig } from "./utils.ts";
@@ -331,7 +335,9 @@ function writeFetchCache(data: StoredSearchData & { urls: ExtractedContent[] }):
 	return { version: FETCH_CACHE_VERSION, key, storedAt: Date.now() };
 }
 
-function createFetchSessionData(data: StoredSearchData & { urls: ExtractedContent[] }, ref: FetchCacheRef | null, cacheError?: string): StoredSearchData {
+function createFetchSessionData(
+	data: StoredSearchData & { urls: ExtractedContent[] }, ref: FetchCacheRef | null, cacheError?: string,
+): StoredSearchData {
 	return {
 		id: data.id,
 		type: "fetch",
@@ -518,7 +524,8 @@ export function loadSessionResults(ctx: ExtensionContext): StoredSearchData[] {
 	pruneExpiredFetchCache(now);
 
 	const loaded: StoredSearchData[] = [];
-	for (const entry of ctx.sessionManager.getBranch()) {
+	for (const entry of readHistoryEntries(ctx.sessionManager, "branch", reference => reference.type === "custom"
+		&& reference.customType === "web-search-results")) {
 		if (entry.type === "custom" && entry.customType === "web-search-results") {
 			const data = entry.data;
 			if (isValidStoredData(data) && now - data.timestamp < CACHE_TTL_MS) {

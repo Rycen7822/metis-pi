@@ -19521,9 +19521,23 @@ async function searchWithCurrentModelOpenAI(query, options = {}, ctx) {
 }
 
 // src/pi-web-access/storage.ts
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync2, readdirSync, renameSync as renameSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
-init_utils();
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync as mkdirSync2,
+  openSync,
+  readFileSync as readFileSync2,
+  readdirSync,
+  renameSync as renameSync2,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
 import { join as join5 } from "node:path";
+init_utils();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 var FETCH_CACHE_DIR = "web-search-cache";
 var FETCH_CACHE_VERSION = 1;

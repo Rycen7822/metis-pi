@@ -21,6 +21,7 @@ function run(config = {}, options = {}) {
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
+			const { buildSessionProjection } = await import("@earendil-works/pi-coding-agent");
 			const options = ${JSON.stringify(options)};
 			const model = "model" in options ? options.model ?? undefined : ${JSON.stringify(nativeAdditions)};
 			const tools = new Map();
@@ -42,7 +43,9 @@ function run(config = {}, options = {}) {
 				type: "message", id: "message-" + index, parentId: index ? "message-" + (index - 1) : null,
 				timestamp: new Date(index).toISOString(), message,
 			}));
-			const ctx = { model, sessionManager: { getBranch: () => entries } };
+			const ctx = { model, sessionManager: {
+				getBranch: () => entries, buildSessionProjection: () => buildSessionProjection(entries),
+			} };
 			for (const event of [].concat(options.event ?? "session_start")) {
 				for (const handler of handlers.get(event) ?? []) await handler(options.eventPayload ?? {}, ctx);
 			}

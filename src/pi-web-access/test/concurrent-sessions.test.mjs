@@ -27,8 +27,12 @@ function startInstance(entries = []) {
 	const tools = new Map();
 	const commands = new Map();
 	const handlers = new Map();
+	let active = [];
 	initializeExtension({
-		registerTool(tool) { tools.set(tool.name, tool); },
+		registerTool(tool) { tools.set(tool.name, tool); active.push(tool.name); },
+		getAllTools() { return [...tools.values()]; },
+		getActiveTools() { return [...active]; },
+		setActiveTools(names) { active = [...names]; },
 		registerCommand(name, command) { commands.set(name, command); },
 		registerShortcut() {},
 		on(event, handler) { handlers.set(event, [...(handlers.get(event) ?? []), handler]); },
@@ -39,7 +43,11 @@ function startInstance(entries = []) {
 		model: undefined,
 		modelRegistry: {},
 		scopedModels: [],
-		sessionManager: { getBranch: () => entries },
+		sessionManager: {
+			getBranch: () => entries,
+			// This fixture journals custom state only; it contributes no model messages.
+			buildSessionProjection: () => ({ entries: [], messages: [], model: null, thinkingLevel: "off" }),
+		},
 		// `/search` picks the first stored result, then Delete.
 		ui: { setWidget() {}, notify() {}, select: async (title, choices) => (title.startsWith("Result ") ? "Delete" : choices[0]) },
 	};

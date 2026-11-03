@@ -1,7 +1,6 @@
 // Derived from mitsuhiko/agent-stuff extensions/btw.ts (Apache-2.0).
 // Source revision and local maintenance scope are recorded in NOTICE.
 import {
-	buildSessionContext,
 	createAgentSession,
 	createExtensionRuntime,
 	getMarkdownTheme,
@@ -32,6 +31,7 @@ import {
 	backgroundAnsi, CODEMODE_ORANGE, DARK_SURFACE_BG, FG_DEFAULT, foregroundAnsi, resolveColorContext,
 } from "../presentation/palette.ts";
 import { paintSurfaceBackground } from "../presentation/sgr.ts";
+import { branchEntryReferences, readHistoryEntries } from "../session-history.ts";
 
 const BTW_ENTRY_TYPE = "btw-thread-entry";
 const BTW_RESET_TYPE = "btw-thread-reset";
@@ -44,7 +44,8 @@ const BTW_SYSTEM_PROMPT = [
 ].join(" ");
 
 const BTW_SUMMARY_PROMPT =
-	"Summarize this side conversation for handoff into the main conversation. Keep key decisions, findings, risks, and next actions. Output only the summary.";
+	"Summarize this side conversation for handoff into the main conversation. "
+	+ "Keep key decisions, findings, risks, and next actions. Output only the summary.";
 
 type SessionThinkingLevel = "off" | AiThinkingLevel;
 
@@ -142,7 +143,7 @@ function buildSeedMessages(ctx: ExtensionContext, thread: BtwDetails[]): Message
 	const seed: Message[] = [];
 
 	try {
-		const contextMessages = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages;
+		const contextMessages = ctx.sessionManager.buildSessionProjection().messages;
 		seed.push(...(contextMessages.filter((message) => "role" in message) as Message[]));
 	} catch {
 		// Ignore context seed failures and continue with an empty side thread.
@@ -468,10 +469,12 @@ export default function (pi: ExtensionAPI) {
 		pending = null;
 		overlayStatus = "Ready";
 		overlayDraft = "";
-		const branch = ctx.sessionManager.getBranch();
+		const branch = branchEntryReferences(ctx.sessionManager);
 		const lastResetIndex = branch.findLastIndex((entry) => entry.type === "custom" && entry.customType === BTW_RESET_TYPE);
+		const active = new Set(branch.slice(lastResetIndex + 1)
+			.filter(entry => entry.type === "custom" && entry.customType === BTW_ENTRY_TYPE).map(entry => entry.id));
 
-		for (const entry of branch.slice(lastResetIndex + 1)) {
+		for (const entry of readHistoryEntries(ctx.sessionManager, "branch", reference => active.has(reference.id))) {
 			if (entry.type !== "custom" || entry.customType !== BTW_ENTRY_TYPE) {
 				continue;
 			}

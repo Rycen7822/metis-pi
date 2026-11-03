@@ -1,6 +1,6 @@
 import { METIS_STATUS_IDS } from "../collaboration.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { branchEntryReferences, readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
+import { branchEntryReferences, readHistoryEntries, sourceEntryReference, type SessionEntryReference } from "../session-history.ts";
 import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
@@ -209,13 +209,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // LLM context, so both belong in the largest-chain-share denominator.
       // Shared projection (src/batch-capture.ts projectBranchMessages) so this
       // matches the chain-detection feed sites exactly.
-      const branch = projectBranchMessages(readMessageBranch(ctx.sessionManager));
+      const entries = readMessageBranch(ctx.sessionManager);
+      const branch = projectBranchMessages(entries);
+      const sources = new WeakMap<object, object>();
+      for (let i = 0; i < branch.length; i++) sources.set(branch[i], sourceEntryReference(ctx.sessionManager, entries[i]));
       return computeContextMetrics(
         branch,
         frontier.get(),
         (k: string) => indexer.isSummarized(k),
         protectionPredicate,
-        jsonSizes.measure,
+        value => {
+          const source = sources.get(value);
+          return source ? jsonSizes.measureSource(source, value) : jsonSizes.measure(value);
+        },
       );
     } catch (err) {
       console.error("pi-condense: context metrics computation failed", err);
@@ -1430,14 +1436,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const warmJsonSizes = async (ctx: ExtensionContext, version: number) => {
     if (ctx.mode !== "tui" || !currentConfig.value.enabled) return;
-    let messages: any[];
-    try { messages = projectBranchMessages(readMessageBranch(ctx.sessionManager)); } catch { return; }
     let slice = performance.now();
-    for (const message of messages) {
-      if (version !== lifecycle || jsonSizes.full) return;
-      try { jsonSizes.measure(message); } catch { /* Diagnostic warming must not fail session setup. */ }
-      if (performance.now() - slice >= 8) { await setImmediate(); slice = performance.now(); }
-    }
+    try {
+      const projection = ctx.sessionManager.buildSessionProjection();
+      for (const { sourceEntry } of projection.entries) {
+        if (version !== lifecycle) return;
+        if (sourceEntry.type !== "message" && sourceEntry.type !== "custom_message") continue;
+        const [message] = projectBranchMessages([sourceEntry]);
+        try { jsonSizes.measureSource(sourceEntryReference(ctx.sessionManager, sourceEntry), message); }
+        catch { /* Diagnostic warming must not fail session setup. */ }
+        if (performance.now() - slice >= 8) { await setImmediate(); slice = performance.now(); }
+      }
+      if (version === lifecycle) jsonSizes.measure(projection.messages);
+    } catch { /* Optional warming must leave session setup intact on a read or serialization failure. */ }
   };
   const start = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
