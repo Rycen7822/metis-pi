@@ -24,9 +24,14 @@ export function projectionFingerprint(messages: any[]): string {
   return hash.digest("hex");
 }
 
+// Keep brief pauses warm, but release the encoder after one minute without tokenization work.
+const WORKER_IDLE_TIMEOUT_MS = 60_000;
+
 /** One lazy encoder; FIFO keeps concurrent summary validations from displacing each other. */
 export class TokenEstimator {
   private worker?: Worker;
+  private retiring?: Promise<number>;
+  private idleTimer?: ReturnType<typeof setTimeout>;
   private active?: Job;
   private pending: Job[] = [];
   private nextId = 0;
@@ -44,7 +49,9 @@ export class TokenEstimator {
         ? { role: message.role, toolCallId: message.toolCallId, toolName: message.toolName,
           content: message.content, isError: message.isError }
         : { role: message.role, content: message.content });
-      snapshot = structuredClone([normalize(before), normalize(after)]);
+      const normalized: [any[], any[]] = [normalize(before), normalize(after)];
+      // postMessage snapshots synchronous dispatch; deferred jobs need their request-time contents now.
+      snapshot = this.active || this.retiring ? structuredClone(normalized) : normalized;
     }
     catch { return Promise.resolve(null); }
     return new Promise(resolve => {
@@ -53,7 +60,7 @@ export class TokenEstimator {
         piAfter: after.reduce((n, m) => n + estimateTokens(m), 0), absolute,
         abort: () => this.clear() };
       signal?.addEventListener("abort", job.abort, { once: true });
-      if (this.active) this.pending.push(job);
+      if (this.active || this.retiring) this.pending.push(job);
       else this.start(job);
     });
   }
@@ -70,6 +77,7 @@ export class TokenEstimator {
   }
 
   private start(job: Job) {
+    this.cancelIdleTimer();
     this.active = job;
     try {
       if (!this.worker) {
@@ -87,7 +95,7 @@ export class TokenEstimator {
           this.finish(current, measured);
           const next = this.pending.shift();
           if (next) this.start(next);
-          else worker.unref();
+          else this.scheduleIdleRelease(worker);
         });
         worker.on("error", () => { if (this.worker === worker) this.clear(); });
         worker.on("exit", () => { if (this.worker === worker) this.clear(); });
@@ -97,14 +105,46 @@ export class TokenEstimator {
     } catch { this.clear(); }
   }
 
-  clear() {
+  private cancelIdleTimer() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
+  }
+
+  private scheduleIdleRelease(worker: Worker) {
+    worker.unref();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      if (this.worker === worker && !this.active && !this.pending.length) this.retireWorker();
+    }, WORKER_IDLE_TIMEOUT_MS);
+    this.idleTimer.unref();
+  }
+
+  private retireWorker() {
     const worker = this.worker;
     this.worker = undefined;
+    if (!worker) return;
+    worker.unref();
+    const retiring = worker.terminate();
+    this.retiring = retiring;
+    void retiring.then(() => {
+      if (this.retiring !== retiring) return;
+      this.retiring = undefined;
+      const next = this.pending.shift();
+      if (next) this.start(next);
+    }, () => {
+      if (this.retiring !== retiring) return;
+      this.retiring = undefined;
+      this.clear();
+    });
+  }
+
+  clear() {
+    this.cancelIdleTimer();
     this.cache = undefined;
     if (this.active) this.finish(this.active, null);
     for (const job of this.pending) this.finish(job, null);
     this.active = undefined;
     this.pending = [];
-    if (worker) { worker.unref(); void worker.terminate(); }
+    this.retireWorker();
   }
 }
