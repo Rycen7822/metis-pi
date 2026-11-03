@@ -127,6 +127,7 @@ export function captureBatch(
 
 /**
  * Scans a session branch for unsummarized tool results and groups them into CapturedBatches.
+ * Consumes the source once and retains only the current assistant's result interval.
  * Useful for capturing results from the current in-progress turn when a prune is triggered.
  *
  * @param branch            The session message branch (from ctx.sessionManager.getBranch())
@@ -134,97 +135,57 @@ export function captureBatch(
  * @param exclude  Optional predicate; matching tool calls are skipped (user-protected tools/paths)
  */
 export function captureUnindexedBatchesFromSession(
-  branch: any[],
+  branch: Iterable<any>,
   indexer: { isSummarized(id: string): boolean },
   exclude?: (toolName: string, args: unknown) => boolean,
   sourceTurnIndices?: ReadonlyMap<string, number>,
 ): CapturedBatch[] {
-  // Keep the SessionEntry wrapper alongside each projected message so the
-  // entry's own timestamp remains available as the preferred source below
-  // (projection alone loses that wrapper for "message" entries).
-  const projected = branch
-    .filter(isProjectableEntry)
-    .map((e: any) => ({ entry: e, msg: e.type === "custom_message" ? projectCustomMessageEntry(e) : e.message }));
-  const msgs = projected.map((p) => p.msg);
-
   const batches: CapturedBatch[] = [];
-  // turnCounter increments for EVERY assistant message (not just prunable ones).
-  // This makes turnIndex stable across multiple prune cycles: pruning removes
-  // ToolResultMessages from the context event but leaves AssistantMessages in the
-  // session branch, so the count of all assistant messages never decreases. This
-  // session-wide count is the frontier's numbering domain; Pi's event.turnIndex
-  // matches it only inside one agent run (it resets on agent_start), so the live
-  // capture path derives the same index from the branch via deriveLiveTurnIndex.
+  // Every assistant counts, including text-only: this is the persisted frontier's numbering domain.
   let turnCounter = 0;
-
-  // userTurnGroup increments on every user message or eligible custom anchor seen
-  // while walking the branch. All assistant tool-call batches between two
-  // consecutive boundaries share the same userTurnGroup. This is used by
-  // groupBatchesByMode to merge turns within a single user → final-agent-message
-  // span when batchingMode === "agent-message".
+  // Shared by agent-message grouping; custom chain anchors advance it just like user messages.
   let userTurnGroup = 0;
+  let currentTurn: { entry: any; msg: any; turnIndex: number; userTurnGroup: number } | undefined;
+  const turnResults = new Map<string, any>();
 
-  for (let i = 0; i < msgs.length; i++) {
-    const msg = msgs[i];
-
-    // Advance userTurnGroup on every user message or eligible custom anchor so
-    // all subsequent assistant batches get a new group number.
-    if (msg.role === "user" || isChainAnchorCustom(msg)) {
-      userTurnGroup++;
-      continue;
-    }
-
-    if (msg.role !== "assistant") continue;
-
-    // Stable turn index: count every assistant message regardless of pruning state
-    const fallbackTurnIndex = turnCounter++;
-    const currentTurnIndex = sourceTurnIndices?.get(projected[i].entry.id) ?? fallbackTurnIndex;
-
-    // Per-turn result map: only the results between this assistant message and
-    // the next one. A branch-wide map is last-wins and mis-pairs repeated ids.
-    const turnResults = new Map<string, any>();
-    for (let j = i + 1; j < msgs.length; j++) {
-      const m = msgs[j];
-      if (m.role === "assistant") break;
-      if (m.role === "toolResult" && m.toolCallId && !turnResults.has(m.toolCallId)) {
-        turnResults.set(m.toolCallId, m);
-      }
-    }
-
+  const finishTurn = () => {
+    if (!currentTurn) return;
+    const { entry, msg, turnIndex, userTurnGroup } = currentTurn;
     const content = Array.isArray(msg.content) ? msg.content : [];
-    const toolCallBlocks = content.filter((c: any) => c.type === "toolCall");
-
-    const readyToPrune = toolCallBlocks.filter((tc: any) => {
-      const id = tc.id;
-      if (!id) return false;
-      const result = turnResults.get(id);
+    const ready = content.filter((call: any) => {
+      if (call.type !== "toolCall" || !call.id) return false;
+      const result = turnResults.get(call.id);
       if (!result) return false;
       if (hasProtectedNestedResults(result.details) && exclude) return false;
-      if (indexer.isSummarized(occKey(id, resultTimestampOf(result.timestamp)))) return false;
-      if (exclude?.(tc.name, tc.input ?? tc.arguments)) return false;
-      return true;
+      if (indexer.isSummarized(occKey(call.id, resultTimestampOf(result.timestamp)))) return false;
+      return !exclude?.(call.name, call.input ?? call.arguments);
     });
+    if (ready.length === 0) return;
+    const results = ready.map((call: any) => turnResults.get(call.id));
+    const readyIds = new Set(ready.map((call: any) => call.id));
+    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : (msg.timestamp ?? Date.now());
+    const batch = captureBatch(msg, results, turnIndex, timestamp);
+    batches.push({ ...batch, toolCalls: batch.toolCalls.filter(call => readyIds.has(call.toolCallId)), userTurnGroup });
+  };
 
-    if (readyToPrune.length > 0) {
-      const results = readyToPrune.map((tc: any) => turnResults.get(tc.id));
-      const readyIds = new Set(readyToPrune.map((tc: any) => tc.id));
-      // We pass the full message but then trim back down to only the tool calls
-      // whose results already exist in the session. This lets a flush prune
-      // an intermediate completed subset in the middle of a longer tool chain
-      // without accidentally capturing later unresolved calls from the same
-      // assistant message as "(no result)" placeholders.
-      const entryTimestamp = projected[i].entry.timestamp;
-      const ts = entryTimestamp ? new Date(entryTimestamp).getTime() : (msg.timestamp ?? Date.now());
-      const batch = captureBatch(msg, results, currentTurnIndex, ts);
-      batches.push({
-        ...batch,
-        toolCalls: batch.toolCalls.filter((tc) => readyIds.has(tc.toolCallId)),
-        // Tag with the current group so flushPending can merge by mode
-        userTurnGroup,
-      });
+  for (const entry of branch) {
+    if (!isProjectableEntry(entry)) continue;
+    const msg = entry.type === "custom_message" ? projectCustomMessageEntry(entry) : entry.message;
+    // A result belongs to the preceding assistant until the next assistant,
+    // even when a user/custom anchor appears between them. Save that turn's group.
+    if (msg.role === "assistant") {
+      finishTurn();
+      turnResults.clear();
+      const fallback = turnCounter++;
+      currentTurn = { entry, msg, turnIndex: sourceTurnIndices?.get(entry.id) ?? fallback, userTurnGroup };
+    } else {
+      if (msg.role === "user" || isChainAnchorCustom(msg)) userTurnGroup++;
+      if (currentTurn && msg.role === "toolResult" && msg.toolCallId && !turnResults.has(msg.toolCallId)) {
+        turnResults.set(msg.toolCallId, msg);
+      }
     }
   }
-
+  finishTurn();
   return batches;
 }
 
