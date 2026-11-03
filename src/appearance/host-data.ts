@@ -9,6 +9,7 @@
 // boundary — no unknown/as-any escape, invalid pieces degrade to "unknown".
 
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { sessionEntryFacts } from "../session-history.ts";
 
 export interface ModelSnapshot {
   id: string;
@@ -38,6 +39,7 @@ export interface HostContextLike {
   getContextUsage?: () => unknown;
   sessionManager?: {
     getEntries?: () => unknown[];
+    getEntriesMetadata?: () => unknown[];
     getSessionId?: () => string;
     getLeafId?: () => string | null;
   };
@@ -215,10 +217,9 @@ export class HostData {
    * on init/restore/verified structure changes — never per tick/render). */
   getSessionEntries(): unknown[] {
     const manager = this.#ctx?.sessionManager;
-    const read = manager?.getEntries;
-    if (typeof read !== "function" || !manager) return [];
+    if (!manager || typeof manager.getEntries !== "function") return [];
     try {
-      const entries = read.call(manager);
+      const entries = sessionEntryFacts(manager);
       return Array.isArray(entries) ? entries : [];
     } catch {
       return [];

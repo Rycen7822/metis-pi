@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -30,11 +31,10 @@ type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiK
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 // Native entries are append-only: the last source entry identifies its ancestry, excluding extension journals.
 const sourceVersion = ({ sessionManager }: ExtensionContext) => {
-  let entry = sessionManager.getLeafEntry();
-  while (entry && entry.type !== "message" && entry.type !== "context_edit"
-    && entry.type !== "compaction" && entry.type !== "branch_summary")
-    entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
-  return entry?.id;
+  for (const entry of reverseBranchEntryReferences(sessionManager)) {
+    if (entry.type === "message" || entry.type === "context_edit" || entry.type === "compaction" || entry.type === "branch_summary")
+      return entry.id;
+  }
 };
 const safeError = (value: unknown, secrets: string[] = []): string => {
   let text = typeof value === "string" ? value : value instanceof Error ? value.message : "provider request failed";
@@ -76,7 +76,7 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   const data = checkpoint(entry);
   // A context edit of the summary invalidates its opaque history.
   const message = wrapper.messages.find(m => m.role === "compactionSummary");
-  const branch = ctx.sessionManager.getBranch();
+  const branch = branchEntryReferences(ctx.sessionManager);
   const covered = new Set(branch.slice(0, branch.findIndex(e => e.id === entry.firstKeptEntryId)).map(e => e.id));
   const entryIndex = branch.findIndex(e => e.id === entry.id);
   const edited = branch.slice(entryIndex + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
@@ -307,7 +307,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   const savedPortable = (current: NonNullable<ReturnType<typeof active>>, ctx: ExtensionContext): string | undefined => {
     if (!current.data) return;
     const fingerprint = portableHash(current);
-    const entry = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === PORTABLE
+    const entries = [...readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom" && entry.customType === PORTABLE)];
+    const entry = entries.findLast(entry => entry.type === "custom"
       && record(entry.data).checkpoint === current.entry.id && record(entry.data).fingerprint === fingerprint);
     const summary = entry?.type === "custom" ? record(entry.data).summary : undefined;
     return isPortableSummary(summary) ? summary : undefined;

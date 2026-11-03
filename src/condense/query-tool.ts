@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
+import { readHistoryEntries } from "../session-history.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { auxiliaryToolRenderers, displayRecord } from "../execution/ui/auxiliary-tool.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
@@ -195,7 +196,10 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
       if (component === "arguments" && !params.toolCallIds && !params.parentToolCallId)
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
-      const sourceBranch = params.sourceEntryIds ? ctx.sessionManager.getBranch() : undefined;
+      const sourceIds = new Set(params.sourceEntryIds);
+      const sourceBranch = params.sourceEntryIds
+        ? [...readHistoryEntries(ctx.sessionManager, "branch", entry => sourceIds.has(entry.id))]
+        : undefined;
       const selected: Selection[] = params.sourceEntryIds
         ? params.sourceEntryIds.map((ref): Selection => {
             const entry = sourceBranch!.find((entry) => entry.id === ref);

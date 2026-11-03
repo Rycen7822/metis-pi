@@ -200,7 +200,7 @@ export class GoalState {
     return hadGoal;
   }
 
-  restore(entries: readonly { type: string; customType?: string; data?: unknown }[]): void {
+  restore(entries: Iterable<{ type: string; customType?: string; data?: unknown }>): void {
     this.#goal = null;
     this.#activeSinceMs = null;
     this.#startedGoalId = null;

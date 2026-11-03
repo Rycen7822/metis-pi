@@ -68,7 +68,7 @@ export class StatsAccumulator {
 
   reconstructFromSession(ctx: ExtensionContext): void {
     this.reset();
-    for (const entry of customEntries(ctx.sessionManager.getBranch(), CUSTOM_TYPE_STATS)) {
+    for (const entry of customEntries(ctx.sessionManager, CUSTOM_TYPE_STATS)) {
       const data = entry.data as SummarizerStats;
       if (data) this.fromJSON(data);
     }

@@ -1,5 +1,6 @@
 import { captureFusionResult } from "./fusion.ts";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { isChainAnchorCustom } from "./chain-detector.ts";
@@ -29,12 +30,17 @@ export function projectBranchMessages(branch: any[]): any[] {
  * Returns -1 when the branch has no projected assistant message (harness-only;
  * a real `turn_end` always follows a persisted assistant message).
  */
-export function deriveLiveTurnIndex(branch: SessionEntry[]): number {
+export function deriveLiveTurnIndex(branch: readonly SessionEntryReference[]): number {
   let count = 0;
   for (const entry of branch) {
     if (entry.type === "message" && entry.message?.role === "assistant") count++;
   }
   return count - 1;
+}
+
+/** Complete message history for raw evidence and chain logic, excluding unrelated extension payloads. */
+export function readMessageBranch(manager: ExtensionContext["sessionManager"]): SessionEntry[] {
+  return [...readHistoryEntries(manager, "branch", entry => entry.type === "message" || entry.type === "custom_message")];
 }
 
 function isProjectableEntry(e: any): boolean {

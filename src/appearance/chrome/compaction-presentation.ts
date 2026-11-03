@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readHistoryEntries } from "../../session-history.ts";
 import { resolveThemePainter } from "../../presentation/palette.ts";
 
 const OWNER = Symbol.for("Rycen7822.metis-pi.compaction-presentation");
@@ -116,7 +117,7 @@ export function registerCompactionPresentation(pi: Pick<ExtensionAPI, "on">, opt
     entries = [];
     live = undefined;
     try {
-      for (const entry of ctx.sessionManager.getBranch()) {
+      for (const entry of readHistoryEntries(ctx.sessionManager, "branch", reference => reference.type === "compaction")) {
         if (entry.type !== "compaction") continue;
         entries.push({ id: entry.id, summary: entry.summary, tokensBefore: entry.tokensBefore,
           timestamp: Date.parse(entry.timestamp), input: requestInput(entry.usage) });

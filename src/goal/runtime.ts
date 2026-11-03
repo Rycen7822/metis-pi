@@ -13,7 +13,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { METIS_EVENTS, METIS_STATUS_IDS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest } from "../collaboration.ts";
+import { readHistoryEntries } from "../session-history.ts";
+import {
+  METIS_EVENTS, METIS_STATUS_IDS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest,
+} from "../collaboration.ts";
 import { GoalState, validateObjective, formatElapsedSeconds, type Goal, type GoalControlAction, type GoalStatus } from "./state.ts";
 import type { GoalPopup } from "./view.ts";
 
@@ -89,7 +92,8 @@ function goalResponse(goal: Goal | null, sessionId: string, includeCompletionRep
   let completionBudgetReport: string | null = null;
   if (includeCompletionReport && goal?.status === "complete") {
     completionBudgetReport = usagePending
-      ? "Goal achieved. Usage in this tool reply excludes the active turn. Final usage will be reported after the turn settles; do not report these provisional values as final."
+      ? "Goal achieved. Usage in this tool reply excludes the active turn. Final usage will be reported after the turn settles; "
+        + "do not report these provisional values as final."
       : `${finalGoalUsage(goal)} Report the final usage to the user.`;
   }
   return {
@@ -520,7 +524,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     inAgentTurn = false;
     completionReportGoalId = undefined;
     requestInvalidated = false;
-    state.restore(ctx.sessionManager.getBranch());
+    state.restore(readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom" && entry.customType === STATE_TYPE));
     updateStatus(ctx);
   }
 

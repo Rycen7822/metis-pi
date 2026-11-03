@@ -1,11 +1,16 @@
 import { METIS_STATUS_IDS } from "../collaboration.ts";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { branchEntryReferences, readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
+import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
-import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./batch-capture.ts";
+import {
+  captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex,
+  groupBatchesByMode, projectBranchMessages, readMessageBranch,
+} from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
 import { prepareBatch, splitPackingRuns } from "./packing.ts";
 import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summarizer.ts";
@@ -100,10 +105,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const resetNested = registerNestedCapture(pi, indexer, protectionPredicate);
   let argumentHistory: ArgumentHistory[] = [];
   const restoreArguments = (ctx: ExtensionContext) => {
-    argumentHistory = ctx.sessionManager
-      .getBranch()
-      .filter((entry) => entry.type === "custom" && entry.customType === ARGUMENT_HISTORY)
-      .map((entry) => (entry as any).data as ArgumentHistory)
+    argumentHistory = [...customEntries(ctx.sessionManager, ARGUMENT_HISTORY)]
+      .map(entry => entry.data as ArgumentHistory)
       .filter(
         (group) =>
           group?.version === 1 &&
@@ -135,7 +138,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const updatePruneStatus = (ctx: ExtensionContext, detail?: string | (() => string)) => {
     // Queue instructions follow config changes; progress/error text stays fixed.
     if (detail !== undefined) latestPruneDetail = typeof detail === "function" ? detail : () => detail;
-    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts(), statsAccum.getSessionTokens(), latestPruneDetail());
+    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(),
+      diagnostics.counts(), statsAccum.getSessionTokens(), latestPruneDetail());
   };
   const queuedDetail = (count: number, prefix = "") => () =>
     `${prefix}${count} turn${count === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${
@@ -205,7 +209,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // LLM context, so both belong in the largest-chain-share denominator.
       // Shared projection (src/batch-capture.ts projectBranchMessages) so this
       // matches the chain-detection feed sites exactly.
-      const branch = projectBranchMessages(ctx.sessionManager.getBranch());
+      const branch = projectBranchMessages(readMessageBranch(ctx.sessionManager));
       return computeContextMetrics(
         branch,
         frontier.get(),
@@ -301,10 +305,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let batches: CapturedBatch[] = [];
     try {
       indexer.syncSummaryEntries(ctx);
-      const rawBranch = ctx.sessionManager.getBranch();
+      const references = branchEntryReferences(ctx.sessionManager);
       const sourceTurns = new Map<string, number>();
       let turnIndex = 0;
-      for (const entry of rawBranch)
+      for (const entry of references)
         if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
       const branch = occ.enabled()
         ? ctx.sessionManager
@@ -312,7 +316,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             .entries.flatMap((entry: any) =>
               entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
             )
-        : rawBranch;
+        : readMessageBranch(ctx.sessionManager);
       batches = captureUnindexedBatchesFromSession(
         branch,
         { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },
@@ -428,8 +432,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     const append = (type: string, data: unknown) => {
       assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
-      if (!ctx.sessionManager.getBranch().some((item: any) => item.type === "custom" && item.customType === type
-        && JSON.stringify(item.data) === JSON.stringify(data))) throw new Error("Chain evidence was not persisted on the current branch");
+      if (!hasCustomEntryData(ctx.sessionManager, type, data))
+        throw new Error("Chain evidence was not persisted on the current branch");
       if (type === CUSTOM_TYPE_CHAIN) {
         lowerFloor(supersede, (data as SingleChainCompressionEntry).startUserTimestamp);
         onPublished?.();
@@ -1427,7 +1431,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const warmJsonSizes = async (ctx: ExtensionContext, version: number) => {
     if (ctx.mode !== "tui" || !currentConfig.value.enabled) return;
     let messages: any[];
-    try { messages = projectBranchMessages(ctx.sessionManager.getBranch()); } catch { return; }
+    try { messages = projectBranchMessages(readMessageBranch(ctx.sessionManager)); } catch { return; }
     let slice = performance.now();
     for (const message of messages) {
       if (version !== lifecycle || jsonSizes.full) return;
@@ -1529,9 +1533,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // persists it at message_end, a strictly earlier event), so the derived
       // index is the rescan index of this turn.
       let liveTurnIndex = event.turnIndex;
-      let branch: SessionEntry[] | undefined;
+      let branch: SessionEntryReference[] | undefined;
       try {
-        branch = ctx.sessionManager.getBranch();
+        branch = branchEntryReferences(ctx.sessionManager);
       } catch {
         // Transient getBranch failure must never block the turn; fall back to
         // the run-local index (pre-#16 behavior). The flush-time rescan still
@@ -1852,7 +1856,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (entry.summaryFingerprint !== undefined) return entry.summaryFingerprint === projectionFingerprint([summaries]);
     if (!entry.rangeSummaryText) return true; // Legacy concatenation reads current semantic bodies.
     if (entry.bodySource === "deterministic") return summaries.length === 0;
-    const branch = ctx?.sessionManager.getBranch() ?? [];
+    const branch = ctx ? [...readHistoryEntries(ctx.sessionManager, "branch", item =>
+      (item.type === "custom" && item.customType === CUSTOM_TYPE_CHAIN)
+      || (item.type === "custom_message" && item.customType === CUSTOM_TYPE_SUMMARY))] : [];
     const published = branch.findIndex(item => item.type === "custom" && item.customType === CUSTOM_TYPE_CHAIN
       && (item.data as SingleChainCompressionEntry)?.blockId === entry.blockId);
     const own = new Set(keys);
@@ -2002,16 +2008,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const appendEntry = (type: string, data: unknown) => {
         assertValid();
         pi.appendEntry(type, data);
-        if (
-          !manager
-            .getBranch()
-            .some(
-              (item) =>
-                item.type === "custom" &&
-                item.customType === type &&
-                JSON.stringify(item.data) === JSON.stringify(data),
-            )
-        )
+        if (!hasCustomEntryData(manager, type, data))
           throw new Error("Chain archive was not persisted on the current branch");
         if (type === CUSTOM_TYPE_CHAIN) publishedChains += chainMembers(data as SingleChainCompressionEntry | SharedChainCompressionEntry).length;
       };

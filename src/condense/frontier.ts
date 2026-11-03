@@ -36,7 +36,7 @@ export class PruneFrontierTracker {
 
   reconstructFromSession(ctx: ExtensionContext): void {
     this.reset();
-    for (const entry of customEntries(ctx.sessionManager.getBranch(), CUSTOM_TYPE_FRONTIER)) {
+    for (const entry of customEntries(ctx.sessionManager, CUSTOM_TYPE_FRONTIER)) {
       const data = entry.data as PruneFrontier;
       if (data) this.fromJSON(data);
     }

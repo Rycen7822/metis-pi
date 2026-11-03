@@ -9,9 +9,11 @@ import {
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
+import { branchEntryReferences, readHistoryEntries } from "../session-history.ts";
+import { customEntries } from "./custom-entries.ts";
 import { createCompactionOutputLimiter } from "./output-limit.ts";
 import { hasUnavailableNestedEvidence, isProtected } from "./protected.ts";
-import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.ts";
+import { captureBatch, captureUnindexedBatchesFromSession, readMessageBranch } from "./batch-capture.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
 import { ARGUMENT_HISTORY } from "./argument-history.ts";
 import { isDerived, retainSources, type Obligation } from "./occ-protection.ts";
@@ -81,14 +83,15 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection();
   const visible = (ctx: ExtensionContext) => {
     const projected = projection(ctx);
-    const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages, api: ctx.model?.api, maintenance: true } satisfies CondenseProjectRequest;
+    const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages,
+      api: ctx.model?.api, maintenance: true } satisfies CondenseProjectRequest;
     pi.events.emit(METIS_EVENTS.condenseProject, request);
     return { messages: request.messages, sources: projected.entries.filter(e => e.messages.length).map(e => e.sourceEntry.id) };
   };
   const signature = (ctx: ExtensionContext) => hash([
     ctx.sessionManager.getSessionId(), visible(ctx), ctx.model,
     projection(ctx).entries.filter(e => e.messages.length).map(e => [e.sourceEntry.id, e.messages]),
-    ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "goal").at(-1),
+    [...customEntries(ctx.sessionManager, "goal")].at(-1),
   ]);
   const chars = (ctx: ExtensionContext) => JSON.stringify(visible(ctx).messages).length;
   const estimatedTokens = (messages: any[]) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
@@ -123,7 +126,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   };
   // Identity is not authority: retain the latest accepted user entry ID even
   // after a split-turn compaction or context edit hides its visible contribution.
-  const externalRequest = (ctx: ExtensionContext) => ctx.sessionManager.getBranch()
+  const externalRequest = (ctx: ExtensionContext) => branchEntryReferences(ctx.sessionManager)
     .filter(e => e.type === "message" && e.message.role === "user").at(-1)?.id;
 
   function decide(ctx: ExtensionContext): boolean {
@@ -347,7 +350,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
 
       // Archive original source separately from the effective projection. Archive
       // records do not authorize pruning and cannot resurrect context edits.
-      await archiveBatches(captureUnindexedBatchesFromSession(ctx.sessionManager.getBranch(),
+      await archiveBatches(captureUnindexedBatchesFromSession(readMessageBranch(ctx.sessionManager),
         { isSummarized: key => !!indexer.getRecord(key) }), { indexer,
         spillThreshold: config.value.spillThreshold, spillPreviewBytes: config.value.spillPreviewBytes,
         sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
@@ -406,9 +409,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     outputLimiter?.release(); outputLimiter = undefined;
     lifecycle++;
     sessionId = ctx.sessionManager.getSessionId();
-    const last = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === STATE).at(-1);
+    const last = [...customEntries(ctx.sessionManager, STATE)].at(-1);
     spentRequests.clear();
-    for (const entry of ctx.sessionManager.getEntries()) {
+    for (const entry of readHistoryEntries(ctx.sessionManager, "session", reference => reference.type === "custom"
+      && reference.customType === STATE)) {
       if (entry.type === "custom" && entry.customType === STATE) {
         const request = (entry.data as MaintenanceState)?.spentRequest;
         if (typeof request === "string") spentRequests.add(request);
@@ -481,6 +485,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       sessionManager: {
         buildSessionProjection: () => ctx.sessionManager.buildSessionProjection(),
         getBranch: () => ctx.sessionManager.getBranch(),
+        getBranchMetadata: () => branchEntryReferences(ctx.sessionManager),
       },
       owns: false,
     };

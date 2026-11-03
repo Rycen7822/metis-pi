@@ -1,4 +1,5 @@
 import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
+import type { SessionEntryReference } from "./session-history.ts";
 
 export const METIS_EVENTS = {
   executionStatus: "metis:execution-status",
@@ -44,6 +45,7 @@ export interface CodexCompactionOwnerRequest {
   readonly sessionManager: {
     readonly buildSessionProjection: () => SessionProjection;
     readonly getBranch: () => SessionEntry[];
+    readonly getBranchMetadata?: () => SessionEntryReference[];
   };
   owns: boolean;
 }
@@ -84,5 +86,7 @@ export function isCodexCompactionOwnerRequest(value: unknown): value is CodexCom
     && (value["model"] === undefined || (record(value["model"]) && typeof value["model"]["api"] === "string"
       && typeof value["model"]["provider"] === "string"))
     && record(value["sessionManager"]) && typeof value["sessionManager"]["buildSessionProjection"] === "function"
-    && typeof value["sessionManager"]["getBranch"] === "function";
+    && typeof value["sessionManager"]["getBranch"] === "function"
+    && (value["sessionManager"]["getBranchMetadata"] === undefined
+      || typeof value["sessionManager"]["getBranchMetadata"] === "function");
 }

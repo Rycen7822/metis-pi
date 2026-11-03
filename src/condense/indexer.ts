@@ -14,12 +14,13 @@ import {
 } from "./types.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { customEntries } from "./custom-entries.ts";
+import { readHistoryEntries } from "../session-history.ts";
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,
   type SummaryToolCallRef,
 } from "./summary-refs.ts";
-import { captureUnindexedBatchesFromSession } from "./batch-capture.ts";
+import { captureUnindexedBatchesFromSession, readMessageBranch } from "./batch-capture.ts";
 import { hashToolResult } from "./content-hash.ts";
 import { occKey, parseOccKey } from "./occurrence-key.ts";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -65,10 +66,11 @@ export class ToolCallIndexer {
     this.chainRegistry.clear();
 
     // Read originals before legacy aliases so recovery can find their source bodies.
-    const branch = ctx.sessionManager.getBranch();
     const dedupAliasEntries: DedupAliasEntryData[] = [];
 
-    for (const entry of customEntries(branch)) {
+    const entries = readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom"
+      && [CUSTOM_TYPE_INDEX, CUSTOM_TYPE_CHAIN, CUSTOM_TYPE_DEDUP_ALIAS].includes(entry.customType));
+    for (const entry of customEntries(entries)) {
       if (entry.customType === CUSTOM_TYPE_INDEX) {
         const data = entry.data as IndexEntryData;
         const backfilled = data.backfilled === true;
@@ -110,7 +112,7 @@ export class ToolCallIndexer {
     // occurrence from immutable source messages before projecting or recalling it.
     const sources = new Map<string, ToolCallRecord>();
     if (dedupAliasEntries.length) {
-      for (const batch of captureUnindexedBatchesFromSession(branch, { isSummarized: () => false })) {
+      for (const batch of captureUnindexedBatchesFromSession(readMessageBranch(ctx.sessionManager), { isSummarized: () => false })) {
         for (const call of batch.toolCalls) {
           sources.set(occKey(call.toolCallId, call.resultTimestamp), {
             ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp,
@@ -125,7 +127,7 @@ export class ToolCallIndexer {
       const own = sources.get(key) ?? (original && this.unknownLegacyOccurrence(key, original));
       if (own) this.indexRecord(own);
     }
-    this.syncSummaryBranch(branch);
+    this.syncSummaryEntries(ctx);
   }
 
   /**
@@ -342,10 +344,12 @@ export class ToolCallIndexer {
    * can serve chain summaries without re-scanning session entries.
    */
   syncSummaryEntries(ctx: ExtensionContext): void {
-    this.syncSummaryBranch(ctx.sessionManager.getBranch());
+    const entries = readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom_message"
+      && entry.customType === CUSTOM_TYPE_SUMMARY && !this.seenSummaryEntries.has(entry.id));
+    this.syncSummaryBranch(entries);
   }
 
-  private syncSummaryBranch(branch: readonly SessionEntry[]): void {
+  private syncSummaryBranch(branch: Iterable<SessionEntry>): void {
     for (const entry of branch) {
       if (entry.type !== "custom_message" || entry.customType !== CUSTOM_TYPE_SUMMARY || this.seenSummaryEntries.has(entry.id)) continue;
       const refs = normalizeSummaryToolCallRefs(entry.details);
