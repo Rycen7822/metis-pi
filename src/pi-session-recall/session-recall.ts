@@ -34,12 +34,12 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
 import { createRecallRequest } from "./context.ts";
 import { searchFiles, searchLines } from "./search.ts";
+import { readSessionLines } from "./session-file.ts";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -160,7 +160,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		label: "Session Search",
 		description:
 			"Find past sessions by literal text search. This is essentially `rg -i -F` over session JSONL files, not semantic search. " +
-			"Use one exact token or phrase. Spaces are exact spaces in an exact phrase, so only use spaces for wording you expect appeared in the session, such as an error message. " +
+			"Use one exact token or phrase. Spaces are exact spaces in an exact phrase, " +
+			"so only use spaces for wording you expect appeared in the session, such as an error message. " +
 			"Good examples: `libc++abi`, `Cannot find module '@sinclair/typebox'`, `Blender VAT bake`. " +
 			"Bad example: `build ci c lib dependency ghostty` because that searches for one exact phrase, not separate keywords. " +
 			"Do not combine independent keywords into one search string. If you need multiple unrelated terms, call session_search multiple times. " +
@@ -198,7 +199,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			query: Type.String({
 				minLength: 1,
 				description:
-					"Literal search pattern passed to fixed-string ripgrep-style search. Use one distinctive token or exact phrase, not a bag of unrelated keywords. Spaces mean exact spaces in an exact phrase.",
+					"Literal search pattern passed to fixed-string ripgrep-style search. " +
+					"Use one distinctive token or exact phrase, not a bag of unrelated keywords. Spaces mean exact spaces in an exact phrase.",
 			}),
 		}),
 
@@ -226,7 +228,9 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 								type: "text" as const,
 								text:
 									`No sessions found matching "${query}".\n\n` +
-									"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
+									"session_search is literal fixed-string search, not semantic search. " +
+									"Retry with one exact distinctive token or phrase, such as a filename, package name, " +
+									"error text, function name, issue id, or unique term.",
 							},
 						],
 						details: { matchCount: 0, totalMatches: 0, truncated: false, query },
@@ -274,7 +278,9 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 								type: "text" as const,
 								text:
 									`No readable matches in the first ${fileMatches.length} of ${allMatches.length} matching session files for "${query}".\n\n` +
-									"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
+									"session_search is literal fixed-string search, not semantic search. " +
+									"Retry with one exact distinctive token or phrase, such as a filename, package name, " +
+									"error text, function name, issue id, or unique term.",
 							},
 						],
 						details,
@@ -304,7 +310,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		label: "Session Query",
 		description:
 			`Query a specific session file to get detailed information. Use after ${searchName} to dig into a particular session, ` +
-			"or when you already have a session path (e.g., from a handoff). Sends the conversation and tool calls, without assistant thinking or tool output, to an LLM for analysis.",
+			"or when you already have a session path (e.g., from a handoff). " +
+			"Sends the conversation and tool calls, without assistant thinking or tool output, to an LLM for analysis.",
 		renderResult: (result, options, theme) => {
 			const container = new Container();
 			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
@@ -374,7 +381,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			// Load the session
 			let sessionManager: SessionManager;
 			try {
-				const entries = parseSessionEntries(await readFile(sessionPath, { encoding: "utf8", signal }));
+				const entries: ReturnType<typeof parseSessionEntries> = [];
+				for await (const line of readSessionLines(sessionPath, signal)) entries.push(...parseSessionEntries(line));
 				signal?.throwIfAborted();
 				sessionManager = SessionManager.inMemory(ctx.cwd, undefined, entries);
 			} catch (err) {

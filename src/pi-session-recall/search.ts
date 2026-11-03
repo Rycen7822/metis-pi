@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { readSessionLines } from "./session-file.ts";
 
 const run = promisify(execFile);
 
@@ -48,26 +48,6 @@ async function* jsonlFiles(dir: string, signal: AbortSignal): AsyncGenerator<str
 	}
 }
 
-/** Streams one record at a time; cancellation also closes the file stream. */
-async function* linesOf(path: string, signal: AbortSignal): AsyncGenerator<string> {
-	signal.throwIfAborted();
-	const stream = createReadStream(path, { encoding: "utf8", signal });
-	let pending = "";
-	try {
-		for await (const chunk of stream) {
-			signal.throwIfAborted();
-			pending += chunk;
-			let end: number;
-			while ((end = pending.indexOf("\n")) >= 0) {
-				signal.throwIfAborted();
-				yield pending.slice(0, end).replace(/\r$/, "");
-				pending = pending.slice(end + 1);
-			}
-		}
-		if (pending) yield pending.replace(/\r$/, "");
-	} finally { stream.destroy(); }
-}
-
 function countsOf(output: string): FileMatchCount[] {
 	return output.trim().split("\n").filter(Boolean).flatMap(line => {
 		const colon = line.lastIndexOf(":");
@@ -96,7 +76,7 @@ export async function searchFiles(query: string, dir: string, callerSignal?: Abo
 	for await (const path of jsonlFiles(dir, signal)) {
 		let count = 0;
 		try {
-			for await (const line of linesOf(path, signal)) {
+			for await (const line of readSessionLines(path, signal)) {
 				if (line.toLowerCase().includes(needle)) count++;
 			}
 		} catch { signal.throwIfAborted(); continue; }
@@ -118,7 +98,7 @@ export async function searchLines(query: string, path: string, limit: number, ca
 	}
 	const matches: string[] = [];
 	try {
-		for await (const line of linesOf(path, signal)) {
+		for await (const line of readSessionLines(path, signal)) {
 			if (line.toLowerCase().includes(query.toLowerCase())) matches.push(line);
 			if (matches.length === limit) break;
 		}

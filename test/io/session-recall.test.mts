@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, ReadStream, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { createAssistantMessageEventStream, InMemoryCredentialStore, normalizeContext, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
-import { ModelRegistry, ModelRuntime, SessionManager, estimateTokens, type ExtensionAPI, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  createAssistantMessageEventStream, InMemoryCredentialStore, normalizeContext, type Api, type AssistantMessage, type Model,
+} from "@earendil-works/pi-ai";
+import {
+  ModelRegistry, ModelRuntime, SessionManager, estimateTokens, type ExtensionAPI, type ExtensionToolContext, type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import initialize from "../../extensions/session-recall.ts";
 import { searchFiles, searchLines } from "../../src/pi-session-recall/search.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
@@ -37,7 +41,8 @@ for (const backend of ["rg", "grep", "node"] as const) {
     mkdirSync(dir); mkdirSync(bin);
     const reached = join(root, "backend-exits");
     if (backend !== "node") writeFileSync(join(bin, backend),
-      `#!/bin/sh\n${shellQuote(binaries[backend]!)} "$@"\nstatus=$?\nprintf '%s\\n' "$status" >> ${shellQuote(reached)}\nexit "$status"\n`, { mode: 0o755 });
+      `#!/bin/sh\n${shellQuote(binaries[backend]!)} "$@"\nstatus=$?\n` +
+      `printf '%s\\n' "$status" >> ${shellQuote(reached)}\nexit "$status"\n`, { mode: 0o755 });
     // The searchable header must not inherit a random storage path containing
     // "-v" (including "-V"), which would add legitimate header matches.
     const cwd = "/recall-search-fixture";
@@ -48,7 +53,8 @@ for (const backend of ["rg", "grep", "node"] as const) {
     process.env.PATH = bin;
     try {
       const results = await searchFiles("needle", dir);
-      if (backend !== "node") assert.equal(readFileSync(reached, "utf8").trim(), "0", "the actual selected backend succeeded, rather than silently falling back");
+      if (backend !== "node") assert.equal(readFileSync(reached, "utf8").trim(), "0",
+        "the actual selected backend succeeded, rather than silently falling back");
       assert.deepEqual(results.sort((a, b) => a.path.localeCompare(b.path)), [{ path: one, count: 1 }, { path: two, count: 2 }]);
       assert.equal((await searchLines("needle", two, 1)).length, 1);
       assert.deepEqual(await searchFiles("-v", dir), [{ path: one, count: 1 }]);
@@ -131,9 +137,31 @@ test("the public grouped Recall tool reads native string messages and rejects em
   assert.match(JSON.stringify(result.content), /\[user\] unique-recall-string/);
   assert.equal(result.details.matchCount, 1);
   await assert.rejects(tool.execute("empty", { action: "search", params: { query: "" } }, undefined, undefined, ctx), /query|minLength|minimum/);
-  const cancelled = await tool.execute("cancelled", { action: "query", params: { sessionPath, question: "What changed?" } }, AbortSignal.abort(), undefined, ctx);
+  const cancelled = await tool.execute("cancelled", { action: "query", params: { sessionPath, question: "What changed?" } },
+    AbortSignal.abort(), undefined, ctx);
   assert.equal(cancelled.details.cancelled, true);
   assert.equal(captured.length, 0, "a cancelled read cannot dispatch a helper request");
+});
+
+test("Recall cancels an opened query stream before provider dispatch and closes its file", async t => {
+  const { sessions, tool, ctx, captured } = await queryFixture(t);
+  const sessionPath = sessionFile(sessions, "cancel-open-query", ["Evidence that must not reach a provider."]);
+  const controller = new AbortController();
+  const emit = ReadStream.prototype.emit;
+  let closed: Promise<void> | undefined;
+  t.mock.method(ReadStream.prototype, "emit", function (this: ReadStream, event: string, ...args: unknown[]) {
+    if (event === "open" && this.path === sessionPath) {
+      closed = new Promise(resolve => this.once("close", resolve));
+      controller.abort(new Error("cancel an opened query file"));
+    }
+    return Reflect.apply(emit, this, [event, ...args]);
+  });
+  const result = await tool.execute("cancel-open", { action: "query", params: { sessionPath, question: "What changed?" } },
+    controller.signal, undefined, ctx);
+  assert.ok(closed, "the actual query reader opened the target file");
+  await closed;
+  assert.equal(result.details.cancelled, true);
+  assert.equal(captured.length, 0, "a cancelled file read never dispatches a helper request");
 });
 
 test("Recall uses the current native runtime's dynamic auth endpoint, headers and env", async t => {
@@ -141,7 +169,8 @@ test("Recall uses the current native runtime's dynamic auth endpoint, headers an
   const auth = t.mock.method(runtime, "getAuth", async () => ({ auth: { apiKey: "broker-key", baseUrl: "http://127.0.0.1:1/broker/v1",
     headers: { "x-recall-auth": "dynamic" } }, env: { RECALL_TEST_ENV: "resolved" } }));
   const sessionPath = sessionFile(sessions, "routing", ["routing decision"]);
-  const result = await tool.execute("query", { action: "query", params: { sessionPath, question: "What was the decision?" } }, undefined, undefined, ctx);
+  const result = await tool.execute("query", { action: "query", params: { sessionPath, question: "What was the decision?" } },
+    undefined, undefined, ctx);
   assert.match(JSON.stringify(result.content), /Offline recalled answer/);
   assert.equal(auth.mock.callCount(), 1);
   assert.equal(captured.length, 1);
@@ -155,7 +184,8 @@ test("Recall bounds final normalized input for small-count giant messages, many 
   const { sessions, tool, ctx, captured } = await queryFixture(t);
   for (const [name, contents] of [
     ["giant", ["needle 界🙂 ".repeat(8000)]],
-    ["many", Array.from({ length: 12 }, (_, i) => `needle decision ${i} ${i === 0 ? "BEGIN_SETUP" : ""} ` + "x".repeat(1500) + (i === 11 ? " FINAL_STATE" : ""))],
+    ["many", Array.from({ length: 12 }, (_, i) =>
+      `needle decision ${i} ${i === 0 ? "BEGIN_SETUP" : ""} ` + "x".repeat(1500) + (i === 11 ? " FINAL_STATE" : ""))],
     ["late-match", ["Earlier context ".repeat(2000) + "needle LATE_MATCH_DECISION " + "context 界🙂 ".repeat(1000)]],
   ] as const) {
     const sessionPath = sessionFile(sessions, name, [...contents]);
