@@ -13,10 +13,21 @@
 | `0000-physical-workspace-bundling.patch` | 官方 esbuild 脚本通过 workspace 自引用/包入口解析依赖，不依赖 node_modules 软链接；保留 exports/subpath 条件，避免回退到旧 TUI 实体副本。 |
 | `0001-reuse-visible-row-composition.patch` | 每个 layout root 只保留上一帧可见行合成结果；精确匹配源行、底层行、x、组件宽度和终端宽度。 |
 | `0002-reuse-stable-assistant-markdown.patch` | Assistant 持有最近正文槽位的 Markdown 实例；文本、padding、streaming 一致才复用。 |
+| `0003-load-session-bodies-on-demand.patch` | JSONL 常驻轻元数据及字节位置，正文按需读取；同步迁移 SDK 启动、统计、计费、模型恢复与边界预览消费者。 |
 
 行缓存不跳过组件 render、布局、复制来源发布、scrollbar、选区、overlay 或图片处理；保留全宽快路径，不缓存图片行。
 正文复用仍 invalidate，让动态 transform、宽度和主题样式重新求值；原生 token WeakRef 可能被 GC 回收，不改成强引用。
-thinking、手动折叠、tool/error/abort/length、OSC133 和消息更新流程保持原生逻辑。无新增缓存预算、hash 校验或扩展猴子补丁。
+thinking、手动折叠、tool/error/abort/length、OSC133 和消息更新流程保持原生逻辑。以上两个 CPU 补丁无新增缓存预算。
+
+`0003` 保持 JSONL 格式、旧分支、签名、图片、完整导出及迁移。文件会话常驻 header、白名单 metadata 和 UTF-8 byte offset；
+正文缓存按序列化 UTF-8 字节计 16 MiB LRU，单条超预算仍可完整读取但不入缓存，**不是进程 heap/RSS 硬限制**。
+同步读取另复用至多 1 MiB 工作 Buffer，大记录独立分配；不持有长期文件句柄、不加持久化索引或 hash。
+`inMemory`/显式预加载继续 eager；`getEntry/getEntries/getBranch/getTree` 仍返回完整数据，不提供假正文或 Proxy。
+新增 `getEntryMetadata/getEntriesMetadata/getBranchMetadata/getContextEntriesMetadata` 只提供事实；真正压缩和显式旧历史恢复仍读必要正文。
+`createBranchPreview` 保留完整历史位置，不把已被摘要的旧目标丢掉；预览不改原分支或文件。
+
+Metis 已通过 `src/session-history.ts` 做一处能力适配：stock SDK 回退完整读取；打补丁 SDK 先按 metadata 选择再解码必要记录。
+第三方若继续调用并长期持有完整历史，仍会占内存；`0003` 不会自动替它们卸载正文。所有补丁均无扩展运行时猴子补丁。
 
 ## 隔离准备与应用
 
@@ -93,6 +104,22 @@ SDK 全仓 `npm run check`、两包正式构建、89项 TUI 测试、26项 SDK U
 
 变化正文控制组 CPU 基本持平，不能声称所有输入零开销。输出字节数与完整结果对照均通过；不将局部收益外推到整个 Pi。
 本轮没有证明大幅持久 RSS 节省，没有删历史/签名/图片或调 GC；未重现旧24小时 Windows Terminal 慢输入，也未做 Windows/Warp 真实图形/剪贴板传输验收。
+
+### 按需历史补丁的开发证据
+
+同一份 251 MiB / 23911 条历史，所有 entry、branch、context provenance 与模型 messages 对照原版一致；
+追加、分支导出、v1/v2 迁移、UTF-8 offset、CRLF/尾行、unknown entry、大 header fallback、缓存淘汰及超大条目通过。
+SDK 23 文件 287 项定向合同、完整 `npm run check`、正式 TUI/coding-agent 构建已通过；未发真实 provider 请求。
+`0000–0003` 在上游实体源码副本依次应用，全部 28 个变更/新增文件与测试源码 `cmp` 一致。
+
+实际隔离 CLI（CPU 补丁基线 + Metis1194b04，对照当前四补丁 + Metis61d1f3c）仍保留所有必要索引和状态。
+一组同快照控制：GC 后 V8 heap 380.82 → 163.67 MiB、主进程 RSS 550.26 → 475.38 MiB、峰值 RSS 717.36 → 476.39 MiB。
+这是完整 SDK/Metis 候选合计，**不能将差值归到单个补丁，也不是当前宿主实测或 24 小时运行保证**；
+readiness 有单次异常，不把最快一次或轮询时间当输入 P95。额外 Python daemon 两臂均启动，未运行 agent 任务。
+
+同步读 Buffer 的独立全历史扫描：23911 次 / 251.18 MiB 分配降为 11 次 / 17.69 MiB，读循环 493–561 → 459–467 ms；
+没有证明该 Buffer 单项减少 CLI RSS 或冷启动时间。临时脚本、原始对照和已修正的失败保留在
+`.work/pi-memory-baseline-20261103/implementation/`。`/tree` 懒读和最终键盘/CPU 矩阵尚未完成，本阶段未安装。
 
 ## 后续维护与撤回
 

@@ -1,0 +1,2713 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 3a9174c..085ca0c 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -124,10 +124,9 @@ import { exportSessionToJsonl } from "./session-export.ts";
+ import {
+ 	type BranchSummaryEntry,
+ 	type CompactionEntry,
+-	type ContextEditEntry,
+ 	getLatestCompactionEntry,
+ 	type SessionEntry,
+-	SessionManager,
++	type SessionManager,
+ 	type SessionProjection,
+ } from "./session-manager.ts";
+ import {
+@@ -629,7 +628,7 @@ export class AgentSession {
+ 		const model = this.model;
+ 		if (!model) return;
+ 		const getModel = (provider: string, modelId: string) => this._modelRuntime.getModel(provider, modelId);
+-		const recorded = getBranchSelection(this.sessionManager.getBranch(), getModel);
++		const recorded = getBranchSelection(this.sessionManager.getBranchMetadata(), getModel);
+ 		if (!recorded || (recorded.provider === model.provider && recorded.modelId === model.id)) return;
+ 		const recordedModel = getModel(recorded.provider, recorded.modelId);
+ 		if (!isVirtualModel(model) && !(recordedModel && isVirtualModel(recordedModel))) return;
+@@ -767,7 +766,7 @@ export class AgentSession {
+ 	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
+ 		if (model.contextWindow <= 0) return false;
+ 		return shouldCompact(
+-			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
++			estimateProjectedContextTokens(projection, this.sessionManager.getBranchMetadata()).tokens,
+ 			model.contextWindow,
+ 			this.settingsManager.getCompactionSettings(this.model),
+ 		);
+@@ -818,7 +817,9 @@ export class AgentSession {
+ 			// start a turn; extension messages can follow them, e.g. from before_agent_start.
+ 			const lastResponse = context.messages.findLastIndex((message) => message.role === "assistant");
+ 			const userTurn = context.messages.slice(lastResponse + 1).some((message) => message.role === "user");
+-			const state = getVirtualModelState(this.sessionManager.getBranch(), model.provider, model.id);
++			const state = getVirtualModelState(this.sessionManager.getBranchMetadata(), model.provider, model.id, (id) =>
++				this.sessionManager.getEntry(id),
++			);
+ 			const route = await this._modelRuntime.resolveModel(model, convertToLlm(context.messages), {
+ 				reason: failed ? "retry" : userTurn ? "user" : "continuation",
+ 				thinkingLevel,
+@@ -965,7 +966,7 @@ export class AgentSession {
+ 				case "compaction": {
+ 					const tokensBefore = estimateProjectedContextTokens(
+ 						manager.buildSessionProjection(),
+-						manager.getBranch(),
++						manager.getBranchMetadata(),
+ 					).tokens;
+ 					entryId = manager.appendCompaction(
+ 						draft.summary,
+@@ -985,9 +986,7 @@ export class AgentSession {
+ 	}
+ 
+ 	private _createBoundaryPreviewManager(drafts: SessionBoundaryDraft[]): SessionManager {
+-		const header = this.sessionManager.getHeader();
+-		if (!header) throw new Error("Session header is missing");
+-		const manager = SessionManager.inMemory(this._cwd, undefined, [header, ...this.sessionManager.getBranch()]);
++		const manager = this.sessionManager.createBranchPreview(this._cwd);
+ 		this._applyBoundaryDrafts(manager, drafts);
+ 		return manager;
+ 	}
+@@ -1000,7 +999,9 @@ export class AgentSession {
+ 		drafts: SessionBoundaryDraft[],
+ 		boundary: "turn_end" | "agent_before_settle",
+ 	): BoundaryContextPreview {
+-		const projection = this._createBoundaryPreviewManager(drafts).buildSessionProjection();
++		const projection = drafts.length
++			? this._createBoundaryPreviewManager(drafts).buildSessionProjection()
++			: this.sessionManager.buildSessionProjection();
+ 		const pendingMessages = this._getPendingBoundaryMessages();
+ 		const llmMessages = convertToLlm(projection.messages);
+ 		const finalRole = llmMessages[llmMessages.length - 1]?.role;
+@@ -1216,8 +1217,10 @@ export class AgentSession {
+ 	private _findPersistedMessageEntryId(message: AgentMessage): string | undefined {
+ 		const mapped = this._entryIdsByMessage.get(message);
+ 		if (mapped) return mapped;
+-		for (const entry of [...this.sessionManager.getBranch()].reverse()) {
+-			if (entry.type === "message" && entry.message === message) return entry.id;
++		for (const metadata of this.sessionManager.getBranchMetadata().reverse()) {
++			if (metadata.type !== "message" || metadata.message.role !== message.role) continue;
++			const entry = this.sessionManager.getEntry(metadata.id);
++			if (entry?.type === "message" && entry.message === message) return entry.id;
+ 		}
+ 
+ 		const messageIndex = this.agent.state.messages.indexOf(message);
+@@ -1421,7 +1424,10 @@ export class AgentSession {
+ 		}
+ 
+ 		this._extensionRunner.invalidate(
+-			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
++			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx " +
++				"after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, " +
++				"move post-replacement work into withSession and use the ctx passed to withSession. " +
++				"For reload, do not use the old ctx after await ctx.reload().",
+ 		);
+ 		this._disconnectFromAgent();
+ 		this._eventListeners = [];
+@@ -1831,9 +1837,11 @@ export class AgentSession {
+ 		this._pendingToolNames.clear();
+ 		// All system messages on the branch, including those before a compaction. Compaction snapshots
+ 		// are derived from these, so replaying them gives the current loadout.
+-		const systemMessages = this.sessionManager
+-			.getBranch()
+-			.flatMap((entry) => (entry.type === "message" && entry.message.role === "system" ? [entry.message] : []));
++		const systemMessages = this.sessionManager.getBranchMetadata().flatMap((metadata) => {
++			if (metadata.type !== "message" || metadata.message.role !== "system") return [];
++			const entry = this.sessionManager.getEntry(metadata.id);
++			return entry?.type === "message" && entry.message.role === "system" ? [entry.message] : [];
++		});
+ 		// No recorded loadout: keep the current tools.
+ 		if (systemMessages.length === 0) return;
+ 		// Tools the branch ever added or removed. Removed tools stay inactive.
+@@ -2779,6 +2787,15 @@ export class AgentSession {
+ 	// Compaction
+ 	// =========================================================================
+ 
++	private _findCompactionEntry(summary: string): CompactionEntry | undefined {
++		for (const metadata of this.sessionManager.getEntriesMetadata()) {
++			if (metadata.type !== "compaction") continue;
++			const entry = this.sessionManager.getEntry(metadata.id);
++			if (entry?.type === "compaction" && entry.summary === summary) return entry;
++		}
++		return undefined;
++	}
++
+ 	/** Generate Pi's built-in compaction summary for manual and automatic compaction. */
+ 	private async _runDefaultCompaction(
+ 		preparation: CompactionPreparation,
+@@ -2909,14 +2926,11 @@ export class AgentSession {
+ 			}
+ 
+ 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+-			const newEntries = this.sessionManager.getEntries();
+ 			this._refreshFinalizedContext();
+ 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
+ 
+ 			// Get the saved compaction entry for the extension event
+-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
+-				| CompactionEntry
+-				| undefined;
++			const savedCompactionEntry = this._findCompactionEntry(summary);
+ 
+ 			if (this._extensionRunner && savedCompactionEntry) {
+ 				await this._extensionRunner.emit({
+@@ -3027,7 +3041,7 @@ export class AgentSession {
+ 		// Skip compaction checks if this assistant message is older than the latest
+ 		// compaction boundary. This prevents a stale pre-compaction usage/error
+ 		// from retriggering compaction on the first prompt after compaction.
+-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
++		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranchMetadata());
+ 		const assistantIsFromBeforeCompaction =
+ 			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+ 		if (assistantIsFromBeforeCompaction) {
+@@ -3046,19 +3060,20 @@ export class AgentSession {
+ 					entry.sourceEntry.id === assistantEntryId &&
+ 					entry.messages.some((message) => message.role === "assistant"),
+ 			);
+-		const branch = this.sessionManager.getBranch();
++		const branch = this.sessionManager.getBranchMetadata();
+ 		const assistantIndex = assistantEntryId ? branch.findIndex((entry) => entry.id === assistantEntryId) : -1;
+ 		const entriesAfterAssistant = assistantIndex >= 0 ? branch.slice(assistantIndex + 1) : [];
+ 		const hasPostAssistantContextEdit = entriesAfterAssistant.some((entry) => entry.type === "context_edit");
+-		const latestAssistantEdit = entriesAfterAssistant
+-			.filter(
+-				(entry): entry is ContextEditEntry => entry.type === "context_edit" && entry.targetId === assistantEntryId,
+-			)
+-			.at(-1);
++		const latestAssistantEditMetadata = entriesAfterAssistant.findLast(
++			(entry) => entry.type === "context_edit" && entry.targetId === assistantEntryId,
++		);
++		const latestAssistantEdit = latestAssistantEditMetadata
++			? this.sessionManager.getEntry(latestAssistantEditMetadata.id)
++			: undefined;
+ 		const assistantRetainedForExplicitRecovery =
+ 			assistantEntryId === undefined ||
+ 			(!entriesAfterAssistant.some((entry) => entry.type === "compaction") &&
+-				latestAssistantEdit?.replacement !== null);
++				!(latestAssistantEdit?.type === "context_edit" && latestAssistantEdit.replacement === null));
+ 		const assistantUsageMatchesProjection = assistantIsProjected && !hasPostAssistantContextEdit;
+ 		const explicitOverflow = assistantMessage.stopReason === "error" && isContextOverflow(assistantMessage);
+ 		const contextOverflow =
+@@ -3235,14 +3250,11 @@ export class AgentSession {
+ 			abortController.signal.throwIfAborted();
+ 
+ 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+-			const newEntries = this.sessionManager.getEntries();
+ 			this._refreshFinalizedContext();
+ 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
+ 
+ 			// Get the saved compaction entry for the extension event
+-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
+-				| CompactionEntry
+-				| undefined;
++			const savedCompactionEntry = this._findCompactionEntry(summary);
+ 
+ 			if (this._extensionRunner && savedCompactionEntry) {
+ 				await this._extensionRunner.emit({
+@@ -4219,12 +4231,12 @@ export class AgentSession {
+ 	 * Get all user messages from session for fork selector.
+ 	 */
+ 	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
+-		const entries = this.sessionManager.getEntries();
+ 		const result: Array<{ entryId: string; text: string }> = [];
+ 
+-		for (const entry of entries) {
+-			if (entry.type !== "message") continue;
+-			if (entry.message.role !== "user") continue;
++		for (const metadata of this.sessionManager.getEntriesMetadata()) {
++			if (metadata.type !== "message" || metadata.message.role !== "user") continue;
++			const entry = this.sessionManager.getEntry(metadata.id);
++			if (entry?.type !== "message" || entry.message.role !== "user") continue;
+ 
+ 			const text = contentText(entry.message.content, "");
+ 			if (text) {
+@@ -4248,7 +4260,7 @@ export class AgentSession {
+ 		let toolCalls = 0;
+ 		const usageTotals = createUsageTotals();
+ 
+-		for (const entry of this.sessionManager.getEntries()) {
++		for (const entry of this.sessionManager.getEntriesMetadata()) {
+ 			if (entry.type === "usage") {
+ 				addUsageToTotals(usageTotals, entry.usage);
+ 			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+@@ -4266,11 +4278,8 @@ export class AgentSession {
+ 				}
+ 			} else if (message.role === "assistant") {
+ 				assistantMessages++;
+-				const assistantMsg = message as AssistantMessage;
+-				if (Array.isArray(assistantMsg.content)) {
+-					toolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
+-				}
+-				addUsageToTotals(usageTotals, assistantMsg.usage);
++				toolCalls += message.toolCallCount;
++				addUsageToTotals(usageTotals, message.usage);
+ 			}
+ 		}
+ 
+@@ -4305,7 +4314,7 @@ export class AgentSession {
+ 		// We can only trust usage from an assistant that responded after the latest compaction.
+ 		// If no such assistant exists, context token count is unknown until the next LLM response.
+ 		const projection = this.sessionManager.buildSessionProjection();
+-		const branch = this.sessionManager.getBranch();
++		const branch = this.sessionManager.getBranchMetadata();
+ 		const latestCompaction = getLatestCompactionEntry(branch);
+ 
+ 		if (latestCompaction) {
+diff --git a/packages/coding-agent/src/core/cache-stats.ts b/packages/coding-agent/src/core/cache-stats.ts
+index 6a53e18..b9d3046 100644
+--- a/packages/coding-agent/src/core/cache-stats.ts
++++ b/packages/coding-agent/src/core/cache-stats.ts
+@@ -1,5 +1,9 @@
+ import type { AssistantMessage } from "@earendil-works/pi-ai";
+-import type { SessionEntry } from "./session-manager.ts";
++import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
++import type { SessionEntry } from "./session-types.ts";
++
++type CacheHistoryEntry = SessionEntry | SessionEntryMetadata;
++type CacheRequest = Pick<AssistantMessage, "provider" | "model" | "usage" | "timestamp">;
+ 
+ /**
+  * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
+@@ -55,7 +59,7 @@ interface PreviousRequest {
+  */
+ function detectMiss(
+ 	prev: PreviousRequest | undefined,
+-	message: AssistantMessage,
++	message: CacheRequest,
+ 	models: ModelPriceSource,
+ ): CacheMiss | undefined {
+ 	const usage = message.usage;
+@@ -89,7 +93,7 @@ function detectMiss(
+ 	};
+ }
+ 
+-function asPreviousRequest(message: AssistantMessage, reportedCache: boolean): PreviousRequest | undefined {
++function asPreviousRequest(message: CacheRequest, reportedCache: boolean): PreviousRequest | undefined {
+ 	const usage = message.usage;
+ 	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+ 	if (promptTokens <= 0) return undefined;
+@@ -101,13 +105,13 @@ function asPreviousRequest(message: AssistantMessage, reportedCache: boolean): P
+ 	};
+ }
+ 
+-function scan(
+-	entries: SessionEntry[],
++function scan<T extends CacheHistoryEntry>(
++	entries: readonly T[],
+ 	models: ModelPriceSource,
+-): { prev: PreviousRequest | undefined; totals: CacheWasteTotals; misses: Map<AssistantMessage, CacheMiss> } {
++): { prev: PreviousRequest | undefined; totals: CacheWasteTotals; misses: Map<T, CacheMiss> } {
+ 	let prev: PreviousRequest | undefined;
+ 	const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
+-	const misses = new Map<AssistantMessage, CacheMiss>();
++	const misses = new Map<T, CacheMiss>();
+ 
+ 	for (const entry of entries) {
+ 		if (entry.type === "compaction" || entry.type === "branch_summary") {
+@@ -133,7 +137,7 @@ function scan(
+ 				totals.missedTokens += miss.missedTokens;
+ 				totals.missedCost += miss.missedCost;
+ 				totals.missCount += 1;
+-				misses.set(entry.message, miss);
++				misses.set(entry, miss);
+ 			}
+ 			prev = asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
+ 		}
+@@ -145,7 +149,7 @@ function scan(
+  * Cumulative cache waste across a session: prompt tokens that should have been
+  * cache reads (they were in the previous turn's prompt) but were re-billed.
+  */
+-export function computeCacheWaste(entries: SessionEntry[], models: ModelPriceSource): CacheWasteTotals {
++export function computeCacheWaste(entries: readonly CacheHistoryEntry[], models: ModelPriceSource): CacheWasteTotals {
+ 	return scan(entries, models).totals;
+ }
+ 
+@@ -158,7 +162,21 @@ export function collectCacheMisses(
+ 	entries: SessionEntry[],
+ 	models: ModelPriceSource,
+ ): Map<AssistantMessage, CacheMiss> {
+-	return scan(entries, models).misses;
++	const misses = new Map<AssistantMessage, CacheMiss>();
++	for (const [entry, miss] of scan(entries, models).misses) {
++		if (entry.type === "message" && entry.message.role === "assistant") misses.set(entry.message, miss);
++	}
++	return misses;
++}
++
++/** Stable record identities keep notices correct when lazy reads produce new message objects. */
++export function collectCacheMissesByEntryId(
++	entries: readonly CacheHistoryEntry[],
++	models: ModelPriceSource,
++): Map<string, CacheMiss> {
++	const misses = new Map<string, CacheMiss>();
++	for (const [entry, miss] of scan(entries, models).misses) misses.set(entry.id, miss);
++	return misses;
+ }
+ 
+ /**
+@@ -166,7 +184,7 @@ export function collectCacheMisses(
+  * `entries` must not yet contain `message` (message_end fires before persistence).
+  */
+ export function detectCacheMiss(
+-	entries: SessionEntry[],
++	entries: readonly CacheHistoryEntry[],
+ 	message: AssistantMessage,
+ 	models: ModelPriceSource,
+ ): CacheMiss | undefined {
+diff --git a/packages/coding-agent/src/core/cache-warmer.ts b/packages/coding-agent/src/core/cache-warmer.ts
+index f4f885f..d79a7b4 100644
+--- a/packages/coding-agent/src/core/cache-warmer.ts
++++ b/packages/coding-agent/src/core/cache-warmer.ts
+@@ -9,7 +9,8 @@ import {
+ } from "@earendil-works/pi-ai";
+ import { getProviderEnvValue } from "@earendil-works/pi-ai/utils/provider-env";
+ import type { ModelRuntime } from "./model-runtime.ts";
+-import type { SessionEntry, SessionManager, UsageEntry } from "./session-manager.ts";
++import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
++import type { SessionManager, UsageEntry } from "./session-manager.ts";
+ import type { CacheWarmingMode } from "./settings-manager.ts";
+ 
+ /** Streaming warming never continues past this long after the real request that started it. */
+@@ -58,7 +59,7 @@ export function isReplayable(model: Model<Api>, options: SimpleStreamOptions | u
+ }
+ 
+ /** Prompt size of the most recent real request on the branch, as reported by the provider. */
+-function lastPromptTokens(entries: SessionEntry[]): number {
++function lastPromptTokens(entries: readonly SessionEntryMetadata[]): number {
+ 	for (let index = entries.length - 1; index >= 0; index--) {
+ 		const entry = entries[index];
+ 		if (entry.type === "message" && entry.message.role === "assistant") {
+@@ -163,7 +164,7 @@ export class CacheWarmer {
+ 	private run?: ActiveRun;
+ 	private inactive: CacheWarmingStatus;
+ 	private readonly models: Pick<ModelRuntime, "streamSimple">;
+-	private readonly sessionManager: Pick<SessionManager, "appendUsage" | "getBranch">;
++	private readonly sessionManager: Pick<SessionManager, "appendUsage" | "getBranchMetadata">;
+ 	private readonly getMode: () => CacheWarmingMode;
+ 	/** Lets extensions override `event.action`; failures fall back to pi's decision. */
+ 	private readonly decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction>;
+@@ -172,7 +173,7 @@ export class CacheWarmer {
+ 
+ 	constructor(
+ 		models: Pick<ModelRuntime, "streamSimple">,
+-		sessionManager: Pick<SessionManager, "appendUsage" | "getBranch">,
++		sessionManager: Pick<SessionManager, "appendUsage" | "getBranchMetadata">,
+ 		getMode: () => CacheWarmingMode,
+ 		decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction> = async (event) => event.action,
+ 	) {
+@@ -377,7 +378,7 @@ export class CacheWarmer {
+ 
+ 	private evaluate(run: ActiveRun): CacheWarmingDecision {
+ 		const model = run.model;
+-		const promptTokens = lastPromptTokens(this.sessionManager.getBranch());
++		const promptTokens = lastPromptTokens(this.sessionManager.getBranchMetadata());
+ 		const cacheHitCost = price(model, { cacheRead: promptTokens });
+ 		const cacheMissCost = price(
+ 			model,
+@@ -412,7 +413,10 @@ function formatCacheWarmingEconomics(decision: CacheWarmingDecision): string {
+ 			? `${probability}% continuation probability while agent is running`
+ 			: `${probability}% continuation probability`;
+ 	const comparison = decision.action === "warm" ? ">=" : "<";
+-	return `${probabilityText}, expected savings ${formatDollars(decision.expectedSavings)} ${comparison} $${CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS.toFixed(3)}`;
++	return (
++		`${probabilityText}, expected savings ${formatDollars(decision.expectedSavings)} ${comparison} $` +
++		CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS.toFixed(3)
++	);
+ }
+ 
+ function formatCacheWarmingDecisionTime(nextWarmAt: number | undefined, now: number): string {
+diff --git a/packages/coding-agent/src/core/compaction/compaction.ts b/packages/coding-agent/src/core/compaction/compaction.ts
+index 07a58ac..8d45391 100644
+--- a/packages/coding-agent/src/core/compaction/compaction.ts
++++ b/packages/coding-agent/src/core/compaction/compaction.ts
+@@ -226,7 +226,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
+ /** Estimate projected context without trusting usage captured before a later edit or compaction. */
+ export function estimateProjectedContextTokens(
+ 	projection: SessionProjection,
+-	branchEntries: SessionEntry[],
++	branchEntries: readonly { id: string; type: string }[],
+ ): ContextUsageEstimate {
+ 	const estimate = estimateContextTokens(projection.messages);
+ 	if (estimate.lastUsageIndex !== null) {
+@@ -504,7 +504,9 @@ export function findCutPoint(
+ // Summarization
+ // ============================================================================
+ 
+-const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
++const SUMMARIZATION_PROMPT =
++	"The messages above are a conversation to summarize. Create a structured context checkpoint " +
++	`summary that another LLM will use to continue the work.
+ 
+ Use this EXACT format:
+ 
+@@ -574,9 +576,12 @@ Use this EXACT format:
+ 
+ Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+ 
+-const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+-
+-${UPDATE_SUMMARIZATION_INSTRUCTIONS}`;
++const UPDATE_SUMMARIZATION_PROMPT = [
++	"The messages above are NEW conversation messages to incorporate into the existing summary " +
++		"provided in <previous-summary> tags.",
++	"",
++	UPDATE_SUMMARIZATION_INSTRUCTIONS,
++].join("\n");
+ 
+ /**
+  * Returns an error message when a summarization response cannot safely be persisted.
+@@ -926,20 +931,24 @@ export function prepareCompaction(
+ // Main compaction function
+ // ============================================================================
+ 
+-const TURN_PREFIX_SUMMARIZATION_PROMPT = `The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
+-
+-Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
+-
+-## Original Request
+-[What did the user ask for?]
+-
+-## Progress So Far
+-- [Key decisions and work completed in these messages]
+-
+-## Context Needed to Continue
+-- [Information from these messages needed to understand the later work]
+-
+-Only summarize information explicitly present above. Do not infer or recreate later messages.`;
++const TURN_PREFIX_SUMMARIZATION_PROMPT = [
++	"The messages above are earlier context from an ongoing conversation. Later messages are stored " +
++		"separately and do not need to be reconstructed.",
++	"",
++	"Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will " +
++		"be placed before the later messages so the conversation can continue with the necessary context.",
++	"",
++	"## Original Request",
++	"[What did the user ask for?]",
++	"",
++	"## Progress So Far",
++	"- [Key decisions and work completed in these messages]",
++	"",
++	"## Context Needed to Continue",
++	"- [Information from these messages needed to understand the later work]",
++	"",
++	"Only summarize information explicitly present above. Do not infer or recreate later messages.",
++].join("\n");
+ 
+ /**
+  * Generate summaries for compaction using prepared data.
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index 0bf874f..25121b1 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -209,14 +209,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 	// Check if session has existing data to restore
+ 	const existingSession = sessionManager.buildSessionContext();
+ 	const hasExistingSession = existingSession.messages.length > 0;
+-	const hasThinkingEntry = sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
++	const hasThinkingEntry = sessionManager.getBranchMetadata().some((entry) => entry.type === "thinking_level_change");
+ 
+ 	let model = options.model;
+ 	let modelFallbackMessage: string | undefined;
+ 
+ 	// Assistant messages name the physical model that answered, so a virtual selection is only in
+ 	// model_change entries.
+-	const sessionModel = getBranchSelection(sessionManager.getBranch(), (provider, modelId) =>
++	const sessionModel = getBranchSelection(sessionManager.getBranchMetadata(), (provider, modelId) =>
+ 		modelRuntime.getModel(provider, modelId),
+ 	);
+ 
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index df5281a..76da56c 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -1,14 +1,10 @@
+ import type { AgentMessage } from "@earendil-works/pi-agent-core";
+ import {
+-	type AssistantMessage,
+ 	getCurrentSystemMessage,
+ 	type ImageContent,
+ 	type Message,
+-	type SystemMessage,
+ 	type TextContent,
+-	type ToolResultMessage,
+ 	type Usage,
+-	type UserMessage,
+ 	uuidv7,
+ } from "@earendil-works/pi-ai";
+ import { randomUUID } from "crypto";
+@@ -38,209 +34,37 @@ import {
+ 	createCompactionSummaryMessage,
+ 	createCustomMessage,
+ } from "./messages.ts";
+-export const CURRENT_SESSION_VERSION = 3;
+-
+-export interface SessionHeader {
+-	type: "session";
+-	version?: number; // v1 sessions don't have this
+-	id: string;
+-	timestamp: string;
+-	cwd: string;
+-	parentSession?: string;
+-}
+-
+-export interface NewSessionOptions {
+-	id?: string;
+-	parentSession?: string;
+-}
+-
+-export interface SessionEntryBase {
+-	type: string;
+-	id: string;
+-	parentId: string | null;
+-	timestamp: string;
+-}
+-
+-export interface SessionMessageEntry extends SessionEntryBase {
+-	type: "message";
+-	message: AgentMessage;
+-}
+-
+-export interface ThinkingLevelChangeEntry extends SessionEntryBase {
+-	type: "thinking_level_change";
+-	thinkingLevel: string;
+-}
+-
+-export interface ModelChangeEntry extends SessionEntryBase {
+-	type: "model_change";
+-	provider: string;
+-	modelId: string;
+-}
+-
+-export interface UsageEntry extends SessionEntryBase {
+-	type: "usage";
+-	/** Arbitrary usage category, such as "cache_warm". */
+-	kind: string;
+-	provider: string;
+-	model: string;
+-	usage: Usage;
+-	/** Optional human-readable qualifier for usage notices. */
+-	note?: string;
+-}
+-
+-export interface CompactionEntry<T = unknown> extends SessionEntryBase {
+-	type: "compaction";
+-	summary: string;
+-	firstKeptEntryId: string;
+-	tokensBefore: number;
+-	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
+-	details?: T;
+-	/** Usage from the LLM call(s) that generated this summary, if available */
+-	usage?: Usage;
+-	/** True if generated by an extension, undefined/false if pi-generated (backward compatible) */
+-	fromHook?: boolean;
+-	/** Complete prompt and tool state at this compaction boundary. */
+-	systemMessage?: SystemMessage;
+-}
+-
+-export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
+-	type: "branch_summary";
+-	fromId: string;
+-	summary: string;
+-	/** Extension-specific data (not sent to LLM) */
+-	details?: T;
+-	/** Usage from the LLM call that generated this summary, if available */
+-	usage?: Usage;
+-	/** True if generated by an extension, false if pi-generated */
+-	fromHook?: boolean;
+-}
+-
+-/**
+- * Custom entry for extensions to store extension-specific data in the session.
+- * Use customType to identify your extension's entries.
+- *
+- * Purpose: Persist extension state across session reloads. On reload, extensions can
+- * scan entries for their customType and reconstruct internal state.
+- *
+- * Does NOT participate in LLM context (ignored by buildSessionContext).
+- * For injecting content into context, see CustomMessageEntry.
+- */
+-export interface CustomEntry<T = unknown> extends SessionEntryBase {
+-	type: "custom";
+-	customType: string;
+-	data?: T;
+-}
+-
+-/** Label entry for user-defined bookmarks/markers on entries. */
+-export interface LabelEntry extends SessionEntryBase {
+-	type: "label";
+-	targetId: string;
+-	label: string | undefined;
+-}
+-
+-/** Session metadata entry (e.g., user-defined display name). */
+-export interface SessionInfoEntry extends SessionEntryBase {
+-	type: "session_info";
+-	name?: string;
+-}
+-
+-/**
+- * Custom message entry for extensions to inject messages into LLM context.
+- * Use customType to identify your extension's entries.
+- *
+- * Unlike CustomEntry, this DOES participate in LLM context.
+- * The content is converted to a user message in buildSessionContext().
+- * Use details for extension-specific metadata (not sent to LLM).
+- *
+- * display controls TUI rendering:
+- * - false: hidden entirely
+- * - true: rendered with distinct styling (different from user messages)
+- */
+-export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
+-	type: "custom_message";
+-	customType: string;
+-	content: string | (TextContent | ImageContent)[];
+-	details?: T;
+-	display: boolean;
+-}
+-
+-/** Content that an append-only context edit may replace without changing message metadata. */
+-export type ContextEditableContent =
+-	| UserMessage["content"]
+-	| AssistantMessage["content"]
+-	| ToolResultMessage["content"]
+-	| CustomMessage["content"];
+-
+-/** Append-only change to one earlier entry's contribution to model context. */
+-export interface ContextEditEntry extends SessionEntryBase {
+-	type: "context_edit";
+-	targetId: string;
+-	/** Null omits the target from model context. A value replaces only its content. */
+-	replacement: { content: ContextEditableContent } | null;
+-}
+-
+-/** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
+-export type SessionEntry =
+-	| SessionMessageEntry
+-	| ThinkingLevelChangeEntry
+-	| ModelChangeEntry
+-	| UsageEntry
+-	| CompactionEntry
+-	| BranchSummaryEntry
+-	| CustomEntry
+-	| CustomMessageEntry
+-	| ContextEditEntry
+-	| LabelEntry
+-	| SessionInfoEntry;
+-
+-/** Raw file entry (includes header) */
+-export type FileEntry = SessionHeader | SessionEntry;
+-
+-/** Tree node for getTree() - defensive copy of session structure */
+-export interface SessionTreeNode {
+-	entry: SessionEntry;
+-	children: SessionTreeNode[];
+-	/** Resolved label for this entry, if any */
+-	label?: string;
+-	/** Timestamp of the latest label change for this entry, if any */
+-	labelTimestamp?: string;
+-}
++import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
++import { SessionEntryStore } from "./session-entry-store.ts";
++import { parseSessionEntryLine, scanSessionFile } from "./session-file-reader.ts";
+ 
+-export interface ProjectedSessionEntry {
+-	/** Raw append-only entry that owns this projected contribution. */
+-	sourceEntry: SessionEntry;
+-	/** Model-visible messages after context edits. Empty for state-only entries and omissions. */
+-	messages: AgentMessage[];
+-}
+-
+-export interface SessionProjection {
+-	entries: ProjectedSessionEntry[];
+-	messages: AgentMessage[];
+-	thinkingLevel: string;
+-	model: { provider: string; modelId: string } | null;
+-}
+-
+-export interface SessionContext {
+-	messages: AgentMessage[];
+-	thinkingLevel: string;
+-	model: { provider: string; modelId: string } | null;
+-}
++export type { SessionEntryMetadata, SessionMessageMetadata } from "./session-entry-metadata.ts";
++export const CURRENT_SESSION_VERSION = 3;
+ 
+-export interface SessionInfo {
+-	path: string;
+-	id: string;
+-	/** Working directory where the session was started. Empty string for old sessions. */
+-	cwd: string;
+-	/** User-defined display name from session_info entries. */
+-	name?: string;
+-	/** Path to the parent session (if this session was forked). */
+-	parentSessionPath?: string;
+-	created: Date;
+-	modified: Date;
+-	messageCount: number;
+-	firstMessage: string;
+-	allMessagesText: string;
+-}
++export type * from "./session-types.ts";
++
++import type {
++	BranchSummaryEntry,
++	CompactionEntry,
++	ContextEditEntry,
++	CustomEntry,
++	CustomMessageEntry,
++	FileEntry,
++	LabelEntry,
++	ModelChangeEntry,
++	NewSessionOptions,
++	ProjectedSessionEntry,
++	SessionContext,
++	SessionEntry,
++	SessionHeader,
++	SessionInfo,
++	SessionInfoEntry,
++	SessionMessageEntry,
++	SessionProjection,
++	SessionTreeNode,
++	ThinkingLevelChangeEntry,
++	UsageEntry,
++} from "./session-types.ts";
+ 
+ export type ReadonlySessionManager = Pick<
+ 	SessionManager,
+@@ -251,6 +75,10 @@ export type ReadonlySessionManager = Pick<
+ 	| "getLeafId"
+ 	| "getLeafEntry"
+ 	| "getEntry"
++	| "getEntryMetadata"
++	| "getEntriesMetadata"
++	| "getBranchMetadata"
++	| "getContextEntriesMetadata"
+ 	| "getLabel"
+ 	| "getBranch"
+ 	| "buildContextEntries"
+@@ -369,13 +197,10 @@ export function parseSessionEntries(content: string): FileEntry[] {
+ 	return entries;
+ }
+ 
+-export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
+-	for (let i = entries.length - 1; i >= 0; i--) {
+-		if (entries[i].type === "compaction") {
+-			return entries[i] as CompactionEntry;
+-		}
+-	}
+-	return null;
++export function getLatestCompactionEntry<T extends SessionEntry | SessionEntryMetadata>(
++	entries: readonly T[],
++): Extract<T, { type: "compaction" }> | null {
++	return entries.findLast((entry): entry is Extract<T, { type: "compaction" }> => entry.type === "compaction") ?? null;
+ }
+ 
+ function buildEntryIndex(entries: SessionEntry[], byId?: Map<string, SessionEntry>): Map<string, SessionEntry> {
+@@ -415,7 +240,9 @@ function buildSessionPath(
+ 	return path;
+ }
+ 
+-function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "thinkingLevel" | "model"> {
++function getSessionContextSettings(
++	path: (SessionEntry | SessionEntryMetadata)[],
++): Pick<SessionContext, "thinkingLevel" | "model"> {
+ 	let thinkingLevel = "off";
+ 	let model: { provider: string; modelId: string } | null = null;
+ 
+@@ -478,14 +305,14 @@ export function buildContextEntries(
+ 	leafId?: string | null,
+ 	byId?: Map<string, SessionEntry>,
+ ): SessionEntry[] {
+-	const path = buildSessionPath(entries, leafId, byId);
+-	let compaction: CompactionEntry | null = null;
++	return selectContextEntries(buildSessionPath(entries, leafId, byId));
++}
+ 
+-	for (const entry of path) {
+-		if (entry.type === "compaction") {
+-			compaction = entry;
+-		}
+-	}
++/** One compaction selection rule for full entries and body-free metadata. */
++function selectContextEntries<T extends SessionEntry | SessionEntryMetadata>(path: T[]): T[] {
++	const compaction = path.findLast(
++		(entry): entry is T & Pick<CompactionEntry, "type" | "firstKeptEntryId"> => entry.type === "compaction",
++	);
+ 
+ 	if (!compaction) {
+ 		return path;
+@@ -496,7 +323,7 @@ export function buildContextEntries(
+ 		return path;
+ 	}
+ 
+-	const contextEntries: SessionEntry[] = [compaction];
++	const contextEntries: T[] = [compaction];
+ 	let foundFirstKept = false;
+ 	for (let i = 0; i < compactionIdx; i++) {
+ 		const entry = path[i];
+@@ -546,8 +373,14 @@ export function buildSessionProjection(
+ 	byId?: Map<string, SessionEntry>,
+ ): SessionProjection {
+ 	const path = buildSessionPath(entries, leafId, byId);
+-	const { thinkingLevel, model } = getSessionContextSettings(path);
+-	const contextEntries = buildContextEntries(entries, leafId, byId);
++	return projectContextEntries(buildContextEntries(entries, leafId, byId), getSessionContextSettings(path));
++}
++
++function projectContextEntries(
++	contextEntries: SessionEntry[],
++	settings: Pick<SessionContext, "thinkingLevel" | "model">,
++): SessionProjection {
++	const { thinkingLevel, model } = settings;
+ 	const edits = new Map<string, ContextEditEntry>();
+ 	for (const entry of contextEntries) {
+ 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
+@@ -601,7 +434,6 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
+ 	return sessionDir;
+ }
+ 
+-const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
+ const SESSION_HEADER_READ_BUFFER_SIZE = 4096;
+ /** Bound synchronous header discovery while allowing large cwd and custom metadata fields. */
+ const MAX_SESSION_HEADER_SCAN_BYTES = 1024 * 1024;
+@@ -613,59 +445,10 @@ class SessionHeaderScanLimitError extends Error {
+ 	}
+ }
+ 
+-function parseSessionEntryLine(line: string): FileEntry | null {
+-	if (!line.trim()) return null;
+-	try {
+-		return JSON.parse(line) as FileEntry;
+-	} catch {
+-		// Skip malformed lines
+-		return null;
+-	}
+-}
+-
+ /** Exported for testing */
+ export function loadEntriesFromFile(filePath: string): FileEntry[] {
+-	const resolvedFilePath = normalizePath(filePath);
+-	if (!existsSync(resolvedFilePath)) return [];
+-
+ 	const entries: FileEntry[] = [];
+-	let pending = "";
+-	const fd = openSync(resolvedFilePath, "r");
+-	try {
+-		const decoder = new StringDecoder("utf8");
+-		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
+-
+-		while (true) {
+-			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+-			if (bytesRead === 0) break;
+-
+-			pending += decoder.write(buffer.subarray(0, bytesRead));
+-			let lineStart = 0;
+-			let newlineIndex = pending.indexOf("\n", lineStart);
+-			while (newlineIndex !== -1) {
+-				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
+-				if (entry) entries.push(entry);
+-				lineStart = newlineIndex + 1;
+-				newlineIndex = pending.indexOf("\n", lineStart);
+-			}
+-			pending = pending.slice(lineStart);
+-		}
+-
+-		pending += decoder.end();
+-		const finalEntry = parseSessionEntryLine(pending);
+-		if (finalEntry) entries.push(finalEntry);
+-	} finally {
+-		closeSync(fd);
+-	}
+-
+-	// Validate session header before repairing the file.
+-	if (entries.length === 0) return entries;
+-	const header = entries[0];
+-	if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+-		return [];
+-	}
+-
+-	if (pending) appendFileSync(resolvedFilePath, "\n");
++	scanSessionFile(filePath, (entry) => entries.push(entry));
+ 	return entries;
+ }
+ 
+@@ -991,8 +774,7 @@ export class SessionManager {
+ 	private cwd: string;
+ 	private persist: boolean;
+ 	private flushed: boolean = false;
+-	private fileEntries: FileEntry[] = [];
+-	private byId: Map<string, SessionEntry> = new Map();
++	private store = new SessionEntryStore();
+ 	private labelsById: Map<string, string> = new Map();
+ 	private labelTimestampsById: Map<string, string> = new Map();
+ 	private leafId: string | null = null;
+@@ -1015,7 +797,7 @@ export class SessionManager {
+ 		if (sessionFile) {
+ 			this._setSessionFile(sessionFile, preloadedFileEntries);
+ 		} else if (preloadedFileEntries?.length) {
+-			this._loadEntries(preloadedFileEntries, newSessionOptions);
++			this._loadStore(new SessionEntryStore(preloadedFileEntries), newSessionOptions);
+ 		} else {
+ 			this.newSession(newSessionOptions);
+ 		}
+@@ -1029,11 +811,13 @@ export class SessionManager {
+ 	private _setSessionFile(sessionFile: string, preloadedFileEntries?: FileEntry[]): void {
+ 		this.sessionFile = resolvePath(sessionFile);
+ 		if (existsSync(this.sessionFile)) {
+-			const entries = preloadedFileEntries ?? loadEntriesFromFile(this.sessionFile);
++			const store = preloadedFileEntries
++				? new SessionEntryStore(preloadedFileEntries, this.sessionFile)
++				: SessionEntryStore.open(this.sessionFile);
+ 
+ 			// If file was empty, initialize it with a valid session header. If it was
+ 			// non-empty but did not parse as a pi session, fail without modifying it.
+-			if (entries.length === 0) {
++			if (store.fileEntryCount === 0) {
+ 				const explicitPath = this.sessionFile;
+ 				if (statSync(explicitPath).size > 0) {
+ 					throw new Error(`Session file is not a valid ${APP_NAME} session: ${explicitPath}`);
+@@ -1045,7 +829,7 @@ export class SessionManager {
+ 				return;
+ 			}
+ 
+-			this._loadEntries(entries);
++			this._loadStore(store);
+ 			this.flushed = true;
+ 		} else {
+ 			const explicitPath = this.sessionFile;
+@@ -1068,8 +852,7 @@ export class SessionManager {
+ 			cwd: this.cwd,
+ 			parentSession: options?.parentSession,
+ 		};
+-		this.fileEntries = [header];
+-		this.byId.clear();
++		this.store = new SessionEntryStore([header]);
+ 		this.labelsById.clear();
+ 		this.labelTimestampsById.clear();
+ 		this.leafId = null;
+@@ -1082,32 +865,29 @@ export class SessionManager {
+ 		return this.sessionFile;
+ 	}
+ 
+-	private _loadEntries(entries: FileEntry[], options?: NewSessionOptions): void {
+-		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
+-
++	private _loadStore(store: SessionEntryStore, options?: NewSessionOptions): void {
++		const header = store.getHeader();
+ 		if (header) {
+-			this.fileEntries = entries;
++			this.store = store;
+ 			this.sessionId = header.id;
+-
+-			if (migrateToCurrentVersion(this.fileEntries)) {
++			if ((header.version ?? 1) < CURRENT_SESSION_VERSION) {
++				const entries = store.getFileEntries();
++				migrateToCurrentVersion(entries);
++				this.store = new SessionEntryStore(entries);
+ 				this._rewriteFile();
+ 			}
+ 		} else {
+ 			this.newSession(options);
+-			this.fileEntries = this.fileEntries.concat(entries);
++			this.store = new SessionEntryStore([...this.store.getFileEntries(), ...store.getFileEntries()]);
+ 		}
+-
+ 		this._buildIndex();
+ 	}
+ 
+ 	private _buildIndex(): void {
+-		this.byId.clear();
+ 		this.labelsById.clear();
+ 		this.labelTimestampsById.clear();
+ 		this.leafId = null;
+-		for (const entry of this.fileEntries) {
+-			if (entry.type === "session") continue;
+-			this.byId.set(entry.id, entry);
++		for (const entry of this.store.getEntriesMetadata()) {
+ 			this.leafId = entry.id;
+ 			if (entry.type === "label") {
+ 				if (entry.label) {
+@@ -1123,14 +903,7 @@ export class SessionManager {
+ 
+ 	private _rewriteFile(): void {
+ 		if (!this.persist || !this.sessionFile) return;
+-		const fd = openSync(this.sessionFile, "w");
+-		try {
+-			for (const entry of this.fileEntries) {
+-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+-			}
+-		} finally {
+-			closeSync(fd);
+-		}
++		this.store.writeToFile(this.sessionFile, "w");
+ 	}
+ 
+ 	isPersisted(): boolean {
+@@ -1164,33 +937,24 @@ export class SessionManager {
+ 	 * first assistant reply) keeps the prompt on disk if the first turn never completes (#10000).
+ 	 */
+ 	private _hasConversation(): boolean {
+-		return this.fileEntries.some(
+-			(e) => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
+-		);
++		return this.store
++			.getEntriesMetadata()
++			.some((e) => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"));
+ 	}
+ 
+ 	_persist(entry: SessionEntry): void {
+ 		if (!this.persist || !this.sessionFile) return;
+-
+ 		if (!this.flushed) {
+ 			if (!this._hasConversation()) return;
+-			const fd = openSync(this.sessionFile, "wx");
+-			try {
+-				for (const e of this.fileEntries) {
+-					writeFileSync(fd, `${JSON.stringify(e)}\n`);
+-				}
+-			} finally {
+-				closeSync(fd);
+-			}
++			this.store.writeToFile(this.sessionFile, "wx");
+ 			this.flushed = true;
+ 		} else {
+-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
++			this.store.appendToFile(entry);
+ 		}
+ 	}
+ 
+ 	private _appendEntry(entry: SessionEntry): void {
+-		this.fileEntries.push(entry);
+-		this.byId.set(entry.id, entry);
++		this.store.append(entry);
+ 		this.leafId = entry.id;
+ 		this._persist(entry);
+ 	}
+@@ -1204,7 +968,7 @@ export class SessionManager {
+ 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+ 		const entry: SessionMessageEntry = {
+ 			type: "message",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			message,
+@@ -1217,7 +981,7 @@ export class SessionManager {
+ 	appendThinkingLevelChange(thinkingLevel: string): string {
+ 		const entry: ThinkingLevelChangeEntry = {
+ 			type: "thinking_level_change",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			thinkingLevel,
+@@ -1230,7 +994,7 @@ export class SessionManager {
+ 	appendModelChange(provider: string, modelId: string): string {
+ 		const entry: ModelChangeEntry = {
+ 			type: "model_change",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			provider,
+@@ -1244,7 +1008,7 @@ export class SessionManager {
+ 	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
+ 		const entry: UsageEntry = {
+ 			type: "usage",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			kind,
+@@ -1268,7 +1032,7 @@ export class SessionManager {
+ 	): string {
+ 		const timestamp = new Date().toISOString();
+ 		const systemMessage = getCurrentSystemMessage(this.buildSessionProjection().messages);
+-		const id = generateId(this.byId);
++		const id = generateId(this.store);
+ 		const entry: CompactionEntry<T> = {
+ 			type: "compaction",
+ 			id,
+@@ -1292,7 +1056,7 @@ export class SessionManager {
+ 			type: "custom",
+ 			customType,
+ 			data,
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 		};
+@@ -1305,7 +1069,7 @@ export class SessionManager {
+ 		const sanitizedName = name.replace(/[\r\n]+/g, " ").trim();
+ 		const entry: SessionInfoEntry = {
+ 			type: "session_info",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			name: sanitizedName,
+@@ -1316,16 +1080,9 @@ export class SessionManager {
+ 
+ 	/** Get the current session name from the latest session_info entry, if any. */
+ 	getSessionName(): string | undefined {
+-		// Walk entries in reverse to find the latest session_info entry.
+-		// Empty names explicitly clear the session title. Reads fileEntries directly: the footer
+-		// calls this on every frame, and getEntries() copies the whole session.
+-		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
+-			const entry = this.fileEntries[i];
+-			if (entry.type === "session_info") {
+-				return entry.name?.trim() || undefined;
+-			}
+-		}
+-		return undefined;
++		// The footer calls this every frame; do not copy or hydrate the whole history.
++		const entry = this.store.getLastMetadata("session_info");
++		return entry?.type === "session_info" ? entry.name?.trim() || undefined : undefined;
+ 	}
+ 
+ 	/**
+@@ -1348,7 +1105,7 @@ export class SessionManager {
+ 			content,
+ 			display,
+ 			details,
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 		};
+@@ -1366,9 +1123,9 @@ export class SessionManager {
+ 		) {
+ 			throw new Error("Context edit replacement must be null or contain string/array content");
+ 		}
+-		const target = this.byId.get(targetId);
++		const target = this.store.getMetadata(targetId);
+ 		if (!target) throw new Error(`Entry ${targetId} not found`);
+-		if (!this.getBranch().some((entry) => entry.id === targetId)) {
++		if (!this.getBranchMetadata().some((entry) => entry.id === targetId)) {
+ 			throw new Error(`Entry ${targetId} is not on the active branch`);
+ 		}
+ 		const editable =
+@@ -1387,7 +1144,7 @@ export class SessionManager {
+ 				: replacement;
+ 		const entry: ContextEditEntry = {
+ 			type: "context_edit",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			targetId,
+@@ -1406,24 +1163,59 @@ export class SessionManager {
+ 	}
+ 
+ 	getLeafEntry(): SessionEntry | undefined {
+-		return this.leafId ? this.byId.get(this.leafId) : undefined;
++		return this.leafId ? this.store.getEntry(this.leafId) : undefined;
+ 	}
+ 
++	/** Loads a complete record on demand; disk and parse failures propagate. */
+ 	getEntry(id: string): SessionEntry | undefined {
+-		return this.byId.get(id);
++		return this.store.getEntry(id);
++	}
++
++	/** Small, body-free entry facts; metadata must not be used as model content. */
++	getEntryMetadata(id: string): SessionEntryMetadata | undefined {
++		return this.store.getMetadata(id);
++	}
++
++	/** All entry facts in file order, excluding the session header. */
++	getEntriesMetadata(): SessionEntryMetadata[] {
++		return this.store.getEntriesMetadata();
++	}
++
++	/** Facts on the requested branch, in root-to-leaf order. */
++	getBranchMetadata(fromId?: string): SessionEntryMetadata[] {
++		const path: SessionEntryMetadata[] = [];
++		const startId = fromId ?? this.leafId;
++		let current = startId ? this.store.getMetadata(startId) : undefined;
++		while (current) {
++			path.push(current);
++			current = current.parentId ? this.store.getMetadata(current.parentId) : undefined;
++		}
++		path.reverse();
++		return path;
++	}
++
++	/**
++	 * Non-persistent preview of the complete current branch. Uncached bodies still read this session's file;
++	 * unlike inMemory(), this is not a detached copy that survives removal of the source file.
++	 */
++	createBranchPreview(cwd: string = this.cwd): SessionManager {
++		const preview = SessionManager.inMemory(cwd);
++		preview._loadStore(this.store.createBranchPreview(this.getBranchMetadata()));
++		return preview;
++	}
++
++	/** Compaction-aware facts selected by the same rule as buildContextEntries(). */
++	getContextEntriesMetadata(): SessionEntryMetadata[] {
++		return selectContextEntries(this.getBranchMetadata());
+ 	}
+ 
+ 	/**
+ 	 * Get all direct children of an entry.
+ 	 */
+ 	getChildren(parentId: string): SessionEntry[] {
+-		const children: SessionEntry[] = [];
+-		for (const entry of this.byId.values()) {
+-			if (entry.parentId === parentId) {
+-				children.push(entry);
+-			}
+-		}
+-		return children;
++		const children: SessionEntryMetadata[] = [];
++		for (const entry of this.store.getIndexedMetadata()) if (entry.parentId === parentId) children.push(entry);
++		return this.store.readEntries(children);
+ 	}
+ 
+ 	/**
+@@ -1439,12 +1231,12 @@ export class SessionManager {
+ 	 * Pass undefined or empty string to clear the label.
+ 	 */
+ 	appendLabelChange(targetId: string, label: string | undefined): string {
+-		if (!this.byId.has(targetId)) {
++		if (!this.store.has(targetId)) {
+ 			throw new Error(`Entry ${targetId} not found`);
+ 		}
+ 		const entry: LabelEntry = {
+ 			type: "label",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: this.leafId,
+ 			timestamp: new Date().toISOString(),
+ 			targetId,
+@@ -1467,15 +1259,7 @@ export class SessionManager {
+ 	 * Use buildSessionContext() to get the resolved messages for the LLM.
+ 	 */
+ 	getBranch(fromId?: string): SessionEntry[] {
+-		const path: SessionEntry[] = [];
+-		const startId = fromId ?? this.leafId;
+-		let current = startId ? this.byId.get(startId) : undefined;
+-		while (current) {
+-			path.push(current);
+-			current = current.parentId ? this.byId.get(current.parentId) : undefined;
+-		}
+-		path.reverse();
+-		return path;
++		return this.store.readEntries(this.getBranchMetadata(fromId));
+ 	}
+ 
+ 	/**
+@@ -1483,7 +1267,7 @@ export class SessionManager {
+ 	 * Uses tree traversal from current leaf.
+ 	 */
+ 	buildContextEntries(): SessionEntry[] {
+-		return buildContextEntries(this.getEntries(), this.leafId, this.byId);
++		return this.store.readEntries(this.getContextEntriesMetadata());
+ 	}
+ 
+ 	/**
+@@ -1491,7 +1275,8 @@ export class SessionManager {
+ 	 * Uses tree traversal from current leaf.
+ 	 */
+ 	buildSessionProjection(): SessionProjection {
+-		return buildSessionProjection(this.getEntries(), this.leafId, this.byId);
++		const path = this.getBranchMetadata();
++		return projectContextEntries(this.store.readEntries(selectContextEntries(path)), getSessionContextSettings(path));
+ 	}
+ 
+ 	buildSessionContext(): SessionContext {
+@@ -1503,22 +1288,22 @@ export class SessionManager {
+ 	 * Get session header.
+ 	 */
+ 	getHeader(): SessionHeader | null {
+-		const h = this.fileEntries.find((e) => e.type === "session");
+-		return h ? (h as SessionHeader) : null;
++		return this.store.getHeader();
+ 	}
+ 
+ 	/** Number of session entries (excludes header), without copying them like `getEntries()`. */
+ 	getEntryCount(): number {
+-		return this.byId.size;
++		return this.store.size;
+ 	}
+ 
+ 	/**
+-	 * Get all session entries (excludes header). Returns a shallow copy.
++	 * Get all complete session entries (excludes header). Persisted bodies are decoded on demand.
++	 * Returns a shallow array copy; use getEntriesMetadata() when bodies are not needed.
+ 	 * The session is append-only: use appendXXX() to add entries, branch() to
+ 	 * change the leaf pointer. Entries cannot be modified or deleted.
+ 	 */
+ 	getEntries(): SessionEntry[] {
+-		return this.fileEntries.filter((e): e is SessionEntry => e.type !== "session");
++		return this.store.getEntries();
+ 	}
+ 
+ 	/**
+@@ -1577,7 +1362,7 @@ export class SessionManager {
+ 	 * are not modified or deleted.
+ 	 */
+ 	branch(branchFromId: string): void {
+-		if (!this.byId.has(branchFromId)) {
++		if (!this.store.has(branchFromId)) {
+ 			throw new Error(`Entry ${branchFromId} not found`);
+ 		}
+ 		this.leafId = branchFromId;
+@@ -1604,14 +1389,14 @@ export class SessionManager {
+ 		fromHook?: boolean,
+ 		usage?: Usage,
+ 	): string {
+-		if (branchFromId !== null && !this.byId.has(branchFromId)) {
++		if (branchFromId !== null && !this.store.has(branchFromId)) {
+ 			throw new Error(`Entry ${branchFromId} not found`);
+ 		}
+ 		const fromId = this.leafId ?? "root";
+ 		this.leafId = branchFromId;
+ 		const entry: BranchSummaryEntry = {
+ 			type: "branch_summary",
+-			id: generateId(this.byId),
++			id: generateId(this.store),
+ 			parentId: branchFromId,
+ 			timestamp: new Date().toISOString(),
+ 			fromId,
+@@ -1709,7 +1494,7 @@ export class SessionManager {
+ 				parentId = labelEntry.id;
+ 			}
+ 
+-			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
++			this.store = new SessionEntryStore([header, ...pathWithoutLabels, ...labelEntries]);
+ 			this.sessionId = newSessionId;
+ 			this.sessionFile = newSessionFile;
+ 			this._buildIndex();
+@@ -1741,7 +1526,7 @@ export class SessionManager {
+ 			labelEntries.push(labelEntry);
+ 			parentId = labelEntry.id;
+ 		}
+-		this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
++		this.store = new SessionEntryStore([header, ...pathWithoutLabels, ...labelEntries]);
+ 		this.sessionId = newSessionId;
+ 		this._buildIndex();
+ 		return undefined;
+diff --git a/packages/coding-agent/src/core/usage-totals.ts b/packages/coding-agent/src/core/usage-totals.ts
+index 6bcafbd..ee624c8 100644
+--- a/packages/coding-agent/src/core/usage-totals.ts
++++ b/packages/coding-agent/src/core/usage-totals.ts
+@@ -1,5 +1,6 @@
+ import type { Usage } from "@earendil-works/pi-ai/compat";
+-import type { SessionEntry } from "./session-manager.ts";
++import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
++import type { SessionEntry } from "./session-types.ts";
+ 
+ export interface UsageTotals {
+ 	input: number;
+@@ -58,7 +59,9 @@ export interface UsageCostBreakdownEntry {
+ }
+ 
+ /** Group model-attributed usage by model and all other usage into a separate bucket. */
+-export function getUsageCostBreakdown(entries: SessionEntry[]): UsageCostBreakdownEntry[] {
++export function getUsageCostBreakdown(
++	entries: readonly (SessionEntry | SessionEntryMetadata)[],
++): UsageCostBreakdownEntry[] {
+ 	const totalsByKey = new Map<string, UsageTotals>();
+ 
+ 	for (const entry of entries) {
+diff --git a/packages/coding-agent/src/core/virtual-models.ts b/packages/coding-agent/src/core/virtual-models.ts
+index 269ef68..d7eec63 100644
+--- a/packages/coding-agent/src/core/virtual-models.ts
++++ b/packages/coding-agent/src/core/virtual-models.ts
+@@ -23,8 +23,11 @@ import {
+ 	type Provider,
+ 	type ThinkingLevelMap,
+ } from "@earendil-works/pi-ai";
++import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
+ import type { SessionEntry } from "./session-manager.ts";
+ 
++type BranchSelectionEntry = SessionEntry | SessionEntryMetadata;
++
+ /** API id of virtual catalog entries. Requests for it fail unless routed first. */
+ export const VIRTUAL_MODEL_API = "pi-virtual";
+ 
+@@ -126,7 +129,7 @@ export function findLatestResponse(messages: readonly AgentMessage[]): Assistant
+  * Only the last `model_change` can hold, so this looks up at most one model in the catalog.
+  */
+ export function getBranchSelection(
+-	branch: readonly SessionEntry[],
++	branch: readonly BranchSelectionEntry[],
+ 	getModel: (provider: string, modelId: string) => Model<Api> | undefined,
+ ): { provider: string; modelId: string } | undefined {
+ 	for (let i = branch.length - 1; i >= 0; i--) {
+@@ -145,7 +148,7 @@ export function getBranchSelection(
+ }
+ 
+ function findLastModelChange(
+-	branch: readonly SessionEntry[],
++	branch: readonly BranchSelectionEntry[],
+ 	before: number,
+ ): { provider: string; modelId: string } | undefined {
+ 	for (let i = before - 1; i >= 0; i--) {
+@@ -155,12 +158,18 @@ function findLastModelChange(
+ 	return undefined;
+ }
+ 
+-/** Latest router state a session branch stores for a virtual model. */
+-export function getVirtualModelState(branch: readonly SessionEntry[], provider: string, modelId: string): unknown {
++/** Latest router state; metadata callers supply a loader for matching custom entry bodies. */
++export function getVirtualModelState(
++	branch: readonly BranchSelectionEntry[],
++	provider: string,
++	modelId: string,
++	readEntry?: (id: string) => SessionEntry | undefined,
++): unknown {
+ 	for (let i = branch.length - 1; i >= 0; i--) {
+ 		const entry = branch[i];
+ 		if (entry.type !== "custom" || entry.customType !== VIRTUAL_MODEL_STATE_ENTRY) continue;
+-		const data = entry.data as VirtualModelStateData | undefined;
++		const body = readEntry ? readEntry(entry.id) : entry;
++		const data = body && "data" in body ? (body.data as VirtualModelStateData | undefined) : undefined;
+ 		if (data?.provider === provider && data.modelId === modelId) return data.state;
+ 	}
+ 	return undefined;
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 0b8fb1d..0df3a40 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -296,11 +296,13 @@ export {
+ 	type SessionContext,
+ 	type SessionEntry,
+ 	type SessionEntryBase,
++	type SessionEntryMetadata,
+ 	type SessionHeader,
+ 	type SessionInfo,
+ 	type SessionInfoEntry,
+ 	SessionManager,
+ 	type SessionMessageEntry,
++	type SessionMessageMetadata,
+ 	type SessionProjection,
+ 	type SessionTreeNode,
+ 	sessionEntryToContextMessages,
+diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/packages/coding-agent/src/modes/interactive/components/footer.ts
+index 8bb7b35..3616624 100644
+--- a/packages/coding-agent/src/modes/interactive/components/footer.ts
++++ b/packages/coding-agent/src/modes/interactive/components/footer.ts
+@@ -121,7 +121,7 @@ export class FooterComponent implements Component {
+ 		const usageTotals = createUsageTotals();
+ 		let latestCacheHitRate: number | undefined;
+ 
+-		for (const entry of sessionManager.getEntries()) {
++		for (const entry of sessionManager.getEntriesMetadata()) {
+ 			if (entry.type === "usage") {
+ 				addUsageToTotals(usageTotals, entry.usage);
+ 			} else if (entry.type === "message" && entry.message.role === "assistant") {
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index e24d150..9fc3846 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -71,7 +71,7 @@ import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-ser
+ import {
+ 	CACHE_TTL_MS,
+ 	type CacheMiss,
+-	collectCacheMisses,
++	collectCacheMissesByEntryId,
+ 	computeCacheWaste,
+ 	detectCacheMiss,
+ } from "../../core/cache-stats.ts";
+@@ -317,11 +317,15 @@ export function formatCrashExtensionHint(extensionMatches: readonly string[] | u
+ 				: `${quoted.slice(0, -1).join(", ")}, and ${quoted[quoted.length - 1]}`;
+ 	const noun = matches.length === 1 ? "extension" : "extensions";
+ 	const pronoun = matches.length === 1 ? "it" : "them";
+-	return `A stack frame came from loaded ${noun} ${labels}, which may be involved. Try disabling ${pronoun} with \`${APP_NAME} config\`, or run \`${APP_NAME} -ne\` to confirm.`;
++	return (
++		`A stack frame came from loaded ${noun} ${labels}, which may be involved. ` +
++		`Try disabling ${pronoun} with \`${APP_NAME} config\`, or run \`${APP_NAME} -ne\` to confirm.`
++	);
+ }
+ 
+ const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
+-	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
++	"Anthropic subscription auth is active. Third-party harness usage draws from extra usage and is billed per token, " +
++	"not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage. Disable this warning in /settings.";
+ 
+ function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
+ 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
+@@ -1748,12 +1752,11 @@ export class InteractiveMode {
+ 			);
+ 			for (const d of collisionList) {
+ 				if (d.collision) {
+-					lines.push(
+-						theme.fg(
+-							"dim",
+-							`    ${theme.fg("warning", "✗")} ${this.formatPathWithSource(d.collision.loserPath, this.findSourceInfoForPath(d.collision.loserPath, sourceInfos))} (skipped)`,
+-						),
++					const loserPath = this.formatPathWithSource(
++						d.collision.loserPath,
++						this.findSourceInfoForPath(d.collision.loserPath, sourceInfos),
+ 					);
++					lines.push(theme.fg("dim", `    ${theme.fg("warning", "✗")} ${loserPath} (skipped)`));
+ 				}
+ 			}
+ 		}
+@@ -3421,7 +3424,7 @@ export class InteractiveMode {
+ 					const entries = this.sessionManager.buildContextEntries();
+ 					if (entries[0]?.id !== event.entry.id) break;
+ 					this.chatContainer.clear();
+-					const branch = this.sessionManager.getBranch();
++					const branch = this.sessionManager.getBranchMetadata();
+ 					const compactionIndex = branch.findIndex((entry) => entry.id === event.entry.id);
+ 					const entriesAfterCompaction = new Set(branch.slice(compactionIndex + 1).map((entry) => entry.id));
+ 					const retainedEntries = entries.slice(1);
+@@ -3960,14 +3963,15 @@ export class InteractiveMode {
+ 	private renderSessionItems(
+ 		items: readonly RenderSessionItem[],
+ 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
++		entryIds: ReadonlyMap<AssistantMessage, string> = new Map(),
+ 	): void {
+ 		this.pendingTools.clear();
+ 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+ 		// Cache misses are not persisted, unlike successful cache-warming usage.
+ 		// Re-derive them and inject them after the assistant messages that paid for them.
+ 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
+-			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRuntime)
+-			: new Map<AssistantMessage, CacheMiss>();
++			? collectCacheMissesByEntryId(this.sessionManager.getEntriesMetadata(), this.session.modelRuntime)
++			: new Map<string, CacheMiss>();
+ 
+ 		if (options.updateFooter) {
+ 			this.footer.invalidate();
+@@ -4029,7 +4033,8 @@ export class InteractiveMode {
+ 					}
+ 				}
+ 				if (message.stopReason !== "aborted" && message.stopReason !== "error") {
+-					const miss = cacheMisses.get(message);
++					const entryId = entryIds.get(message);
++					const miss = entryId === undefined ? undefined : cacheMisses.get(entryId);
+ 					if (miss) this.addCacheMissNotice(miss);
+ 				}
+ 			} else if (message.role === "toolResult") {
+@@ -4063,7 +4068,9 @@ export class InteractiveMode {
+ 	): void {
+ 		// Selection coordinates point into the transcript being replaced (#9311).
+ 		if (this.renderer instanceof TuiAltScreen) this.renderer.resetTextSelection();
++		const entryIds = new Map<AssistantMessage, string>();
+ 		const items = entries.flatMap((entry): RenderSessionItem[] => {
++			if (entry.type === "message" && entry.message.role === "assistant") entryIds.set(entry.message, entry.id);
+ 			if (entry.type === "custom" || (entry.type === "usage" && entry.kind === "cache_warm")) {
+ 				return [entry];
+ 			}
+@@ -4073,7 +4080,7 @@ export class InteractiveMode {
+ 			}
+ 			return messages;
+ 		});
+-		this.renderSessionItems(items, options);
++		this.renderSessionItems(items, options, entryIds);
+ 	}
+ 
+ 	private addCacheWarmingUsage(entry: UsageEntry): void {
+@@ -4125,11 +4132,14 @@ export class InteractiveMode {
+ 		let previousDroppedCount = 0;
+ 		// message_end reaches the UI before the current message is persisted,
+ 		// so the branch's last assistant message is the previous response.
+-		const branch = this.sessionManager.getBranch();
++		const branch = this.sessionManager.getBranchMetadata();
+ 		for (let i = branch.length - 1; i >= 0; i--) {
+ 			const entry = branch[i];
+ 			if (entry.type === "message" && entry.message.role === "assistant") {
+-				previousDroppedCount = InteractiveMode.countDroppedThinkingBlocks(entry.message);
++				const previous = this.sessionManager.getEntry(entry.id);
++				if (previous?.type === "message" && previous.message.role === "assistant") {
++					previousDroppedCount = InteractiveMode.countDroppedThinkingBlocks(previous.message);
++				}
+ 				break;
+ 			}
+ 		}
+@@ -4155,7 +4165,7 @@ export class InteractiveMode {
+ 		if (!this.settingsManager.getShowCacheMissNotices()) return;
+ 
+ 		// Entries don't contain `message` yet: message_end fires before persistence.
+-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
++		const miss = detectCacheMiss(this.sessionManager.getEntriesMetadata(), message, this.session.modelRuntime);
+ 		if (miss) this.addCacheMissNotice(miss);
+ 	}
+ 
+@@ -4183,7 +4193,7 @@ export class InteractiveMode {
+ 		this.renderProjectTrustWarningIfNeeded();
+ 
+ 		// Show compaction info if session was compacted
+-		const allEntries = this.sessionManager.getEntries();
++		const allEntries = this.sessionManager.getEntriesMetadata();
+ 		const compactionCount = allEntries.filter((e) => e.type === "compaction").length;
+ 		if (compactionCount > 0) {
+ 			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
+@@ -4204,7 +4214,8 @@ export class InteractiveMode {
+ 				() =>
+ 					theme.fg(
+ 						"warning",
+-						`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
++						`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. ` +
++							"Use /trust to save a trust decision, then restart pi.",
+ 					),
+ 				1,
+ 				0,
+@@ -6666,7 +6677,7 @@ export class InteractiveMode {
+ 	private handleSessionCommand(): void {
+ 		const stats = this.session.getSessionStats();
+ 		const sessionName = this.sessionManager.getSessionName();
+-		const entries = this.sessionManager.getEntries();
++		const entries = this.sessionManager.getEntriesMetadata();
+ 		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
+ 
+ 		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
+@@ -6711,7 +6722,10 @@ export class InteractiveMode {
+ 
+ 			info += `\n${theme.bold("Cache Warming")}\n`;
+ 			info += `${theme.fg("dim", "Mode:")} ${cacheWarmingMode}\n`;
+-			info += `${theme.fg("dim", "Status:")} ${cacheWarmingStatus ? formatCacheWarmingStatus(cacheWarmingStatus) : "Inactive (cache warming unavailable)"}\n`;
++			const warmingStatus = cacheWarmingStatus
++				? formatCacheWarmingStatus(cacheWarmingStatus)
++				: "Inactive (cache warming unavailable)";
++			info += `${theme.fg("dim", "Status:")} ${warmingStatus}\n`;
+ 			const decision = cacheWarmingStatus?.decision;
+ 			if (decision?.economicsAvailable) {
+ 				info += `${theme.fg("dim", "Cache miss penalty:")} $${decision.missCost.toFixed(3)}\n`;
+diff --git a/packages/coding-agent/test/agent-session-stats.test.ts b/packages/coding-agent/test/agent-session-stats.test.ts
+index d113abf..a26346f 100644
+--- a/packages/coding-agent/test/agent-session-stats.test.ts
++++ b/packages/coding-agent/test/agent-session-stats.test.ts
+@@ -103,11 +103,17 @@ describe("AgentSession.getSessionStats", () => {
+ 
+ 		try {
+ 			sessionManager.appendMessage(createUserMessage("hello", 1));
+-			sessionManager.appendMessage(createAssistantMessage("hi", 200, 2));
++			const reply = createAssistantMessage("hi", 200, 2);
++			reply.content.push({ type: "toolCall", id: "call", name: "read", arguments: { path: "fixture" } });
++			sessionManager.appendMessage(reply);
+ 			syncAgentMessages(session, sessionManager);
+ 
+ 			const stats = session.getSessionStats();
+ 			expect(stats.contextUsage).toEqual(session.getContextUsage());
++			expect(stats.toolCalls).toBe(1);
++			expect(stats.userMessages).toBe(1);
++			expect(stats.assistantMessages).toBe(1);
++			expect(stats.totalMessages).toBe(2);
+ 			expect(stats.contextUsage?.tokens).toBe(200);
+ 			expect(stats.contextUsage?.contextWindow).toBe(model.contextWindow);
+ 			expect(stats.contextUsage?.percent).toBe((200 / model.contextWindow) * 100);
+@@ -290,6 +296,24 @@ describe("AgentSession.getSessionStats", () => {
+ 		]);
+ 	});
+ 
++	it("keeps resolved response-model attribution and tool usage in body-free accounting", () => {
++		const manager = SessionManager.inMemory();
++		manager.appendMessage({
++			...createAssistantMessage("response", 100, 1),
++			responseModel: "resolved-model",
++			usage: { ...createUsage(100), cost: { ...createUsage(100).cost, total: 0.5 } },
++		});
++		manager.appendMessage(
++			createToolResultMessage({ ...createUsage(50), cost: { ...createUsage(50).cost, total: 1 } }),
++		);
++		const expected = [
++			{ key: "Tools/summaries", cost: 1, tokens: 50 },
++			{ key: `${model.provider}/resolved-model`, cost: 0.5, tokens: 100 },
++		];
++		expect(getUsageCostBreakdown(manager.getEntries())).toEqual(expected);
++		expect(getUsageCostBreakdown(manager.getEntriesMetadata())).toEqual(expected);
++	});
++
+ 	it("ignores zero-usage messages when checking for post-compaction context usage", async () => {
+ 		const { session, sessionManager } = await createSession();
+ 
+diff --git a/packages/coding-agent/test/cache-stats.test.ts b/packages/coding-agent/test/cache-stats.test.ts
+index 248432e..d048912 100644
+--- a/packages/coding-agent/test/cache-stats.test.ts
++++ b/packages/coding-agent/test/cache-stats.test.ts
+@@ -2,10 +2,12 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
+ import { describe, expect, it } from "vitest";
+ import {
+ 	collectCacheMisses,
++	collectCacheMissesByEntryId,
+ 	computeCacheWaste,
+ 	detectCacheMiss,
+ 	type ModelPriceSource,
+ } from "../src/core/cache-stats.ts";
++import { toSessionEntryMetadata } from "../src/core/session-entry-metadata.ts";
+ import type { SessionEntry } from "../src/core/session-manager.ts";
+ 
+ const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+@@ -123,6 +125,23 @@ describe("collectCacheMisses", () => {
+ 	});
+ });
+ 
++describe("body-free cache history", () => {
++	it("preserves miss amounts and stable record IDs without relying on message reference or timestamp identity", () => {
++		const missTurn = assistant({ cacheWrite: 110_000, cost: { cacheWrite: 0.4125 }, timestamp: 60_000 });
++		const history = [entry(turn1), entry(turn2), entry(missTurn)].map((value, index) => ({
++			...value,
++			id: `turn-${index}`,
++		}));
++		const metadata = structuredClone(history.map(toSessionEntryMetadata));
++		const misses = collectCacheMissesByEntryId(metadata, models);
++		expect([...misses.keys()]).toEqual(["turn-2"]);
++		expect(misses.get("turn-2")?.missedTokens).toBe(105_000);
++		expect(misses.get("turn-2")?.missedCost).toBeCloseTo(0.36225, 5);
++		expect(computeCacheWaste(metadata, models)).toEqual(computeCacheWaste(history, models));
++		expect(detectCacheMiss(metadata.slice(0, 2), missTurn, models)?.missedTokens).toBe(105_000);
++	});
++});
++
+ describe("detectCacheMiss", () => {
+ 	it("detects a miss on a just-completed message with idle time", () => {
+ 		const missMessage = assistant({ cacheWrite: 110_000, cost: { cacheWrite: 0.4125 }, timestamp: 600_000 });
+diff --git a/packages/coding-agent/test/cache-warmer.test.ts b/packages/coding-agent/test/cache-warmer.test.ts
+index 543550f..3837d97 100644
+--- a/packages/coding-agent/test/cache-warmer.test.ts
++++ b/packages/coding-agent/test/cache-warmer.test.ts
+@@ -26,6 +26,7 @@ import { createEventBus } from "../src/core/event-bus.ts";
+ import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
+ import { ExtensionRunner } from "../src/core/extensions/runner.ts";
+ import type { ExtensionFactory } from "../src/core/extensions/types.ts";
++import { toSessionEntryMetadata } from "../src/core/session-entry-metadata.ts";
+ import { type SessionEntry, SessionManager, type UsageEntry } from "../src/core/session-manager.ts";
+ import type { CacheWarmingMode } from "../src/core/settings-manager.ts";
+ import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
+@@ -104,7 +105,7 @@ function fakeRuntime(
+ 				} as unknown as AssistantMessageEventStream;
+ 			},
+ 		},
+-		{ appendUsage, getBranch: () => state.branch },
++		{ appendUsage, getBranchMetadata: () => state.branch.map(toSessionEntryMetadata) },
+ 		() => state.mode,
+ 		async (event) => {
+ 			events.push(event);
+diff --git a/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts b/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts
+index 48732b5..88555df 100644
+--- a/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts
++++ b/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts
+@@ -1,6 +1,7 @@
+ import type { AssistantMessage } from "@earendil-works/pi-ai";
+ import { Container } from "@earendil-works/pi-tui";
+ import { describe, expect, test } from "vitest";
++import { SessionManager } from "../src/core/session-manager.ts";
+ import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+ import { stripAnsi } from "../src/utils/ansi.ts";
+@@ -51,7 +52,7 @@ const message: AssistantMessage = {
+ type NoticeContext = {
+ 	chatContainer: Container;
+ 	settingsManager: { getShowCacheMissNotices(): boolean };
+-	sessionManager: { getBranch(): Array<{ type: "message"; message: AssistantMessage }> };
++	sessionManager: SessionManager;
+ };
+ 
+ const maybeShowThinkingDropNotice = Reflect.get(InteractiveMode.prototype, "maybeShowThinkingDropNotice") as (
+@@ -65,7 +66,7 @@ describe("InteractiveMode assistant diagnostics", () => {
+ 		const enabled = {
+ 			chatContainer: new Container(),
+ 			settingsManager: { getShowCacheMissNotices: () => true },
+-			sessionManager: { getBranch: () => [] },
++			sessionManager: SessionManager.inMemory(),
+ 		};
+ 		maybeShowThinkingDropNotice.call(enabled, message);
+ 		const output = stripAnsi(enabled.chatContainer.render(120).join("\n"));
+@@ -74,7 +75,7 @@ describe("InteractiveMode assistant diagnostics", () => {
+ 		const disabled = {
+ 			chatContainer: new Container(),
+ 			settingsManager: { getShowCacheMissNotices: () => false },
+-			sessionManager: { getBranch: () => [] },
++			sessionManager: SessionManager.inMemory(),
+ 		};
+ 		maybeShowThinkingDropNotice.call(disabled, message);
+ 		expect(disabled.chatContainer.children).toHaveLength(0);
+@@ -82,10 +83,12 @@ describe("InteractiveMode assistant diagnostics", () => {
+ 
+ 	test("does not repeat unchanged Anthropic thinking drops", () => {
+ 		initTheme("dark");
++		const sessionManager = SessionManager.inMemory();
++		sessionManager.appendMessage(message);
+ 		const context = {
+ 			chatContainer: new Container(),
+ 			settingsManager: { getShowCacheMissNotices: () => true },
+-			sessionManager: { getBranch: () => [{ type: "message" as const, message }] },
++			sessionManager,
+ 		};
+ 
+ 		maybeShowThinkingDropNotice.call(context, { ...message, timestamp: 2 });
+diff --git a/packages/coding-agent/test/interactive-mode-compaction.test.ts b/packages/coding-agent/test/interactive-mode-compaction.test.ts
+index 0f35b02..9df5399 100644
+--- a/packages/coding-agent/test/interactive-mode-compaction.test.ts
++++ b/packages/coding-agent/test/interactive-mode-compaction.test.ts
+@@ -103,6 +103,7 @@ describe("InteractiveMode compaction events", () => {
+ 				{ type: "compaction_cost", kind: "compaction", usage: previousUsage },
+ 			],
+ 			{},
++			new Map(),
+ 		);
+ 	});
+ 
+diff --git a/packages/coding-agent/test/session-manager/build-context.test.ts b/packages/coding-agent/test/session-manager/build-context.test.ts
+index e81eb5d..1e3507c 100644
+--- a/packages/coding-agent/test/session-manager/build-context.test.ts
++++ b/packages/coding-agent/test/session-manager/build-context.test.ts
+@@ -7,6 +7,7 @@ import {
+ 	type CustomEntry,
+ 	type ModelChangeEntry,
+ 	type SessionEntry,
++	SessionManager,
+ 	type SessionMessageEntry,
+ 	type ThinkingLevelChangeEntry,
+ } from "../../src/core/session-manager.ts";
+@@ -66,6 +67,75 @@ function modelChange(id: string, parentId: string | null, provider: string, mode
+ 	return { type: "model_change", id, parentId, timestamp: "2025-01-01T00:00:00Z", provider, modelId };
+ }
+ 
++describe("session entry metadata", () => {
++	it("retains topology and accounting without message, custom, edit or summary bodies", () => {
++		const session = SessionManager.inMemory("/metadata-fixture");
++		const body = "BODY_ONLY_DO_NOT_RETAIN_IN_METADATA";
++		const user = session.appendMessage({ role: "user", content: body, timestamp: 1 });
++		const assistant = msg("fixture", null, "assistant", body).message;
++		if (assistant.role !== "assistant") throw new Error("Expected assistant fixture");
++		assistant.content.push({ type: "thinking", thinking: body, thinkingSignature: body });
++		assistant.content.push({ type: "toolCall", id: "call", name: "read", arguments: { path: body } });
++		assistant.responseModel = "resolved-model";
++		const reply = session.appendMessage(assistant);
++		const customId = session.appendCustomEntry("extension-state", { body });
++		session.appendCustomMessageEntry("extension-card", body, true, { body });
++		session.appendContextEdit(user, { content: body });
++		session.appendCompaction(body, user, 1000, { body });
++		session.branchWithSummary(reply, body, { body });
++		session.appendUsage("fixture", "anthropic", "claude-test", assistant.usage, body);
++		session.appendThinkingLevelChange("high");
++		session.appendModelChange("openai", "fixture-model");
++		session.appendLabelChange(user, "bookmark");
++		session.appendSessionInfo("session title");
++		const original = session.getEntries();
++		const metadata = session.getEntriesMetadata();
++
++		expect(metadata.map(({ id, parentId, type }) => ({ id, parentId, type }))).toEqual(
++			original.map(({ id, parentId, type }) => ({ id, parentId, type })),
++		);
++		expect(JSON.stringify(metadata)).not.toContain(body);
++		expect(session.getEntryMetadata(reply)).toMatchObject({
++			type: "message",
++			message: {
++				role: "assistant",
++				provider: "anthropic",
++				model: "claude-test",
++				responseModel: "resolved-model",
++				toolCallCount: 1,
++				usage: assistant.usage,
++			},
++		});
++		expect(session.getEntryMetadata(customId)).toMatchObject({ type: "custom", customType: "extension-state" });
++		expect(session.getEntryMetadata("missing")).toBeUndefined();
++		expect(session.getEntries()).toEqual(original);
++		expect(session.getEntry(customId)).toMatchObject({ data: { body } });
++	});
++
++	it("selects the same retained range across compactions, state records and branch changes", () => {
++		const entries: SessionEntry[] = [
++			msg("1", null, "user", "before"),
++			thinkingLevel("2", "1", "high"),
++			custom("3", "2", "kept-state", { body: "must remain accessible" }),
++			msg("4", "3", "assistant", "kept"),
++			compaction("5", "4", "summary", "3"),
++			msg("6", "5", "user", "after"),
++			msg("7", "1", "user", "abandoned branch"),
++		];
++		const session = SessionManager.inMemory("/metadata-fixture", undefined, entries);
++		session.branch("6");
++		expect(session.getContextEntriesMetadata().map((entry) => entry.id)).toEqual(["5", "3", "4", "6"]);
++		expect(session.getContextEntriesMetadata().map((entry) => entry.id)).toEqual(
++			session.buildContextEntries().map((entry) => entry.id),
++		);
++		expect(session.getBranchMetadata().map((entry) => entry.id)).toEqual(["1", "2", "3", "4", "5", "6"]);
++		expect(session.getBranchMetadata("7").map((entry) => entry.id)).toEqual(["1", "7"]);
++		expect(session.getBranchMetadata("missing")).toEqual([]);
++		session.resetLeaf();
++		expect(session.getContextEntriesMetadata()).toEqual([]);
++	});
++});
++
+ describe("buildSessionContext", () => {
+ 	describe("trivial cases", () => {
+ 		it("empty entries returns empty context", () => {
+diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
+index 8353ccd..65d1906 100644
+--- a/packages/coding-agent/test/session-manager/file-operations.test.ts
++++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
+@@ -44,6 +44,35 @@ describe("loadEntriesFromFile", () => {
+ 		);
+ 	}
+ 
++	it("keeps a complete, independent branch for non-persistent context previews", () => {
++		const seed = SessionManager.create(tempDir, tempDir);
++		const old = seed.appendMessage(userMsg("old 界🙂 evidence"));
++		seed.appendMessage(assistantMsg("first answer"));
++		const kept = seed.appendMessage(userMsg("kept evidence"));
++		seed.appendCompaction("checkpoint", kept, 100);
++		const file = seed.getSessionFile();
++		if (!file) throw new Error("Expected session file");
++		const original = SessionManager.open(file);
++		const bytes = readFileSync(file);
++		const projection = original.buildSessionProjection();
++		const preview = original.createBranchPreview();
++		const draft = preview.appendContextEdit(old, { content: "edited old evidence" });
++		preview.appendCompaction("preview checkpoint", old, 100);
++
++		expect(preview.isPersisted()).toBe(false);
++		expect(preview.getSessionId()).toBe(original.getSessionId());
++		expect(preview.getBranchMetadata().some((entry) => entry.id === old)).toBe(true);
++		expect(preview.buildSessionProjection().messages.filter((message) => message.role === "user")).toMatchObject([
++			{ content: "edited old evidence" },
++			{ content: "kept evidence" },
++		]);
++		expect(original.getEntry(draft)).toBeUndefined();
++		expect(original.buildSessionProjection()).toEqual(projection);
++		expect(readFileSync(file)).toEqual(bytes);
++		original.newSession();
++		expect(preview.getEntry(old)).toMatchObject({ message: { content: "old 界🙂 evidence" } });
++	});
++
+ 	it("returns empty array for non-existent file", () => {
+ 		const entries = loadEntriesFromFile(join(tempDir, "nonexistent.jsonl"));
+ 		expect(entries).toEqual([]);
+@@ -155,6 +184,14 @@ describe("loadEntriesFromFile", () => {
+ 				const sessionManager = SessionManager.open(file, tempDir, cwdOverride);
+ 				expect(sessionManager.getSessionId()).toBe(id);
+ 				expect(sessionManager.getCwd()).toBe(cwdOverride ?? storedCwd);
++				const appended = sessionManager.appendMessage({
++					role: "user",
++					content: "After header discovery fallback",
++					timestamp: 1,
++				});
++				expect(SessionManager.open(file, tempDir, cwdOverride).getEntry(appended)).toMatchObject({
++					message: { role: "user", content: "After header discovery fallback" },
++				});
+ 			}
+ 		}
+ 	});
+diff --git a/packages/coding-agent/test/virtual-models.test.ts b/packages/coding-agent/test/virtual-models.test.ts
+index 3650c2c..4389d41 100644
+--- a/packages/coding-agent/test/virtual-models.test.ts
++++ b/packages/coding-agent/test/virtual-models.test.ts
+@@ -14,7 +14,13 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
+ import { ModelRuntime } from "../src/core/model-runtime.ts";
+ import { createAgentSession } from "../src/core/sdk.ts";
+ import { SessionManager } from "../src/core/session-manager.ts";
+-import { getBranchSelection, type ModelRouteRequest, type VirtualModelDefinition } from "../src/core/virtual-models.ts";
++import {
++	getBranchSelection,
++	getVirtualModelState,
++	type ModelRouteRequest,
++	VIRTUAL_MODEL_STATE_ENTRY,
++	type VirtualModelDefinition,
++} from "../src/core/virtual-models.ts";
+ import { createTestResourceLoader } from "./utilities.ts";
+ 
+ async function createRuntime(requests: ModelRouteRequest[] = []) {
+@@ -55,12 +61,19 @@ describe("getBranchSelection", () => {
+ 	function select(build: (sessionManager: SessionManager) => void, runtime: ModelRuntime) {
+ 		const sessionManager = SessionManager.inMemory();
+ 		build(sessionManager);
+-		const lookups: string[] = [];
+-		const selection = getBranchSelection(sessionManager.getBranch(), (provider, modelId) => {
+-			lookups.push(`${provider}/${modelId}`);
+-			return runtime.getModel(provider, modelId);
+-		});
+-		return { selection, lookups };
++		const selectFrom = (
++			branch: ReturnType<SessionManager["getBranch"]> | ReturnType<SessionManager["getBranchMetadata"]>,
++		) => {
++			const lookups: string[] = [];
++			const selection = getBranchSelection(branch, (provider, modelId) => {
++				lookups.push(`${provider}/${modelId}`);
++				return runtime.getModel(provider, modelId);
++			});
++			return { selection, lookups };
++		};
++		const full = selectFrom(sessionManager.getBranch());
++		expect(selectFrom(sessionManager.getBranchMetadata())).toEqual(full);
++		return full;
+ 	}
+ 
+ 	// #10198: the selection must not cost one catalog lookup per assistant message.
+@@ -113,6 +126,25 @@ describe("getBranchSelection", () => {
+ 	});
+ });
+ 
++describe("metadata router-state recovery", () => {
++	it.each([undefined, null, { next: "exact state" }])("preserves the latest matching state %j", (state) => {
++		const manager = SessionManager.inMemory();
++		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "router", modelId: "auto", state: "older" });
++		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "router", modelId: "auto", state });
++		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "other", modelId: "auto", state: "other" });
++		const unrelated = manager.appendCustomEntry("unrelated-large-state", { untouched: true });
++		const reads: string[] = [];
++		expect(getVirtualModelState(manager.getBranch(), "router", "auto")).toEqual(state);
++		expect(
++			getVirtualModelState(manager.getBranchMetadata(), "router", "auto", (id) => {
++				reads.push(id);
++				return manager.getEntry(id);
++			}),
++		).toEqual(state);
++		expect(reads).not.toContain(unrelated);
++	});
++});
++
+ describe("ModelRuntime virtual models", () => {
+ 	it("lists a virtual model and routes it to a physical model with a clamped thinking level", async () => {
+ 		const requests: ModelRouteRequest[] = [];
+diff --git a/packages/coding-agent/src/core/session-entry-metadata.ts b/packages/coding-agent/src/core/session-entry-metadata.ts
+new file mode 100644
+index 0000000..37a2e46
+--- /dev/null
++++ b/packages/coding-agent/src/core/session-entry-metadata.ts
+@@ -0,0 +1,111 @@
++import type { AgentMessage } from "@earendil-works/pi-agent-core";
++import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
++import type {
++	BranchSummaryEntry,
++	CompactionEntry,
++	ContextEditEntry,
++	CustomEntry,
++	CustomMessageEntry,
++	LabelEntry,
++	ModelChangeEntry,
++	SessionEntry,
++	SessionEntryBase,
++	SessionInfoEntry,
++	ThinkingLevelChangeEntry,
++	UsageEntry,
++} from "./session-types.ts";
++
++/** Facts needed for settings and usage; content, signatures and tool payloads remain in the entry body. */
++export type SessionMessageMetadata =
++	| (Pick<
++			AssistantMessage,
++			"role" | "api" | "provider" | "model" | "responseModel" | "responseId" | "usage" | "stopReason" | "timestamp"
++	  > & {
++			toolCallCount: number;
++	  })
++	| Pick<ToolResultMessage, "role" | "usage">
++	| { role: Exclude<AgentMessage["role"], "assistant" | "toolResult"> };
++
++/** Body-free records for branch selection, state discovery and accounting. */
++export type SessionEntryMetadata = Readonly<
++	| (SessionEntryBase & { type: "message"; message: SessionMessageMetadata })
++	| ThinkingLevelChangeEntry
++	| ModelChangeEntry
++	| Omit<UsageEntry, "note">
++	| Omit<CompactionEntry, "summary" | "details" | "systemMessage">
++	| Omit<BranchSummaryEntry, "summary" | "details">
++	| Omit<CustomEntry, "data">
++	| Omit<CustomMessageEntry, "content" | "details">
++	| Omit<ContextEditEntry, "replacement">
++	| LabelEntry
++	| SessionInfoEntry
++	| (SessionEntryBase & { type: "unknown"; sourceType: string })
++>;
++
++export function toSessionEntryMetadata(entry: SessionEntry): SessionEntryMetadata {
++	const base = { id: entry.id, parentId: entry.parentId, timestamp: entry.timestamp };
++	const sourceType = entry.type;
++	switch (entry.type) {
++		case "message": {
++			let message: SessionMessageMetadata;
++			if (entry.message.role === "assistant") {
++				message = {
++					role: entry.message.role,
++					api: entry.message.api,
++					provider: entry.message.provider,
++					model: entry.message.model,
++					responseModel: entry.message.responseModel,
++					responseId: entry.message.responseId,
++					toolCallCount: Array.isArray(entry.message.content)
++						? entry.message.content.reduce((count, block) => count + (block.type === "toolCall" ? 1 : 0), 0)
++						: 0,
++					usage: entry.message.usage,
++					stopReason: entry.message.stopReason,
++					timestamp: entry.message.timestamp,
++				};
++			} else if (entry.message.role === "toolResult") {
++				message = { role: entry.message.role, usage: entry.message.usage };
++			} else {
++				message = { role: entry.message.role };
++			}
++			return { ...base, type: entry.type, message };
++		}
++		case "thinking_level_change":
++			return { ...base, type: entry.type, thinkingLevel: entry.thinkingLevel };
++		case "model_change":
++			return { ...base, type: entry.type, provider: entry.provider, modelId: entry.modelId };
++		case "usage":
++			return {
++				...base,
++				type: entry.type,
++				kind: entry.kind,
++				provider: entry.provider,
++				model: entry.model,
++				usage: entry.usage,
++			};
++		case "compaction":
++			return {
++				...base,
++				type: entry.type,
++				firstKeptEntryId: entry.firstKeptEntryId,
++				tokensBefore: entry.tokensBefore,
++				usage: entry.usage,
++				fromHook: entry.fromHook,
++			};
++		case "branch_summary":
++			return { ...base, type: entry.type, fromId: entry.fromId, usage: entry.usage, fromHook: entry.fromHook };
++		case "custom":
++			return { ...base, type: entry.type, customType: entry.customType };
++		case "custom_message":
++			return { ...base, type: entry.type, customType: entry.customType, display: entry.display };
++		case "context_edit":
++			return { ...base, type: entry.type, targetId: entry.targetId };
++		case "label":
++			return { ...base, type: entry.type, targetId: entry.targetId, label: entry.label };
++		case "session_info":
++			return { ...base, type: entry.type, name: entry.name };
++		default:
++			// Parsed files can contain newer entry types; preserve topology and leave their bodies readable.
++			return { ...base, type: "unknown", sourceType };
++	}
++}
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+new file mode 100644
+index 0000000..346b144
+--- /dev/null
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -0,0 +1,236 @@
++import { appendFileSync, closeSync, openSync, readSync, statSync, writeFileSync } from "fs";
++import { type SessionEntryMetadata, toSessionEntryMetadata } from "./session-entry-metadata.ts";
++import { type SessionEntryLocation, scanSessionFile } from "./session-file-reader.ts";
++import type { FileEntry, SessionEntry, SessionHeader } from "./session-types.ts";
++
++// Serialized UTF-8 bytes, not a JS heap limit; the measured active context is about 4.4 MiB.
++const MAX_CACHED_SESSION_ENTRY_BYTES = 16 * 1024 * 1024;
++// Reuse one bounded workspace for ordinary reads instead of churning native Buffer allocations per record.
++const MAX_REUSED_ENTRY_READ_BYTES = 1024 * 1024;
++
++interface StoredSessionEntry {
++	kind: "entry";
++	metadata: SessionEntryMetadata;
++	body?: SessionEntry;
++	location?: SessionEntryLocation;
++}
++
++type StoredRecord = StoredSessionEntry | { kind: "header"; header: SessionHeader };
++
++/** Owns record locations and bounded decoded bodies; returned entries remain ordinary, complete objects. */
++export class SessionEntryStore {
++	private records: StoredRecord[] = [];
++	private byId = new Map<string, StoredSessionEntry>();
++	private path?: string;
++	private cache = new Map<StoredSessionEntry, { entry: SessionEntry; bytes: number }>();
++	private cachedBytes = 0;
++	private entryReadBuffer?: Buffer;
++
++	constructor(entries: FileEntry[] = [], path?: string) {
++		this.path = path;
++		for (const entry of entries) this.add(entry);
++	}
++
++	static open(path: string): SessionEntryStore {
++		const store = new SessionEntryStore();
++		store.path = path;
++		scanSessionFile(path, (entry, location) => store.add(entry, location));
++		return store;
++	}
++
++	private add(entry: FileEntry, location?: SessionEntryLocation): void {
++		if (entry.type === "session") {
++			this.records.push({ kind: "header", header: entry });
++			return;
++		}
++		const record: StoredSessionEntry = {
++			kind: "entry",
++			metadata: toSessionEntryMetadata(entry),
++			location,
++			...(location ? {} : { body: entry }),
++		};
++		this.records.push(record);
++		this.byId.set(entry.id, record);
++	}
++
++	get size(): number {
++		return this.byId.size;
++	}
++	get fileEntryCount(): number {
++		return this.records.length;
++	}
++	has(id: string): boolean {
++		return this.byId.has(id);
++	}
++
++	getHeader(): SessionHeader | null {
++		const record = this.records.find((record) => record.kind === "header");
++		return record?.kind === "header" ? record.header : null;
++	}
++
++	/** A non-persistent branch fork keeps locations and currently cached bodies, not the complete history. */
++	createBranchPreview(branch: readonly SessionEntryMetadata[]): SessionEntryStore {
++		const preview = new SessionEntryStore([], this.path);
++		const header = this.getHeader();
++		if (header) preview.records.push({ kind: "header", header });
++		for (const metadata of branch) {
++			const record = this.byId.get(metadata.id);
++			if (!record) throw new Error(`Session entry not found: ${metadata.id}`);
++			// Copy envelopes: later persistence must not rebind this preview's source locations.
++			const snapshot = { ...record, body: record.body ?? this.cache.get(record)?.entry };
++			preview.records.push(snapshot);
++			preview.byId.set(metadata.id, snapshot);
++		}
++		return preview;
++	}
++
++	getMetadata(id: string): SessionEntryMetadata | undefined {
++		return this.byId.get(id)?.metadata;
++	}
++
++	getEntriesMetadata(): SessionEntryMetadata[] {
++		const entries: SessionEntryMetadata[] = [];
++		for (const record of this.records) if (record.kind === "entry") entries.push(record.metadata);
++		return entries;
++	}
++
++	*getIndexedMetadata(): IterableIterator<SessionEntryMetadata> {
++		for (const record of this.byId.values()) yield record.metadata;
++	}
++
++	getLastMetadata(type: SessionEntryMetadata["type"]): SessionEntryMetadata | undefined {
++		for (let index = this.records.length - 1; index >= 0; index--) {
++			const record = this.records[index];
++			if (record.kind === "entry" && record.metadata.type === type) return record.metadata;
++		}
++		return undefined;
++	}
++
++	readEntries(metadata: readonly SessionEntryMetadata[]): SessionEntry[] {
++		return metadata.map((entry) => {
++			const record = this.byId.get(entry.id);
++			if (!record) throw new Error(`Session entry not found: ${entry.id}`);
++			return this.read(record);
++		});
++	}
++
++	getEntry(id: string): SessionEntry | undefined {
++		const record = this.byId.get(id);
++		return record ? this.read(record) : undefined;
++	}
++
++	getEntries(): SessionEntry[] {
++		const entries: SessionEntry[] = [];
++		for (const record of this.records) if (record.kind === "entry") entries.push(this.read(record));
++		return entries;
++	}
++
++	getFileEntries(): FileEntry[] {
++		return this.records.map((record) => (record.kind === "header" ? record.header : this.read(record)));
++	}
++
++	append(entry: SessionEntry): void {
++		this.add(entry);
++	}
++
++	private read(record: StoredSessionEntry): SessionEntry {
++		if (record.body) return record.body;
++		const cached = this.cache.get(record);
++		if (cached) {
++			this.cache.delete(record);
++			this.cache.set(record, cached);
++			return cached.entry;
++		}
++		if (!this.path || !record.location) throw new Error(`Session entry has no body: ${record.metadata.id}`);
++		const { offset, length } = record.location;
++		let bytes: Buffer;
++		if (length <= MAX_REUSED_ENTRY_READ_BYTES) {
++			this.entryReadBuffer ??= Buffer.allocUnsafe(MAX_REUSED_ENTRY_READ_BYTES);
++			bytes = this.entryReadBuffer;
++		} else {
++			bytes = Buffer.allocUnsafe(length);
++		}
++		const fd = openSync(this.path, "r");
++		try {
++			let read = 0;
++			while (read < length) {
++				const count = readSync(fd, bytes, read, length - read, offset + read);
++				if (count === 0) throw new Error(`Session entry was truncated: ${record.metadata.id}`);
++				read += count;
++			}
++		} finally {
++			closeSync(fd);
++		}
++		const entry = JSON.parse(bytes.toString("utf8", 0, length)) as SessionEntry;
++		const expectedType = record.metadata.type === "unknown" ? record.metadata.sourceType : record.metadata.type;
++		if (!entry || entry.id !== record.metadata.id || entry.type !== expectedType) {
++			throw new Error(`Session entry changed on disk: ${record.metadata.id}`);
++		}
++		this.remember(record, entry, length);
++		return entry;
++	}
++
++	private remember(record: StoredSessionEntry, entry: SessionEntry, bytes: number): void {
++		const previous = this.cache.get(record);
++		if (previous) {
++			this.cachedBytes -= previous.bytes;
++			this.cache.delete(record);
++		}
++		if (bytes > MAX_CACHED_SESSION_ENTRY_BYTES) return;
++		while (this.cachedBytes + bytes > MAX_CACHED_SESSION_ENTRY_BYTES) {
++			const oldest = this.cache.entries().next().value;
++			if (!oldest) break;
++			this.cache.delete(oldest[0]);
++			this.cachedBytes -= oldest[1].bytes;
++		}
++		this.cache.set(record, { entry, bytes });
++		this.cachedBytes += bytes;
++	}
++
++	/** Rewrites explicitly materialize before truncation, so old offsets cannot refer into an overwritten source. */
++	writeToFile(path: string, flag: "w" | "wx"): void {
++		const files = this.records.map((record) =>
++			record.kind === "header"
++				? { kind: "header" as const, entry: record.header }
++				: { kind: "entry" as const, record, entry: this.read(record) },
++		);
++		const written: { record: StoredSessionEntry; entry: SessionEntry; location: SessionEntryLocation }[] = [];
++		let offset = 0;
++		const fd = openSync(path, flag);
++		try {
++			for (const file of files) {
++				const bytes = Buffer.from(`${JSON.stringify(file.entry)}\n`, "utf8");
++				writeFileSync(fd, bytes);
++				if (file.kind === "entry")
++					written.push({
++						record: file.record,
++						entry: file.entry,
++						location: { offset, length: bytes.length - 1 },
++					});
++				offset += bytes.length;
++			}
++		} finally {
++			closeSync(fd);
++		}
++		this.path = path;
++		this.cache.clear();
++		this.cachedBytes = 0;
++		for (const { record, entry, location } of written) {
++			record.location = location;
++			record.body = undefined;
++			this.remember(record, entry, location.length);
++		}
++	}
++
++	/** Persists an already-appended record and records its byte position without reparsing it. */
++	appendToFile(entry: SessionEntry): void {
++		const record = this.byId.get(entry.id);
++		if (!this.path || !record) throw new Error(`Session entry is not ready to persist: ${entry.id}`);
++		const bytes = Buffer.from(`${JSON.stringify(entry)}\n`, "utf8");
++		const offset = statSync(this.path).size;
++		appendFileSync(this.path, bytes);
++		record.location = { offset, length: bytes.length - 1 };
++		record.body = undefined;
++		this.remember(record, entry, record.location.length);
++	}
++}
+diff --git a/packages/coding-agent/src/core/session-file-reader.ts b/packages/coding-agent/src/core/session-file-reader.ts
+new file mode 100644
+index 0000000..660c3cb
+--- /dev/null
++++ b/packages/coding-agent/src/core/session-file-reader.ts
+@@ -0,0 +1,75 @@
++import { appendFileSync, closeSync, existsSync, openSync, readSync } from "fs";
++import { normalizePath } from "../utils/paths.ts";
++import type { FileEntry } from "./session-types.ts";
++
++// A 1 MiB scan buffer amortizes filesystem reads without retaining the whole transcript.
++const SESSION_SCAN_CHUNK_BYTES = 1024 * 1024;
++const NEWLINE_BYTE = 0x0a;
++
++export interface SessionEntryLocation {
++	/** UTF-8 byte offset and length, excluding the physical newline. */
++	offset: number;
++	length: number;
++}
++
++export function parseSessionEntryLine(line: string): FileEntry | null {
++	if (!line.trim()) return null;
++	try {
++		return JSON.parse(line) as FileEntry;
++	} catch {
++		return null;
++	}
++}
++
++/** Visits validated-session JSONL records one at a time; malformed lines retain the legacy skip contract. */
++export function scanSessionFile(
++	filePath: string,
++	visit: (entry: FileEntry, location: SessionEntryLocation) => void,
++): number {
++	const path = normalizePath(filePath);
++	if (!existsSync(path)) return 0;
++	let count = 0;
++	const accept = (bytes: Buffer, offset: number): boolean => {
++		const entry = parseSessionEntryLine(bytes.toString("utf8"));
++		if (!entry) return true;
++		if (count === 0 && (entry.type !== "session" || typeof entry.id !== "string")) return false;
++		visit(entry, { offset, length: bytes.length });
++		count++;
++		return true;
++	};
++	const fd = openSync(path, "r");
++	let parts: Buffer[] = [];
++	let fileOffset = 0;
++	let recordOffset = 0;
++	try {
++		const buffer = Buffer.allocUnsafe(SESSION_SCAN_CHUNK_BYTES);
++		while (true) {
++			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
++			if (bytesRead === 0) break;
++			let start = 0;
++			let end = buffer.indexOf(NEWLINE_BYTE, start);
++			while (end >= 0 && end < bytesRead) {
++				const tail = buffer.subarray(start, end);
++				let bytes = tail;
++				if (parts.length) {
++					parts.push(tail);
++					bytes = Buffer.concat(parts);
++				}
++				if (!accept(bytes, recordOffset)) return 0;
++				parts = [];
++				start = end + 1;
++				recordOffset = fileOffset + start;
++				end = buffer.indexOf(NEWLINE_BYTE, start);
++			}
++			// The scan buffer is reused; unfinished records must own their retained bytes.
++			if (start < bytesRead) parts.push(Buffer.from(buffer.subarray(start, bytesRead)));
++			fileOffset += bytesRead;
++		}
++		if (parts.length && !accept(Buffer.concat(parts), recordOffset)) return 0;
++	} finally {
++		closeSync(fd);
++	}
++	// Preserve loadEntriesFromFile's repair only after accepting a real session header.
++	if (count > 0 && parts.length) appendFileSync(path, "\n");
++	return count;
++}
+diff --git a/packages/coding-agent/src/core/session-types.ts b/packages/coding-agent/src/core/session-types.ts
+new file mode 100644
+index 0000000..69fa9a8
+--- /dev/null
++++ b/packages/coding-agent/src/core/session-types.ts
+@@ -0,0 +1,213 @@
++import type { AgentMessage } from "@earendil-works/pi-agent-core";
++import type {
++	AssistantMessage,
++	ImageContent,
++	SystemMessage,
++	TextContent,
++	ToolResultMessage,
++	Usage,
++	UserMessage,
++} from "@earendil-works/pi-ai";
++import type { CustomMessage } from "./messages.ts";
++
++export interface SessionHeader {
++	type: "session";
++	version?: number; // v1 sessions don't have this
++	id: string;
++	timestamp: string;
++	cwd: string;
++	parentSession?: string;
++}
++
++export interface NewSessionOptions {
++	id?: string;
++	parentSession?: string;
++}
++
++export interface SessionEntryBase {
++	type: string;
++	id: string;
++	parentId: string | null;
++	timestamp: string;
++}
++
++export interface SessionMessageEntry extends SessionEntryBase {
++	type: "message";
++	message: AgentMessage;
++}
++
++export interface ThinkingLevelChangeEntry extends SessionEntryBase {
++	type: "thinking_level_change";
++	thinkingLevel: string;
++}
++
++export interface ModelChangeEntry extends SessionEntryBase {
++	type: "model_change";
++	provider: string;
++	modelId: string;
++}
++
++export interface UsageEntry extends SessionEntryBase {
++	type: "usage";
++	/** Arbitrary usage category, such as "cache_warm". */
++	kind: string;
++	provider: string;
++	model: string;
++	usage: Usage;
++	/** Optional human-readable qualifier for usage notices. */
++	note?: string;
++}
++
++export interface CompactionEntry<T = unknown> extends SessionEntryBase {
++	type: "compaction";
++	summary: string;
++	firstKeptEntryId: string;
++	tokensBefore: number;
++	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
++	details?: T;
++	/** Usage from the LLM call(s) that generated this summary, if available */
++	usage?: Usage;
++	/** True if generated by an extension, undefined/false if pi-generated (backward compatible) */
++	fromHook?: boolean;
++	/** Complete prompt and tool state at this compaction boundary. */
++	systemMessage?: SystemMessage;
++}
++
++export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
++	type: "branch_summary";
++	fromId: string;
++	summary: string;
++	/** Extension-specific data (not sent to LLM) */
++	details?: T;
++	/** Usage from the LLM call that generated this summary, if available */
++	usage?: Usage;
++	/** True if generated by an extension, false if pi-generated */
++	fromHook?: boolean;
++}
++
++/**
++ * Custom entry for extensions to store extension-specific data in the session.
++ * Use customType to identify your extension's entries.
++ *
++ * Purpose: Persist extension state across session reloads. On reload, extensions can
++ * scan entries for their customType and reconstruct internal state.
++ *
++ * Does NOT participate in LLM context (ignored by buildSessionContext).
++ * For injecting content into context, see CustomMessageEntry.
++ */
++export interface CustomEntry<T = unknown> extends SessionEntryBase {
++	type: "custom";
++	customType: string;
++	data?: T;
++}
++
++/** Label entry for user-defined bookmarks/markers on entries. */
++export interface LabelEntry extends SessionEntryBase {
++	type: "label";
++	targetId: string;
++	label: string | undefined;
++}
++
++/** Session metadata entry (e.g., user-defined display name). */
++export interface SessionInfoEntry extends SessionEntryBase {
++	type: "session_info";
++	name?: string;
++}
++
++/**
++ * Custom message entry for extensions to inject messages into LLM context.
++ * Use customType to identify your extension's entries.
++ *
++ * Unlike CustomEntry, this DOES participate in LLM context.
++ * The content is converted to a user message in buildSessionContext().
++ * Use details for extension-specific metadata (not sent to LLM).
++ *
++ * display controls TUI rendering:
++ * - false: hidden entirely
++ * - true: rendered with distinct styling (different from user messages)
++ */
++export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
++	type: "custom_message";
++	customType: string;
++	content: string | (TextContent | ImageContent)[];
++	details?: T;
++	display: boolean;
++}
++
++/** Content that an append-only context edit may replace without changing message metadata. */
++export type ContextEditableContent =
++	| UserMessage["content"]
++	| AssistantMessage["content"]
++	| ToolResultMessage["content"]
++	| CustomMessage["content"];
++
++/** Append-only change to one earlier entry's contribution to model context. */
++export interface ContextEditEntry extends SessionEntryBase {
++	type: "context_edit";
++	targetId: string;
++	/** Null omits the target from model context. A value replaces only its content. */
++	replacement: { content: ContextEditableContent } | null;
++}
++
++/** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
++export type SessionEntry =
++	| SessionMessageEntry
++	| ThinkingLevelChangeEntry
++	| ModelChangeEntry
++	| UsageEntry
++	| CompactionEntry
++	| BranchSummaryEntry
++	| CustomEntry
++	| CustomMessageEntry
++	| ContextEditEntry
++	| LabelEntry
++	| SessionInfoEntry;
++
++/** Raw file entry (includes header) */
++export type FileEntry = SessionHeader | SessionEntry;
++
++/** Tree node for getTree() - defensive copy of session structure */
++export interface SessionTreeNode {
++	entry: SessionEntry;
++	children: SessionTreeNode[];
++	/** Resolved label for this entry, if any */
++	label?: string;
++	/** Timestamp of the latest label change for this entry, if any */
++	labelTimestamp?: string;
++}
++
++export interface ProjectedSessionEntry {
++	/** Raw append-only entry that owns this projected contribution. */
++	sourceEntry: SessionEntry;
++	/** Model-visible messages after context edits. Empty for state-only entries and omissions. */
++	messages: AgentMessage[];
++}
++
++export interface SessionProjection {
++	entries: ProjectedSessionEntry[];
++	messages: AgentMessage[];
++	thinkingLevel: string;
++	model: { provider: string; modelId: string } | null;
++}
++
++export interface SessionContext {
++	messages: AgentMessage[];
++	thinkingLevel: string;
++	model: { provider: string; modelId: string } | null;
++}
++
++export interface SessionInfo {
++	path: string;
++	id: string;
++	/** Working directory where the session was started. Empty string for old sessions. */
++	cwd: string;
++	/** User-defined display name from session_info entries. */
++	name?: string;
++	/** Path to the parent session (if this session was forked). */
++	parentSessionPath?: string;
++	created: Date;
++	modified: Date;
++	messageCount: number;
++	firstMessage: string;
++	allMessagesText: string;
++}
