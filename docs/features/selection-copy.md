@@ -1,48 +1,40 @@
 # 逻辑选区复制
 
-fullscreen 选区按 Ctrl+C 复制对应逻辑文本：合并软折行，保留真实换行、缩进和选中的语义前缀。`selectionCopy.enabled` 控制此能力，`selectionCopy.ctrlC` 控制按键接管，见 [配置](../configuration.md)。
+fullscreen 应用选区通过宿主 `app.clear`（缺失才用 Ctrl+C）复制逻辑原文：合并软折行，保留真实换行/缩进及选中的语义前缀。`selectionCopy.enabled/ctrlC` 控制能力/按键接管，见[配置](../configuration.md)；不额外注册快捷键。
 
 | 情况 | 行为 |
 | --- | --- |
-| 有选区 | 复制，不清草稿；存在选区时固定历史窗口。 |
-| 无选区 | 交回宿主清空/退出行为。 |
-| 只选中 gutter、行号或省略提示 | 不写剪贴板、不清草稿。 |
-| 写入失败 | 保留选区和草稿。 |
+| 有选区 | 复制、保草稿并固定历史窗口。 |
+| 无选区 | 交回宿主清空/退出。 |
+| 只选 gutter/行号/省略提示 | 不写剪贴板、不清草稿。 |
+| 写入失败 | 保选区/草稿。 |
 
-路由读取宿主 `app.clear` 键位，缺失才用 Ctrl+C，不另注册快捷键。regular 模式无应用选区；Shift 拖拽等终端原生选择由终端处理。
+regular 无应用选区；Shift 拖拽等终端原生选择由终端处理。
 
 ## 输入框选区删除
 
-fullscreen 的 Metis 输入框中，鼠标选区完全位于输入正文时，Backspace 或 Delete 一次删除整个范围，光标移到起点，原生撤销一次恢复。遵循宿主删除键绑定；Ctrl+C 仍只复制，不删除。
+fullscreen Metis editor 的选区完全落在输入正文时，按宿主 Backspace/Delete 一次删整段、光标到起点，原生撤销一次恢复；Ctrl+C 只复制。此能力不受 `selectionCopy.enabled/ctrlC` 控制，regular/终端选区不可用。
 
-范围按已提交画面映射到原生逻辑行，支持软折行、内部滚动、Unicode 字素和粘贴块；部分选中的粘贴标记按整块删除，未选中的粘贴内容保留。只选中输入框留白不删除其他字符。正文选区、跨区域选择或草稿已变导致映射失效时，沿用普通光标删除，不按复制文字搜索草稿。
-
-这项能力随 Metis 输入框提供，不受逻辑复制的 `selectionCopy.enabled` / `ctrlC` 开关控制。regular 模式及 Shift 拖拽等终端原生选区不可由应用读取，不提供范围删除。
+从已提交画面映射逻辑行，支持软折行、内滚动、Unicode 字素和粘贴块；部分选中粘贴标记按整块删除，其他粘贴保留。留白不删字符；正文/跨区域选区或草稿变化使映射失效时仅普通光标删除，不按复制文字搜索草稿。
 
 ## 映射与回退
 
 | 内容 | 处理 |
 | --- | --- |
-| Markdown 段落、标题、列表、引用、围栏；宿主 Text；展开思考；本包 shell/diff/write | 映射与当前帧一致时精确提取。 |
-| 列表/引用/diff 符号和围栏 | 仅所选列覆盖时复制；行号与 gutter 不复制。 |
-| 省略行 | 硬边界，不能误拼首尾。 |
-| 表格、未知 token、图片、排版漂移、Spacer/结构空行 | 原生回退。 |
-| tab、链接、数学块 | 按宿主显示转为 3 空格、显示文字、渲染 Unicode，不追加隐藏 URL。 |
+| Markdown 段落/标题/列表/引用/围栏，宿主 Text、展开思考、本包 shell/diff/write | 与当前帧一致才精确提取。 |
+| 列表/引用/diff 符号与围栏 | 所选列覆盖才复制；行号/gutter 不复制。 |
+| 省略行 | 硬边界，不拼首尾。 |
+| 表格/未知 token/图片/排版漂移/Spacer/结构空行 | 原生回退。 |
+| tab / 链接 / 数学 | 宿主的 3 空格 / 显示文字（无隐藏 URL）/ Unicode 公式。 |
 
-映射按渲染数组身份保存在 WeakMap，绑定已提交帧；工具外壳读取实际渲染文字，不额外 render。resize 无法安全重投影时保守回退。
+来源按渲染数组身份存 WeakMap，绑定提交帧；工具外壳取实际文字、不额外 render。Markdown 复用可核对的宿主 token/代码高亮，不改主题/highlighter，仍逐行验证、保流式节流与降级；弱引用不常驻旧 token/整块数组，resize 不可重投影时回退。
 
-Markdown 镜像在可核对时复用本帧宿主 token 和已高亮的代码逻辑行，避免再次解析、高亮；不修改主题或 highlighter，仍逐行核对宿主显示并保留流式节流与失败回退。观察数据使用弱引用，不额外保留旧 token 或整块历史渲染数组。
-
-宿主同步检查选区并执行复制时，同一已提交帧、源行及完整选区端点只序列化一次；诊断中的调用次数仍记录每次查询。复用在当前同步调用结束后的微任务阶段清除；选区、帧或取列函数变化立即重新计算，失败不缓存。
-
-`/codex-ui` 报告 `exact` / `mixed` / `native-fallback`、镜像降级与最近失败。serializer 安装在当前 TuiAltScreen 实例，覆盖 pi-copy-soft-wrap 的原型启发式包装；后装实例包装仍可能冲突，`other-wrapper` 报告已检测来源。
+同一同步调用内，同帧/源行/完整端点只序列化一次，诊断仍逐次计数；微任务末清复用，选区/帧/取列函数变化重算，失败不缓存。`/codex-ui` 报 `exact/mixed/native-fallback`、降级/失败；serializer 属于当前 TuiAltScreen 实例，替代 pi-copy-soft-wrap 原型启发式，后装实例包装仍可能冲突（`other-wrapper`）。
 
 ## 剪贴板
 
-本地 WSL（非 Windows Terminal、非 SSH/MOSH 远程）默认预热一个 Windows 写入进程，经管道传输，收到写入确认才报成功。Ctrl+C 与宿主鼠标复制共用该路径，保留 Unicode、缩进、LF/CRLF 和字面 BOM，不依赖 OSC 52 或 clip.exe。
+本地 WSL（排除 Windows Terminal、SSH/MOSH）预热 Windows 写入进程，经管道传输并等写入确认；Ctrl+C/宿主鼠标共用，保 Unicode、缩进、LF/CRLF/字面 BOM，不依赖 OSC52/clip.exe。初次可能等预热，启动失败/退出/超时可回退。
 
-Windows Terminal、远程和非 WSL 环境沿用宿主路径。启动失败、退出或超时可回退；首次复制仍可能等待预热。关闭、重载和卸载取消请求、结束进程，不启动迟到回退。
+Windows Terminal、远程、非 WSL 或 `PI_CLIPBOARD_OSC52=1` 走 Pi 原生路径。关闭/重载/卸载取消请求并结束进程，不启迟到回退。
 
-设置 `PI_CLIPBOARD_OSC52=1` 时交给 Pi 原生复制路径处理，跳过 WSL 快速写入。
-
-`src/selection-copy/` 持有映射、提取、传输与清理。严格 PTY 验证实际复制回读，`scripts/copy-perf.mjs` 仅测渲染/提取成本。
+owner 为 `src/selection-copy/`；严格 PTY 验证实际回读，`scripts/copy-perf.mjs` 只测渲染/提取。

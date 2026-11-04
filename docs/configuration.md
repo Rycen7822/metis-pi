@@ -18,7 +18,7 @@ Metis 偏好使用全局 **`<agentDir>/metis-pi.toml`**。agentDir 默认 `~/.pi
 | 精简与 OCC | `[contextPrune]` 及子表 | `/pruner` 保存；手工修改后 `/reload`。 |
 | 动态指令 | `[dynamicAgents]` / `[[dynamicAgents.groups]]` | 下一正式 run 读取；Markdown 路径相对全局配置目录。 |
 | 子代理 | `[subagents]` / `profiles` | 后端启动读取；更改容量、超时或 profile 后，安全停止再重连。 |
-| 本地搜索 | `[neuralSearch]` | `/reload` 或重启。 |
+| 本地搜索 | `[neuralSearch]` | 启动偏好需 `/reload` 或重启；semantic 缓存预算/空闲超时在下一请求生效。 |
 | 结构化提问 | `[askUserQuestion]` 及 `guidance` | 工具说明注册时读取，折叠键调用时读取。 |
 | 会话回忆 | `[sessionRecall]` | `query` 操作重读；`queryModel="default"` 跟随当前模型，也可填 `provider/model-id`。 |
 | 网页访问 | `[webAccess]` 及子表 | `/websearch`、`/curator` 保存普通选项。 |
@@ -27,31 +27,11 @@ Metis 偏好使用全局 **`<agentDir>/metis-pi.toml`**。agentDir 默认 `~/.pi
 
 ## 显示字段
 
-自定义示例（并非默认值）：
-
-```toml
-[appearance.thinking]
-peekLines = 10
-[appearance.footer]
-showChanges = false
-locationExpanded = false
-pruneExpanded = false
-[appearance.fullscreen]
-marginX = 0
-```
-
-有效配置见 `/codex-ui`，字段解释见 [appearance 参数](../metis-pi-config.md#appearance-及其子表)。
+有效值见 `/codex-ui`；字段、单位、默认值见 [appearance 参数](../metis-pi-config.md#appearance-及其子表)。例如 `appearance.thinking.peekLines` 控制思考预览，`appearance.footer` 控制状态字段与默认展开。
 
 ## 执行字段
 
-```toml
-[execution.tools]
-autoReasoning = false
-[execution.ui]
-backgroundShellPrevShortcut = "alt+u"
-```
-
-`/execution` 写全局设置。工具用法见[执行工具](execution.md)，字段见[参数说明](../metis-pi-config.md)。
+`/execution` 保存 `[execution.tools]` / `[execution.ui]`；修改快捷键后重启。工具用法见[执行工具](execution.md)，字段见[参数说明](../metis-pi-config.md)。
 
 ## LSP
 
@@ -113,7 +93,12 @@ keepAliveServers = []
 Pi package entry filters 控制扩展加载。在 `settings.json` 的 packages 项保留 source 与其他规则，添加排除项，再 `/reload` 或重启：
 
 ```json
-{"packages": [{"source": "git:git@github.com:Rycen7822/metis-pi.git", "extensions": ["-extensions/goal.ts", "-extensions/action-fusion.ts"]}]}
+{
+  "packages": [{
+    "source": "git:git@github.com:Rycen7822/metis-pi.git",
+    "extensions": ["-extensions/goal.ts", "-extensions/action-fusion.ts"]
+  }]
+}
 ```
 
 | 功能 | 排除项 |

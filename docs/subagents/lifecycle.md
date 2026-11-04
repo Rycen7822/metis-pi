@@ -4,7 +4,7 @@ Python Runtime owns scheduling and the ledger; the JS worker owns a child Pi ses
 
 ## Idle shutdown and cleanup
 
-After **30 consecutive idle seconds** without active, queued or input-waiting runs, the daemon closes admission, finishes in-flight requests and notifications, parks settled workers with verified cleanup, then exits. Unknown cleanup or active tools prevent automatic exit. Sessions, results and attention remain durable.
+After **30 consecutive idle seconds** without active, queued or input-waiting runs, the daemon closes admission, drains requests/notifications, parks cleanup-verified settled workers, then exits. Live owned workers with active tools or unverified cleanup block exit; historical `cleanup=unknown` records without a live resident stay quarantined but do not keep the daemon alive forever. Sessions, results and attention remain durable.
 
 Reopening a parent session with a saved scope performs one non-consuming recovery read, restarting the daemon if needed but not its workers. Fresh sessions do not start it automatically. Subsequent watches remain passive; explicit requests can restart it on demand without automatic restart loops. The frontend can release an unused IPC helper while retaining its logical session lease; reconnect cannot replace a later owner.
 
@@ -44,8 +44,8 @@ SDK startup configures proxy-aware HTTP and WebSocket globals before extensions.
 
 ## Configuration and upgrades
 
-Global TOML capacity, timeouts and profiles are read at daemon startup. Let work finish and wait for verified idle shutdown before updating runtime or backend policy; frontend reload does not replace resident code.
+Global TOML capacity/timeouts/profiles are read at daemon startup; reload alone cannot replace busy resident code. Every request checks runtime identity, including same-version source changes. A new bridge can negotiate idle handoff with the original PID/revision; the daemon closes admission only after checking workers and admitted operations in one event loop. Busy daemons reject it without interrupting work. Legacy daemons without this capability need a controlled transition, not new shutdown arguments.
 
-Every request checks the backend source fingerprint, including same-package-version changes. `version_mismatch` reports a mismatch without interrupting work. Automatic synchronization failure warns once and pauses watch/boundary/settlement RPCs for that frontend; explicit tools still report errors. Normal idle exit is silent, and foreground activity resumes watching.
+`version_mismatch` reports incompatible identity. Automatic sync failure warns once and pauses that frontend's watch/boundary/settlement RPCs; explicit tools still report errors. Normal idle exit is silent, and foreground activity resumes watching. Finish work and confirm cleanup before a manual runtime/policy update.
 
 For unusable launch settings or saved sessions, inspect the failed worker and start a new agent. Verified parked workers use followup; cleanup-unverified workers require inspection before reuse.

@@ -23,13 +23,13 @@
 
 | 模型工具 | 说明 |
 | --- | --- |
-| `goal` | [读取、创建与完成规则](features/goal.md)。 |
+| `goal` | [读写目标与一次性编辑授权](features/goal.md)。 |
 | `subagents_*` | [委派、等待、结果与清理](subagents/native.md)。 |
 | `context_tree_query` | [历史证据与原文分页](features/condense.md#原文与分页恢复)。 |
 | `exec_command` / `write_stdin` | [PTY 会话](execution.md)。 |
 | `change_reasoning` | 开启 `autoReasoning` 后按模型能力提供。 |
 | `lsp` | [diagnostics / fix](features/lsp.md)；fix 默认预览，`write: true` 才写入。 |
-| `neural_search` | [本地路径与内容搜索](features/neural-search.md)。 |
+| `neural_search` | [路径、内容与 semantic 搜索](features/neural-search.md)。 |
 | `web_access` / `session_recall` | [网页访问与会话检索](features/managed-plugins.md)。 |
 | `ask_user_question` | [结构化决策](features/ask-user-question.md)。 |
 | edit/write 的 `then_run` | [修改后执行命令](features/action-fusion.md)。 |

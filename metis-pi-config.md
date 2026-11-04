@@ -2,20 +2,14 @@
 
 ## 唯一配置文件与初始化
 
-所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。只使用这一份全局文件，不叠加项目配置覆盖。
+Metis 偏好只存全局 `<agentDir>/metis-pi.toml`（默认 `~/.pi/agent`，跟随 `PI_CODING_AGENT_DIR`），无项目覆盖。包内 `metis-pi.toml` 提供缺省值，Web 未填项沿用原默认；不要用模板覆盖个人配置。
 
-包内同目录的 `metis-pi.toml` 是默认值来源；网页选项不预填，继续采用各功能的原有默认值，见下文 `[webAccess]`。不要直接用默认模板覆盖已有个性配置。尚无全局 TOML 时运行 **`/metis-config init`**：从包内默认值写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖；初始化不导入、改写或备份其他配置文件。
-
-已有 TOML 直接编辑需要修改的字段；未填写的选项沿用包内默认值。
-`/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有 TOML。
-
-读取本身不写文件。所有偏好始终只读全局 TOML 与包内默认值；没有 TOML 时也使用默认值。网页凭据从同目录 JSON 或环境变量读取。命令只保存 TOML，首次保存也从默认值开始合并字段。损坏或无权限的文件不会被保存覆盖。需要保留的个性偏好请自行整理到对应 TOML 字段；**不要删除 Pi 的整个 settings.json**。
-
-Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`<agentDir>/metis/subagent/` 保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。本地搜索由 `[neuralSearch]` 管理；旧独立插件 `pi-fff.json` 不再作为本组件的配置来源，其他独立插件配置仍不归本包所有。
-
-修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，LSP 在每次工具或 `/lsp` 调用时重读，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件；Metis 命令通过跨进程锁串行化读取、合并与发布，互不重叠的字段 patch 会保留双方修改；同一字段或重叠的完整配置快照仍由后一次更新覆盖。手动编辑或绕过此锁的外部写入不受该保护。
-
-TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapThresholdTokens` 用 `false` 关闭；`maxImagesPerRequest = false` 表示采用 API 默认。这是配置语法，不是字符串 `"false"`。其他字段用正确的 boolean/string/number/array/table；错误值按所属模块的校验回退或报错，不会修复你的文件。
+- `/metis-config` 查看路径；`init` 创建缺失 TOML 及同目录本说明，已有文件不覆盖，不导入/备份/改写其他配置。读取不写盘、不执行密钥命令；命令首次保存也从默认值合并。
+- 保存重建模板注释、保未知字段/section，个人注释另存。跨进程锁串行读取/合并/临时文件原子 rename；不重叠 patch 合并，重叠字段后写覆盖；手工写入不受锁保护，损坏/无权限文件不覆盖。
+- Pi 的模型/主题/reserve/packages/trust/MCP 定义及认证留在 settings.json/mcp.json/mcp-auth.json；goal/摘要/blobs/缓存/策略 Markdown 是状态，不写偏好。不要删除整个 settings.json。
+- 旧 LSP JSON、pi-fff.json、项目 Metis 偏好不读取；手工迁移所需值，init 不导入。子代理偏好归 `[subagents]`，账本/会话仍在 `<agentDir>/metis/subagent/`。
+- 显示/快捷键/入口变更重载或重启；执行在 run 边界、LSP 每次调用、MCP `/mcp reload`、动态指令下一正式 run 生效，后端设置须安全重启 daemon。`/execution`、`/pruner settings`、`/websearch`、`/curator` 保存同一全局文件，无 `/execution project`。
+- TOML 无 null；autoBudgetThreshold/budgetTurnDelta/frontierGapThresholdTokens 用布尔 false 关闭，maxImagesPerRequest=false 采用 API 默认，不是字符串。其他类型错误由模块回退或报错，不修文件。
 
 ## `[appearance]` 及其子表
 
@@ -34,7 +28,7 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `working.animation` | `true` | 真彩终端的工作动画。 |
 | `working.animationIntervalMs` | `32` | 帧间隔毫秒，32–1000；越界钳制。 |
 | `footer.enabled` / `details` | 均 `true` | Footer、累计 I/O/cache 明细。 |
-| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、已完成响应的非推理生成速率 `gen(last)` / `gen(avg2/avg3)`（`tok/s`）。只计非推理输出，窗口为首个文字/工具名产物至末尾增量，不含首输出前的等待；短输出最多合并三条有效样本，生成中保留上次完成值，详见 [统计口径](docs/features/interface.md#统计口径)。 |
+| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | cache、Git、生成速率（tok/s）：流式 `gen≈(live)` 按字符÷4估算，每批（含工具调用）结束用可靠非推理用量校准 last/avg；明细不可信保留 est，不计思考/工具执行。详见 [统计口径](https://github.com/Rycen7822/metis-pi/blob/main/docs/features/interface.md#统计口径)。 |
 | `footer.locationExpanded` / `pruneExpanded` | 均 `false` | 目录/分支、prune 详情的默认展开状态；重载/重启后生效，界面点击不写回 TOML。 |
 | `summary.enabled` / `persist` | 均 `true` | 结束摘要、会话持久化；关闭 persist 时仅临时显示。 |
 | `selectionCopy.enabled` / `ctrlC` | 均 `true` | fullscreen 精确复制、Ctrl+C 复制选区；无选区保留原行为。 |
@@ -83,13 +77,14 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 ```toml
 [neuralSearch.semantic]
 cacheBudgetMiB = 512
+idleTimeoutSeconds = 300
 ```
 
-只接受 TOML 整数 `256`、`512`、`1024`，省略时默认 `512MiB`；`512.0`、字符串及其它档位会显式报错。所有缓存根共用一档，临时文件、新旧代和活跃读者责任都计入。降档未释放足够空间时为 pending，不自动升档、不截断搜索，也不放宽 RAM、线程或 cgroup 限制。
+`idleTimeoutSeconds` 为 1–86400 的 TOML 整数秒；共享服务最多 3×4 计算线程，跨仓库复用同代模型，排队/工作结束后计空闲，status 不续时。两项都在下一 semantic 请求读取。磁盘预算只接受整数 `256`、`512`、`1024`，省略时默认 `512MiB`；`512.0`、字符串及其它档位会显式报错。所有缓存根共用一档，临时文件、新旧代和活跃读者责任都计入。降档未释放足够空间时为 pending，不自动升档、不截断搜索，也不放宽 RAM、线程或 cgroup 限制。
 
-该字段在下一次 `semantic` 调用读取，无需 `/reload`；其它启动偏好仍需重载。语义模式另需可信 CPU 运行包，缺少时明确报错，不现场构建或回退。安装和当前会话激活不由修改 TOML 自动完成，参见[语义搜索](docs/features/neural-search.md#语义搜索)。
+semantic 两项无需 reload；其他启动偏好仍需重载。另需可信 CPU 包，缺失报错，不现场构建/回退；修改 TOML 不等于安装或激活，见[语义搜索](https://github.com/Rycen7822/metis-pi/blob/main/docs/features/neural-search.md#语义搜索)。
 
-Neural Search 只读全局 TOML；缺省值来自包内模板。除上述语义磁盘预算外，修改启动偏好后 `/reload` 或重启。启用时提供一个 `deferred` 工具 `neural_search`，原生 `tool_search` 发现并激活后直接调用；不要求 codemode，也不替换 Pi 的内置 `find` / `grep`。
+启用时提供 deferred `neural_search`，tool_search 发现后可直接调用；codemode 可选，不替换内置 find/grep。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -101,7 +96,7 @@ Neural Search 只读全局 TOML；缺省值来自包内模板。除上述语义�
 | `followSymlinks` | `true` | 索引目录符号链接指向的文件；按需可关闭以缩小扫描范围。 |
 | `frecencyDbPath` / `historyDbPath` | 不填写 | 可选数据库目录。缺省为 `<agentDir>/metis/neural-search/{frecency,history}`。 |
 
-没有旧 JSON、`FFF_*` / `PI_FFF_*` 环境变量或旧命令行开关的兼容读取，也不自动借用编辑器数据库。旧配置/数据库不修改、不删除；如果需要继续使用原有排序数据，应明确填入对应数据库目录，并自行管理其他使用者的并发访问。切换时从 Pi packages 移除独立 `@ff-labs/pi-fff`，避免两套工具和索引同时运行。详见 [Neural Search](docs/features/neural-search.md)。
+没有旧 JSON、`FFF_*` / `PI_FFF_*` 环境变量或旧命令行开关的兼容读取，也不自动借用编辑器数据库。旧配置/数据库不修改、不删除；如果需要继续使用原有排序数据，应明确填入对应数据库目录，并自行管理其他使用者的并发访问。切换时从 Pi packages 移除独立 `@ff-labs/pi-fff`，避免两套工具和索引同时运行。详见 [Neural Search](https://github.com/Rycen7822/metis-pi/blob/main/docs/features/neural-search.md)。
 
 ## `[lsp]`
 
@@ -141,18 +136,9 @@ skipDirectories = ["generated"]
 LSP_LOG = "debug"
 ```
 
-语言服务器由用户自行安装，Metis 不下载；使用内置 catalog 的诊断会报告并跳过缺失的
-默认命令，显式选择或自定义配置的缺失命令会报错。`/lsp` 查看配置与命令可用状态。
+服务器自行安装；catalog 默认缺命令报告并跳过，显式/自定义缺命令报错，`/lsp` 查看状态。旧全局/项目 pi-lsp.json/lsp.json 不读，手工将 timeout/servers（含原 argv/env/初始化/排除/等待值）迁入，裸映射放 lsp.servers；原 JSON 可留作独立版回退，激活前停用 npm:@narumitw/pi-lsp。
 
-旧全局和项目 `pi-lsp.json` / `lsp.json` 均被忽略，即使全局 TOML 不存在也不读取。
-其他机器须把旧 wrapper 的 `timeout` / `servers` 手动写到 `[lsp]` 下；
-裸服务器映射转为 `lsp.servers`，原 argv/env/初始化/排除/等待选项保持原值。
-`/metis-config init` 不导入 LSP JSON；不要覆盖已有个性化 TOML，原 JSON 可保留作回退。
-激活前停用独立 `npm:@narumitw/pi-lsp`，否则会重复 `/lsp` 命令并保留旧工具。
-
-模型侧只有一个 direct `lsp`（`action: diagnostics/fix`），fix 默认不写入。
-只按工具名的只读 allowlist 须排除它，或由权限策略检查 `action` / `write`；
-配置命令仍使用 Pi 的进程权限，预览不是沙箱。完整用法与边界见包内 `docs/features/lsp.md`。
+只有 direct `lsp`，action=diagnostics/fix，write 默认 false。只读策略须检查 action/write 或排除该工具；配置进程沿用 Pi 权限，预览不是沙箱。完整接口见包内 docs/features/lsp.md。
 
 ## `[dynamicAgents]` 与 `[[dynamicAgents.groups]]`
 
@@ -242,7 +228,7 @@ exclude = []
 | `maxAgentsPerScope` | `16` | 每个父会话 scope 的活跃/清理未验证 worker 上限；历史不占容量。 |
 | `rpcTimeoutSeconds` | `20` | worker RPC 请求秒数。 |
 | `startupTimeoutSeconds` | `30` | SDK 启动握手秒数。 |
-| `defaultIdleTimeoutSeconds` | `1800` | 模型无进展超时，任务参数可覆写；不是任务总时长上限。原生压缩/摘要重试使用独立有界维护窗口，见[生命周期](docs/subagents/lifecycle.md)。 |
+| `defaultIdleTimeoutSeconds` | `1800` | 模型无进展超时，任务参数可覆写；不是任务总时长上限。原生压缩/摘要重试使用独立有界维护窗口，见[生命周期](https://github.com/Rycen7822/metis-pi/blob/main/docs/subagents/lifecycle.md)。 |
 | `maxWaitSeconds` | `3600` | 后端 wait 轮询上限秒数；不扩大工具 schema 本身的上限。 |
 | `residentIdleTimeoutSeconds` | `1800` | 已结束/空闲的驻留 worker 回收时间秒数。 |
 | `eventMaxCountPerAgent` | `20000` | 单代理最多保留的事件数。 |
@@ -262,9 +248,7 @@ exclude = []
 | --- | --- | --- |
 | `queryModel` | `"default"` | `session_query` 跟随当前会话；可指定已注册的 `provider/model-id`，例如 `openai/gpt-6.1-sol`。 |
 
-每次查询重读，无需重启；值无效或模型不在 Pi 注册表中时回退当前会话。
-`session_search` 不调用模型。模型定义与认证仍由 Pi 管理。
-直接编辑本字段；未填写时使用默认值。损坏 TOML 会返回查询配置错误。
+每次 query 重读，缺省/无效/未注册模型跟随会话，损坏 TOML 报错；search 不调用模型，模型与认证归 Pi。
 
 ## `[webAccess]`
 

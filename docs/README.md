@@ -21,6 +21,7 @@
 | 网页与会话查询 | [内置扩展](features/managed-plugins.md) |
 | 阻塞决策问卷 | [结构化提问](features/ask-user-question.md) |
 | 诊断与单文件修复 | [LSP](features/lsp.md) |
+| 路径、内容与语义检索 | [Neural Search](features/neural-search.md) |
 | MCP | [配置与连接](configuration.md#mcp) |
 | 故障定位 | [诊断](diagnostics.md) · [兼容性](compatibility.md) |
 

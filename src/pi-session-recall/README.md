@@ -1,21 +1,7 @@
 # Metis Session Recall
 
-This module is maintained and shipped by **metis-pi**, not installed as a separate
-Pi package. Install Metis using the [root README](../../README.md); disable the
-standalone `@ogulcancelik/pi-session-recall` entry to avoid duplicate tools.
-Upstream version, commit and license attribution are retained in [METIS.md](METIS.md)
-and [LICENSE](LICENSE).
+Shipped by [metis-pi](../../README.md), not a separate package; disable standalone `@ogulcancelik/pi-session-recall` to avoid duplicate tools. [METIS.md](METIS.md) records source/maintenance contracts; [LICENSE](LICENSE) retains MIT attribution.
 
-Metis exposes one deferred `session_recall` tool with `search`, `query` and
-`describe` actions. Search finds literal text in saved session JSONL files;
-query reads a selected session branch using the current Pi model runtime.
-There is no background indexing or vector database. Ripgrep is recommended;
-search can fall back to grep or Node's streaming scan.
+Deferred `session_recall` exposes search/query/describe: search is literal saved-JSONL scanning (rg recommended, grep/streaming Node fallback), query reads a selected branch through Pi's current model runtime. No background index/vector database. Global `[sessionRecall].queryModel` optionally selects another registered model; Pi owns authentication.
 
-The optional query model is selected by `[sessionRecall].queryModel` in the global
-`metis-pi.toml`; `"default"` follows the current session. Pi owns model definitions
-and authentication. See the [tool and configuration guide](../../docs/features/managed-plugins.md)
-for the current interface and examples.
-
-Development dependencies and checks are owned by the root project. This module
-loads TypeScript directly and does not need an independent manifest or build.
+See [usage/configuration](../../docs/features/managed-plugins.md). Root dependencies/checks own direct TypeScript loading; no nested manifest/build.

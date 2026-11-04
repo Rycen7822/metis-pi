@@ -4,45 +4,39 @@
 
 | 组件 | 要求 |
 | --- | --- |
-| Pi | **1.5.0**；依赖、锁文件和 CI 使用同一基线。 |
+| Pi | **仅 1.5.0**；依赖、lock 和 CI 同版。 |
 | Node.js | **22.19.0+**。 |
-| 子代理 | Linux/WSL 或 Windows，Python **3.11+**；使用父会话的 Pi SDK 和 Node。 |
-| PTY helper | 随包提供 **Linux x64** 静态可执行文件及 **Windows x64** EXE；Windows 需要 ConPTY（Windows 10 1809+ / Windows 11）。 |
-| Neural Search | **Linux x64，glibc ≥2.31** 或 **Windows x64**；保留可选依赖 `ffi-rs`。 |
+| 子代理 | Linux/WSL 或 Windows，Python **3.11+**；沿用父端 SDK/Node。 |
+| PTY | 随包 Linux x64 静态 helper、Windows x64 EXE；ConPTY 需 Windows 10 1809+ / 11。 |
+| FFF 搜索 | Linux x64、glibc ≥2.31，或 Windows x64；保留可选依赖 `ffi-rs`。 |
+| semantic | 另需准备 Linux x64 运行包，见[搜索指南](features/neural-search.md)。 |
 
-Windows 的 Python 可通过 PATH 或 `py` launcher 查找；shell 命令需要 Git for Windows。Git Bash 不在默认位置时，在 Pi `settings.json` 设置 `shellPath`，例如 `"D:\\app\\Git\\bin\\bash.exe"`，不要误用 PATH 中的 WSL `bash.exe`。普通安装使用随包资产，无需 Rust/MSVC。更新前退出所有加载 Metis 的 Pi 进程，以免 DLL 被占用，完成后重新启动。
+Windows Python 可经 PATH 或 `py` 查找；shell 需 Git for Windows。非默认 Git Bash 路径在 Pi `settings.json` 设置 `shellPath`，如 `"D:\\app\\Git\\bin\\bash.exe"`，不要选 WSL `bash.exe`。普通安装无需 Rust/MSVC；更新原生资产前退出全部相关 Pi，避免 DLL 占用。
 
-其他平台需要对应原生资产和实际验证。在线服务、模型、终端图片协议及第三方插件组合需在使用环境验证。
+其他平台、在线服务、模型、图片协议及插件组合须在目标环境验证。
 
 ## 显示适配
 
-Metis 校验宿主组件与工具 renderer 的来源，仅接管明确的 Pi builtin 或本包入口。第三方同名工具、独立 renderer、未知组件形状或渲染失败保留原生显示；执行语义与已有结果正文不变。
+只接管来源明确的 Pi builtin 或本包 renderer。第三方同名工具、独立 renderer、未知宿主结构或渲染失败保留原生行为，不改变执行和结果正文。
 
-codemode 默认显示实际动作摘要：Describe namespace/tool、Search tools、模型目录查询，以及原有工具执行行；没有可观测子动作时显示通用脚本状态。
-生成参数时，源码以灰色流式预览末尾12个可视行，左侧保留橙色 `│`；生成结束后自动预览收起，再显示动作摘要。
-点击标题或全局展开可查看完整源码；动作参数与脚本输出独立展开，生成结束不覆盖显式展开选择。
-脚本输出可通过 `Took` 展开或收起，也可单击已展开的正文收起；拖选和修饰键点击不触发折叠。旧会话没有辅助动作记录时显示通用摘要，不推测旧调用。
-辅助动作记录有界，超限明确提示；观察只补充 details 元数据，不改变脚本正文、工具权限或模型可见输出。
+codemode 使用真实辅助动作元数据，无记录的旧会话保留通用摘要，不猜旧调用。源码流式预览、自动收起和 `Took`/正文折叠见[转录显示](features/display.md)；元数据有界且超限提示，只补 details，不改脚本、权限或模型输出。
 
-组件包装按所有权释放，保留后装插件的接管。输入区、全屏历史、选区复制与 skill 显示依赖宿主结构；退避和失败原因见 `/codex-ui`。相同工具或命令只启用一个提供者。
+包装按所有权释放，不覆盖后装插件。editor/footer/Working、历史、复制与 skills 依赖宿主结构，退避见 `/codex-ui`；同名提供者只开一个。主题/字体/鼠标/字宽限制见[界面](features/interface.md)、[复制](features/selection-copy.md)。
 
-思考标签跟随当前主题；颜色、字体、鼠标和字宽边界见[界面](features/interface.md)与[复制](features/selection-copy.md)。Pi 默认 fullscreen；需要终端原生 scrollback 时，设置 `tuiMode: "regular"` 或使用 `--tui-mode regular`。`quietStartup: "header"` 由 Pi 处理。
+Pi 默认 fullscreen；需要终端 scrollback 时设 `tuiMode: "regular"` 或 `--tui-mode regular`。`quietStartup: "header"` 由 Pi 管理。
 
 ## 托管工具授权
 
-managed 子代理按显式工具白名单排除未授权的 MCP 和资源工具，保留原 excludes；明确 MCP 名称或 `mcp__` glob 交由宿主筛选。无法安全表达补集的普通 wildcard 白名单在启动前拒绝。默认选择和纯 modifier 遵循 Pi；此策略不改写主宿主的工具筛选，详见[原生子代理](subagents/native.md)。
+managed 子代理的显式白名单排除未授权 MCP/资源工具并保留 excludes；明确 MCP 名或 `mcp__` glob 交宿主筛选。无法安全表示补集的普通 wildcard 白名单启动前拒绝。默认选择与纯 modifier 遵循 Pi，不改主端筛选，详见[子代理](subagents/native.md)。
 
 ## MCP OAuth
 
-Metis 使用原生 `pi mcp login` 的凭据，并在同一状态与刷新锁下保存旋转 token。
-Pi 1.5 的默认 `oauth.clientRegistration: "auto"` 可选择客户端文档；已有 DCR 注册继续复用。
-显式 `dcr` / `cimd` 遵循原生配置规则，`cimd` 不与固定 clientId/clientName 或非原生回调路径混用。
-需要重新授权时保留原生登录提示；缺少所需服务端能力则明确报错，不自动改成另一客户端身份。
+登录用原生 `pi mcp login`；Metis 共用状态/刷新锁并保存旋转 token。1.5 默认 `oauth.clientRegistration: "auto"` 可选客户端文档，已有 DCR 注册继续复用；显式 `dcr`/`cimd` 遵循原生规则，`cimd` 不能配固定 clientId/clientName 或非原生回调路径。需要重登或服务端能力不足时明确报错，不静默换身份。
 
 ## 请求与恢复
 
-Pi 持有 provider、OAuth、工具配对和 codemode。远端压缩的协议选择、检查点范围、失败与恢复见[远端压缩](features/codex-compaction.md)；其他压缩由 Pi/condense 协作。未完成的 nested 证据或归档失败会保留源历史。
+Pi 持有 provider、OAuth、工具配对与 codemode。[远端压缩](features/codex-compaction.md)说明协议、检查点、失败和恢复；其他压缩与 condense 协作，未完成 nested 或归档失败保留原文。
 
-codemode 访问未知工具成员会报错，存在性检查使用 `"name" in tools`。普通图片用 `image(await tools.read({path: "image.png"}))` 转发，详见[执行工具](execution.md)。
+未知 `tools` 成员访问会报错，存在性判断用 `"name" in tools`；图片转发用 `image(await tools.read({path: "image.png"}))`，见[执行工具](execution.md)。
 
-复制或备份会话时保留旁边的 `<sessionId>-blobs/`。更换配置或停用扩展前，先完成对应功能的恢复与关闭步骤；当前进程、磁盘安装和已有会话记录是不同状态。
+复制/备份会话须保留旁边 `<sessionId>-blobs/`。更换配置或停用扩展前完成对应恢复与关闭步骤；磁盘安装、当前进程及旧会话记录是不同状态。

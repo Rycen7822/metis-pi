@@ -1,185 +1,84 @@
 # Metis-owned Rust search engine
 
-Based on FFF **0.11.0** (`v0.11.0`), commit `95fd777c2529fc7b4d7572dabff64cc07268f2c5` from <https://github.com/dmtrKovalenko/fff>.
-Copyright (c) 2025 Dmitriy Kovalenko; MIT terms remain in `LICENSE`.
-Metis maintains a specialized fork, not a byte-identical copy or a standalone FFF SDK.
+FFF **0.11.0** (`v0.11.0`), commit `95fd777c2529fc7b4d7572dabff64cc07268f2c5`, from [dmtrKovalenko/fff](https://github.com/dmtrKovalenko/fff). Copyright (c) 2025 Dmitriy Kovalenko; [MIT](LICENSE) retained. This is a specialized fork, not byte-identical upstream or a standalone SDK.
 
 ## Ownership and supported platform
 
-- `crates/fff-core`: file/directory indexes, AI ranking, live filesystem updates, content reads, plain/regex/fuzzy/OR orchestration and compatible LMDB storage.
-  Literal OR uses Aho-Corasick, verifying sensitive candidates for mixed smart-case without changing uniform-case fast paths.
-- `crates/fff-query-parser`: file/mixed query grammar and explicit content filters, using the single `zlob` backend.
-  Content needles are not filter expressions. Unsupported `type:` filters fail explicitly; use extensions/globs.
-- `crates/fff-grep`: slice searching, matcher/sink interfaces and line/context collection.
-- `crates/fff-c`: private **ABI v7** in `libmetis_neural_search.so` / `metis_neural_search.dll`, with `metis_search_*` symbols.
-  Rust owns result envelopes and payloads; JS copies a borrowed view and releases the envelope in `finally`.
-  Only creation transfers an instance, subsequently destroyed once. This is not a public C SDK.
-  Progress reports scanning, readiness and errors.
-  Its borrowed prefix is 24 bytes; Rust alone owns the payload-release tail.
-- `src/neural-search/native/binding/`: one Linux / Windows x64 Node/Bun binding.
-  Only consumed display/continuation data crosses it, not detailed rank/highlight objects.
-- `src/neural-search/assets/`: bundled library, paired source/binding/build/ABI/hash manifest and redistribution notices.
+| Owner | Contract |
+| --- | --- |
+| `crates/fff-core` | File/directory indexes, AI ranking, live updates, owned content reads, plain/regex/fuzzy/OR and compatible LMDB. Aho-Corasick OR verifies sensitive candidates for mixed smart-case; uniform fast paths remain. |
+| `crates/fff-query-parser` | File/mixed grammar and explicit filters through zlob; needles are not filters, unsupported type: fails (use extensions/globs). |
+| `crates/fff-grep` | Slice matcher/sink and line/context collection. |
+| `crates/fff-c` | Private ABI v7, 16 `metis_search_*` exports in libmetis_neural_search.so / metis_neural_search.dll. Rust owns envelopes/payloads; JS copies borrowed data and releases in finally, only create transfers a finder destroyed once. Borrowed prefix is 24 bytes; release tail Rust-only. Progress owns readiness/scanning/errors. |
+| `../native/binding/` | Linux/Windows x64 Node/Bun adapter, only consumed display/continuation data, no detailed rank/highlight wire objects. |
+| `../assets/` | Library, paired source/binding/build/ABI manifest and notices. |
 
-The Rust workspace, TS adapter and bundled assets all live under `src/neural-search/`.
-The package scripts and CI refer to this module; `extensions/neural-search.ts` is only its host entry.
+All assets/source/TS live under `src/neural-search/`; root scripts/CI build, `extensions/neural-search.ts` adapts Pi. Targets: Linux x64 **glibc ≥2.31**, Windows x64 static CRT (private exports, not bundled libgit2 exports). CPU detection/scalar fallback remains; x64 need not have AVX2. Private scores/context/limits stay covered by workspace tests.
 
-Bundled targets are **Linux x64 with glibc >=2.31** and **Windows x64**. The Windows DLL uses a static CRT; its supported ABI is the 16 `metis_search_*` exports, not dependency exports from bundled libgit2.
-Runtime CPU detection and scalar fallbacks remain: x64 does not imply AVX2.
-Private Rust APIs carry score totals and grep display/context/limit data. Ranking and fuzzy quality remain covered by workspace checks.
-
-Ordinary installation uses the bundled library, needs **no Rust/Zig compiler** and performs no engine download.
-Missing optional `ffi-rs`, missing library bytes or an ABI mismatch fail on index use, not during tool discovery.
+Install uses bundled bytes, no Rust/Zig/download. Missing optional ffi-rs/library or wrong ABI fails on index use, not discovery.
 
 ## Persistent data
 
-Frecency/query-association encoding, keys, named tables and retention remain supported.
-Frecency updates and rename-history copies use one write transaction; the query open-time cap covers its configured 10 MiB map.
-AI filesystem events still record access and copy history for recognized renames.
+Preserve frecency/query-association encoding, keys/tables/retention and recognized rename/access history. Frecency/rename copies use one write transaction; open-time query cap covers the configured 10 MiB map. Never auto-open/copy/migrate old plugin/editor DBs or delete data.mdb/lock.mdb; explicit paths work, oversized/incompatible stores report failure and may fall back without persistence.
 
-No old plugin/editor database is opened, copied or migrated automatically. Explicit database paths remain supported.
-Oversized or incompatible databases are **not erased or repaired**: initialization reports the problem and the host may retry without persistence.
-Never remove `data.mdb` or `lock.mdb` as automatic recovery.
-
-Database health preserves the store's healthy flag and errors.
-An opened store is not necessarily healthy: false can mean pending/failed startup maintenance or failed writes, not proof of permanent data loss.
-Cleanup success alone marks initialization healthy; cleanup or worker-start failure remains degraded.
-The pooled environment owns that shared state; trackers borrow it for as long as they hold the environment.
-Opening another tracker does not restart cleanup or reset a degraded state.
+Pooled environment owns healthy/errors; trackers borrow it. Open ≠ healthy: startup maintenance/writes may be pending/failed, not permanently lost. Only successful cleanup marks startup healthy; worker-start/cleanup failures stay degraded, another tracker does not restart/reset them.
 
 ### Reader capacity
 
-`METIS_NEURAL_SEARCH_LMDB_MAX_READERS` is the low-level capacity override (default 1024, minimum 126).
-The former `FFF_LMDB_MAX_READERS` name is not an alias.
-Global search preferences still belong to `[neuralSearch]`; this override is not a second preference source.
-
-Existing LMDB users/lock state can determine capacity until all users restart.
-Renaming the override does not migrate database formats or paths.
+`METIS_NEURAL_SEARCH_LMDB_MAX_READERS`: default 1024, minimum 126, no FFF_LMDB_MAX_READERS alias. Existing LMDB users/lock state may hold capacity until all restart; it does not migrate paths/formats or replace global `[neuralSearch]` preferences.
 
 ## Indexing and live updates
 
 ### Scan readiness and failure
 
-A scan reservation covers walking, classification, subscription acknowledgements and the initial Git status/recency attempt.
-Busy requests coalesce without an idle handoff gap.
+Reservation spans walk, classification, subscription ACKs and initial Git/recency attempt; busy requests coalesce without handoff gaps. Walk/commit errors are fatal. Watcher/Git-worker errors are nonfatal: committed snapshots stay searchable with degraded notices, readiness false, bounded wait ends, rescan can retry. Throttled invalidations retain dirty work on the existing owner, not extra timer threads.
 
-- Walk/commit failures remain fatal through progress and health.
-- Watcher initialization and Git-worker failures are separate non-fatal diagnostics.
-  A committed index stays searchable with unavailable-monitoring or degraded-metadata notices.
-- Failed monitoring keeps readiness false; rescan can retry without destroying the usable snapshot.
-  A completed scan with unavailable monitoring returns partial state without spending the rest of the host's bounded timeout.
-- Throttled invalidations retain a dirty request on the existing watcher owner.
-  They are not discarded and do not create new timer threads.
+Classify immutable inputs copied under lock, do IO outside it, then verify index/revision before publishing. Reclassify live unknown-extension binary→text changes; GC rereads in its write transaction and old association cleanup compares exact normalized paths. Multi-part scores accumulate before averaging; explicit content filters never disappear on zero candidates, fuzzy continuation starts at the earliest unreturned file.
 
-Classification copies immutable inputs under the index lock, performs IO outside it, then checks index identity/content revision before publishing results.
-Full and watcher-subtree walks share the owning picker's existing shutdown token.
-Cancellation quits cooperatively at walker callbacks, discards partial candidates and does not publish a scan error or request recovery; it cannot force-abort an OS call already in progress.
-
-A separate filesystem-mutation epoch detects live updates that a candidate walk could overwrite.
-New monitoring coverage is reconciled after subscription, including newly imported descendants.
-One immediate automatic follow-up is allowed per admitted job; further coverage debt stays incomplete and uses the existing owner/cooldown instead of an unbounded scan loop.
-Classification, Git metadata and no-op control writes do not create filesystem debt.
+Full/subtree walkers cooperate with picker shutdown at callbacks; cancelled candidates are discarded without scan-error/recovery publication, not force-aborting OS calls. A filesystem epoch detects updates a walk could overwrite; new subscriptions earn reconciliation. At most one immediate follow-up per admitted job; further debt uses the existing owner/cooldown, with classification/Git/no-op writes excluded.
 
 ### Filesystem event policy
 
-Live admissions preserve the walk's symlink and hidden-path rules:
+- Recheck captured symlink policy for queued subscriptions, leaf and root-relative ancestors; stale events cannot bypass replaced directories.
+- Outside working repositories, prune hidden ancestors/renamed paths; worktree hidden files remain supported.
+- Register/revive empty directories independently of files; root sentinel is internal. Moved ignore definitions request retained root-policy refresh, not a differently based matcher.
+- Non-missing metadata IO errors retain index and throttled recovery; explicit removal/missing/nonregular/policy-rejected paths retire entries.
 
-- Queued directory subscriptions recheck symlink policy before watching.
-  Leaf events also check ancestors within the search root, so stale queued events cannot bypass a rejected replacement directory.
-- Non-working-repository hidden paths remain pruned, including hidden ancestors and renamed directories.
-  Git worktree hidden files remain supported.
-- New directories and empty descendants register/revive rows independently of file additions.
-  The empty root bookkeeping sentinel is not a search result.
-- Moved-in ignore definitions request a retained root-policy rescan, not a replacement matcher based at a different directory.
-- Non-missing metadata IO failures retain the previous index and request retained/throttled recovery.
-  Explicit removal, missing targets, nonregular files and policy-rejected symlinks still retire entries.
-
-Root deletion/move invalidates the current watcher immediately.
-If recovery fails while the root remains absent, recreate it and explicitly rescan to install fresh monitoring.
-Automatic recovery after an arbitrarily long absence is not promised.
+Root deletion/move invalidates its watcher; prolonged absence may require explicit rescan after recreation, not promised automatic recovery.
 
 ### Git metadata and worktrees
 
-Search roots resolve symlink aliases to one physical identity for data paths, Git caches and watcher events.
-Discovery preserves the working directory when a `.git` file points to separate metadata; it does not reopen the gitdir and guess its parent.
-Subscriptions use the actual repository directory for worktrees/submodules and refresh when a repository is initialized after startup.
-
-- Status-affecting `config`/`config.worktree` writes trigger targeted refreshes, even without a directory identity change.
-- Linked worktrees subscribe non-recursively to a distinct common directory, including external metadata, and recognize shared config changes.
-- A worktree inside that common directory still routes its files as data.
-  Other-worktree indexes, `config.lock` and `FETCH_HEAD` do not trigger another full status pass or enter the file index.
-- A recorded Git failure stays degraded until a successful full refresh.
-  A successful path subset cannot establish recovery.
+Canonical physical roots own data/Git caches/watchers. Preserve .git-file working directories, actual worktree/submodule metadata and post-start Git initialization; never guess a gitdir parent. Config/config.worktree changes trigger refresh; distinct common dirs are watched nonrecursively, including external metadata, without dropping nested worktree data. Other-worktree indexes/config.lock/FETCH_HEAD do not trigger full status or enter the index. Only successful **full** refresh clears degradation, not a subset.
 
 ### Fuzzy file ranking
 
-Multi-word file queries use the same effective parts (at least two bytes) for path matching and filename bonuses.
-Ignored one-byte terms cannot become fallback filename needles or distort the matched span.
-Original query case/path intent, typo limits and history keys remain unchanged.
+Use the same ≥2-byte effective query parts for path matching and filename bonuses; ignored one-byte terms cannot become fallback needles or distort spans. Keep case/path intent, typo limits and history keys.
 
 ## Content queries
 
-Content case policy has one internal three-state representation: smart, sensitive or insensitive.
-The private ABI's existing smart-case boolean still selects smart or sensitive at the C boundary.
-Forced-insensitive matching remains available inside the engine, including uppercase patterns.
+Case policy is smart/sensitive/insensitive internally; private ABI smart-case bool chooses smart/sensitive, forced-insensitive remains a Rust capability.
 
 ### Owned bytes and cache limits
 
-Workspace content uses indexed-length owned reads and immutable cached bytes, never file-backed mmap.
-External truncation cannot invalidate a borrowed search slice. Short reads are skipped; cached bytes remain a previous snapshot until managed invalidation.
-This is not an atomic filesystem-wide content snapshot.
+Only regular files enter content indexing. Nonblocking opens and descriptor checks prevent FIFO/type-race waits. Reads use indexed-length owned bytes/immutable caches, not file-backed mmap: truncation skips short reads rather than invalidating slices; cached snapshots update on managed invalidation, not an atomic whole-filesystem guarantee.
 
-Only regular files enter the content index.
-Classification and content reads use nonblocking opens and descriptor type checks, so a FIFO or raced type change cannot wait for a pipe writer.
-
-Cache admission retains its 4 KiB cutoff, file-count caps, 10 MiB per-file limit and 128/256/512 MiB repository byte caps.
-Concurrent reservations cannot exceed those caps.
-Fresh-index commit owns cache reset and automatic sizing together; explicit limits remain authoritative, with no independent budget replacement.
-
-Owned snapshots consume private heap rather than file-backed pages. Each active Rayon job can also hold a bounded read buffer.
-Scratch allocation starts only after an uncached regular file opens successfully; cache-only jobs need no read buffer.
-The first cold buffer and post-cache-transfer capacity policies remain unchanged.
-Cache limits are **not a total RSS ceiling**.
+Retain the 4 KiB admission cutoff, file-count / 10 MiB file caps and 128/256/512 MiB repository caps, including concurrent reservations. Fresh commit owns reset/automatic sizing; explicit limits stay authoritative. Rayon jobs use bounded scratch only after uncached regular opens; cached jobs need none, cold/transfer capacity policies remain. These bounds are not process RSS limits.
 
 ### Regex fallback ownership
 
-Native regex compilation failure returns the existing error metadata without a literal scan.
-The Metis content adapter owns the single canonical literal retry, preserving filters and LF/backslash encoding.
-This intentionally narrows the private Rust `grep_pattern` error path; direct Rust callers must choose their own explicit retry instead of assuming native literal results.
-Valid regex searches do not construct a literal finder or pattern buffer.
+Compilation failure reports native metadata without literal scanning; TS adapter alone retries the original literal/filters/LF/backslashes. Private Rust callers choose explicit retry; valid regex constructs no unused literal matcher/buffer.
 
 ### Output limitations
 
-Native regex compilation determines whether an expression can consume LF; by-line projections conservatively report limitations for that capability, including alternatives after the first match.
-A warning can therefore remain when only an ordinary branch matched; row counts and paging do not change, and no second content scan is needed.
-Coalesced line coverage is measured before trailing terminators are trimmed; actual native byte/context clipping remains a separate fact.
-The SDK no longer guesses multiline limitations from regex source syntax.
-These facts survive buffered pages and cause explicit notices and conservative `outputTruncated` metadata.
-Ordinary single-line matches keep their row counts; this does not promise complete per-occurrence multiline extraction.
+Native compilation determines LF capability, conservatively flagged for by-line alternatives even if the matched branch is ordinary. Preserve coalesced blank-row coverage before terminator trim; actual byte/context clipping is a separate fact, not JS syntax inference or a second scan. Both survive buffered pages and report conservative outputTruncated; ordinary row counts remain, not complete per-occurrence multiline extraction.
 
 ### Pagination, revision and cancellation
 
-Native queries are synchronous and cannot be interrupted mid-call by a JS abort signal.
-Whole-file soft pagination and complete zero-match semantics remain.
-
-Matching/serialization captures the conservative index revision under the same native read lock.
-Cursors carry offset plus revision; continuations verify both under that lock before applying an offset.
-
-Fresh queries remain valid read-consistent batches even if a queued writer runs immediately afterwards; never retag them with a later revision.
-Buffered rows also check the saved revision, and optional fuzzy suggestions must match the exact no-match batch's revision.
-
-No full content snapshot or ranking change is introduced. No-op mutable access can invalidate a continuation.
-These guards cover Metis-managed updates, not arbitrary interior mutation by external Rust consumers.
+Native calls are synchronous, not JS-signal interruptible; whole-file soft limits and complete zero-match semantics remain. Match/serialize captures offset+revision under one read lock; resumes and buffered rows verify it there, fuzzy suggestions match the no-hit batch. Never retag after queued writers; no-op mutable access can invalidate cursors. Guards cover managed updates, not arbitrary external interior mutation. No new full-content snapshot/ranking policy is introduced.
 
 ## Building and verification
 
-Development prerequisites:
-
-- Rust **1.94.0** with `rust-docs`, which supplies standard-library notices.
-- Zig **0.16.0**, libclang and Node.
-- Linux: `cargo-zigbuild` **0.23.4** and GNU binutils (`readelf`).
-- Windows: Rust's MSVC target, Visual Studio C++ Build Tools and Windows SDK. Linux cross-build variables are documented in `build-win32-x64.mjs`.
-
-Linux tool installation is separate from ordinary package installation:
+Development only: Rust **1.94.0** + rust-docs, Zig **0.16.0**, libclang/Node; Linux additionally cargo-zigbuild **0.23.4**/readelf; Windows MSVC target, VS C++ Build Tools/SDK (cross-build variables in build-win32-x64.mjs).
 
 ```sh
 rustup toolchain install 1.94.0 --component rust-docs
@@ -189,26 +88,15 @@ RUSTUP_TOOLCHAIN=1.94.0 npm run build:neural-engine
 npm run verify:neural-engine
 ```
 
-On Windows, activate an x64 MSVC developer shell, set `$env:RUSTUP_TOOLCHAIN="1.94.0"`, and run the same npm build/verify commands.
+Windows: x64 developer shell, `$env:RUSTUP_TOOLCHAIN="1.94.0"`, same npm commands. Locked ci profile uses baseline `x86_64-unknown-linux-gnu.2.31` / `x86_64-pc-windows-msvc`, rejecting host CPU overrides; manifest fixes ZLOB_ZIG_CPU=baseline. Direct Cargo profiling must not replace releases; outputs go under `.work/neural-engine/target`.
 
-The platform-selected builder uses the locked graph, `ci` profile and baseline x64 CPU settings: `x86_64-unknown-linux-gnu.2.31` or `x86_64-pc-windows-msvc`.
-It rejects host-specific CPU overrides and pins `ZLOB_ZIG_CPU=baseline` for the Zig helper in the manifest.
-Local profiling may use Cargo directly, but must not replace the published artifact. Outputs stay under `.work/neural-engine/target`.
+Verification pairs Rust/header/build/TS sources, exports, bytes/notices; Linux checks ELF/glibc, Windows inspects PE internally. Root verify:native-assets checks both inventories/current ABI; prepack verifies without compiling, not proof of source→binary provenance. Linux CI rebuilds and rejects differing library/manifest/notices, retains a compiled failed comparison candidate for diagnosis, not release approval.
 
-Verification checks paired Rust/header/build and TS binding sources, exported private ABI, library bytes and notices. Linux checks ELF dependencies and the glibc floor; Windows checks PE imports without external inspection tools. Root `verify:native-assets` checks both platforms' source/payload inventories and the current host's ABI.
-`prepack` verifies without compiling Rust; this checks declared source, library, ABI and notice consistency, not proof that the library was compiled from those sources.
-Linux CI also rebuilds with the pinned toolchain and rejects any difference from the checked-in library, manifest or notices.
-A successfully compiled CI candidate is retained even if that comparison fails; a failed-run artifact is diagnostic, not release approval.
-Rust source locations are remapped to stable workspace, Cargo-home and target prefixes so local checkout paths do not become shipped bytes.
-The verified PATH Zig executable is also fixed for cargo-zigbuild and zlob; Python's bundled Zig cannot silently override it.
-Native release objects and linker wrappers use a toolchain-specific subdirectory beneath the selected Cargo target directory, separate from objects built with an earlier compiler-selection policy.
+Remap source/Cargo-home/target paths for reproducible bytes; verified PATH Zig is fixed for cargo-zigbuild/zlob, not Python's bundled Zig. Release objects/link wrappers use a toolchain-specific target subdirectory, not older compiler-policy objects.
 
 ### Checks
 
-Inherited unit checks stay with continuing behavior.
-SDK/editor/bigram-only checks retire with those features; shared filtering, sorting, context, live updates and persistence protection remain.
-
-New one-off diagnosis, migration and package probes belong **only under `.work/`**, never in permanent test discovery.
+Keep tests for continuing filtering/ranking/context/live-update/persistence; SDK/editor/bigram-only tests retire with those features. New one-off diagnosis/migration/package probes stay in `.work/`, not permanent discovery.
 
 ```sh
 mkdir -p .work/neural-engine/tmp
@@ -221,21 +109,8 @@ TMPDIR="$PWD/.work/neural-engine/tmp" \
 
 ## Updates and resource lifetime
 
-**Restart Pi after updating or rolling back the native engine.**
-Native modules are process-cached; `/reload` alone does not unload them. ABI/cache guards reject mismatched layouts rather than reinterpret old pointers.
-
-Finder instances release resources when their session/cwd lifetime ends.
-Auxiliary roots also expire actively after five idle minutes, using one unref'd pool timer rather than waiting for the next request.
-Busy/pending leases are not evicted; release starts the idle deadline, and shutdown clears the timer.
-Returning to an expired root creates a cold index; a continuation cannot silently substitute that new finder.
-Readiness comes from the current watcher instance, not a shared success latch; failed registrations stay unhealthy and rescan can retry them.
-
-Deploy source, binding, manifest and library as **one package**, not independently.
+Deploy source/binding/manifest/library as **one package and restart Pi**; reload cannot unload native modules, ABI guards reject old layouts. Session/cwd releases finders; auxiliary idle expiration is five minutes via one unref timer, busy/pending leases protected, release restarts timeout, shutdown clears it. Expired roots are cold, not substituted continuations. Readiness belongs to the current watcher; failed registration stays unhealthy until successful retry.
 
 ## Redistribution
 
-`notices.mjs` collects each target's locked runtime/build dependency closure, including bundled C notices, and retains Rust standard-library notices.
-`licenses/` supplies pinned texts missing from some published crates; provenance is in `licenses/SOURCE.md`.
-
-Regenerate notices through the builder after dependency removal, not by trimming copyright/license text manually.
-The manifest verifies distributed notice bytes alongside the library.
+notices.mjs collects locked target runtime/build closures, bundled C and Rust stdlib notices. [licenses/SOURCE.md](licenses/SOURCE.md) pins texts absent from crates. Regenerate through builders after dependency changes; do not manually trim licenses. Manifests verify notice bytes with the library.

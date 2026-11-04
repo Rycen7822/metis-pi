@@ -34,9 +34,11 @@ neural_search({ action: "semantic", params: { query: "缓存容量不足时继�
 
 `limit` 默认 5、最多 100，仅限制排序后的返回数量；无分页游标。返回保留完整记录的排名前缀，超过 50,000 字节展示预算时标记 `outputTruncated`、提供下一条省略记录的位置；JSON 传输超过 16MiB 则明确报错，不返回半个响应。分数、文件和行范围由 CLI 提供，不在宿主重新计算。`scope` 是所选文件/目录；`root` 是返回路径的目录基准，单文件搜索时为其父目录。`limitReached` 只表示已达到本次返回数量限制，不证明还有多少结果。
 
-整次 CLI 调用（含模型初始化）的超时默认 1800 秒，`timeoutSeconds` 可设为 1–3600。取消、超时和会话/cwd 变更终止自有进程组，并确认无存活成员后才结束；失败不伪装成零命中或回退到 grep。诊断中会保留缓存不可用而完整计算的说明。
+请求（含排队/初始化）默认超时 1800 秒，`timeoutSeconds` 为 1–3600。取消/超时/会话或 cwd 变更终止自有 CLI 客户端组并确认清理，服务取消对应请求，不杀其他客户端/共享服务。失败不伪装零命中或回退 grep；无法缓存但完整计算会明确诊断。
 
-运行包布局为 `bin/sgrep`、`lib/`、`models/`、可信 `assets.json`；默认位置为 `src/neural-search/assets/semantic/linux-x64/`。部署可通过已有 `SGREP_RUNTIME_DIR` 指向另一份可信运行包，不接受工具参数指定可执行文件。宿主要求 `--metis-protocol 1`，旧 CLI 必须报错而不是忽略预算。模型资产校验与取得由 CLI 拥有，不调用 Python、编译器或常驻模型服务。
+运行包为 `bin/sgrep`、`lib/`、`models/`、可信 `assets.json`，默认 `src/neural-search/assets/semantic/linux-x64/`；可用 `SGREP_RUNTIME_DIR` 指向可信包，不能由工具参数指定可执行文件。要求 `--metis-protocol 1`，旧 CLI 不得忽略预算。CLI 管资产取得/校验，不在查询中运行 Python/编译器。
+
+Metis 使用同 UID/规范 HOME 的私有共享模型服务，各仓库不重复加载同代模型；LateOn/Bekko 按需各加载一份，最多 3 请求×4 计算线程，超出有界排队。`[neuralSearch.semantic].idleTimeoutSeconds` 默认 300，接受整数 1–86400 秒，下一请求生效；工作/排队清空后计空闲，status 不延长，stop 先排空。详见[核心服务](../../src/neural-search/semantic/README.md#cli-and-shared-service)。
 
 缓存磁盘预算由全局 `[neuralSearch.semantic].cacheBudgetMiB` 设置为整数 256、512、1024，默认 512MiB，下一次语义调用读取新快照，无需为此重载。所有缓存根共享同一 HOME 峰值预算；降档 pending 不表示目标档已生效。结果中的 `cacheBudgetRequestedMiB` 仅表示本次配置请求，不冒充账本生效档位。超额时完整流式计算，不截断语料、不自动升档；RAM、线程及 cgroup 限制不随磁盘档位放宽。
 

@@ -1,19 +1,19 @@
 # Metis-owned ask_user_question
 
-Source: [juicesharp/rpiv-mono](https://github.com/juicesharp/rpiv-mono), package `@juicesharp/rpiv-ask-user-question` **2.13.8**, tag `v2.13.8`, commit `afc21bc25f7d07cae9fb3103dc309240a16b9f49` (also npm gitHead). MIT license is preserved in `LICENSE`. Guidance validation and test utilities derive from that release's `rpiv-config` and `test-utils`, under the same repository license.
+Source: [juicesharp/rpiv-mono](https://github.com/juicesharp/rpiv-mono), `@juicesharp/rpiv-ask-user-question` **2.13.8**, tag `v2.13.8`, commit/npm gitHead `afc21bc25f7d07cae9fb3103dc309240a16b9f49`. [MIT license](LICENSE) retained; guidance/test helpers derive from the same release's `rpiv-config`/`test-utils`.
 
-Metis owns execution, parameter normalization/schema, UI/state machine, preview/notes/custom answers, RPC fallback, result envelopes, events and locales. No mandatory rpiv runtime dependency remains. Optional rpiv-i18n loading and the original namespace/events are retained; absent SDK means English fallback. Relative source imports use `.ts` for the Metis source distribution.
+Metis owns schema/normalization, execution, UI/reducer, previews/notes/custom answers, RPC, envelopes/events/locales. No mandatory rpiv runtime remains; optional rpiv-i18n retains its namespace/events and English fallback. Source distribution uses `.ts` imports and the root toolchain.
 
-Local changes:
-- `extensions/ask-user-question.ts` loads this implementation; session-start registration checks entrypoint provenance before touching same-name tools.
-- Tool availability is `deferred` with UI/enabled configuration, `hidden` otherwise. `before_agent_start` never eagerly activates it; explicit tool_search/user activation is retained. Native discovery gateway is enabled only at session start, and the prompt hint matches the usable route. Foreign providers remain untouched with a warning.
-- Configuration is global `metis-pi.toml [askUserQuestion]`, not project or rpiv JSON. Collapse key grammar/default/off and full guidance replacement semantics are preserved. No personal files are migrated automatically.
-- Execution abort is threaded into RPC select/input and TUI done/cleanup, without confusing abort with custom-answer dismissal. Presentation claims and blocked events remain per invocation. Prewarming is once per registration owner with shutdown cleanup.
-- Closing an invocation aborts its external editor and waits for child cleanup before releasing the UI slot. Lazy imports cannot launch an editor after cancellation, and late results cannot update a closed session.
-- The router emits input intent and buffer snapshots; the reducer owns answers, tab advancement and saved notes. Collapsed ignored input cannot mutate a draft. Protocol labels and neutral row types do not depend on renderers.
-- View composition wires the fixed component tree directly. Single-select rendering has one props-driven owner; custom-answer scrolling follows the caret. Preview measurement and rendering share width/row limits, preserving closed borders and clipping hints on narrow terminals.
-- Registration uses one normalized TOML snapshot. Repeated identical failures stay quiet; changed failures and failures after recovery are reported again. Unused upstream workflow helpers and internal compatibility surfaces are retired.
+## Integration boundaries
 
-Tests are retained beside the source (excluded from the production package and core typecheck). `npm run check:test` checks the colocated tests and fixtures using the local helper copies in `test/helpers/ask-user-question`. The retired upstream standalone shipping assertion is covered by Metis `test/package.test.mjs`; JSON config/automatic activation tests now cover TOML/deferred ownership. Runtime/UI/presentation/copy/parser regressions remain. `npm run test:ask-user-question` runs real SDK boundary tests plus the scoped upstream-derived Vitest suite; `npm test` includes both. Vitest is development-only.
+- `extensions/ask-user-question.ts` checks provenance before touching a same-name tool. UI+enabled means deferred, otherwise hidden; before_agent_start never eagerly activates it. Session-start gateway/guidance must match the usable discovery route; explicit activation persists, foreign providers are warned and untouched.
+- Only global TOML `[askUserQuestion]`: no project/rpiv JSON or automatic migration. Preserve collapse-key grammar/default/off and full guidance replacement. One normalized registration snapshot; identical failures stay quiet, changed/recovered failures notify again.
+- Abort reaches RPC/TUI cleanup without treating custom-answer dismissal as abort. Claims/blocked events remain per invocation; prewarm once per owner, release on shutdown. Abort external editors and await cleanup before freeing the UI slot; lazy imports/late results cannot revive closed work.
+- Router emits intent/buffer snapshots; reducer owns answers, tab advancement and notes. Collapsed ignored input cannot edit a draft; protocol labels/neutral rows stay renderer-independent.
+- Fixed view composition and props-driven single-select rendering; custom answer follows caret. Preview layout/render share width/row limits, narrow borders/clipping hints remain intact.
 
-Do not run the external npm extension alongside this owned entry. Installation/uninstallation is separate from source integration. No Windows, physical terminal/clipboard or real model call is asserted by headless contract checks.
+## Verification and delivery
+
+Public usage/configuration belongs in [the feature guide](../../docs/features/ask-user-question.md). Do not enable the standalone npm provider alongside Metis; source integration does not install/uninstall it.
+
+Colocated upstream-derived tests are excluded from production/core types; `check:test` uses `test/helpers/ask-user-question`. `test:ask-user-question` runs real SDK boundaries and scoped Vitest (`npm test` includes both; Vitest is dev-only). Metis package checks replace the retired standalone shipping assertion; TOML/deferred tests replace JSON/automatic-activation tests. Preserve runtime/UI/presentation/copy/parser protection. Headless checks do not establish Windows, physical terminal/clipboard or real-model behavior.

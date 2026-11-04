@@ -2,66 +2,63 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A compact, Codex-style transcript UI for Pi, with separate extensions for goals, skill input, condense, and execution tools. Current version: **0.21.0**. Development and host checks target **Pi 1.5.0**.
+Codex-style transcripts and workflow extensions for Pi. **Metis 0.21.0 targets Pi 1.5.0 only**; Node.js **22.19.0+** is required.
 
 ## Installation
 
-Requires Node.js >=22.19.0 and Pi 1.5.0. From a local checkout, run:
-
 ```bash
-pi install .
+pi install .  # from a local checkout
+# or: pi install git:git@github.com:Rycen7822/metis-pi.git
 ```
 
-Restart Pi to load the changes, then select `metis-pi` in the theme picker. To install from Git, use `pi install git:git@github.com:Rycen7822/metis-pi.git`. This package provides independent execution tools; remove or disable the standalone `@howaboua/pi-codex-conversion` before installing to avoid duplicate tool registrations.
+Restart Pi and select the `metis-pi` theme. Disable matching standalone providers first: `@howaboua/pi-codex-conversion`, `pi-web-access`, `pi-session-recall`, `@narumitw/pi-lsp`, and agent-stuff's BTW/commit/github/uv resources. Metis retains their original files and sessions; see [managed extensions](docs/features/managed-plugins.md) and [LSP](docs/features/lsp.md).
 
-Metis also maintains bundled `pi-web-access`, `pi-session-recall`, and `@narumitw/pi-lsp` sources. Remove or disable their standalone npm entries before activating Metis to avoid duplicate tools or `/lsp` commands; original files and sessions are retained. The BTW side chat and `commit`, `github`, `uv` skills are also maintained here; disable their matching agent-stuff resources to avoid duplicate commands or skills. See the [managed extensions guide](docs/features/managed-plugins.md) and [LSP guide](docs/features/lsp.md).
-
-Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-extensions/goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
+Use Pi package entry filters to disable features, for example `"extensions": ["-extensions/goal.ts"]` inside the package configuration. The [feature manual](docs/README.md) is currently in Chinese.
 
 ## Features
 
 | Feature | Behavior |
 | --- | --- |
-| [Tool transcripts](docs/features/display.md) | Compact headers for built-in tools, grouped exploration, streaming write previews, and edit/write diffs. Third-party tools retain their own renderers. |
-| [Thinking display](docs/features/display.md#思考块) | Shows the latest 6 lines while streaming, then collapses. Left-click toggles collapsed/scrollable preview; right-click toggles fully expanded/closed. Fully expanded ignores left-click. Ctrl+T retains the host behavior. |
-| [Composer and status](docs/features/interface.md#输入区) | Gray input area with model and context information. The [Working indicator and footer](docs/features/interface.md#统计口径) show the execution phase, measured output speed, usage, and the amount of uncommitted changes. |
-| [Selection copy](docs/features/selection-copy.md) | In fullscreen mode, maps selected display content back to logical source text. Falls back to native extraction for lines that cannot be verified. |
-| [Long histories](docs/features/interface.md#全屏历史与留白) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
-| [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
-| [BTW side chat](docs/features/managed-plugins.md#btw-旁路对话) | `/btw` opens a side conversation using Pi's current model and authentication, with optional summary handoff to the main conversation. |
-| [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
-| [Bundled skills](docs/features/skills.md#随包-skills) | `ast-grep`, `commit`, `github`, `uv`, discovered by Pi and updated with Metis. The corresponding external CLIs must be installed separately. |
-| [MCP](docs/configuration.md#mcp) | Optional Pi-native MCP integration: cached directory, lazy connections and idle shutdown; shares native CLI/OAuth and tool permissions. Disabled by default. |
-| [Neural Search](docs/features/neural-search.md) | One deferred `neural_search` for native path/content search and full-scope CPU semantic search, discovered through `tool_search`. FFF supports Linux x64 (glibc ≥2.31) and Windows x64; semantic requires a separately prepared Linux x64 runtime. |
-| [LSP](docs/features/lsp.md) | One direct `lsp` tool with `action: diagnostics/fix`, flat parameters and preview-by-default fixes; `/lsp` checks configured command availability. Name-only read-only allowlists need an argument-level policy to distinguish writes. |
-| [Subagents](docs/subagents/native.md) | Metis-owned durable Pi children, deferred native tools discovered/called through codemode, explicit questions and completion wakeups. Linux/WSL and Windows with Python 3.11+; choose one subagent provider in Pi config. |
-| [Execution tools](docs/execution.md) | Deferred PTY tools for Pi native codemode; ordinary images use Pi `read` + `image()`. Pi owns providers and login. |
-| [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from the global TOML, applied at the next agent run. Replaces the request's global instructions only; preserves project rules and source files. |
-| [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
-| [OpenAI / Codex remote compaction](docs/features/codex-compaction.md) | ChatGPT OAuth keeps development on `openai` and uses legacy Codex OAuth for encrypted compaction; API keys use `/responses/compact`, and Codex sessions use Remote V2. |
-| [Condense](docs/features/condense.md) | Opt-in history condensation using contextPrune. Measures mechanical replacements independently; paid summaries need pressure and complete-message proxy budgets. Deferred evidence stays recoverable. Supports paginated retrieval and token-only summary usage. |
+| [Tool transcripts](docs/features/display.md) | Compact builtin tool rows, exploration groups, streaming write previews and diffs; third-party renderers remain native. |
+| [Thinking](docs/features/display.md#思考块) | Latest 6 lines while streaming, folded on completion. Left-click toggles peek, right-click toggles full/closed; full ignores left-click. Ctrl+T stays native. |
+| [Composer and status](docs/features/interface.md#输入区) | Gray composer, model/context, Working phases, live/calibrated output speed, usage and uncommitted changes. |
+| [Selection copy](docs/features/selection-copy.md) | Fullscreen selections recover logical source text; unverifiable content falls back to native extraction. |
+| [Long histories](docs/features/interface.md#全屏历史与留白) | Up to 5,000 retained display lines with paging and derived-cache release; original records remain intact. |
+| [Goals](docs/features/goal.md) | `/goal` manages persistent objectives, timers, budgets and cross-turn continuation. |
+| [BTW](docs/features/managed-plugins.md#btw-旁路对话) | Side conversation using the current Pi model/auth, with optional summary handoff. |
+| [Multiple skills](docs/features/skills.md) | Expand multiple skills in one input and collapse them as one transcript entry. |
+| [Bundled skills](docs/features/skills.md#随包-skills) | `ast-grep`, `commit`, `github`, `uv`; external CLIs are installed separately. |
+| [MCP](docs/configuration.md#mcp) | Opt-in cached discovery, lazy connections and idle shutdown; native CLI/OAuth and permissions. |
+| [Neural Search](docs/features/neural-search.md) | Deferred `neural_search`: native path/content search and CPU semantic search, discovered via `tool_search`. |
+| [LSP](docs/features/lsp.md) | Direct `lsp` diagnostics/fix; fixes preview unless `write: true`. Read-only policies must inspect arguments, not just the tool name. |
+| [Subagents](docs/subagents/native.md) | Durable native Pi children, deferred codemode tools, questions and completion wakeups. Requires Python 3.11+ and one active subagent provider. |
+| [Execution](docs/execution.md) | Deferred PTY sessions; images use Pi `read` + `image()`. Pi owns providers and login. |
+| [Dynamic agents](docs/features/dynamic-agents.md) | Next-run global instructions selected by provider/model; project rules and source files remain unchanged. |
+| [Action Fusion](docs/features/action-fusion.md) | edit/write `then_run`: execute after successful mutation, retaining separate statuses, diffs and logs. |
+| [Remote compaction](docs/features/codex-compaction.md) | Encrypted checkpoints for OpenAI/Codex, persistent replay and cross-model recovery. |
+| [Condense](docs/features/condense.md) | Opt-in contextPrune, recoverable evidence and pressure/budget-gated summaries; token usage is tracked separately. |
 
-All Metis-owned preferences use one global `~/.pi/agent/metis-pi.toml` (honoring `PI_CODING_AGENT_DIR`), with no project Metis overrides. When TOML is absent, run `/metis-config init` to create the default settings file and install the adjacent [parameter guide](metis-pi-config.md); it does not import, rewrite or back up other files. Edit existing TOML directly; omitted settings use package defaults. LSP reads only `[lsp]`; copy legacy LSP JSON values into it manually, as init does not import them. Subagent backend preferences also use `[subagents]`; safely drain/restart its daemon to apply them. The bundled [TOML template](metis-pi.toml) contains all defaults. Set `[appearance] enabled = false` to disable only display; Pi-owned model/theme/package/MCP credentials remain in their own files. See the [configuration reference](docs/configuration.md).
+Preferences live only in global `~/.pi/agent/metis-pi.toml` (or `PI_CODING_AGENT_DIR`), not project overrides. `/metis-config init` creates missing defaults and the [parameter guide](metis-pi-config.md), without importing or rewriting other settings. Edit existing TOML directly; omitted fields use [package defaults](metis-pi.toml). LSP JSON migration is manual; safely restart the subagent daemon after backend changes. `[appearance] enabled = false` disables display only. Pi keeps its model/theme/package/trust/MCP credential files. See [configuration](docs/configuration.md).
 
 ## Compatibility boundaries
 
-- The display layer only takes over Pi built-in tools with a verified origin. It backs off for unknown host structures, third-party patches, or non-modifiable prototypes; see `/codex-ui` for the reason.
-- Exact copying depends on application-managed selections in fullscreen mode. Markdown tables, unknown tokens, images, and similar content retain native fallbacks. Native terminal selections are outside this plugin's control.
-- The 5,000-line limit applies to the retained display window. A single oversized component may still be fully laid out once, and native search only covers the loaded window.
-- The main UI may conflict with other plugins that replace the editor, footer, or Working indicator. This package's exact copy path takes over the heuristic copying provided by `pi-copy-soft-wrap`; use only one implementation.
-- Bundled PTY and Neural Search assets support Linux x64 and Windows 10/11 x64. Windows needs Git Bash for shell commands; exit Pi before updating loaded native assets. See [compatibility](docs/compatibility.md).
+- Only verified builtin tool origins are restyled. Unknown host shapes, foreign patches and immutable prototypes retain native behavior; `/codex-ui` reports why.
+- Exact copy requires fullscreen application selections. Tables, unknown Markdown, images and terminal-native selections retain their documented fallbacks.
+- The 5,000-line bound is a display-window limit, not a hard process-memory cap. Oversized components can still be laid out once; native search covers loaded history only.
+- Editor/footer/Working replacements may conflict. Use one copy implementation rather than also enabling `pi-copy-soft-wrap`.
+- Bundled PTY/FFF assets support Linux x64 (FFF: glibc ≥2.31) and Windows 10/11 x64; Windows needs Git Bash. Semantic search needs a separately prepared Linux x64 runtime. Exit Pi before updating loaded native assets.
 
-The [compatibility guide](docs/compatibility.md) documents host contracts and limits; it does not guarantee compatibility with every plugin combination.
+See [compatibility](docs/compatibility.md) for contracts and limits; arbitrary plugin combinations are not guaranteed.
 
 ## Development
 
 ```bash
-npm ci --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --bin-links=false --no-audit --no-fund
 npm run verify
 ```
 
-Run `npm run test:pty` for visible interaction checks, or `npm run preview` for a static preview. See the [development guide](docs/development.md) for test scope, source checks, and documentation maintenance; [architecture](docs/architecture.md) for module responsibilities; and [CHANGELOG.md](CHANGELOG.md) for version changes.
+Use `npm run test:pty` for terminal journeys and `npm run preview` for static previews. [Development](docs/development.md) covers checks/build/release; [architecture](docs/architecture.md) maps owners; [CHANGELOG](CHANGELOG.md) records releases.
 
 ## Attribution and licenses
 
-Based on `pi-codex-style-tools`, retaining its MIT license. Goal, BTW and the commit/github/uv skills derive from an Apache-2.0 upstream; codex-conversion and the maintained LSP module come from MIT upstreams. See [NOTICE](NOTICE), [LICENSE](LICENSE), and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for attribution and modification notices. This project is not officially affiliated with OpenAI or the Pi upstream project.
+Derived from `pi-codex-style-tools` (MIT). Goal, BTW and commit/github/uv skills retain Apache-2.0 provenance; codex-conversion and LSP retain MIT provenance. See [NOTICE](NOTICE), [LICENSE](LICENSE) and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0). This project is not affiliated with OpenAI or the Pi upstream.

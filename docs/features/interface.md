@@ -1,116 +1,76 @@
 # 输入区、状态与全屏界面
 
-配置键与默认值统一见 [配置参考](../configuration.md)，实际生效状态见 `/codex-ui`。
+[配置参考](../configuration.md)列出键/默认值，`/codex-ui` 查看有效状态。
 
 ## 输入区
 
-appearance 使用宿主 CustomEditor，提供灰色输入面与首行 `> `；正文列、编辑状态、鼠标/光标几何和提交内容保留。提示符及 `Ask anything...` 不进入 `getText()`。`composer.surface` 控制输入面，`composer.promptPrefix` 依赖 surface，`composer.metadata` 控制 Footer 的模型/provider/推理/上下文字段。
+基于宿主 CustomEditor 的灰色输入面和 `> `，保留正文列、编辑/提交、光标和鼠标几何；提示符与 `Ask anything...` 不进入 `getText()`。`composer.surface` 控制底色，`promptPrefix` 依赖 surface，`metadata` 控制 Footer 模型/provider/推理/上下文。
 
-聚焦时使用终端竖线光标，保留输入法定位；缺硬件光标 API 时回退宿主反色光标，卸载恢复原设置。editor 已被其他插件占用或能力缺失时保留原编辑区。
-
-composer 为 `￥` 和第二个及之后的 `/` 补发 skill 查询，见 [skills](skills.md)。
+聚焦用终端竖线光标并保留输入法定位，无硬件 API 回退反色；卸载恢复。外来 editor 或能力不足时不接管。`￥` 和后续 `/` 的 skill 查询见 [skills](skills.md)。
 
 ## 探索工具显示
 
-`read` 与本包 `neural_search` 使用 Exploring / Explored，规则见[转录显示](display.md#命令与探索)。只读 `ast-grep run/scan`、`rg` 命令显示 Search，`fd` 显示 Find，已识别读取命令显示 Read；改写、执行子命令、重定向或混合操作仍显示 Ran。展开保留原命令和输出。
+`read`/本包 `neural_search` 用 Exploring/Explored；只读 `ast-grep run/scan`、`rg` 为 Search，`fd` 为 Find，识别的读取命令为 Read。改写、子命令执行、重定向或混合操作仍为 Ran；展开保留原命令/输出，见[转录显示](display.md#命令与探索)。
 
 ## Working、Header 与摘要
 
-Header 显示实际 Pi/metis 版本。Working 从 `agent_start` 到 `agent_settled`，包含最终回复后的 condense 维护，显示 Working / Writing / Waiting for input。安装 widget 成功后才隐藏宿主 loader；失败时回退 `setWorkingIndicator`。
+Header 显示实际 Pi/Metis 版本；Working 从 `agent_start` 到 `agent_settled`（含回复后 condense 维护），显示 Working/Writing/Waiting for input。widget 安装成功才隐藏原 loader，失败回退 `setWorkingIndicator`。
 
-时长每秒更新，shimmer 仅 truecolor 使用；settle、关闭与重载清理计时器。交互时长与各 thinking run 时长分别计算。`working.elapsed/thought/tool/tokens` 分别控制时长、思考、工具和 token 段，`working.animation` 与 `working.animationIntervalMs` 控制动画（帧间隔 32–1000 ms）。
+- 时长每秒更新，thinking run 与整轮分别计时；shimmer 仅真彩，`working.elapsed/thought/tool/tokens` 控制各段，动画开关/32–1000ms 间隔归 `animation/animationIntervalMs`。settle/关闭/重载清 timer。
+- 展开流式思考的灰色 `thinking 12s` 复用活动时钟，不占 peek 正文预算、不入复制，完成移除；折叠摘要仍是 `Thought for …`。
+- 纯 thinking 流仅在实际 peek 且 ≥16 Ki 字符时按 100ms 合并更新，静止时刷最后一批；仍完整原生 Markdown 排版，不截源拼尾。点击/滚动/视图、文字/工具和完成立即处理，卸载取消待刷新。
+- codemode 运行显示 Elapsed、完成 Took，无子调用也显示；历史/嵌套各用自己的保存时长。自有参数/结果/账本引用共用估算 4 MiB UI 缓存，淘汰较早已完成项，保运行中参数与顺序，超大项不缓存；历史失效释放派生组件。外来 renderer 自管，缺参数/diff/输出时说明，不从脚本或当前文件猜历史。
+- 原生手动/自动/overflow 压缩提示旁加 `· 12s` / `· 1m 03s`，从提示出现计（含重试），结束/失败/取消清除。用 CustomEditor 公开状态组件和原 spinner，无新 hook/prototype patch/timer；Esc/压缩仍归宿主，窄屏裁切、外来 editor 回退原生。
 
-展开的流式思考正文上方显示灰色 `thinking 12s`，复用活动时钟每秒刷新当前 run 时长；标题不占 peek 正文行数、不进入复制，完成后移除，折叠摘要仍为 `Thought for …`。
-
-长思考的纯 thinking 流在实际处于 peek 视图且达到 16 Ki 字符后，按 100 ms 合并预览更新；暂停输入时仍会刷新最后一批。保留完整宿主 Markdown 排版，不截断源码来拼尾部。点击、滚动、切换视图、普通文字/工具调用与最终完成立即处理；卸载取消待刷新的预览。
-
-codemode 工具行运行时显示 `Elapsed`，结束后显示 `Took`，没有嵌套工具调用的脚本也显示。历史记录使用已保存的执行时长；嵌套工具显示自己的时长。
-
-嵌套工具在已有 renderer 支持范围内复用直接调用样式；实时工具行也读取会话保存的完整参数，不把截断摘要当作完整命令。临时参数、结果和会话参数账本引用共用估算体积 4 MiB 的 UI 缓存预算（不是整个进程的内存上限），空间不足时为新数据淘汰较早已完成的条目，保留运行中参数和原调用顺序；超大单项仍不缓存。Metis 自有的嵌套结果组件随历史窗口失效释放，重新显示时只从仍保留的数据重建；不接管第三方 renderer 的缓存生命周期。命令参数或 diff/输出确实未保留时，会说明缺失原因，不从当前文件或脚本猜测历史改动。
-
-手动 `/compact`、自动阈值压缩及 overflow 恢复时，输入区顶部的原生压缩提示旁显示 `· 12s` / `· 1m 03s`。计时从原生提示出现开始，包含重试等待，不混用 Working 的整轮时长；结束、失败或取消后清除。通过 CustomEditor 的公开状态组件接口渲染，复用宿主 spinner 刷新，不增加事件 hook、prototype patch 或定时器；Esc 和压缩流程由宿主管理。窄窗口裁切显示，其他插件占用 editor 时保留原生界面。
-
-| 最终原因 | 摘要 |
+| 终态 | 摘要 |
 | --- | --- |
 | `stop` / `error` / `aborted` | Worked / Failed / Interrupted。 |
 | `length` / 其他或未知 | Ended · output limit / Ended。 |
 
-单个工具失败不等于整轮失败，历史证据不足时不推断成功。`summary.persist` 决定摘要持久保存或仅临时显示。
-
-已发送的用户消息下方显示发送时间，完成摘要下方显示回复结束时间，格式为 `2026-10-03 02:20:09`（固定 UTC+8）。回复时间取最终消息结束时刻，不受后续 condense 维护耗时影响；记录缺少结束时刻时使用本轮结算时间。恢复历史使用已保存时间；时间戳只用于界面，不加入模型消息。关闭摘要持久化时，回复时间随临时摘要显示在状态区。
+单工具失败不等于整轮失败，证据不足不猜成功；`summary.persist` 选择持久或临时摘要。用户消息下显示发送时间，摘要下显示回复结束时间，固定 UTC+8（如 `2026-10-03 02:20:09`）；回复时间不含后续维护，缺失时回退结算，历史用保存值。时间戳不进模型消息，临时摘要时间在状态区。
 
 ## 统计口径
 
-Footer 默认显示模型、推理等级、provider、上下文、累计 I/O、cache、速度与 Git `+A -D`；窄终端按完整字段换行。`footer.enabled`、`details`、`showCache`、`showChanges`、`showSpeed` 分别控制整块与各段。目录和分支默认折叠，点击主状态行末尾的 `▶` 展开到下方，点击 `▼` 收起。`+A -D` 不随目录隐藏。元数据不依赖 composer 安装，不读取 auth 或查询额度。
+Footer 显示模型/推理/provider/上下文、I/O、cache、速度、Git `+A -D`，按完整字段换行；`footer.enabled/details/showCache/showChanges/showSpeed` 控制各段，元数据不依赖 composer，不读 auth/额度。
 
-prune 行常驻开关、上下文变化与累计额外用量，普通排队/延期消息默认折叠；点击该行的三角独立展开最新详情，不影响目录/分支。展开状态在同一 Footer 内保留，新会话按 TOML 默认值初始化。普通队列和无操作提示不追加到 TUI 正文；实际 prune 操作、警告和错误仍显示。
-
-默认展开状态由全局 `metis-pi.toml` 控制，修改后 `/reload` 或重启生效；点击三角只改变当前界面，不写回配置。regular 模式鼠标由终端管理时，也用这两个字段选择默认状态：
-
-```toml
-[appearance.footer]
-locationExpanded = false # 目录/分支
-pruneExpanded = false    # prune 详情
-```
+目录/分支与 prune 排队详情分别用三角独立展开；`+A -D`、prune 开关/上下文变化/累计用量常驻。点击只改当前 UI，不写 TOML；新 Footer 使用 `appearance.footer.locationExpanded/pruneExpanded` 默认值（均 false，regular 也适用，改后重载）。普通无操作/排队提示不追加正文，实际操作/警告/错误保留。
 
 | 字段 | 来源 |
 | --- | --- |
-| context | `getContextUsage()` 的已持久化分支用量；流式片段复用有效样本，分支、模型或消息完成等边界刷新。 |
-| `Σ` I/O | 当前 session 文件的标准 assistant、compaction、branch summary 用量（包含其他分支已产生的用量）；工具自报的模型用量、condense 和摘要 custom entry 不混入。 |
-| cache | 最近已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；诊断同样报告最近已确认请求值。 |
-| input | 不把 cacheRead 重复算为新输入。 |
-| `gen≈(live)` · `tok/s` | 流式模型文本及工具参数按「已计时字符数 ÷ 4 ÷ 已观测秒数」估算；字符按 UTF-16 长度计，4 是 UI 近似换算，不是分词器，不代表真实逐 token 计数。 |
-| `gen≈(last)` / `gen≈(avg2)` / `gen≈(avg3)` · `tok/s` | 每批 assistant 输出结束（含 `toolUse`）后，用可靠的输出/推理用量校准。工具参数批次单独报告；短正文最多合并三窗，工具执行期间保留已完成批次的值。 |
-| `gen≈(est)` · `tok/s` | 输出结束但推理明细缺失或不可信时，保留明确标记的字符 ÷ 4 估算；不拿密文、思考摘要或上一条回复的密度猜推理 token。 |
+| context | `getContextUsage()` 持久化分支投影；流式复用有效样本，分支/模型/完成边界刷新，不是实时输出计数。 |
+| `Σ` I/O | 当前 session 所有分支的标准 assistant、compaction、branch summary；不混工具自报、condense 或摘要 custom entry。input 不重复加入 cacheRead。 |
+| cache | 最近确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`，诊断同口径。 |
+| `gen≈(live)` · `tok/s` | 流式文本/工具参数的计时 UTF-16 长度 ÷ 4 ÷ 观测秒数；4 为 UI 近似，不是分词器/逐 token 实测。 |
+| `gen≈(last/avg2/avg3)` · `tok/s` | 每批 assistant 完成（含 toolUse）以可靠 `output-reasoning` 按计时字符份额校准；工具批单报，短正文最多三窗。 |
+| `gen≈(est)` · `tok/s` | 推理明细不可信时保留字符÷4估算，不从密文、摘要或上次密度猜 token。 |
 
-context 样本来自 `getContextUsage()` 读取的已持久化会话投影，不是正在流式生成的消息，因此不是实时输出 token 计数。
+生成速率取 SDK producer 的 `text_delta/toolcall_delta` 单调时钟，不用排队 UI 时间。各段首批字符/时间同时排除，思考/段切换拆窗；同批同步/微任务不拆分。须 ≥100ms、≥半输出被计时；单批、短尾、终态补发不报数。工具 JSON 只计原始 delta 长度，以 `toolcall_end` 封口；混合输出需各块完整，thinking 存在但 reasoning=0 也不视为可信明细。
 
-状态栏与 `/codex-ui` 诊断区分两个口径：
+新输出先藏旧值，足量观测后显示 live，完成立即校准；工具执行/返回值和无新输出的失败不改批次。工具批不与正文平滑，正文 ≤64 tokens 时用至多三窗的 `Σ估算 tokens / Σ秒数`，不是平均速率；provider/实际模型/推理级别隔离，会话/模型/上下文变化清空。这是受网络/字符密度影响的客户端估算，不是服务端测速，不加 UI 分词器/hash 或正文副本。
 
-- **模型生成估算**：在宿主 SDK 的 producer 交付 `text_delta` / `toolcall_delta` 时用单调时钟计数，不按排队后的 UI 回调取时。
-  各段首个交付批次没有可观测生成区间，因此字符和时间同时排除；重新思考及输出段切换会拆开窗口。
-  流式阶段按字符 ÷ 4 估算；每次 `message_end` 再用 `usage.output - usage.reasoning` 按已计时字符份额校准，明确标 `≈`。
-  这是客户端交付估算，受网络及 token/字符分布影响，不冒充精确逐 token 或服务端解码速度。
-- 至少观测 100ms，且至少一半模型输出位于计时窗口。同一批同步/微任务增量不拆开；单批、只见短尾或终态补发不制造速率。
-  工具参数按原始 JSON delta 长度计数，SDK 的 `toolcall_end` 确认流完整，不重序列化/保存参数副本。
-  混合文本/工具输出需各块都完整交付；仅用已确认且可信的推理明细校准，有 thinking 块但推理为零也视为不可信。
-  不加载 UI 分词器，不复制/分词历史正文，不新增 hash。
-- 新文本/工具参数开始时隐藏上一条值，有足够观测后显示 `live`；每批输出完成立即更新，思考及工具执行耗时不算入速率。
-  无新输出的失败或工具结果不会改写已完成批次。工具参数批次不与正文平滑；正文不超过 64 tokens 时最多合并三条有效窗口，
-  用 `Σ估算 tokens / Σ窗口秒数` 而非平均速率。provider、实际模型及推理等级隔离，会话/模型/上下文变化清空。
-- **端到端吞吐**仅在诊断显示 `out(last)`：SDK 总输出（含推理）除以完整 `durationMs`。
-  包含首字等待、思考和传输；不含调用前压缩、工具执行、UI 消费延迟。即使正文不可测，这个口径仍可独立有效。
-  它不依赖推理明细或正文/密文内容；原始用量、历史消息及持久化摘要不改写。
+诊断另报 `out(last)` = SDK 总输出（含推理）÷完整 `durationMs`：含首字等待/思考/传输，不含请求前压缩、工具执行或 UI 延迟；无可靠正文速率时仍可有效。原始用量/历史/摘要不改，I/O/cache/本轮摘要仅收主 assistant；condense 额外用量单列，旧摘要不重写，上下文缓存按生命周期失效，不每帧扫历史。
 
-实时累计 I/O、最近请求 cache 和本轮摘要只接收主 assistant 用量，与 session 重建保持同一角色范围；工具的活动/错误仍正常显示，历史已持久化摘要不重写。condense 的额外摘要用量单列，不能与上述统计互换。上下文归一化缓存按生命周期失效，不每帧扫描历史。
-
-Git `+A -D` 合并比较工作树/index 相对 HEAD，再加未忽略的未跟踪文本；不是累计编辑次数或单一净值。未跟踪扫描最多 200 文件、每个 256 KiB，二进制跳过；已跟踪文件不受此扫描上限限制。
-
-可见且启用的 Footer 每 2 秒采样并 250 ms 防抖，隐藏或关闭即停止。Git 查询 5 秒超时，不运行外部 diff/textconv、不写对象；失败保留上次值。只有确认 HEAD 未出生时才用对应哈希格式的空树。
+Git 比较工作树/index 相对 HEAD，并加未忽略的未跟踪文本，不是编辑次数/单一净值。未跟踪最多 200 文件×256 KiB，跳二进制，已跟踪无此限制。可见启用时每 2s 采样、250ms 防抖，隐藏停；5s 超时，不用外部 diff/textconv、不写对象，失败保留旧值。仅确认 unborn HEAD 才用对应哈希格式空树。
 
 ## 全屏历史与留白
 
-fullscreen 留白、历史窗口与置顶输入条共用一个布局根安装生命周期；关闭留白不关闭窗口或输入条，regular 模式不接管终端滚动。`fullscreen.marginX`（0–8，0 关闭留白）与 `fullscreen.minWidth`（40–400）控制左右留白。原始 session 记录保留。
+fullscreen 留白/历史/置顶输入共用布局生命周期；关闭留白不关其他两项，regular 不接管终端滚动。`marginX` 0–8（0 关闭）、`minWidth` 40–400；原 session 不删。
 
 ### 置顶输入与跳转
 
-- 顶部预留一行，避免输入条出现/消失时正文和输入区跳动；原 prompt 尚有部分可见时留空，完全滚出上方后显示 `↑` 和单行摘要。
-- 摘要对应当前阅读位置最近的用户输入，翻阅旧轮次时不会错误显示最新输入；使用原组件实际显示的内容，保留 Markdown 转换/脱敏，按终端列宽裁切并沿用用户消息主题色。
-- 左键点击输入条跳回那条原始 prompt；即使原位置已超出 5,000 行窗口也会按需加载。拖动、右键或带修饰键点击不跳转，滚轮仍滚动正文；跳转后不自动跟随新输出。
-- 输入条独立于正文滚动和复制，不加入 session、模型上下文或正文选区。选区固定当前阅读上下文，释放后再更新；关闭/重载恢复原布局。
+预留顶部一行：prompt 部分可见时留空，完全滚出上方后显示最近阅读位置对应的 `↑` 单行摘要，不误用最新轮。取原组件实际显示/脱敏/Markdown 转换与主题色，按列宽裁切。
+
+左键跳回原 prompt（超窗按需加载），之后不自动跟新输出；拖选/右键/修饰键不跳，滚轮照常。输入条不进 session/模型/正文选区；选区固定阅读上下文，释放再更新，关闭恢复布局。
 
 ### 历史窗口
 
-- 最多保留 5,000 显示行，包含 Earlier/Later 提示；到边缘继续滚动按需翻页，释放另一端派生缓存。
-- 阅读旧历史时保留锚点，滚轮在边缘继续逐页加载；宿主顶部/底部跳转可跨页。拖动滚动条到底会回到真实历史末尾并跟随新输出，不停在已加载片段的末尾；普通定位和提示导航不会触发这一跨页跳转。零边距与留白模式都在真实 renderer 上安装；`history-window.scrollbarFollow` 诊断报告桥接是否成功及原因。无法安全桥接宿主滚动条入口时仅停用该增强，仍保留滚轮分页和显式顶部/底部跳转。搜索仅覆盖已加载窗口。
-- 活动时钟每秒只使缓存内的流式消息块过期，让思考标题更新；已完成历史仍复用，不重建消息正文或增加计时器。
-- 有选区时固定已提交窗口，暂停时钟驱动的块刷新，提交输入解除；resize 无法安全重投影时按 [复制](selection-copy.md) 规则回退。
-- 预算限制保留窗口；边界处单个超大组件仍可能完整 render 一次，再裁切并释放缓存。
+- 最多 5,000 显示行（含 Earlier/Later），边缘继续滚动翻页并释放另一端派生缓存，保阅读锚点；顶部/底部键可跨页，搜索仅已加载窗口。
+- 滚动条拖到底跳真实历史末尾并跟新输出，普通定位/提示不触发跨页。零边距/留白均安装；`history-window.scrollbarFollow` 报告桥接，无法安全桥接仅关此增强，保滚轮分页和显式跳顶/底。
+- 活动秒钟仅使缓存内流式块过期以更新思考标题，完成历史复用，不重建正文/添 timer。有选区固定已提交窗口并暂停时钟刷新，提交输入解除；resize 无法重投影按[复制](selection-copy.md)回退。
+- 预算限制保留行数，不是内存硬限；超大组件仍可能完整 render 一次后裁切/释放。
 
 ## 字形
 
-布局后为默认 `✔ ✖ ✓ ✗ ⚠` 补 U+FE0E，请求文字形态；已有 VS15/VS16 不改，SGR 和 OSC 载荷原样通过。选择子不进入 session 或复制文本，布局列映射不变。`glyphs.textPresentation` 关闭这套处理，`glyphs.include` 额外追加字符；终端和字体决定实际效果，绕过帧写入路径的组件不受处理。
+布局后为 `✔ ✖ ✓ ✗ ⚠` 补 U+FE0E，请求文字形态；已有 VS15/VS16、SGR/OSC 载荷不改，不入 session/复制、不改列映射。`glyphs.textPresentation` 关闭，`include` 追加字符；字体/终端决定效果，绕过帧 writer 的输出不受处理。
 
-主界面实现集中在 `src/appearance/chrome/`，交互摘要与用量 owner 位于 `src/appearance/activity/`；Git 统计和会话装配由 appearance 管理，共用呈现组件位于 `src/presentation/`。
-
-字形 writer 随激活持有、会话关闭释放，不覆盖后装包装。无法安全替换时保留现状并报告，重启 Pi 后再接管。
+writer 激活持有、关闭释放，不覆盖后装包装；不安全时报告并保持现状，重启后再接管。界面实现归 `src/appearance/chrome/`，摘要/用量归 `activity/`，Git/装配归 appearance，公共组件归 `src/presentation/`。

@@ -2,66 +2,63 @@
 
 [English](README.md) | **简体中文**
 
-为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、skill 输入、condense 和执行工具。当前版本 **0.21.0**，开发与宿主检查针对 **Pi 1.5.0**。
+Pi 的 Codex 风格转录界面与工作流扩展。**Metis 0.21.0 仅适配 Pi 1.5.0**，需要 Node.js **22.19.0+**。
 
 ## 安装
 
-需要 Node.js >=22.19.0 和 Pi 1.5.0。在本地检出目录运行：
-
 ```bash
-pi install .
+pi install .  # 在本地检出目录执行
+# 或：pi install git:git@github.com:Rycen7822/metis-pi.git
 ```
 
-重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包保留独立执行工具，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
+重启 Pi 并选择 `metis-pi` 主题。先禁用同名独立提供者：`@howaboua/pi-codex-conversion`、`pi-web-access`、`pi-session-recall`、`@narumitw/pi-lsp`，以及 agent-stuff 的 BTW/commit/github/uv 资源；原文件和会话保留。详见[内置维护扩展](docs/features/managed-plugins.md)与 [LSP](docs/features/lsp.md)。
 
-Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`。激活前应移除或禁用原来的独立 npm 包入口，避免重复工具或 `/lsp` 命令；原文件和历史会话保留。BTW 旁路对话及 `commit`、`github`、`uv` 技能也由本包维护；启用时应禁用 agent-stuff 中对应资源，避免同名命令或技能重复。详见[内置维护扩展](docs/features/managed-plugins.md)和 [LSP 指南](docs/features/lsp.md)。
-
-可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-extensions/goal.ts"]`。详细用法见[功能手册](docs/README.md)。
+用 Pi 包入口过滤单独停用功能，例如在包配置中设 `"extensions": ["-extensions/goal.ts"]`；详见[功能手册](docs/README.md)。
 
 ## 功能
 
-| 功能 | 行为与说明 |
+| 功能 | 行为 |
 | --- | --- |
-| [工具转录](docs/features/display.md) | 内建工具的紧凑标题、探索分组、流式 write 预览与 edit/write diff；第三方工具保留自己的 renderer。 |
-| [思考显示](docs/features/display.md#思考块) | 流式显示最新 6 行，结束后折叠；左键切换折叠/可滚动窥视，右键切换全展开/关闭；全展开时左键不变，Ctrl+T 保留宿主行为。 |
-| [输入与状态](docs/features/interface.md#输入区) | 灰色输入面、模型/上下文信息；[Working/footer](docs/features/interface.md#统计口径) 显示运行阶段、实测输出速度、用量和未提交改动量。 |
-| [选区复制](docs/features/selection-copy.md) | fullscreen 下将所选显示内容按来源映射还原为逻辑文本；无法验证的行回退原生提取。 |
-| [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
-| [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
-| [BTW 旁路对话](docs/features/managed-plugins.md#btw-旁路对话) | `/btw` 沿用 Pi 当前模型和认证发起旁路问答，可将摘要送回主会话。 |
-| [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
-| [随包 skills](docs/features/skills.md#随包-skills) | `ast-grep`、`commit`、`github`、`uv` 随 Metis 安装和更新，由 Pi 原生发现；相应外部 CLI 须另外安装。 |
-| [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
-| [Neural Search](docs/features/neural-search.md) | 一个 deferred `neural_search` 聚合原生路径/内容搜索与全范围 CPU 语义搜索，经 `tool_search` 发现后直接调用。FFF 支持 Linux x64（glibc ≥2.31）和 Windows x64；semantic 另需准备 Linux x64 运行包。 |
-| [LSP](docs/features/lsp.md) | 一个 direct `lsp` 工具，以 `action: diagnostics/fix` 和扁平参数调用；修复默认预览，`/lsp` 查看命令可用性。只按名字的只读 allowlist 须另按参数限制写入。 |
-| [子代理](docs/subagents/native.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 或 Windows，需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
-| [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 工具；普通图片使用 Pi `read` + `image()`，provider 和登录由 Pi 提供。 |
-| [Dynamic agents](docs/features/dynamic-agents.md) | 按 provider/模型从全局 TOML 选择全局指令策略，在下一次 agent run 生效；仅替换请求中的全局指令，保留项目规则和源文件。 |
-| [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
-| [Codex 远端压缩](docs/features/codex-compaction.md) | `openai` / `openai-codex` 的 `/compact` 与自动压缩支持远端加密 checkpoint，持久化回放；ChatGPT OAuth Responses 可经旧 Codex 路径压缩。 |
-| [condense](docs/features/condense.md) | 默认关闭，沿用 contextPrune；独立测量确定性替换，付费摘要须满足压力和完整消息 proxy 预算；不足时保留待处理证据，支持分页回读与 token 用量显示。 |
+| [工具转录](docs/features/display.md) | 内建工具紧凑行、探索分组、流式 write 预览与 diff；第三方保留原生 renderer。 |
+| [思考显示](docs/features/display.md#思考块) | 流式显示最新 6 行，结束折叠；左键切换窥视，右键切换全展开/关闭；全展开时左键不变，Ctrl+T 沿用宿主。 |
+| [输入与状态](docs/features/interface.md#输入区) | 灰色输入区、模型/上下文、Working 阶段、实时估算/校准速度、用量及未提交改动。 |
+| [选区复制](docs/features/selection-copy.md) | fullscreen 应用选区还原逻辑原文，无法验证的内容回退原生提取。 |
+| [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行，按需翻页、释放派生缓存；原始记录不删。 |
+| [goal](docs/features/goal.md) | `/goal` 管理持久目标、计时、预算及跨轮续跑。 |
+| [BTW](docs/features/managed-plugins.md#btw-旁路对话) | 沿用当前 Pi 模型/认证的旁路对话，可将摘要送回主会话。 |
+| [多 skill](docs/features/skills.md) | 一次展开多个 skill，在转录中合并折叠。 |
+| [随包 skills](docs/features/skills.md#随包-skills) | `ast-grep`、`commit`、`github`、`uv`；外部 CLI 另装。 |
+| [MCP](docs/configuration.md#mcp) | 默认关闭；缓存发现、懒连接、空闲回收，共用原生 CLI/OAuth 与权限。 |
+| [Neural Search](docs/features/neural-search.md) | 经 `tool_search` 发现 deferred `neural_search`，提供原生路径/内容搜索及 CPU 语义搜索。 |
+| [LSP](docs/features/lsp.md) | direct `lsp` 诊断/修复，`write: true` 才写入；只读策略须检查参数，不能仅检查工具名。 |
+| [子代理](docs/subagents/native.md) | 持久 Pi 子代理、deferred codemode 工具、问题与完成唤醒；需 Python 3.11+，只启用一个提供者。 |
+| [执行工具](docs/execution.md) | deferred PTY 会话；图片用 Pi `read` + `image()`，provider 和登录归 Pi。 |
+| [Dynamic agents](docs/features/dynamic-agents.md) | 按 provider/模型选择下一 run 的全局指令，保留项目规则与源文件。 |
+| [Action Fusion](docs/features/action-fusion.md) | edit/write 成功后执行 `then_run`，分别保留状态、diff 和日志。 |
+| [远端压缩](docs/features/codex-compaction.md) | OpenAI/Codex 加密检查点、持久化回放与跨模型恢复。 |
+| [condense](docs/features/condense.md) | 默认关闭的 contextPrune；证据可回读，付费摘要受压力/预算约束，用量单列。 |
 
-metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不再使用项目 metis 覆盖。`/metis-config init` 在缺少 TOML 时按默认值创建配置并安装同目录[参数说明](metis-pi-config.md)，不导入、改写或备份其他配置文件。LSP 只读 `[lsp]`，旧 LSP JSON 的配置值须手动复制，init 不导入。已有 TOML 直接编辑所需配置项并保留个性化值；子代理后端也使用 `[subagents]`，须先安全结束任务再重启 daemon 生效。[TOML 模板](metis-pi.toml)列出全部默认值。`[appearance] enabled = false` 只关闭显示层；Pi 自有模型/主题/packages/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
+偏好统一存于全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不做项目覆盖。`/metis-config init` 创建缺失默认配置及[参数说明](metis-pi-config.md)，不导入或改写其他文件；已有 TOML 直接编辑，缺项采用[默认模板](metis-pi.toml)。旧 LSP JSON 须手工迁移，子代理后端变更后须安全重启 daemon。`[appearance] enabled = false` 只关显示；Pi 的模型/主题/packages/trust/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
 
 ## 兼容边界
 
-- 显示层只接管来源明确的 Pi 内建工具；未知宿主形状、第三方补丁或不可修改原型会退避，原因见 `/codex-ui`。
-- 精确复制依赖 fullscreen 应用选区；Markdown 表格、未知 token、图片等保留原生回退。终端原生选区不受此插件控制。
-- 5,000 行是保留窗口上限；单个超大组件仍可能完整排版一次，原生搜索仅覆盖已加载窗口。
-- 本包的主界面外观与其它替换 editor/footer/Working 的插件可能冲突。`pi-copy-soft-wrap` 的启发式复制由本包精确路径接管，建议只保留一套。
-- 随包 PTY / Neural Search 资产支持 Linux x64 和 Windows 10/11 x64。Windows shell 命令需 Git Bash，更新原生资产前先退出 Pi；详见[兼容性](docs/compatibility.md)。
+- 仅接管来源明确的内建工具；未知宿主、外来补丁或不可修改原型保留原生行为，原因见 `/codex-ui`。
+- 精确复制依赖 fullscreen 应用选区；表格、未知 Markdown、图片和终端原生选区保留各自回退。
+- 5,000 行限制显示窗口，不是进程内存硬上限；超大组件仍可能完整排版一次，原生搜索只查已加载历史。
+- editor/footer/Working 替换可能冲突；不要再同时启用 `pi-copy-soft-wrap`。
+- 随包 PTY/FFF 支持 Linux x64（FFF 要求 glibc ≥2.31）及 Windows 10/11 x64；Windows 需 Git Bash，semantic 另需准备 Linux x64 运行包。更新已加载原生资产前先退出 Pi。
 
-[兼容性说明](docs/compatibility.md)记录宿主契约与限制，不保证任意插件组合完全兼容。
+[兼容性](docs/compatibility.md)列出契约与限制，不保证任意插件组合。
 
 ## 开发
 
 ```bash
-npm ci --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --bin-links=false --no-audit --no-fund
 npm run verify
 ```
 
-运行可见交互检查用 `npm run test:pty`，静态预览用 `npm run preview`。具体测试范围、源码检查与文档维护见[开发说明](docs/development.md)；模块职责见[架构](docs/architecture.md)，版本差异见[CHANGELOG.md](CHANGELOG.md)。
+`npm run test:pty` 检查终端交互，`npm run preview` 生成静态预览。[开发说明](docs/development.md)涵盖检查/构建/发布，[架构](docs/architecture.md)列出所有权，[CHANGELOG](CHANGELOG.md)记录版本变更。
 
 ## 来源与许可
 
-基于 `pi-codex-style-tools` 修改，保留 MIT 许可。goal 衍生代码使用 Apache-2.0 上游，codex-conversion 和内置 LSP 使用 MIT 上游；归属及修改说明见 [NOTICE](NOTICE)、[LICENSE](LICENSE)、[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0)。本项目与 OpenAI、Pi 上游无官方关联。
+基于 `pi-codex-style-tools`（MIT）；goal、BTW、commit/github/uv 保留 Apache-2.0 来源，codex-conversion 与 LSP 保留 MIT 来源。详见 [NOTICE](NOTICE)、[LICENSE](LICENSE)、[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0)。本项目与 OpenAI、Pi 上游无官方关联。

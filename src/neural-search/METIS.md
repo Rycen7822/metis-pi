@@ -2,129 +2,72 @@
 
 ## Source and ownership
 
-Derived from `@ff-labs/pi-fff` 0.11.0 in <https://github.com/dmtrKovalenko/fff>, tag `v0.11.0`, commit `95fd777c2529fc7b4d7572dabff64cc07268f2c5`, under the MIT license retained in `LICENSE`.
+Derived from [FFF](https://github.com/dmtrKovalenko/fff) `@ff-labs/pi-fff` **0.11.0**, tag `v0.11.0`, commit `95fd777c2529fc7b4d7572dabff64cc07268f2c5`; [MIT license](LICENSE) retained. `references/pi-fff/packages/pi-fff/` is ignored reference material, never a runtime/package input.
 
-The pristine, sparse reference checkout is `references/pi-fff/packages/pi-fff/`. It is ignored by Git and is not a runtime dependency or package payload. The installed component is the locally maintained TypeScript in this directory, loaded by `extensions/neural-search.ts`.
+Metis owns this TS integration and the specialized Rust fork in `engine/`, not upstream editor/SDK compatibility. `extensions/neural-search.ts` is the host entry; root dependencies/builds own delivery. The engine source stays in Git; `native/`, bundled libraries/manifests/notices in `assets/` ship. No upstream FFF package/download is needed. Targets: Linux x64 glibc ≥2.31 and Windows x64, optional `ffi-rs` retained.
 
-Metis owns the Pi integration, configuration, native finder lifetime, bounded auxiliary finders and cursors, editor autocomplete, maintenance commands, tool schemas and display. Do not reinstall the standalone Pi wrapper to update this component. Compare upstream changes against the pinned source, port intentionally and verify affected behavior before updating this provenance.
-
-In source checkouts, the owned Rust workspace is in `engine/`; it is not part of the npm payload.
-The reduced Linux `ffi-rs` adapter in `native/` and the bundled library plus manifest/notices in `assets/` ship with the runtime.
-All engine implementation and delivery files are maintained under `src/neural-search/`; `extensions/neural-search.ts` is only the host entry.
-No upstream FFF npm package or binary download remains. The engine is a Metis-specialized Rust fork of 0.11.0, with the original zlob semantics and existing LMDB format.
-It retains AI search/ranking and live indexing, not upstream editor/SDK compatibility. Delivery targets Linux x64 glibc >=2.31 and Windows x64, using bundled native libraries.
-See the repository's [engine maintenance guide](https://github.com/Rycen7822/metis-pi/blob/main/src/neural-search/engine/README.md) for builds and redistribution.
-`find/grep/multi_grep` retain FFF path/content and frecency behavior. `semantic` instead invokes the separate CPU sgrep core in `semantic/`, with Bekko128 for text and LateOn token48 for code; it uses complete-scope scoring and the core's original ranking, without FFF prefiltering or frecency. Both run locally. The semantic runtime currently targets Linux x64 and must be prepared separately; missing or incompatible runtimes fail explicitly.
+FFF owns find/grep/multi_grep ranking and frecency. [semantic/](semantic/README.md) separately owns CPU sgrep with Bekko 128D vectors / LateOn 48D token rows, complete-scope scoring and original ranking without FFF prefilter/frecency; Linux x64 runtime must be prepared separately. Both search locally. User API/limits belong in [the search guide](../../docs/features/neural-search.md), native contracts/builds in [engine/README](engine/README.md).
 
 ## Architecture
 
-```text
-index.ts          Pi composition, events/commands, action-map factory
-config.ts         Global preferences and owned database-path resolution
-session.ts        Session/cwd lifetime, indexes, leases and cursor invalidation
-cursors.ts        Bounded continuation state and checked action/request identity
-native/           Finder/pool, path/filter codec, content protocol/pages
-native/binding/   Owned Linux C-ABI types, ffi-rs decoding and finder operations
-tools/            Pi action schemas, execution/query orchestration and returned text
-  semantic.ts     Versioned CLI/JSON boundary, bounded output, owned process-group cancellation
-ui/               Autocomplete adaptation and native fallback widgets
-```
+| Owner | Responsibility |
+| --- | --- |
+| `index.ts` | Pi composition/events/commands and one readonly action-map factory, not a native barrel. |
+| `config.ts` | Global defaults/TOML validation and resolved database paths. |
+| `session.ts` | cwd/session epochs, finder leases, scope selection and cursor invalidation, not query assembly. |
+| `cursors.ts` | Typed continuation/request identity and bounded state. |
+| `native/` | Finder/pool, path/filter codecs, content protocol/pages. |
+| `native/binding/` | Private C ABI, ffi-rs decoding and operations. |
+| `tools/` | Schemas, initial/fuzzy/resumed queries and formatted results; `semantic.ts` owns CLI/JSON/process cancellation. |
+| `ui/` | Host autocomplete/provider adaptation and fallback widgets. |
 
-The extension consumes the factory's readonly action map directly; there is no registration callback or second action registry. `index.ts` is the composition root, not a barrel for native internals. The bundled root TOML is the sole defaults source. The config boundary resolves database paths once; each scoped native factory captures shared scan policy and explicitly whitelists native fields. Main creation may use persistence and database-free fallback; auxiliary creation always bypasses both DB paths, warnings and sticky fallback state.
-
-`session.ts` selects and leases an index and returns its root/relative constraint. It does not assemble queries: action execution owns initial, fuzzy-fallback and resumed queries together. Cursor lookup validates action/scope/request once and returns the corresponding typed variant; resource freshness is still checked after asynchronous acquisition.
-
-Native path routing and root/home scan policy share one owner in `native/paths.ts`; database paths belong to configuration, not routing. Native resource code does not depend on tool execution or TUI presentation. The concrete Pi session/UI adaptation remains in the application session owner; no generic host port or resource framework is added.
-
-SDK cache policy, database fallback/scan cancellation, auxiliary leases/eviction and cursor validation remain separate because they have distinct lifetimes and failure semantics. Versioned global binding promises survive jiti/Bun reevaluation, keyed by the module location; rejected imports remain retryable. Finder instances are still scoped and disposed independently. Within the auxiliary pool, one record owns a resource through pending and ready states; reservation counts are never copied between collections. Continuations lease the original live finder or fail immediately, never initialize a replacement. Find cursors retain the complete immutable result snapshot and next page; content cursors retain the effective query and native batch progress. Both retain the original request and derive page/context/case settings rather than storing duplicate projections. No compatibility re-export files preserve the former flat layout; private consumers are migrated together.
+Root TOML is the sole default source. Scoped factories capture scan policy and whitelist native fields: main creation may persist/fall back without DB, auxiliary creation bypasses both DBs, warnings and sticky fallback. `native/paths.ts` owns root/home policy and routing; DB paths stay configuration-owned. Native resources do not depend on tools/UI; concrete session adaptation stays in the application, not a generic framework.
 
 ## Local contracts
 
-- One public, deferred `neural_search` entry, using the existing Metis `action` / `params` / `describe` envelope. File lookup, single-pattern grep, literal multi-pattern grep and semantic search are inner actions, not separately registered tools.
-- Semantic execution binds the existing session/cwd lifetime without acquiring a FFF finder. It launches the owned absolute `bin/sgrep` with argument arrays and Metis JSON protocol1, never a shell/PATH lookup or query-time build. Session change, cancellation and timeout terminate the whole process group and confirm no live members before settling; protocol/model/source errors cannot become empty results or another action. Ordinary CLI JSON remains unchanged unless the host protocol is requested.
-- The existing global configuration owner binds each semantic budget selection to a stable config-file stat snapshot. Integer tiers256/512/1024 (default512) share one HOME ledger. The requested tier is not a claim that a pending downgrade has taken effect. Only complete ranked-prefix records are retained under the host display budget; no incompatible cursors or FFF filters are accepted.
-- A short `metis_neural_search` prompt directory advertises the capability without its argument schemas. Pi's native `tool_search` can activate the entry for direct calls; codemode remains optional. Discovery must never auto-activate `neural_search` on every session or turn.
-- Global `[neuralSearch]` in `metis-pi.toml` is the only preference source. No legacy JSON/env/flags, native tool-name override modes or old active aliases. `mentions` controls editor completion independently.
-- State defaults to `<agentDir>/metis/neural-search/{frecency,history}`. Never automatically read, move, delete or migrate old plugin/editor databases. Explicit configured database paths are honored; initialization can fall back without persistence when database access fails. Oversized databases are preserved and rejected, not automatically erased. The low-level reader-capacity override is `METIS_NEURAL_SEARCH_LMDB_MAX_READERS` (default 1024, valid >=126); the old FFF name is not an alias. It does not import preferences or introduce a second TOML schema.
-- Preserve git/frecency order, path and exclusion semantics, smart case and regex fallback, bounded context/output, pagination and external-root lookup. Session/cwd changes and shutdown must not publish obsolete native finders or reuse another operation's cursor.
-- Historical standalone tool names may still be rendered by Metis; that is not registration of executable aliases. When installing Neural Search, remove standalone `@ff-labs/pi-fff` to avoid duplicate tools/indexers.
+- One deferred action/params/describe tool and a short `metis_neural_search` directory. Discovery never auto-activates each turn; native tool_search enables direct use, codemode optional. `mentions` independently controls editor completion; historical tool-name rendering does not register aliases. Disable standalone `@ff-labs/pi-fff`.
+- Global `[neuralSearch]` only, no legacy JSON/env/flags/name overrides. Default DB directories are `<agentDir>/metis/neural-search/{frecency,history}`; never import/move/delete editor/plugin DBs. Explicit paths are honored, access failure permits database-free search, oversized DBs are preserved/rejected. Reader-capacity override `METIS_NEURAL_SEARCH_LMDB_MAX_READERS` is separate (1024, minimum 126; no old alias).
+- Semantic acquires no FFF finder. It runs absolute `bin/sgrep` with argv, shared service and protocol 1, not PATH/shell/query-time builds. Session/cancel/timeout terminates its own client group and confirms cleanup; the service cancels that request, not other clients. Errors never become empty hits/fallback actions. Ordinary CLI JSON is unchanged without host mode.
+- Semantic integer tiers 256/512/1024 MiB (default 512) bind to a stable config-file stat snapshot and one HOME ledger; requested downgrade is not effective-policy proof. Display retains only complete ranked-prefix records; no FFF filters/cursors are accepted.
+- Action lookup validates action/scope/request once; resource freshness is rechecked after awaits. Acquisition, DB fallback, request cancellation, auxiliary lifetime and cursor policy remain distinct.
 
-## Cancellation and native-query boundary
+## Native lifetime and autocomplete
 
-Operation cancellation and scope lifetime are distinct. A private abortable wait lets one tool/command/autocomplete request stop waiting without aborting shared initialization. A lease arriving after its waiter is cancelled is released; shutdown/cwd/session changes still own actual finder destruction. Native synchronous grep itself is not interruptible by a JS signal.
-Full and watcher-subtree walks observe the owning picker's shutdown token at callbacks and discard cancelled partial candidates without publishing scan failures; this is not forceful OS-call interruption.
-One unref'd pool timer actively expires auxiliary finders after five idle minutes; busy/pending leases retain ownership and release restarts the idle deadline. Expired-root reuse is a cold initialization, never transparent continuation replacement.
+Versioned binding promises survive jiti/Bun reevaluation, keyed by module location; rejected imports retry, scoped finders dispose independently. An auxiliary record owns pending/ready state and reservations; busy/pending leases are not evicted. One unref timer expires idle finders after five minutes; release restarts the deadline, returning later is cold. Continuations lease the original finder or fail, never substitute a replacement.
 
-The action adapter captures scan progress before querying and discloses incomplete initial indexing. Auxiliary results state the actual search root. Auxiliary reuse requires the exact scan root: hidden/ignore/git rules are root-relative, so physical containment cannot attest compatible coverage. Literal directories containing spaces can have their own finders; unrepresentable filename/glob filters are rejected explicitly. `pathConstraintText` owns native separator normalization, home expansion and absolute-whitespace preservation before both routing and query encoding; POSIX literal backslashes remain data. Dot segments are normalized before query encoding. Physical containment remains a separate routing policy.
+### Cancellation and native-query boundary
 
-`native/content.ts` owns one literal encoder, including regex fallback.
-Newline-free arrays use structured multiGrep.
-By explicit user decision, arrays containing any real LF fail with split-query guidance; a single LF literal uses escaped regex encoding, not extra OR items.
-Needles and filters cross private ABI v7 separately: no token transport, whitespace split or second backslash+n decoder.
-Literal backslashes/source whitespace remain data, invalid-regex fallback reuses the original literal, and NUL inputs fail explicitly.
-Native compilation failure returns metadata without scanning; this adapter performs the sole canonical literal retry, including LF encoding. Private Rust callers no longer receive implicit literal results.
+Cancelling a waiter does not abort shared initialization; a late lease is released. cwd/session/shutdown owns destruction, while synchronous native grep cannot be JS-interrupted. Full/subtree walkers cooperate with the owning shutdown token and discard cancelled partial candidates without reporting scan failures; they cannot abort an OS call.
 
-One compiled native regex owns its matcher and LF capability, derived from the same native syntax and flags; no per-line secondary content scan is used.
-By-line `nativeMultilineLimited` is conservative for LF-capable expressions, even when only an ordinary branch matches; coalesced blank-row coverage is retained before terminator trimming.
-The emitted batch separately carries actual `nativeOutputTruncated` byte/context loss; the SDK does not guess these facts from JavaScript pattern syntax.
-Both content actions disclose limited multiline/block counts and conservative outputTruncated, not complete per-occurrence pagination.
-Ordinary single-line rows retain their count; byte clipping must be reported even if a multibyte line is below the JS character limit.
+A conflicting provider disables auxiliary integration and releases resources; managed children never regain excluded discovery tools. Autocomplete asks host navigation before index init, uses session epoch (not initial cwd) to invalidate wrappers, preserves same-session cwd rebinding and passes through replacement-session wrappers. Public writable triggerCharacters supports merged triggers and either skill-mux load order; quoted whitespace paths remain tested.
 
-Immutable batches plus unread-row offsets provide bounded intra-file pages before advancing a native file cursor.
-Matching/serialization captures the index revision under the same native read lock; continuations verify offset and revision there.
-Buffered rows also require that saved revision, and optional fuzzy suggestions must match the exact no-match batch.
-Per-file-cap metadata belongs to the saved immutable batch, is computed once per batch, and is copied into each page without sharing mutable output arrays.
-Never use external before/after probes or retag an older batch after a writer.
-No-op shared mutable access conservatively advances the revision; rescan never resets it.
-Find snapshots remain independent and immutable.
+Sanitize untrusted display text before ANSI while retaining raw arguments/copy metadata. Keep numeric normalization even after schema validation; do not request discarded definition classification.
 
-Live admission checks the captured symlink policy on leaf and root-relative ancestors; queued directory subscriptions revalidate it.
-Empty directories revive rows independently of files; the root sentinel stays internal.
-Moved ignore definitions retain a root-policy refresh.
-Root removal/move invalidates monitoring; prolonged absence requires explicit rescan after recreation.
-Neither initial nor second-stat non-missing IO failures imply deletion: retain the index and request coalesced/throttled recovery.
-Non-working-repository hidden ancestors follow SKIP_HIDDEN even with rules; worktree hidden files remain supported.
+## Query encoding and pagination
 
-The 200-match per-file cap is possible truncation, not a promise to fetch more.
-Public limits apply without host validation.
-Both content actions share notices and completeness projection, while acquisition/modes/cursor variants stay distinct.
-Collection warnings remain on buffered pages; a fresh native batch supplies its own flags.
-Resume the saved mode without reparsing the regex.
-Only valid detected regexes reach the broad-pattern guard; invalid expressions stay literal and blank queries fail.
+### Paths and literals
 
-The entry supplies a live ownership predicate: a conflicting provider disables auxiliary integration and disposes native resources. Managed children never regain a profile-excluded discovery builtin. Autocomplete delegates path navigation to the host before index initialization and gates stale wrappers by session epoch, not the initial cwd scope. Same-session cwd rebinding remains active; replacement-session wrappers pass through.
+`pathConstraintText` normalizes native separators/home/dot segments before routing/encoding while preserving existing absolute-file whitespace and POSIX literal backslashes. Physical containment is a separate policy; auxiliary reuse requires the **exact root**, since hidden/ignore/Git rules are root-relative. Space-containing directories may get separate finders, but unrepresentable filename/glob filters fail.
 
-Autocomplete wraps the host's public provider contract, including writable triggerCharacters for the host's merged trigger assignment. Actual setup/editor tests cover both skill-mux/neural orders, earlier custom triggers, cwd rebinding and quoted whitespace paths. Sanitize untrusted call/result text before adding theme ANSI; paint-only normalization must preserve raw arguments and copy metadata. Do not remove numeric safety normalization merely because the dispatcher also validates/coerces schema inputs. The driver does not request unused definition classification that is discarded from both published text and details.
+- Needles and filters cross ABI v7 separately: no token transport, whitespace split or second backslash-n decoding. One literal codec owns regex fallback; invalid regex retries once with original filters/LF encoding, NUL/blank inputs fail. Newline-free arrays use structured multiGrep; any real LF in arrays is rejected, single LF literals use escaped regex.
+- Directory filters preserve `./`/absolute directory intent, basename globs get `./`; `stray/pkg.v1` cannot steal `./pkg.v1/`. Proven absolute files/exclusions take literal precedence before list scanning, even with glob syntax or commas; nonexisting paths stay patterns.
+- Use native bracket literals for ordinary metacharacters. Brace paths need duplicated escaped alternatives: expansion decodes escapes before compilation, backslashes inside classes are data. Do not use singleton braces, UTF-8 bytes or `!` classes; use a safe ASCII class or duplicate UTF-only alternatives. Keep POSIX trailing backslashes.
+- Split scalar lists only outside nested braces/classes (including initial literal `]`), honoring outside escapes. Array exclusions preserve internal whitespace until validation; existing scalar whitespace/comma/brace forms remain.
+
+### Immutable results
+
+Find's native offset is an item offset but ties are unstable across requests. Probe at most 100, then capture a complete immutable snapshot if needed; every page including first comes from it. Reject >10,000/changing/incomplete captures. Cursor storage caps 20,000 unique snapshot rows/200 tokens, shared snapshots counted once; row limits are not heap bounds. Fuzzy quality uses the original top score via action-owned `isWeakFind`, never a page-local score; exact globs bypass weak-fuzzy truncation, advertised hasMore requires a real cursor.
+
+Content cursors retain the effective query/mode, immutable batch and unread-row offset before advancing whole-file native offsets. Matching and serialization share one revision/read lock; buffered/resumed rows and fuzzy suggestions verify that revision. Do not retag old batches after a writer or derive mode again from regex. Per-file cap facts are computed once, arrays not shared mutably; collection warnings persist until a fresh batch. Rescan does not reset revision, no-op mutable access conservatively advances it.
+
+The native 200-match file cap may truncate, not promise further retrieval. Public pages cap at 50 content results / 100 find results; context rows merge with match precedence/indentation. Native LF capability and actual byte/context clipping independently report limitations; preserve blank-row coverage before terminator trimming. Do not infer them from JS regex syntax or claim per-occurrence multiline completeness. Report 500-character shortening and 2,000-line / 50 KiB body limits; paging cannot restore omitted display text. Fuzzy fallback retains all path/exclude filters.
 
 ## Pinned-engine corrections
 
-FFF 0.11.0 requires local integration corrections, verified against the real bindings:
+[Engine maintenance](engine/README.md) owns scan readiness/failure, symlink/hidden/ignore policy, worktree identities, content-cache/owned-byte safety, regex revision and persistence contracts. Preserve these when porting from the pinned upstream; access/history storage and AI ranking/live indexing remain, unused SDK/editor/bigram machinery does not.
 
-- Private `fileSearch.offset` is a zero-based item offset, not a page number; but repeated offset requests have unstable tie boundaries. Find probes with at most100 rows, then captures the complete query once when continuation is needed. Every displayed page, including the first, comes from that snapshot. Refuse more than10,000 matches before a large native request; reject changing/incomplete capture rather than invent a cursor. Cursor storage retains at most20,000 unique find-snapshot rows and200 tokens, counting shared snapshots once; these are row bounds, not a heap-byte guarantee.
-- The content-bigram optimization is removed, including its candidate/overlay maintenance; real filtering, binary classification and ordinary matcher order remain. All workspace-content reads now produce bounded owned byte snapshots, with the existing cache caps and small-file admission cutoff; neither cached nor uncached search maps mutable workspace files. Truncation may cause a skipped short read, not SIGBUS; cached snapshots refresh on managed invalidation. Heap/scratch memory costs remain bounded per cache/worker, not by a process-wide RSS ceiling. Literal OR keeps per-pattern smart-case behavior with one automaton, verifying case-sensitive candidates only in mixed queries. Metadata updates accept older mtimes while still advancing content revisions. Directory scoring and actual filesystem watchers are retained; only unused external client subscriptions are retired.
-- Linux Node and Bun share private ABI v7, including followSymlinks and native output-limit flags.
-  The cold standalone scanning probe and integer envelope slot are retired; progress still owns scanning/readiness/errors.
-  Each envelope owns payloads through detached JS decoding and error paths; only creation transfers a finder.
-  No upstream binding fallback or general SDK/highlight/rank wire layout remains.
-- Roots canonicalize to the physical identity used by Git caches and watcher paths.
-  One discovery boundary preserves .git-file workdirs for scans, watcher identity and index-lock lookup, without guessing the gitdir parent.
-  Config/config.worktree changes refresh status; distinct common directories are watched non-recursively without dropping nested worktree data.
-  Other-worktree indexes, FETCH_HEAD and config.lock remain filtered; only successful full status refresh clears degradation.
-- Readiness includes subscriptions, initial Git refresh and reconciled filesystem coverage.
-  A narrow filesystem epoch catches old-snapshot updates; newly installed coverage earns reconciliation after subscription.
-  One immediate automatic follow-up per job is bounded; further debt stays incomplete on the existing owner/cooldown.
-  Classification/Git/no-op writes do not dirty that epoch.
-  Walk/commit errors are fatal; monitoring/metadata failures keep committed snapshots searchable with warnings and false readiness.
-  Database initialization becomes healthy only after successful maintenance; failures stay degraded, not automatically diagnosed as permanent data loss.
-  Progress owns its errors and exact revision; unsafe JS integer values fail closed.
-- Classification uses copied inputs and index/revision validation, not a shared mutable post-scan alias. Live unknown-extension binary-to-text updates are reclassified; GC re-reads in its write transaction, and old combo associations compare normalized exact paths. Multi-part scores accumulate before averaging. Explicit content filters cannot be removed on zero candidates, and native fuzzy continuation resumes at the earliest unreturned file.
-- Directory filters use explicit globs; `./` and absolute-path normalization preserve directory meaning. Basename globs in path/exclude gain a canonical `./` prefix, ensuring content and file queries both recognize them as filters. A file such as `stray/pkg.v1` must not redirect a request for `./pkg.v1/` away from `pkg.v1/inside.ts`.
-- Native grep page size is a whole-file soft limit, not an output bound. Retain unread batch rows, cap pages at50 matches, and disclose per-file collection limits. Formatting merges physical context rows with match precedence, preserves indentation, and reports both 500-character source-line shortening and Pi's default 2,000-line/50KiB body budget through an omission notice and outputTruncated details. Omitted display text is not recovered by the next cursor; lower context/limit or read source.
-- Find pages are capped at100; exact glob filters bypass weak-fuzzy truncation. Classify fuzzy quality from the snapshot's original top score, never the current page's lower scores. The action owns `isWeakFind` for snapshot probing and continuation; formatting receives only page items and the quality decision, not a native-shaped partial result, sliced scores or an override of the original top score. Advertised hasMore requires an actual continuation. Content fuzzy fallback keeps the same path/exclude filters, including concrete filenames.
-- Proven existing absolute files take literal precedence in both main and auxiliary indexes, even when their names contain glob syntax. The shared query codec also recognizes absolute exclusions before list tokenization, preserving filename commas. Use native bracket literals for ordinary metacharacters. Brace-containing paths require a real duplicated alternative group of escaped literals: expansion decodes escapes before glob compilation, whereas backslash inside a class is data and admits extra files. Force an ASCII class for otherwise plain names, or duplicate UTF-only alternatives when no safe ASCII class exists. Do not wrap escaped metaclasses in singleton braces or put UTF-8 bytes/! into a class. Keep POSIX trailing backslashes; nonexisting absolute patterns still route as globs. Native controls cover punctuation, Unicode, nested-name exclusion and root identity. Array exclusions retain internal whitespace until validation instead of silently splitting filename paths; scalar whitespace lists and existing comma/brace syntax remain supported. A scanner, not a flat regex, splits lists outside nested braces and bracket classes, including class-initial literal `]`; outside-class escapes protect the following character. Existing absolute files are recognized before this scan.
-
-`ffi-rs` is an optional dependency; the owned library is bundled, not downloaded or compiled during ordinary installation. Unsupported platforms or missing bindings fail explicitly when an index is requested, not during tool discovery. Builds and prepack verify source/library/ABI/notice hashes. Native modules remain cached: updating engine bytes requires a Pi restart, not just `/reload`.
+Native libraries are process-cached: update source/binding/manifest/library/notices together and **restart Pi**, not only reload. Missing library/ffi/ABI or unsupported platforms fail at index use, not discovery; ordinary install neither downloads nor builds.
 
 ## Verification
 
-New diagnosis, migration and acceptance fixtures belong under `.work/`, not in permanent test discovery. Verify the native SDK request surface before and after discovery, direct execution, source-gated rendering and readonly subagent policy, real native search over disposable files, input/cursor isolation and resource cleanup. Keep checks offline; use the final package contents to verify no runtime import points into `references/` or an installed standalone plugin.
+One-off diagnosis/migration/package probes belong in `.work/`. Verify real SDK discovery/direct calls/source-gated rendering/read-only policy, disposable native searches, input/cursor isolation and cleanup offline. Package checks must exclude references/standalone runtime imports; upstream updates preserve notices and intentionally port only still-needed behavior.
