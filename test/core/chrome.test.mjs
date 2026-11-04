@@ -76,7 +76,8 @@ test("footer disclosures are independent native mouse targets and preserve focus
     model: { id: "gpt-6.1-sol", provider: "openai", contextWindow: 500_000 },
     thinkingLevel: "xhigh", contextUsage: { tokens: 157_500, contextWindow: 500_000, percent: 31.5 },
     cwd: "/home/xu/project/harness/metis-pi", session: { input: 13_800_000, output: 1_000_000 },
-    cacheLastPct: 96.6, speed: { tokensPerSecond: 103, estimatedTokens: 1030, durationMs: 10000, sampleCount: 1 },
+    cacheLastPct: 96.6,
+    speed: { tokensPerSecond: 103, estimatedTokens: 1030, durationMs: 10000, sampleCount: 1, kind: "calibrated" },
     changes: { additions: 99, deletions: 10 }, revision: 1,
   };
   const summary = "│ prune: ON · 743.1k->292.7k (-61%) · usage: 0 tokens";

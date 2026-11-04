@@ -1,7 +1,7 @@
 // Product status footer below the editor. Metrics stay visible; location and
 // ordinary prune messages have independent, component-local disclosures.
 // Snapshot scopes: session cumulative I/O, latest confirmed cache rate,
-// last completed output throughput, and work-tree changes against HEAD.
+// live model-output estimate / calibrated completed batches, and work-tree changes against HEAD.
 // Narrow widths wrap whole fields; painting happens after plain-text layout.
 
 import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -26,7 +26,7 @@ export interface FooterSnapshot {
   session: UsageRecord | undefined;
   /** cache(last) hit rate %, null when unknown. */
   cacheLastPct: number | null;
-  /** Latest measurable generation rate; short responses may pool up to three windows. */
+  /** Current output estimate or completed calibrated rate; short prose samples may pool three windows. */
   speed: OutputSpeedSample | undefined;
   /** Working-tree change counts vs HEAD; undefined = not a repo / unreadable. */
   changes: GitChangeStat | undefined;
@@ -110,9 +110,13 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
       if (hit) add([{ text: "cache ", tone: "dim" }, { text: hit, tone: "normal" }]);
     }
   }
-  if (show.showSpeed) {
-    const value = formatSpeedValue(snapshot.speed?.tokensPerSecond);
-    if (value) add([{ text: `${formatSpeedLabel(snapshot.speed?.sampleCount)} `, tone: "dim" }, { text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" }]);
+  const speed = snapshot.speed;
+  if (show.showSpeed && speed) {
+    const value = formatSpeedValue(speed.tokensPerSecond);
+    if (value) add([
+      { text: `${formatSpeedLabel(speed)} `, tone: "dim" }, { text: value, tone: "normal" },
+      { text: ` ${SPEED_UNIT}`, tone: "dim" },
+    ]);
   }
   const changes = snapshot.changes;
   if (show.showChanges && changes && (changes.additions > 0 || changes.deletions > 0)) {

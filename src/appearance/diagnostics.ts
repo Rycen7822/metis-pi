@@ -111,17 +111,20 @@ const cacheLine = (deps: DiagnosticsDeps): string => {
 const speedLine = (deps: DiagnosticsDeps): string => {
   const speed = deps.outputSpeed.snapshot();
   const count = speed?.sampleCount ?? 1;
-  const speedText = formatSpeed(speed?.tokensPerSecond, count);
-  const scope = count > 1 ? `last ${count} completed; short-response smoothing` : "last completed";
+  const speedText = formatSpeed(speed);
+  let scope = "last completed; usage-calibrated";
+  if (speed?.kind === "live") scope = "current stream; characters/4";
+  else if (speed?.kind === "estimated") scope = "last completed; characters/4";
+  else if (count > 1) scope = `last ${count} completed; short-response smoothing`;
   const detail = speed && speedText
     ? `${speedText} (estimated=${speed.estimatedTokens} tokens, duration=${speed.durationMs}ms, samples=${count}, scope=${scope})`
-    : "— (no sufficiently observed text-only response with reported reasoning usage)";
+    : "— (no sufficiently observed output window)";
   const total = deps.outputSpeed.throughput();
   const throughput = total
     ? `out(last) ${formatSpeedValue(total.tokensPerSecond)} tok/s (output=${total.outputTokens} tokens, `
       + `duration=${total.durationMs}ms, samples=1, scope=last completed)`
     : "— (no completed response with valid SDK usage and duration)";
-  return `  text generation: ${detail} — estimated body tokens in observed delivery windows; excludes first batches and thinking\n`
+  return `  output generation: ${detail} — text/tool-argument delivery; excludes first batches and thinking\n`
     + `  output throughput: ${throughput} — SDK total output including reasoning ÷ full SDK response duration; `
     + "includes initial wait/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays";
 };

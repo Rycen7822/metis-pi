@@ -48,6 +48,9 @@ function finishResponse(handlers, message, ctx) {
   if (producer) {
     if (!message.content.length) message.content = producer.partial.content;
     message.timestamp = producer.partial.timestamp;
+    for (const [contentIndex, toolCall] of message.content.entries()) {
+      if (toolCall.type === "toolCall") producer.stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: message });
+    }
     producer.stream.push({ type: "done", reason: message.stopReason, message });
     producer.stream.end();
   }
@@ -532,7 +535,7 @@ test("one interaction wires usage previews, body generation speed, Working and t
   await update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, '{"command":');
   now += 400;
   await update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, '"echo ready"}');
-  assert.doesNotMatch(frame(), /tok\/s/, "partial cumulative usage is not a live speed measurement");
+  assert.match(frame(), /gen≈\(live\) 8.1 tok\/s/, "tool JSON deltas use characters / 4, not partial usage");
   const confirmed = { ...message("first", { input: 100, output: 80, cacheRead: 900, cacheWrite: 0, reasoning: 60 }, 3400),
     stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo ready" } }] };
   finishResponse(handlers, confirmed);
@@ -540,11 +543,12 @@ test("one interaction wires usage previews, body generation speed, Working and t
   const final = frame();
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
-  assert.doesNotMatch(final, /tok\/s/, "tool arguments are not a measurable body response");
+  assert.match(final, /gen≈\(last\) 27.1 tok\/s/, "tool-call completion calibrates 20 tokens to the 13/24 observed share");
   handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
   const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
   assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
   handlers.get("tool_execution_end")({ toolCallId: "t1", toolName: "bash", result: {}, isError: true });
+  assert.match(frame(), /gen≈\(last\) 27.1 tok\/s/, "tool execution does not replace the completed model batch");
   const toolResult = { role: "toolResult", toolCallId: "t1", toolName: "bash", content: [], isError: true, timestamp: Date.now() };
   handlers.get("message_start")({ message: toolResult }); handlers.get("message_end")({ message: toolResult });
 
@@ -554,15 +558,16 @@ test("one interaction wires usage previews, body generation speed, Working and t
   handlers.get("message_start")({ message: failed });
   handlers.get("message_end")({ message: failed });
   handlers.get("agent_end")({});
-  assert.doesNotMatch(frame(), /tok\/s/, "an error does not manufacture a body rate");
+  assert.match(frame(), /gen≈\(last\) 27.1 tok\/s/, "an error without output cannot replace the preceding tool batch");
   handlers.get("agent_start")({}); handlers.get("turn_start")({});
-  assert.doesNotMatch(frame(), /tok\/s/, "retry does not fall back to full-response throughput");
+  assert.match(frame(), /gen≈\(last\) 27.1 tok\/s/, "retry retains the labeled completed batch, not total throughput");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   providerEvent(handlers, message("second"), "response.created");
   await update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "a");
   now += 400;
   await update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.doesNotMatch(frame(), /tok\/s/, "a current body must not display a previous or incomplete response rate");
+  assert.doesNotMatch(frame(), /gen≈\((last|avg\d)\)/, "incomplete usage cannot produce a completed calibrated rate");
+  assert.match(frame(), /gen≈\(live\) 6.3 tok\/s/, "ten characters / 4 / 400ms is an explicit live estimate");
   finishResponse(handlers, message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400));
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
@@ -652,6 +657,7 @@ test("SDK producer timing survives queued deltas and pre-request compaction", as
     if (event.type === "message_update") {
       receivedCounts.push(event.message.usage.output);
       assert.doesNotMatch(frame(), /tok\/s/, "shared future usage does not become a live rate");
+      assert.doesNotMatch(frame(), /gen≈\(live\)/, "queued callbacks do not revive a producer that has already ended");
     }
   });
   await agent.prompt("offline timing fixture");
@@ -683,7 +689,7 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   finishResponse(handlers, first, ctx);
   const beforeTool = frame();
   assert.match(beforeTool, /↑100 ↓100.*cache 90%/);
-  assert.doesNotMatch(beforeTool, /tok\/s/, "tool-call-only output has diagnostic throughput but no body rate");
+  assert.match(beforeTool, /gen≈\(last\) 50.5 tok\/s/, "100 generated tokens × one-half observed share / 990ms");
   handlers.get("tool_execution_start")({ toolCallId: "tool", toolName: "codemode", args: {} }, ctx);
   now = 4000;
   const tool = { role: "toolResult", toolCallId: "tool", toolName: "codemode", timestamp: 4000, isError: false,
