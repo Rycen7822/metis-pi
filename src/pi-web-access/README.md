@@ -431,9 +431,13 @@ Automatic order: configured SearXNG first; then subscription-backed OpenAI when 
 
 ### Tool names and workflows
 
-`workflow` defaults to `none`; `summary-review` opens the curator with a draft, while `auto-summary` returns a model summary without a browser. Per-call workflow overrides config; `/curator` saves the next default.
+`workflow` defaults to `none`; `summary-review` opens the curator with a draft.
+Use `workflow: "auto-summary"` to generate a summary without opening the curator.
+Per-call workflow overrides config; `/curator` saves the next default.
 
-Standalone extension `toolNames` can rename `webSearch`, `sourceCheck`, `fetchContent`, and `getSearchContent`; defaults are the four operation names above. `webSearch.enabled = false` disables search and source-check registration unless a tool-specific gate overrides it; fetch/content tools remain available. Metis keeps its grouped public entrypoint; MCP uses default names.
+In the standalone extension, `toolNames` can opt into alternate public tool names for `webSearch`, `sourceCheck`, `fetchContent`, and `getSearchContent`; defaults are the four operation names above.
+`webSearch.enabled = false` disables search and source-check registration unless a tool-specific gate overrides it; fetch/content tools remain available.
+Metis keeps its grouped public entrypoint; MCP uses default names.
 
 ### Browser cookies and Gemini models
 
@@ -455,7 +459,7 @@ Summaries and query rewriting resolve Pi registry routes and honor `enabledModel
 
 | Preference | Default / contract |
 | --- | --- |
-| `summaryGenerationDeadlineMs` | 30,000; positive integer, cap 600,000; one model attempt |
+| `summaryGenerationDeadlineMs` | `30000` ms; positive integer, capped at `600000` ms per model attempt |
 | `maxInlineContentChars` | 30,000; integers 1,000–200,000; invalid/smaller values use the default; direct fetch and stored-content slice budget |
 | `curatorTimeoutSeconds` | 20 local / 60 remote; max 600; adjustable in UI |
 | `fetch.timeout` | 30 seconds for direct HTTP/Jina; positive finite fractional seconds allowed, rounded up to ≥1 ms; must fit Node's 2,147,483,647 ms timer |
@@ -606,7 +610,10 @@ Remote mode prints the URL and defaults idle timeout to 60 seconds; explicit `cu
 
 #### Disabling browser auto-open
 
-`autoOpenBrowser = false` always prints a requested curator URL without launching Glimpse/browser. Local default is `true`, remote default is no auto-open. It never changes bind/exposure. If launch fails in Docker/WSL/SSH/headless environments, use the displayed running URL with an appropriate browser or port-forward.
+`autoOpenBrowser = false` always prints a requested curator URL without launching Glimpse/browser; the local default is `true`.
+Remote curator sessions print the URL instead of trying to open a browser by default; set `autoOpenBrowser = true` to opt in. This never changes bind/exposure.
+If launch fails in Docker, WSL, SSH, or headless environments, the curator stays running and prints its URL.
+Copy it into a browser that can reach the Pi host, using a port-forward if needed.
 
 ### Tool activation
 
@@ -622,7 +629,23 @@ curate = "ctrl+shift+s"
 activity = "ctrl+shift+w"
 ```
 
-Values use Pi keybinding syntax (`ctrl+s`, `alt+r`, etc.); restart to apply. Feature registration gates are `tools.{webSearch,sourceCheck,fetchContent,getSearchContent}.enabled`, `commands.{websearch,curator,search,google-account}.enabled`, `image.enabled`, and `pdf.enabled`. Tool-specific gates override legacy `webSearch.enabled`; tool/command registration changes require restart. `image.enabled = false` blocks direct images, frames, and thumbnails; `pdf.enabled = false` blocks PDF extraction. GitHub gates only skip specialization as described above. `youtube.enabled` / `video.enabled` control their analysis paths.
+Values use Pi keybinding syntax (`ctrl+s`, `alt+r`, etc.); restart to apply.
+
+### Registration gates
+
+Feature gates are `tools.{webSearch,sourceCheck,fetchContent,getSearchContent}.enabled`, `commands.{websearch,curator,search,google-account}.enabled`, `image.enabled`, and `pdf.enabled`. For example:
+
+```toml
+[webAccess.tools.webSearch]
+enabled = false
+
+[webAccess.commands.websearch]
+enabled = false
+```
+
+Tool-specific gates override legacy `webSearch.enabled`. Pi restart is required for tool and command registration changes.
+`image.enabled = false` blocks direct images, frames, and thumbnails; `pdf.enabled = false` blocks PDF extraction.
+GitHub gates only skip specialization as described above. `youtube.enabled` / `video.enabled` control their analysis paths.
 
 ## Limitations
 
