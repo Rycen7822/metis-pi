@@ -30,7 +30,7 @@ class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         # still reconcile its own row after close returns. Unknown cleanup also
         # quarantines a crashed row, not only the orphaned state label.
         orphan='pi_quarantined_history'
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.home/'registry.sqlite')) as db, db:
             db.execute("INSERT INTO agents(id,scope,name,cwd,session_file,state,launch,generation,cleanup,created,updated) "
                        "SELECT ?,scope,?,cwd,session_file,'crashed',launch,1,'unknown',created,updated FROM agents WHERE id=?",
                        (orphan,'detached writer history',run['agent_id']))
@@ -45,7 +45,7 @@ class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError) as blocked:
             await self.request('spawn',{'scope':sid,'request_id':'overlap','task':'must stay blocked','access':'write'})
         self.assertEqual(blocked.exception.code,'writer_conflict')
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.home/'registry.sqlite')) as db, db:
             row=db.execute('SELECT state,cleanup FROM agents WHERE id=?',(orphan,)).fetchone()
         self.assertEqual(row,('crashed','unknown'))
 

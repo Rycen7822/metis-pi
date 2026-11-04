@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from paths import ROOT, TEST_ROOT, REPO_ROOT, WORKER_ROOT
 from metis_subagent.common import BASE_ENV_KEYS, AgentError, live_identity, crop
 
@@ -25,6 +27,29 @@ class ClientTimeoutBudget(unittest.TestCase):
         for op in ('soft_interrupt','message','followup'):
             self.assertGreaterEqual(call_timeout(op,{},None),budget)
         self.assertGreater(budget,45)                  # the old flat 45s was the bug
+    def test_autostart_keeps_its_budget_after_process_creation(self):
+        from metis_subagent import client
+        peer = (object(), object())
+        for returncode in (None, 0):  # A competing starter can exit normally while another daemon takes the lease.
+            with self.subTest(returncode=returncode), tempfile.TemporaryDirectory() as tmp:
+                elapsed = 0
+                async def pause(_delay):
+                    nonlocal elapsed
+                    elapsed += 3
+                async def connect(_home):
+                    if elapsed < 12:  # Ready after the old 8s cutoff, but inside the shared 38s budget.
+                        raise FileNotFoundError()
+                    return peer
+                async def run():
+                    process = SimpleNamespace(poll=lambda: returncode)
+                    with (patch.object(client, 'time', SimpleNamespace(monotonic=lambda: elapsed)),
+                          patch.object(client, 'asyncio', SimpleNamespace(sleep=pause)),
+                          patch.object(client.ipc, 'connect', connect),
+                          patch.object(client, 'boot_budget', return_value=38),
+                          patch.object(client.subprocess, 'Popen', return_value=process)):
+                        self.assertEqual(await client.connect_daemon(Path(tmp), True), peer)
+                asyncio.run(run())
+
     def test_boot_timeout_ignores_model_inactivity_limit(self):
         self.assertEqual(call_timeout('spawn',{'idle_timeout_seconds':604800},None),
                          call_timeout('spawn',{},None))

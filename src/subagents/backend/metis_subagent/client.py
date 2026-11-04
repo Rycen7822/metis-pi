@@ -50,12 +50,12 @@ async def connect_daemon(home,autostart):
         env=os.environ.copy(); env['PI_AGENTS_HOME']=str(home)
         env['PYTHONUTF8']='1'
         until=time.monotonic()+boot_budget(home)
-        started=False
+        process=None
         while True:
             # A parked daemon closes its socket before verified worker cleanup
             # releases the lock. Do not spawn a replacement that loses that
             # lock and exits, leaving the waiting caller unable to wake it.
-            if not started:
+            if process is None:
                 fd=os.open(home/'daemon.lock',os.O_RDWR|os.O_CREAT,0o600)
                 try:
                     if locks.try_lock(fd):
@@ -65,13 +65,15 @@ async def connect_daemon(home,autostart):
                         options = ({'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
                                    if IS_WINDOWS else {'start_new_session': True})
                         with log.open('ab') as f:
-                            subprocess.Popen([python_executable(),str(ENTRYPOINT),'--home',str(home),'daemon'],stdin=subprocess.DEVNULL,
-                                             stdout=f,stderr=f,env=env,cwd=home,close_fds=True,**options)
-                        started=True
-                        until=time.monotonic()+8
+                            process=subprocess.Popen([python_executable(),str(ENTRYPOINT),'--home',str(home),'daemon'],
+                                stdin=subprocess.DEVNULL,stdout=f,stderr=f,env=env,cwd=home,close_fds=True,**options)
+                        # Lock drain and startup share one deadline; spawning must not shorten it.
                 finally: os.close(fd)
             try: reader,writer=await ipc.connect(home); break
             except (FileNotFoundError,ConnectionRefusedError):
+                # Exit 0 can mean another starter won the lease; only an abnormal exit proves this boot failed.
+                if process is not None and (returncode := process.poll()) not in (None, 0):
+                    raise AgentError('daemon_start_failed',f'Daemon exited with code {returncode}; inspect {log}')
                 if time.monotonic()>until: raise AgentError('daemon_start_failed',f'Cannot start daemon; inspect {log}')
                 await asyncio.sleep(.05)
     return reader,writer

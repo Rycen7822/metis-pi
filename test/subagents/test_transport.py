@@ -127,7 +127,19 @@ class IpcHarness:
 
     async def request(self, op, params, **kwargs):
         kwargs.setdefault('source', self.source)
-        return await ipc_request(self.home, op, params, **kwargs)
+        try:
+            return await ipc_request(self.home, op, params, **kwargs)
+        except AgentError as error:
+            if error.code != 'daemon_start_failed':
+                raise
+            print(f'Owned daemon status: {[(proc.pid, proc.poll()) for proc in self.daemons]}')
+            # Pytest retains this output on failure; optional diagnostics must not mask the original error.
+            with contextlib.suppress(OSError), (self.home/'daemon.log').open('rb') as log:
+                tail_bytes = 8 * 1024  # One bounded traceback, not unbounded fixture output.
+                log.seek(0, os.SEEK_END)
+                log.seek(max(0, log.tell() - tail_bytes))
+                print(log.read(tail_bytes).decode('utf-8', errors='replace'))
+            raise
 
     async def call(self, op, params, *, consume=True):
         params = dict(params)
