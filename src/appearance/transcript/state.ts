@@ -38,9 +38,9 @@ export interface TextRunPlan {
  * blocks are ONE run; the runIndex is the host's ordinal of RENDERED runs —
  * an all-empty run consumes no ordinal). */
 export interface ThinkingRunPlan {
-  /** Wall-clock ms when the run first contained non-empty thinking text. */
+  /** Monotonic ms when the run first contained non-empty thinking text; not a calendar timestamp. */
   readonly startedAt?: number;
-  /** Wall-clock ms when the run closed (later non-thinking block or
+  /** Monotonic ms when the run closed (later non-thinking block or
    * message_end). Runs of restored history have no timing evidence. */
   readonly endedAt?: number;
   /** endedAt - startedAt when both are known; never fabricated. */
@@ -248,9 +248,9 @@ export class TranscriptState {
   private readonly observedResponses = new Map<string, MessageViewKey | null>();
   private openMessageKey: MessageViewKey | undefined;
 
-  /** Wall clock is injectable so tests can drive run durations deterministically. */
+  /** A monotonic clock keeps run durations stable across system clock corrections. */
   private readonly now: () => number;
-  constructor(now: () => number = () => Date.now()) {
+  constructor(now: () => number = () => performance.now()) {
     this.now = now;
   }
 
@@ -475,6 +475,12 @@ export class TranscriptState {
     return {
       separatorBefore: plan.separatorBefore,
     };
+  }
+
+  /** Origin of the current visible thinking clock; completed/history runs never drive live refresh. */
+  activeThinkingStartedAt(): number | undefined {
+    const run = this.openMessageKey ? this.messagePlans.get(this.openMessageKey)?.thinkingRuns.at(-1) : undefined;
+    return run?.endedAt === undefined ? run?.startedAt : undefined;
   }
 
   thinkingRunPlan(messageKey: MessageViewKey, runIndex: number): ThinkingRunPlan | undefined {

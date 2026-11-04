@@ -91,6 +91,7 @@ test("npm FFF direct calls join read exploration and retain native execution", (
 
 test("live thought headings tick through the shipped entry and completed summaries follow the host theme", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+  t.mock.method(performance, "now", () => Date.now());
   const h = entry(t);
   let color = "FIRST", calls = 0;
   const theme = { style(text, options) {

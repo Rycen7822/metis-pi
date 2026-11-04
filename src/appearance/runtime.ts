@@ -199,7 +199,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   }
 
   const metrics = new UiMetrics(
-    { now: () => performance.now(), wall: () => Date.now() },
+    { now: () => performance.now(), wall: () => Date.now(), tickOrigin: () => transcript.activeThinkingStartedAt() },
     {
       onTick: (snapshot) => {
         if (!chromeEnabled) return;

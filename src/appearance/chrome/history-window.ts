@@ -259,7 +259,7 @@ export class HistoryWindow {
   }
 
   invalidateStreaming(): void {
-    if (this.holdSelection()) return;
+    // Selection freezes committed rows, not pending invalidation; release must catch up on its first frame.
     // Refresh time-driven labels without rebuilding native content or completed history.
     for (const [component, block] of this.#blocks) {
       if (component.isStreaming !== true || !block.rows?.length) continue;

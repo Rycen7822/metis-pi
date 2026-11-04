@@ -16,7 +16,8 @@
 
 Header 显示实际 Pi/Metis 版本；Working 从 `agent_start` 到 `agent_settled`（含回复后 condense 维护），显示 Working/Writing/Waiting for input。widget 安装成功才隐藏原 loader，失败回退 `setWorkingIndicator`。
 
-- 时长每秒更新，thinking run 与整轮分别计时；shimmer 仅真彩，`working.elapsed/thought/tool/tokens` 控制各段，动画开关/32–1000ms 间隔归 `animation/animationIntervalMs`。settle/关闭/重载清 timer。
+- 时长使用单调时钟；共享刷新对齐活动 thinking run 的秒界，无 run 时对齐整轮。主线程/终端停顿后直接显示当前值，不补播旧秒数。thinking run 与整轮分别计时。
+- shimmer 仅真彩，`working.elapsed/thought/tool/tokens` 控制各段，动画开关/32–1000ms 间隔归 `animation/animationIntervalMs`。settle/关闭/重载清 timer。
 - 展开流式思考的灰色 `thinking 12s` 复用活动时钟，不占 peek 正文预算、不入复制，完成移除；折叠摘要仍是 `Thought for …`。
 - 纯 thinking 流仅在实际 peek 且 ≥16 Ki 字符时按 100ms 合并更新，静止时刷最后一批；仍完整原生 Markdown 排版，不截源拼尾。点击/滚动/视图、文字/工具和完成立即处理，卸载取消待刷新。
 - codemode 运行显示 Elapsed、完成 Took，无子调用也显示；历史/嵌套各用自己的保存时长。自有参数/结果/账本引用共用估算 4 MiB UI 缓存，淘汰较早已完成项，保运行中参数与顺序，超大项不缓存；历史失效释放派生组件。外来 renderer 自管，缺参数/diff/输出时说明，不从脚本或当前文件猜历史。
@@ -66,7 +67,7 @@ fullscreen 留白/历史/置顶输入共用布局生命周期；关闭留白不�
 
 - 最多 5,000 显示行（含 Earlier/Later），边缘继续滚动翻页并释放另一端派生缓存，保阅读锚点；顶部/底部键可跨页，搜索仅已加载窗口。
 - 滚动条拖到底跳真实历史末尾并跟新输出，普通定位/提示不触发跨页。零边距/留白均安装；`history-window.scrollbarFollow` 报告桥接，无法安全桥接仅关此增强，保滚轮分页和显式跳顶/底。
-- 活动秒钟仅使缓存内流式块过期以更新思考标题，完成历史复用，不重建正文/添 timer。有选区固定已提交窗口并暂停时钟刷新，提交输入解除；resize 无法重投影按[复制](selection-copy.md)回退。
+- 活动秒钟仅使缓存内流式块过期以更新思考标题，完成历史复用，不重建正文/添 timer。有选区固定已提交窗口但保留待刷新状态，解除后第一帧追上当前时钟；提交输入解除选区；resize 无法重投影按[复制](selection-copy.md)回退。
 - 预算限制保留行数，不是内存硬限；超大组件仍可能完整 render 一次后裁切/释放。
 
 ## 字形

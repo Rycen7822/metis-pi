@@ -170,7 +170,8 @@ const widgetByKey = (slots, key) =>
 
 for (const [rail, streaming] of [[false, "full"], [true, "full"], [true, "peek"]]) {
   test(`rail=${rail} ${streaming} headings tick through the real history cache and release cleanly`, async t => {
-    t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000 });
+    t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: 1_000 });
+    t.mock.method(performance, "now", () => Date.now());
     class Assistant extends AssistantMessageComponent {
       updateContent(message, isStreaming = this.isStreaming) { super.updateContent(message, isStreaming); }
     }
@@ -206,6 +207,7 @@ for (const [rail, streaming] of [[false, "full"], [true, "full"], [true, "peek"]
       getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
     });
     handlers.get("agent_start")();
+    t.mock.timers.tick(375); // Visible reasoning starts between interaction-clock ticks.
     const message = { role: "assistant", content: [{ type: "thinking", thinking: "RAIL_BODY" }] };
     handlers.get("message_start")({ message });
     handlers.get("message_update")({ message, assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message } });
@@ -215,8 +217,10 @@ for (const [rail, streaming] of [[false, "full"], [true, "full"], [true, "peek"]
     assert.equal(rails, rail ? 1 : 0, "disabled rail must not construct a wrapper");
     assert.match(frames.at(-1), /thinking 0s/);
     const staticRenders = stableRender.mock.callCount();
-    t.mock.timers.tick(1_000);
-    assert.match(frames.at(-1), /thinking 1s/, "the ticker advances the live heading with Working disabled and no new model delta");
+    t.mock.timers.tick(625);
+    assert.match(frames.at(-1), /thinking 0s/);
+    t.mock.timers.tick(375);
+    assert.match(frames.at(-1), /thinking 1s/, "the ticker follows the visible run boundary without a new model delta");
     assert.equal(stableRender.mock.callCount(), staticRenders, "the completed history stays cached");
     assert.equal(rails, rail ? 1 : 0, "clock ticks must not rebuild the assistant subtree");
     handlers.get("message_end")({ message });

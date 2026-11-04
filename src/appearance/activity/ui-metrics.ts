@@ -52,6 +52,8 @@ export interface UiMetricsCallbacks {
 export interface UiMetricsOptions {
   now: () => number; // monotonic
   wall: () => number; // wall clock
+  /** Monotonic origin of the displayed clock; falls back to the interaction start. */
+  tickOrigin?: () => number | undefined;
   tickMs?: number;
 }
 
@@ -79,7 +81,8 @@ function unionMs(intervals: ThinkingInterval[], nowMs: number): number {
 export class UiMetrics {
   readonly #opts: UiMetricsOptions;
   readonly #cb: UiMetricsCallbacks;
-  #timer: ReturnType<typeof setInterval> | undefined;
+  #timer: ReturnType<typeof setTimeout> | undefined;
+  #tickOrigin: number | undefined;
   #generation = 0;
 
   #interactionStart: number | undefined;
@@ -191,6 +194,7 @@ export class UiMetrics {
 
   thinkingStart(): void {
     if (!this.active) return;
+    this.#ensureTicker(); // The first visible delta can establish a later run origin.
     const open = this.#thinking.at(-1);
     if (open && open.endMs === OPEN_END) return; // already open — deltas don't restart
     this.#thinking.push({ startMs: this.#opts.now(), endMs: OPEN_END });
@@ -277,17 +281,28 @@ export class UiMetrics {
   }
 
   #ensureTicker(): void {
-    if (this.#timer !== undefined) return;
-    this.#timer = setInterval(() => this.#emit(), this.#opts.tickMs ?? 1000);
-    // Unref so a stuck timer can't hold the process open.
+    if (this.#interactionStart === undefined) return;
+    const origin = this.#opts.tickOrigin?.() ?? this.#interactionStart;
+    if (this.#timer !== undefined && this.#tickOrigin === origin) return;
+    this.#stopTicker();
+    this.#tickOrigin = origin;
+    const periodMs = this.#opts.tickMs ?? 1000;
+    const elapsedMs = Math.max(0, this.#opts.now() - origin);
+    // Round up to the next clock boundary: no accumulated drift, early sample or replay of missed seconds.
+    this.#timer = setTimeout(() => {
+      this.#timer = undefined;
+      try { this.#emit(); }
+      finally { this.#ensureTicker(); }
+    }, Math.ceil(periodMs - (elapsedMs % periodMs)));
     (this.#timer as unknown as { unref?: () => void }).unref?.();
   }
 
   #stopTicker(): void {
     if (this.#timer !== undefined) {
-      clearInterval(this.#timer);
+      clearTimeout(this.#timer);
       this.#timer = undefined;
     }
+    this.#tickOrigin = undefined;
   }
 
   #emit(): void {

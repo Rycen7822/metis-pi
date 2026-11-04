@@ -75,9 +75,10 @@ test("initial replay and resize stop at a 5000-row suffix; warm scroll never ren
   live.id = "tick-2";
   view.system.invalidateStreaming(); view.render();
   assert.equal(view.lines(), committed, "a clock tick must not move selected content");
+  assert.equal(renderCount(blocks), 101, "selected content is not rerendered");
   view.selection(null);
-  view.system.invalidateStreaming(); view.render();
-  assert.equal(view.lines().at(-1), "tick-2:99");
+  view.render();
+  assert.equal(view.lines().at(-1), "tick-2:99", "release consumes the pending tick without waiting for another");
   assert.equal(renderCount(blocks), 102);
   live.isStreaming = false;
   view.system.invalidateStreaming(); view.render();

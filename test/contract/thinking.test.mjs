@@ -99,15 +99,18 @@ const click = (region) => {
 
 test("live heading reads the current run clock without deltas and never enters copied reasoning", t => {
   installCopyPrototypes(t);
-  let clock = 5_000;
-  const state = new TranscriptState(() => clock);
+  let clock = 5_000, wall = 1_000_000;
+  t.mock.method(performance, "now", () => clock);
+  t.mock.method(Date, "now", () => wall);
+  const state = new TranscriptState();
   setup(t, state, { streaming: "full", completed: "collapsed" }, { makeClickable });
   const { component, message, update } = streamingAssistant(state);
   const frame = () => component.render(80).join("\n");
   update([{ type: "thinking", thinking: "FIRST_BODY" }]);
   assert.match(frame(), /\x1b\[2mthinking 0s\x1b\[22m/);
   clock += 12_500;
-  assert.match(frame(), /thinking 12s/, "a repaint advances the heading without another model event");
+  wall += 120_000;
+  assert.match(frame(), /thinking 12s/, "elapsed time follows the monotonic clock, not wall-clock corrections");
   for (let i = 0; i < 3; i++) component.updateContent(message, true);
   assert.equal([...frame().matchAll(/thinking 12s/g)].length, 1, "native rebuilds do not stack headings");
   const copied = select(copyFrame(component, 80)).text;

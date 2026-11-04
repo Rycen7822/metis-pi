@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { UiMetrics, type InteractionSnapshot } from "../../src/appearance/activity/ui-metrics.ts";
 
 test("writing and thinking share one retry clock; settlement resets the next interaction", (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   let now = 0;
   const ticks: InteractionSnapshot[] = [];
   const settled: InteractionSnapshot[] = [];
@@ -13,8 +13,8 @@ test("writing and thinking share one retry clock; settlement resets the next int
   );
   t.after(() => metrics.reset());
   const advance = (ms: number) => { now += ms; };
-  const intervals = t.mock.method(globalThis, "setInterval");
-  const clears = t.mock.method(globalThis, "clearInterval");
+  const timeouts = t.mock.method(globalThis, "setTimeout");
+  const clears = t.mock.method(globalThis, "clearTimeout");
   metrics.agentStart();
   metrics.recordUsage("req-1", { input: 100, output: 50 });
   metrics.writeStreaming();
@@ -63,8 +63,35 @@ test("writing and thinking share one retry clock; settlement resets the next int
   assert.deepEqual(settled.map((snapshot) => snapshot.elapsedMs), [10_500, 1_000]);
   assert.equal(settled[1]!.thinkingMs, 0, "closed thinking belongs only to the previous interaction");
   assert.deepEqual(settled[1]!.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-  assert.deepEqual(clears.mock.calls.map((call) => call.arguments[0]), intervals.mock.calls.map((call) => call.result));
+  assert.equal(clears.mock.calls.at(-1)?.arguments[0], timeouts.mock.calls.at(-1)?.result,
+    "settlement cancels the remaining scheduled deadline");
   const stopped = ticks.length;
   t.mock.timers.tick(5_000);
   assert.equal(ticks.length, stopped, "settlement clears the actual timers and prevents later emissions");
+});
+
+test("ticks follow the visible run boundary without restarting on repeated thinking deltas", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: 1_000 });
+  let origin: number | undefined;
+  const ticks: InteractionSnapshot[] = [];
+  const metrics = new UiMetrics(
+    { now: () => Date.now(), wall: () => Date.now(), tickOrigin: () => origin },
+    { onTick: snapshot => ticks.push(snapshot) },
+  );
+  t.after(() => metrics.reset());
+  metrics.agentStart();
+  metrics.thinkingStart(); // A provider can announce thinking before any visible reasoning exists.
+  t.mock.timers.tick(375);
+  origin = Date.now();
+  metrics.thinkingStart();
+  const before = ticks.length;
+  t.mock.timers.tick(625);
+  assert.equal(ticks.length, before, "the old interaction deadline must not sample before the run boundary");
+  metrics.thinkingStart();
+  metrics.thinkingStart();
+  t.mock.timers.tick(375);
+  assert.equal(ticks.length, before + 1, "deltas do not postpone the run deadline");
+  assert.equal(ticks.at(-1)?.thinkingMs, 1_375, "activity includes the interval before visible reasoning");
+  t.mock.timers.tick(1_000);
+  assert.equal(ticks.at(-1)?.thinkingMs, 2_375);
 });
