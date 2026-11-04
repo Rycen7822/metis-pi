@@ -4,6 +4,7 @@ import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";
 import { altScreen, container, screenLines, drag, installCopyPrototypes, copyFrame, select } from "../helpers/ui-fixtures.mjs";
 import { createFullscreenLayout } from "../../src/appearance/chrome/fullscreen-layout.ts";
+import { createHistoryWindowSystem } from "../../src/appearance/chrome/history-window.ts";
 import {
   initTheme,
   InteractiveMode,
@@ -176,20 +177,35 @@ test("generation streams a bounded source preview, then folds it without overwri
   global.setArgsComplete();
   assert.match(plain(global), /JS_ONLY_MARKER/, "automatic preview does not overwrite global expansion");
   const folded = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code: "" });
+  const updateArgs = folded.updateArgs;
+  const { tui } = altScreen(80, 30);
+  const scroll = new Tui.ScrollView(container(folded), { primary: true, follow: "end" });
+  tui.setLayoutRoot(scroll);
+  const history = createHistoryWindowSystem(Tui);
+  history.mount(tui, scroll);
+  t.after(() => history.dispose());
+  assert.equal(history.status().installed, true);
+  const frame = () => {
+    tui.doRender();
+    return stripVTControlCharacters(tui.currentLayout.root.scrollContentLines.join("\n"));
+  };
+  frame(); // Warm the real history cache before any argument deltas arrive.
   folded.updateArgs({ code: code.slice(0, 40) });
-  assert.match(plain(folded), /JS_ONLY_MARKER/);
-  assert.doesNotMatch(plain(folded), /tools\.read/);
+  assert.match(frame(), /JS_ONLY_MARKER/);
+  assert.doesNotMatch(frame(), /tools\.read/);
   folded.updateArgs({ code });
-  assert.match(plain(folded), /tools\.read/, "each arriving source update is visible before completion");
+  assert.match(frame(), /tools\.read/, "each arriving source update is visible before completion");
   folded.setArgsComplete();
-  assert.doesNotMatch(plain(folded), /JS_ONLY_MARKER/, "source folds as soon as generation ends, before execution starts");
-  assert.match(plain(folded), /Preparing script/);
+  assert.doesNotMatch(frame(), /JS_ONLY_MARKER/, "source folds as soon as generation ends, before execution starts");
+  assert.match(frame(), /Preparing script/);
   folded.markExecutionStarted();
   folded.updateResult({ content: [], details: { calls: [] } }, true);
-  assert.match(plain(folded), /Running script/);
+  assert.match(frame(), /Running script/);
   folded.updateResult({ content: [], details: { calls: [] } }, false);
-  assert.match(plain(folded), /Ran script/);
-  assert.doesNotMatch(plain(folded), /JS_ONLY_MARKER/);
+  assert.match(frame(), /Ran script/);
+  assert.doesNotMatch(frame(), /JS_ONLY_MARKER/);
+  history.dispose();
+  assert.equal(folded.updateArgs, updateArgs, "unmount restores the native argument updater");
 });
 
 test("codemode streams gray text inside the unchanged orange rail with terminal color fallbacks", (t) => {

@@ -247,8 +247,9 @@ export class HistoryWindow {
 
   #watch(component: Component): CachedBlock {
     const block: CachedBlock = { offset: 0, height: 0, unwatch: () => {} };
+    // Pi defers argument layout until render; invalidate cached rows when the input changes.
     const restores = descendants(component).map((node) => observe(node,
-      ["invalidate", "updateContent", "updateDisplay", "setText", "addChild", "removeChild", "clear"], () => {
+      ["invalidate", "updateArgs", "updateContent", "updateDisplay", "setText", "addChild", "removeChild", "clear"], () => {
         block.rows = undefined; this.#dirty = true;
         if (this.#promptPreview?.component === component) this.#promptPreview = undefined;
       }));
