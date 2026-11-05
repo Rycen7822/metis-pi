@@ -198,6 +198,10 @@ GeGLU owns one public ORT CPU `Erf` operator per graph kernel. It reuses its out
 for scale → in-place Erf → gate, sharing the existing ORT pool without a new
 tensor scratch or math-library dependency. ORT/MLAS Erf is not bit-identical to
 the previous scalar `std::erf`; the arithmetic revision prevents mixed encodings.
+On x86-64, residual/LN normalizes four independent rows in SSE lanes without
+reordering either per-row reduction. Up to 128 rows run on the caller to avoid
+small-job pool dispatch; longer inputs use the existing pool. Tail rows and other
+platforms retain scalar normalization; output normalization is unchanged.
 Native output/MaxSim boundaries share guarded SIMD finite classification while
 retaining scalar fallbacks and the original validation/error semantics. AVX2 MaxSim
 shares document loads across four query rows and transposes the final lane sums;

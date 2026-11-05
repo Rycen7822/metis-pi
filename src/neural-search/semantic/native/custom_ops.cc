@@ -88,6 +88,47 @@ void normalize256(const float* input, const float* gamma, float* output) {
   const float inverse = 1.0f / std::sqrt(variance / 256.0f + 1e-5f);
   for (size_t d = 0; d < 256; ++d) output[d] = (input[d] - mean) * inverse * gamma[d];
 }
+#if defined(__x86_64__)
+constexpr size_t NORMALIZATION_GROUP_ROWS = 4; // One independent row per SSE lane.
+// Measured coarse cutoff for residual/LN only; larger jobs retain the existing ORT pool.
+constexpr size_t RESIDUAL_NORM_CALLER_MAX_ROWS = 128;
+
+void normalize_four_rows(const float* input, const float* gamma, float* output) {
+  constexpr size_t features = 256; // Fixed LateOn hidden width.
+  const float* rows[] = {input, input+features, input+2*features, input+3*features};
+  __m128 mean = _mm_setzero_ps();
+  for (size_t column = 0; column < features; column += 4) {
+    __m128 v0 = _mm_loadu_ps(rows[0]+column), v1 = _mm_loadu_ps(rows[1]+column);
+    __m128 v2 = _mm_loadu_ps(rows[2]+column), v3 = _mm_loadu_ps(rows[3]+column);
+    _MM_TRANSPOSE4_PS(v0, v1, v2, v3);
+    // Each lane follows the original column order; no horizontal reduction or FMA.
+    mean = _mm_add_ps(_mm_add_ps(_mm_add_ps(_mm_add_ps(mean, v0), v1), v2), v3);
+  }
+  mean = _mm_div_ps(mean, _mm_set1_ps(features));
+  __m128 variance = _mm_setzero_ps();
+  for (size_t column = 0; column < features; column += 4) {
+    __m128 v0 = _mm_loadu_ps(rows[0]+column), v1 = _mm_loadu_ps(rows[1]+column);
+    __m128 v2 = _mm_loadu_ps(rows[2]+column), v3 = _mm_loadu_ps(rows[3]+column);
+    _MM_TRANSPOSE4_PS(v0, v1, v2, v3);
+    for (__m128 values : {v0, v1, v2, v3}) {
+      const __m128 delta = _mm_sub_ps(values, mean);
+      variance = _mm_add_ps(variance, _mm_mul_ps(delta, delta));
+    }
+  }
+  const __m128 denominator = _mm_add_ps(_mm_div_ps(variance, _mm_set1_ps(features)), _mm_set1_ps(1e-5f));
+  const __m128 inverse = _mm_div_ps(_mm_set1_ps(1.0f), _mm_sqrt_ps(denominator));
+  alignas(16) float means[NORMALIZATION_GROUP_ROWS], inverses[NORMALIZATION_GROUP_ROWS];
+  _mm_store_ps(means, mean);
+  _mm_store_ps(inverses, inverse);
+  for (size_t row = 0; row < NORMALIZATION_GROUP_ROWS; ++row) {
+    const __m128 mu = _mm_set1_ps(means[row]), scale = _mm_set1_ps(inverses[row]);
+    for (size_t column = 0; column < features; column += 4) {
+      const __m128 centered = _mm_sub_ps(_mm_loadu_ps(rows[row]+column), mu);
+      _mm_storeu_ps(output+row*features+column, _mm_mul_ps(_mm_mul_ps(centered, scale), _mm_loadu_ps(gamma+column)));
+    }
+  }
+}
+#endif
 } // namespace
 
 struct Kernel {
@@ -197,10 +238,32 @@ struct Kernel {
     const float* a=skip.GetTensorData<float>(), *b=addition.GetTensorData<float>(), *g=gamma.GetTensorData<float>();
     float* residual=ctx.GetOutput(0,dimensions).GetTensorMutableData<float>();
     float* normalized=ctx.GetOutput(1,dimensions).GetTensorMutableData<float>();
+#if defined(__x86_64__)
+    const size_t row_count = static_cast<size_t>(dimensions[0]);
+    auto normalize_group = [&](size_t group, size_t) {
+      const size_t begin = group*NORMALIZATION_GROUP_ROWS;
+      const size_t end = std::min(begin+NORMALIZATION_GROUP_ROWS, row_count);
+      for (size_t row = begin; row < end; ++row)
+        for (size_t column = 0; column < 256; ++column) residual[row*256+column] = a[row*256+column]+b[row*256+column];
+      if (end-begin == NORMALIZATION_GROUP_ROWS) {
+        normalize_four_rows(residual+begin*256, g, normalized+begin*256);
+      } else {
+        for (size_t row = begin; row < end; ++row) normalize256(residual+row*256, g, normalized+row*256);
+      }
+    };
+    const size_t groups = (row_count+NORMALIZATION_GROUP_ROWS-1)/NORMALIZATION_GROUP_ROWS;
+    if (row_count <= RESIDUAL_NORM_CALLER_MAX_ROWS) {
+      for (size_t group = 0; group < groups && !state->cancelled.load(); ++group) normalize_group(group, 0);
+      cancelled(*state);
+    } else {
+      parallel(ctx, groups, *state, normalize_group);
+    }
+#else
     parallel(ctx,dimensions[0],*state,[&](size_t row,size_t) {
       for (size_t d=0; d<256; ++d) residual[row*256+d]=a[row*256+d]+b[row*256+d];
       normalize256(residual+row*256,g,normalized+row*256);
     });
+#endif
   }
   void geglu(Ort::KernelContext& ctx) {
     auto input=ctx.GetInput(0);
