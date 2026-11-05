@@ -83,6 +83,9 @@ pub struct Work {
     pub scored_document_tokens: usize,
     pub discarded_cached_chunks: usize,
     pub discarded_cached_document_tokens: usize,
+    /// Subsets of accepted work computed by the earlier scan of this same request.
+    pub reused_scored_chunks: usize,
+    pub reused_scored_document_tokens: usize,
 }
 
 #[derive(Debug)]
@@ -245,6 +248,21 @@ impl Scorer {
         work.discarded_cached_document_tokens += work.scored_document_tokens;
         work.semantic_scored_chunks = 0;
         work.scored_document_tokens = 0;
+    }
+    pub(crate) fn accept_reused_score(&mut self, rows: usize) -> Result<()> {
+        let work = match self {
+            Self::Bekko { work, .. } | Self::LateOn { work, .. } => work,
+        };
+        if work.discarded_cached_chunks == 0 || work.discarded_cached_document_tokens < rows {
+            return Err("invalid request-local score reuse accounting".into());
+        }
+        work.discarded_cached_chunks -= 1;
+        work.discarded_cached_document_tokens -= rows;
+        work.semantic_scored_chunks += 1;
+        work.scored_document_tokens += rows;
+        work.reused_scored_chunks += 1;
+        work.reused_scored_document_tokens += rows;
+        Ok(())
     }
     pub fn score_document(&mut self, path: String, content: String) -> Result<f64> {
         self.score_document_to(path, content, None)

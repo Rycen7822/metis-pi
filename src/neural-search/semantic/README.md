@@ -91,12 +91,19 @@ representations. Format08 stores counts once and derives the current query's DF;
 Format07 remains readable with postings validation. Hits are provisional: matching
 model/preprocessing identity permits a full cached scan, but its stored source
 manifest must match one final complete content capture before any output. A stale
-hit discards scores and rebuilds in the same request, reusing a compatible query.
-Code/Format08 rebuilds reuse checked records only for unchanged raw paths/content,
-with an unambiguous UTF-8 mapping and identical chunk range/text. Every window is
-still scored, and current corpus statistics and ranking are rebuilt. Text,
-Format07, non-UTF8 and ambiguous paths keep full encoding. Reuse is request-local:
-no persistent per-file embedding store or second model process is introduced.
+hit rebuilds in the same request, keeping a compatible query. Code/Format08
+reuses raw scores already computed by that request's complete scan: unchanged
+files stream checked chunk statistics without splitting again; changed files
+match identical normalized chunk content under the same raw path. Each old record
+is consumed at most once. Shifted line ranges rewrite metadata only, preserving
+the exact encoded payload. DF, BM25, normalization and ranking are always current.
+The changed-file text/descriptor matching estimate is capped at 8MiB per request;
+overflow disables matching for that file, not complete evaluation. No whole decoded
+corpus is retained. Text, Format07, non-UTF8 and ambiguous paths keep full encoding.
+`reused_scored_chunks`/`reused_scored_document_tokens` are subsets of accepted work,
+transferred from discarded observations rather than counted as new native calls.
+Reuse never crosses a request/query or model identity and introduces no persistent
+per-file embedding store, extra hash pass or second model process.
 Misses build the snapshot during their first source read, then retain Reader and
 final content checks. Source changes during rebuilding permit one complete retry,
 never partial results. Final content capture remains complete: fewer than 128 files

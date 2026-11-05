@@ -282,14 +282,32 @@ impl<'a> Record<'a> {
     pub fn kind(&self) -> ModelKind {
         self.kind
     }
-    /// The caller scores every stored window before copying this checked record.
-    pub fn copy_to(&self, output: &mut (impl Write + Seek)) -> Result<(u64, u64)> {
-        let start = output.stream_position()?;
-        for block in self.data.chunks(COPY_IO_BYTES) {
-            crate::request::check()?;
-            output.write_all(block)?;
+    /// Header-only accounting after this immutable record was fully scored.
+    pub(crate) fn scored_rows(&self) -> Result<usize> {
+        if self.kind == ModelKind::Text {
+            return Ok(1);
         }
-        Ok((start, self.data.len() as u64))
+        let mut at = self.semantic;
+        let mut rows = 0usize;
+        for _ in 0..self.blocks {
+            let header = self
+                .data
+                .get(at..at + CODE_WINDOW_HEADER_BYTES)
+                .ok_or_else(|| invalid("truncated checked window"))?;
+            rows = rows
+                .checked_add(u32::from_le_bytes(header[20..24].try_into()?) as usize)
+                .ok_or_else(|| invalid("row count overflow"))?;
+            let payload_bytes = u32::from_le_bytes(header[24..28].try_into()?) as usize;
+            at = at
+                .checked_add(CODE_WINDOW_HEADER_BYTES)
+                .and_then(|at| at.checked_add(payload_bytes))
+                .filter(|at| *at <= self.data.len())
+                .ok_or_else(|| invalid("window size overflow"))?;
+        }
+        if at != self.data.len() {
+            return Err(invalid("trailing checked windows"));
+        }
+        Ok(rows)
     }
     pub fn visit(&self, decoder: &mut codec::Decoder, sink: &mut BlockSink<'_>) -> Result<()> {
         let mut at = self.semantic;
@@ -376,6 +394,112 @@ impl<'a> Record<'a> {
         if at != self.data.len() || next != self.chunk.content.len() {
             return Err(invalid("partial/trailing representation"));
         }
+        Ok(())
+    }
+}
+
+/// Copy only after complete scoring and current source identity checks. Relocated
+/// blocks keep identical encoder input/payload, but receive current line metadata.
+pub(crate) fn copy_checked(
+    data: &[u8],
+    output: &mut (impl Write + Seek),
+    relocated: Option<&Chunk>,
+) -> Result<(u64, u64)> {
+    let start = output.stream_position()?;
+    let bytes = if let Some(chunk) = relocated {
+        let semantic = HEADER_BYTES
+            .checked_add(read_usize(data, 16)?)
+            .ok_or_else(|| invalid("metadata overflow"))?;
+        let payload = data
+            .get(semantic..)
+            .ok_or_else(|| invalid("invalid semantic section"))?;
+        let (raw_bytes, metadata) = codec::pack_metadata(serde_json::to_vec(&MetadataRef {
+            chunk,
+            counts: &chunk.counts,
+        })?)?;
+        let mut header: [u8; HEADER_BYTES] = data
+            .get(..HEADER_BYTES)
+            .ok_or_else(|| invalid("truncated checked record"))?
+            .try_into()?;
+        let total = HEADER_BYTES
+            .checked_add(metadata.len())
+            .and_then(|n| n.checked_add(payload.len()))
+            .ok_or_else(|| invalid("record length overflow"))?;
+        for (offset, value) in [
+            (8, total),
+            (16, metadata.len()),
+            (48, chunk.content.len()),
+            (56, raw_bytes),
+        ] {
+            header[offset..offset + 8].copy_from_slice(&(value as u64).to_le_bytes());
+        }
+        output.write_all(&header)?;
+        output.write_all(&metadata)?;
+        payload
+    } else {
+        data
+    };
+    for block in bytes.chunks(COPY_IO_BYTES) {
+        crate::request::check()?;
+        output.write_all(block)?;
+    }
+    Ok((start, output.stream_position()? - start))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn relocated_record_keeps_payload_and_counts_but_updates_lines() -> Result<()> {
+        let chunk = Chunk {
+            path: "source.py".into(),
+            start: 1,
+            end: 2,
+            content: "alpha\nbeta\n".into(),
+            counts: HashMap::from([("alpha".into(), 1), ("beta".into(), 1)]),
+            scores: None,
+        };
+        let mut original = Cursor::new(Vec::new());
+        let mut writer = RecordWriter::begin(&mut original, &chunk, ModelKind::Code)?;
+        let values = [f16::from_f32(0.25); 2 * CODE_EMBEDDING_DIMENSION];
+        writer.push(DocumentBlock::Code {
+            source: 0..chunk.content.len(),
+            input_tokens: 4,
+            values: &values,
+        })?;
+        writer.finish()?;
+        let mut decoder = codec::Decoder::new()?;
+        let record = Record::open(original.get_ref(), 0, &mut decoder)?;
+        assert_eq!(record.scored_rows()?, 2);
+        let mut moved = record.chunk;
+        moved.start = 10;
+        moved.end = 11;
+        let mut output = Cursor::new(Vec::new());
+        copy_checked(original.get_ref(), &mut output, Some(&moved))?;
+        let restored = Record::open(output.get_ref(), 0, &mut decoder)?;
+        assert_eq!((restored.chunk.start, restored.chunk.end), (10, 11));
+        assert_eq!(restored.chunk.content, chunk.content);
+        assert_eq!(restored.chunk.counts, chunk.counts);
+        assert_eq!(restored.scored_rows()?, 2);
+        let mut delivered = Vec::new();
+        restored.visit(&mut decoder, &mut |block| {
+            let DocumentBlock::Code { values, .. } = block else {
+                panic!("code record expected");
+            };
+            delivered.extend_from_slice(values);
+            Ok(())
+        })?;
+        assert_eq!(delivered, values);
+        let old_payload = HEADER_BYTES + read_usize(original.get_ref(), 16)?;
+        assert_eq!(
+            &original.get_ref()[old_payload..],
+            &output.get_ref()[restored.semantic..]
+        );
+        let mut unchanged = Cursor::new(Vec::new());
+        copy_checked(original.get_ref(), &mut unchanged, None)?;
+        assert_eq!(unchanged.into_inner(), original.into_inner());
         Ok(())
     }
 }

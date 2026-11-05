@@ -12,7 +12,7 @@ use memmap2::Mmap;
 mod lexical;
 mod pages;
 mod parallel;
-mod reuse;
+pub(crate) mod reuse;
 mod validation;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -76,7 +76,7 @@ pub struct ScopeIndexWriter {
     offsets: Vec<(u64, u64)>,
     metadata: Metadata,
     total_length: usize,
-    reuse: Option<reuse::UnchangedRecords>,
+    reuse: Option<reuse::RebuildSource>,
 }
 impl ScopeIndexWriter {
     pub fn begin(
@@ -116,36 +116,34 @@ impl ScopeIndexWriter {
             reuse: None,
         })
     }
-    pub fn reuse_unchanged_records(&mut self, previous: Option<ScopeIndex>) -> Result<()> {
-        let Some(previous) = previous else {
-            return Ok(());
-        };
-        match reuse::UnchangedRecords::new(previous, &self.metadata) {
-            Ok(reuse) => self.reuse = reuse,
-            Err(error) if error.is::<crate::record::CorruptRecord>() => {
-                crate::request::diagnostic(format_args!(
-                    "sgrep: record reuse unavailable: {error}"
-                ));
-            }
-            Err(error) => return Err(error),
-        }
-        Ok(())
+    pub fn reuse_records(&mut self, previous: Option<reuse::RebuildSource>) {
+        self.reuse = previous.filter(|source| source.matches(&self.metadata));
     }
-    fn score_reused_record(&mut self, scorer: &mut Scorer, chunk: &Chunk) -> Result<Option<f64>> {
-        let Some(reuse) = &mut self.reuse else {
+    pub fn score_reused_record(
+        &mut self,
+        scorer: &mut Scorer,
+        record: reuse::ReusedRecord,
+        range: (usize, usize),
+        load_chunk: impl FnOnce() -> Result<Chunk>,
+    ) -> Result<Option<f64>> {
+        crate::request::check()?;
+        let Some(source) = &self.reuse else {
             return Ok(None);
         };
-        let Some((record, decoder)) = reuse.find(chunk)? else {
-            return Ok(None);
+        let relocated = if self.output.is_some() && range != (record.start, record.end) {
+            let mut chunk = load_chunk()?;
+            chunk.counts = crate::ranking::term_counts(&chunk.path, &chunk.content);
+            Some(chunk)
+        } else {
+            None
         };
-        let score = scorer.score_blocks(|sink| record.visit(decoder, sink))?;
         if let Some(output) = &mut self.output {
-            match record.copy_to(output) {
+            match source.copy(record, output, relocated.as_ref()) {
                 Ok(location) => {
                     self.offsets.push(location);
                     self.total_length = self
                         .total_length
-                        .checked_add(record.length)
+                        .checked_add(record.word_count)
                         .ok_or("corpus length overflow")?;
                 }
                 Err(error) => {
@@ -162,20 +160,10 @@ impl ScopeIndexWriter {
                 }
             }
         }
-        Ok(Some(score))
+        scorer.accept_reused_score(record.scored_rows)?;
+        Ok(Some(record.score))
     }
     pub fn score_chunk(&mut self, scorer: &mut Scorer, mut chunk: Chunk) -> Result<f64> {
-        match self.score_reused_record(scorer, &chunk) {
-            Ok(Some(score)) => return Ok(score),
-            Ok(None) => {}
-            Err(error) if error.is::<crate::record::CorruptRecord>() => {
-                self.reuse = None;
-                crate::request::diagnostic(format_args!(
-                    "sgrep: record reuse disabled; encoding continues: {error}"
-                ));
-            }
-            Err(error) => return Err(error),
-        }
         if self.output.is_none() {
             return scorer.score_document(chunk.path, chunk.content);
         }
@@ -322,6 +310,13 @@ pub struct HitTimings {
     rank_us: u128,
     scan_worker_limit: usize,
     scan_batches: usize,
+}
+
+pub struct CachedSearch {
+    pub results: Vec<Chunk>,
+    pub work: crate::semantic::Work,
+    pub timings: HitTimings,
+    pub similarities: Vec<f64>,
 }
 
 pub struct ScopeIndex {
@@ -485,6 +480,17 @@ impl ScopeIndex {
         index.timings.record_validation_us = crc_ready.elapsed().as_micros();
         Ok(index)
     }
+    fn record_bytes(&self, id: usize) -> Result<&[u8]> {
+        if id >= self.count {
+            return Err("record ID outside scope".into());
+        }
+        let entry = self.record_table + id * RECORD_LOCATION_BYTES;
+        let start = read_usize(&self.map, entry)?;
+        let length = read_usize(&self.map, entry + 8)?;
+        self.map
+            .get(start..start.checked_add(length).ok_or("record size overflow")?)
+            .ok_or_else(|| "record outside immutable scope".into())
+    }
     fn record(&self, id: usize, decoder: &mut crate::record::codec::Decoder) -> Result<Record<'_>> {
         if id >= self.count {
             return Err("record ID outside scope".into());
@@ -581,7 +587,7 @@ impl ScopeIndex {
         assets: &Cache,
         request_scorer: &mut Option<Scorer>,
         trace: Option<&mut crate::diagnostics::RetrievalTrace>,
-    ) -> Result<(Vec<Chunk>, crate::semantic::Work, HitTimings)> {
+    ) -> Result<CachedSearch> {
         // Match Sum<f64>'s identity in the streaming BM25 path, including the
         // observable sign of zero when a document has no matching postings.
         let mut lexical = vec![-0.0; self.count];
@@ -685,6 +691,11 @@ impl ScopeIndex {
             trace,
         )?;
         timings.rank_us = rank_started.elapsed().as_micros();
-        Ok((result, scorer.work(), timings))
+        Ok(CachedSearch {
+            results: result,
+            work: scorer.work(),
+            timings,
+            similarities,
+        })
     }
 }

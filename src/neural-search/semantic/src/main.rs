@@ -185,7 +185,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         && args.rg_json.is_none()
         && index_cache.as_ref().is_some_and(|c| c.max_bytes > 0);
     let mut cached_scorer = None;
-    let mut previous_index = None;
+    let mut previous_source = None;
     if cache_allowed
         && !args.refresh_cache
         && let Some(config) = &index_cache
@@ -195,9 +195,16 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
             Ok(index) => {
                 let search_result = index.search(args, &cache, &mut cached_scorer, trace.as_mut());
                 let complete = search_result.is_ok();
+                let mut previous_scores = Vec::new();
                 let verify_started = std::time::Instant::now();
                 let search_result = match search_result {
-                    Ok(result) => index.verify_source(&path, &filter).map(|_| result),
+                    Ok(mut result) => match index.verify_source(&path, &filter) {
+                        Ok(()) => Ok(result),
+                        Err(error) => {
+                            previous_scores = std::mem::take(&mut result.similarities);
+                            Err(error)
+                        }
+                    },
                     // An obsolete auto/code snapshot must not reject a current
                     // text scope by its different query-token budget.
                     Err(error) if error.is::<semantic::QueryTooLong>() => {
@@ -207,7 +214,12 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                 };
                 let source_verify_us = verify_started.elapsed().as_micros();
                 match search_result {
-                    Ok((results, work, phases)) => {
+                    Ok(scope_index::CachedSearch {
+                        results,
+                        work,
+                        timings: phases,
+                        ..
+                    }) => {
                         diagnostics::check_scope(work, index.len(), 0)?;
 
                         if let Some(trace) = trace {
@@ -239,7 +251,8 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                             scorer.discard_cached_scores();
                         }
                         if complete && error.is::<source_snapshot::SourceChanged>() {
-                            previous_index = Some(index);
+                            previous_source =
+                                scope_index::reuse::RebuildSource::new(index, previous_scores)?;
                         }
                         // A failed diagnostic capture is provisional too.
                         trace = diagnostics::RetrievalTrace::from_env(args)?;
@@ -253,7 +266,15 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
             Err(_) => {}
         }
     }
-    let mut corpus = corpus::Corpus::scan(args, &path, &filter, &terms)?;
+    let mut corpus = match corpus::Corpus::scan(args, &path, &filter, &terms, &mut previous_source)
+    {
+        Err(error) if error.is::<record::CorruptRecord>() => {
+            crate::request::diagnostic(format_args!("sgrep: record reuse unavailable: {error}"));
+            previous_source = None;
+            corpus::Corpus::scan(args, &path, &filter, &terms, &mut previous_source)?
+        }
+        result => result?,
+    };
     let source_snapshot = corpus.source_snapshot.as_ref();
     if corpus.len() == 0 {
         corpus.verify_provided()?;
@@ -302,16 +323,28 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
             scorer.kind(),
             corpus.prose_only,
         )?;
-        index_writer.reuse_unchanged_records(previous_index)?;
+        index_writer.reuse_records(previous_source);
         Some(index_writer)
     } else {
         None
     };
     let mut similarities = Vec::with_capacity(corpus.len());
-    let scoring_source_peak = corpus.visit(|chunk| {
-        let score = match index_writer.as_mut() {
-            Some(index_writer) => index_writer.score_chunk(&mut scorer, chunk)?,
-            None => scorer.score_document(chunk.path, chunk.content)?,
+    let scoring_source_peak = corpus.visit(|id, reader| {
+        let reused = match (index_writer.as_mut(), corpus.reused(id)) {
+            (Some(writer), Some((record, range))) => {
+                writer
+                    .score_reused_record(&mut scorer, record, range, || reader.chunk(&corpus, id))?
+            }
+            _ => None,
+        };
+        let score = if let Some(score) = reused {
+            score
+        } else {
+            let chunk = reader.chunk(&corpus, id)?;
+            match index_writer.as_mut() {
+                Some(writer) => writer.score_chunk(&mut scorer, chunk)?,
+                None => scorer.score_document(chunk.path, chunk.content)?,
+            }
         };
         similarities.push(score);
         Ok(())

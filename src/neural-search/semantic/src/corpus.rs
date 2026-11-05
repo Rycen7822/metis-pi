@@ -2,6 +2,7 @@
 //! and query-relevant statistics, not corpus text, full word maps or embeddings.
 use crate::{
     Args, Chunk, Result,
+    scope_index::reuse::{RebuildSource, ReusedRecord},
     source_snapshot::{SourceChanged, SourceFileDigest, SourceSnapshot},
 };
 use sha2::{Digest, Sha256};
@@ -26,13 +27,20 @@ impl SourceContents {
     pub fn read(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
         let digest = Sha256::digest(&bytes).into();
-        let binary = bytes.contains(&0);
-        let text = if binary {
-            String::new()
-        } else {
-            String::from_utf8(bytes)
-                .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
-        };
+        if bytes.contains(&0) {
+            return Ok(Self {
+                text: String::new(),
+                starts: vec![0],
+                digest,
+                binary: true,
+            });
+        }
+        Ok(Self::from_text_bytes(bytes, digest))
+    }
+    // Callers already classified these bytes as non-binary; do not scan for NUL twice.
+    fn from_text_bytes(bytes: Vec<u8>, digest: [u8; 32]) -> Self {
+        let text = String::from_utf8(bytes)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
         let text = if text.as_bytes().contains(&b'\r') {
             let mut normalized = String::with_capacity(text.len());
             let mut chars = text.chars().peekable();
@@ -57,12 +65,12 @@ impl SourceContents {
         if starts.last().copied() != Some(text.len()) {
             starts.push(text.len());
         }
-        Ok(Self {
+        Self {
             text,
             starts,
             digest,
-            binary,
-        })
+            binary: false,
+        }
     }
     pub fn lines(&self) -> usize {
         self.starts.len() - 1
@@ -91,6 +99,7 @@ struct ChunkEntry {
     length: usize,
     matches: Vec<(usize, usize)>,
     exact: bool,
+    reused: Option<ReusedRecord>,
 }
 pub struct Corpus {
     files: Vec<SourceFileEntry>,
@@ -108,6 +117,7 @@ impl Corpus {
         scope: &Path,
         filter: &crate::storage::SourceFilter,
         terms: &[String],
+        reuse: &mut Option<RebuildSource>,
     ) -> Result<Self> {
         let mut corpus = Self {
             files: Vec::new(),
@@ -130,6 +140,7 @@ impl Corpus {
                     false,
                     true,
                     chunk,
+                    None,
                     false,
                     terms,
                     &pattern,
@@ -140,6 +151,11 @@ impl Corpus {
             corpus.corpus_len = corpus.documents.len();
         } else {
             let (root, names) = crate::source_snapshot::discover_files(scope, filter)?;
+            if let Some(source) = reuse.as_ref() {
+                if !source.compatible_paths(&names)? {
+                    *reuse = None;
+                }
+            }
             let mut source_snapshot = SourceSnapshot {
                 scope: scope.as_os_str().as_encoded_bytes().to_vec(),
                 files: Vec::with_capacity(names.len()),
@@ -152,16 +168,44 @@ impl Corpus {
                 crate::request::check()?;
                 let relative = name.strip_prefix(".").unwrap_or(&name);
                 let path = root.join(relative);
-                let source = SourceContents::read(&path).map_err(source_read_error)?;
+                let bytes =
+                    std::fs::read(&path).map_err(|error| source_read_error(error.into()))?;
+                let digest = Sha256::digest(&bytes).into();
                 let stamp = SourceFileDigest {
                     path: name.as_os_str().as_encoded_bytes().to_vec(),
-                    digest: source.digest,
+                    digest,
                 };
                 corpus.budget(stamp.path.capacity())?;
                 source_snapshot.files.push(stamp);
-                if source.binary {
+                corpus.source_peak_bytes = corpus.source_peak_bytes.max(bytes.capacity());
+                if bytes.contains(&0) {
                     continue;
                 }
+                let mut previous = reuse
+                    .as_mut()
+                    .map(|source| source.file(name.as_os_str().as_encoded_bytes(), &digest))
+                    .transpose()?;
+                if let Some(previous) = &mut previous {
+                    if previous.unchanged {
+                        while let Some(record) = previous.next()? {
+                            corpus.add(
+                                path.clone(),
+                                digest,
+                                true,
+                                false,
+                                record.chunk,
+                                Some(record.reused),
+                                false,
+                                terms,
+                                &pattern,
+                                &mut files,
+                                &mut locations,
+                            )?;
+                        }
+                        continue;
+                    }
+                }
+                let source = SourceContents::from_text_bytes(bytes, digest);
                 corpus.source_peak_bytes = corpus.source_peak_bytes.max(source.resident_bytes());
                 let ranges = crate::splitter::ranges(&source.text, relative, &source.starts)?;
                 for (start, end) in ranges {
@@ -175,12 +219,18 @@ impl Corpus {
                         end,
                         source.part(start, end)?.into(),
                     );
+                    let reused = previous
+                        .as_mut()
+                        .map(|file| file.find(&chunk))
+                        .transpose()?
+                        .flatten();
                     corpus.add(
                         path.clone(),
                         source.digest,
                         true,
                         false,
                         chunk,
+                        reused,
                         false,
                         terms,
                         &pattern,
@@ -199,6 +249,7 @@ impl Corpus {
                         false,
                         true,
                         chunk,
+                        None,
                         true,
                         terms,
                         &pattern,
@@ -233,6 +284,7 @@ impl Corpus {
         in_snapshot: bool,
         provided: bool,
         chunk: Chunk,
+        reused: Option<ReusedRecord>,
         supplied: bool,
         terms: &[String],
         pattern: &Option<(regex::Regex, Vec<&str>)>,
@@ -293,6 +345,7 @@ impl Corpus {
             length: chunk.counts.values().sum(),
             matches,
             exact,
+            reused,
         });
         self.prose_only &= crate::is_prose(&chunk.path);
         locations.insert(key, document);
@@ -341,10 +394,17 @@ impl Corpus {
             })
             .collect()
     }
-    pub fn visit(&self, mut consume: impl FnMut(Chunk) -> Result<()>) -> Result<usize> {
+    pub fn reused(&self, index: usize) -> Option<(ReusedRecord, (usize, usize))> {
+        let doc = self.documents.get(index)?;
+        doc.reused.map(|record| (record, (doc.start, doc.end)))
+    }
+    pub fn visit(
+        &self,
+        mut consume: impl FnMut(usize, &mut ChunkReader) -> Result<()>,
+    ) -> Result<usize> {
         let mut reader = ChunkReader::default();
         for i in 0..self.len() {
-            consume(reader.chunk(self, i)?)?;
+            consume(i, &mut reader)?;
         }
         Ok(reader.peak)
     }
