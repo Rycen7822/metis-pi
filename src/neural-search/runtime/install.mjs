@@ -143,8 +143,9 @@ async function download(asset, directory, context) {
   if ([process.env.PI_OFFLINE, process.env.HF_HUB_OFFLINE].some(value => /^(1|true|yes|on)$/i.test(value ?? ""))) {
     throw new Error("Required semantic assets are not cached and offline mode prohibits automatic download.");
   }
-  const { fetch, EnvHttpProxyAgent } = await import("undici");
-  context.agent ??= new EnvHttpProxyAgent();
+  const { fetch, EnvHttpProxyAgent, RetryAgent } = await import("undici");
+  // At most two transient GET retries (delays in milliseconds), never checksum/ABI failures or completed objects.
+  context.agent ??= new RetryAgent(new EnvHttpProxyAgent(), { maxRetries: 2, minTimeout: 250, maxTimeout: 1000 });
   const signal = AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), ...(context.signal ? [context.signal] : [])]);
   const response = await fetch(asset.url, { dispatcher: context.agent, signal });
   if (!response.ok || !response.body) {

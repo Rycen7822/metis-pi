@@ -71,6 +71,10 @@ test("automatic setup reuses models across engine updates and preserves the old 
   const payloads = new Map();
   const server = http.createServer((request, response) => {
     counts[request.url] = (counts[request.url] ?? 0) + 1;
+    if (request.url === "/engine-two.tar.gz" && counts[request.url] === 1) {
+      request.socket.destroy(); // A transient transport failure must not restart either completed model download.
+      return;
+    }
     const body = payloads.get(request.url);
     response.writeHead(body ? 200 : 404);
     response.end(body);
@@ -127,7 +131,7 @@ test("automatic setup reuses models across engine updates and preserves the old 
   distribution = { ...distribution, id: "runtime-two", engine: nextEngine };
   await setup();
   assert.deepEqual(modelPaths(), paths);
-  assert.equal(counts["/engine-two.tar.gz"], 1);
+  assert.equal(counts["/engine-two.tar.gz"], 2);
   for (const name of Object.keys(models)) assert.equal(counts[`/model-${name}.tar.gz`], 1);
   const previous = selected();
   const failed = await asset("engine-broken", { "bin/sgrep": "#!/bin/sh\necho controlled-native-failure >&2\nexit 2\n" });
