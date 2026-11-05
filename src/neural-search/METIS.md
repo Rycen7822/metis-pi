@@ -6,7 +6,7 @@ Derived from [FFF](https://github.com/dmtrKovalenko/fff) `@ff-labs/pi-fff` **0.1
 
 Metis owns this TS integration and the specialized Rust fork in `engine/`, not upstream editor/SDK compatibility. `extensions/neural-search.ts` is the host entry; root dependencies/builds own delivery. The engine source stays in Git; `native/`, bundled libraries/manifests/notices in `assets/` ship. No upstream FFF package/download is needed. Targets: Linux x64 glibc ≥2.31 and Windows x64, optional `ffi-rs` retained.
 
-FFF owns find/grep/multi_grep ranking and frecency. [semantic/](semantic/README.md) separately owns CPU sgrep with Bekko 128D vectors / LateOn 48D token rows, complete-scope scoring and original ranking without FFF prefilter/frecency; Linux x64 runtime must be prepared separately. Both search locally. User API/limits belong in [the search guide](../../docs/features/neural-search.md), native contracts/builds in [engine/README](engine/README.md).
+FFF owns find/grep/multi_grep ranking and frecency. [semantic/](semantic/README.md) separately owns CPU sgrep with Bekko 128D vectors / LateOn 48D token rows, complete-scope scoring and original ranking without FFF prefilter/frecency; Linux x64 installation/update automatically prepares separate engine/model release assets. Immutable models persist across engine generations; a packaged exec launcher selects the verified physical engine copy and shared-model catalog in Pi's data directory, outside the extension checkout. Both search locally. User API/limits belong in [the search guide](../../docs/features/neural-search.md), native contracts/builds in [engine/README](engine/README.md).
 
 ## Architecture
 

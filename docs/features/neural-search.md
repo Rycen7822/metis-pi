@@ -36,7 +36,13 @@ neural_search({ action: "semantic", params: { query: "缓存容量不足时继�
 
 请求（含排队/初始化）默认超时 1800 秒，`timeoutSeconds` 为 1–3600。取消/超时/会话或 cwd 变更终止自有 CLI 客户端组并确认清理，服务取消对应请求，不杀其他客户端/共享服务。失败不伪装零命中或回退 grep；无法缓存但完整计算会明确诊断。
 
-运行包为 `bin/sgrep`、`lib/`、`models/`、可信 `assets.json`，默认 `src/neural-search/assets/semantic/linux-x64/`；可用 `SGREP_RUNTIME_DIR` 指向可信包，不能由工具参数指定可执行文件。要求 `--metis-protocol 1`，旧 CLI 不得忽略预算。CLI 管资产取得/校验，不在查询中运行 Python/编译器。
+Linux x64 / glibc 2.39+ 首次安装 Metis 和后续 `pi update --extensions` 通过安装生命周期自动准备预编译运行数据；无需额外安装命令、Python 模型转换或本机编译。local 包或被跳过的安装脚本由首次 semantic 调用自动补齐，仍受请求取消和超时约束。
+
+引擎、Bekko、LateOn 使用三个固定版本发布包。模型按资产身份独立缓存在 `<agentDir>/metis/neural-search/semantic/linux-x64/objects/`，普通 Metis 更新不重复下载模型；只换引擎也不下载或复制相同模型。已有完整旧安装的匹配模型会验证后实体迁移。下载时校验发布包完整性，未变模型复用原完整性 receipt，不在查询热路径重建 hash。
+
+每个运行代仅含实体引擎副本与引用共享模型目录的可信 catalog；实际加载、编码、评分两模型后才原子切换普通 `current` 文件。旧运行代和活跃映射保留，失败不覆盖旧选择，不创建软链接、不主动停止其他会话的模型服务。已有服务按原排空/idle 合同退出后使用新代。
+
+包内 `assets/semantic/linux-x64/bin/sgrep` 是保持 PID/参数的 exec 入口。`SGREP_RUNTIME_DIR` 的既有独立可信运行包覆盖仍受支持，不读取工具参数指定的程序。catalog V2 保留固定模型 revision、文件集合及原有完整性验证，允许引用共享绝对模型目录；V1 远端合同保留。V2 的 `--cache-dir` 不复制权重，`--fresh-assets` 不适用；parser 随引擎准备，默认入口复用它。
 
 Metis 使用同 UID/规范 HOME 的私有共享模型服务，各仓库不重复加载同代模型；LateOn/Bekko 按需各加载一份，最多 3 请求×4 计算线程，超出有界排队。`[neuralSearch.semantic].idleTimeoutSeconds` 默认 300，接受整数 1–86400 秒，下一请求生效；工作/排队清空后计空闲，status 不延长，stop 先排空。详见[核心服务](../../src/neural-search/semantic/README.md#cli-and-shared-service)。
 

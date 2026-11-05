@@ -2,9 +2,10 @@ import { spawn } from "node:child_process";
 import { statSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadSemanticRequestSettings } from "../config.ts";
+import { ensureSemanticRuntime } from "../runtime/install.mjs";
 import { HOME_DIR, scanOptOutReason } from "../native/paths.ts";
 import type { SearchRuntime } from "../session.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
@@ -44,7 +45,7 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
     name: toolName, label: "Semantic",
     description: "按含义搜索代码和文档，适用于自然语言功能描述、实现位置和相关概念检索；"
       + "使用全范围语义评分与 BM25 混合排序。精确文本或正则匹配使用 grep，文件路径查找使用 find。"
-      + "No FFF prefilter/frecency or automatic fallback. Requires a prepared CPU runtime.",
+      + "No FFF prefilter/frecency or search fallback. The Linux x64 CPU runtime is prepared automatically.",
     parameters: semanticSchema,
     outputSchema: Type.Unknown(),
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -60,37 +61,49 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
       if (!stat.isFile() && !stat.isDirectory()) throw new Error("Semantic scope must be an existing regular file or directory.");
       const refusal = scanOptOutReason(root, runtime.config);
       if (refusal) throw new Error(refusal);
-      const { selection, idleTimeoutSeconds } = loadSemanticRequestSettings();
-      const model = params.model ?? "auto", limit = params.limit ?? 5;
-      const wire = await runSemanticCli(root, scope.cwd, params.query, model, limit,
-        params.timeoutSeconds ?? 1800, JSON.stringify(selection), idleTimeoutSeconds, combined);
-      runtime.assertCurrent(scope);
-      combined.throwIfAborted();
-      const chunks = parseChunks(wire.stdout, limit);
-      const results: SemanticChunk[] = [];
-      let bytes = 0;
-      for (const chunk of chunks) {
-        // UTF-16 length is a lower bound on the record's serialized UTF-8 bytes.
-        if (chunk.content.length > OUTPUT_BYTES - bytes) break;
-        bytes += Buffer.byteLength(JSON.stringify(chunk));
-        if (bytes > OUTPUT_BYTES) break;
-        results.push(chunk);
-      }
-      const outputTruncated = results.length !== chunks.length;
-      const next = outputTruncated ? chunks[results.length] : undefined;
-      const omitted = next ? { path: next.path, start: next.start, end: next.end } : undefined;
-      const notice = next
-        ? `\n[Output truncated at ${OUTPUT_BYTES} bytes; only complete ranked-prefix records retained. `
-          + `Next result: ${safeText(next.path)}:${next.start}-${next.end}. Read that source or narrow the scope.]` : "";
-      const body = results.map(chunk => `${safeText(chunk.path)}:${chunk.start}-${chunk.end}\n${safeText(chunk.content)}`).join("\n\n");
-      const diagnostics = wire.stderr ? `\n[CLI diagnostics: ${safeText(wire.stderr)}]` : "";
-      const text = (body || (chunks.length ? "No complete result fits the display budget." : "No semantic results.")) + notice + diagnostics;
-      const details = { root: stat.isFile() ? path.dirname(root) : root, scope: root,
-        protocol: 1, modelRequested: model, cacheBudgetRequestedMiB: selection.budget_mib,
-        resultsReturned: results.length, limitReached: chunks.length === limit, outputTruncated, nextOmitted: omitted ?? null,
-        elapsedMs: performance.now() - started };
-      return { content: [{ type: "text", text }], details,
-        structuredContent: { ...details, results, diagnostics: wire.stderr || null } };
+      const timeoutSeconds = params.timeoutSeconds ?? 1800;
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(new Error(
+        `Semantic search timed out after ${timeoutSeconds}s; no partial results returned.`,
+      )), timeoutSeconds * 1000);
+      const requestSignal = AbortSignal.any([combined, deadline.signal]);
+      try {
+        await ensureSemanticRuntime(path.resolve(getAgentDir()), requestSignal);
+        runtime.assertCurrent(scope);
+        requestSignal.throwIfAborted();
+        // Automatic first-time setup can be long; read mutable budget policy only when dispatching.
+        const { selection, idleTimeoutSeconds } = loadSemanticRequestSettings();
+        const model = params.model ?? "auto", limit = params.limit ?? 5;
+        const wire = await runSemanticCli(root, scope.cwd, params.query, model, limit,
+          timeoutSeconds, JSON.stringify(selection), idleTimeoutSeconds, requestSignal);
+        runtime.assertCurrent(scope);
+        requestSignal.throwIfAborted();
+        const chunks = parseChunks(wire.stdout, limit);
+        const results: SemanticChunk[] = [];
+        let bytes = 0;
+        for (const chunk of chunks) {
+          // UTF-16 length is a lower bound on the record's serialized UTF-8 bytes.
+          if (chunk.content.length > OUTPUT_BYTES - bytes) break;
+          bytes += Buffer.byteLength(JSON.stringify(chunk));
+          if (bytes > OUTPUT_BYTES) break;
+          results.push(chunk);
+        }
+        const outputTruncated = results.length !== chunks.length;
+        const next = outputTruncated ? chunks[results.length] : undefined;
+        const omitted = next ? { path: next.path, start: next.start, end: next.end } : undefined;
+        const notice = next
+          ? `\n[Output truncated at ${OUTPUT_BYTES} bytes; only complete ranked-prefix records retained. `
+            + `Next result: ${safeText(next.path)}:${next.start}-${next.end}. Read that source or narrow the scope.]` : "";
+        const body = results.map(chunk => `${safeText(chunk.path)}:${chunk.start}-${chunk.end}\n${safeText(chunk.content)}`).join("\n\n");
+        const diagnostics = wire.stderr ? `\n[CLI diagnostics: ${safeText(wire.stderr)}]` : "";
+        const text = (body || (chunks.length ? "No complete result fits the display budget." : "No semantic results.")) + notice + diagnostics;
+        const details = { root: stat.isFile() ? path.dirname(root) : root, scope: root,
+          protocol: 1, modelRequested: model, cacheBudgetRequestedMiB: selection.budget_mib,
+          resultsReturned: results.length, limitReached: chunks.length === limit, outputTruncated, nextOmitted: omitted ?? null,
+          elapsedMs: performance.now() - started };
+        return { content: [{ type: "text", text }], details,
+          structuredContent: { ...details, results, diagnostics: wire.stderr || null } };
+      } finally { clearTimeout(timer); }
     },
     renderCall(args, theme) {
       return new CollapsedText(theme.fg("toolTitle", theme.bold("Semantic")) + " " + theme.fg("accent", safeText(args.query ?? ""))
@@ -119,7 +132,8 @@ function runSemanticCli(root: string, cwd: string, query: string, model: string,
       "--model", model, "-n", String(limit), "--", query, root,
     ], {
       cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, SGREP_RUNTIME_DIR: runtimeDir, SGREP_CACHE_POLICY_REQUEST: policy },
+      env: { ...process.env, SGREP_RUNTIME_DIR: runtimeDir, SGREP_CACHE_POLICY_REQUEST: policy,
+        METIS_SEMANTIC_AGENT_DIR: path.resolve(getAgentDir()) },
     });
     const output: Buffer[] = [], errors: Buffer[] = [];
     let size = 0, errorSize = 0, failure: unknown, killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -140,13 +154,10 @@ function runSemanticCli(root: string, cwd: string, query: string, model: string,
       }, 1000);
     }
     const onAbort = () => stop(signal.reason);
-    const deadline = setTimeout(() => stop(new Error(
-      `Semantic search timed out after ${timeoutSeconds}s; no partial results returned.`,
-    )), timeoutSeconds * 1000);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
     child.on("error", error => stop(new Error(
-      `Semantic runtime could not start at ${binary}; install a qualified prepared runtime. No build or fallback was attempted.`,
+      `Semantic runtime could not start at ${binary} after automatic setup. No build or search fallback was attempted.`,
       { cause: error },
     )));
     child.stdout.on("error", stop);
@@ -164,7 +175,7 @@ function runSemanticCli(root: string, cwd: string, query: string, model: string,
       const kept = chunk.subarray(0, DIAGNOSTIC_BYTES - errorSize); errors.push(kept); errorSize += kept.length;
     });
     child.once("close", (code, exitSignal) => {
-      clearTimeout(deadline); if (killTimer) clearTimeout(killTimer);
+      if (killTimer) clearTimeout(killTimer);
       signal.removeEventListener("abort", onAbort);
       const stderr = Buffer.concat(errors).toString("utf8").trim();
       if (failed || code !== 0) {

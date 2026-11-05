@@ -1,0 +1,98 @@
+{
+  "format_version": 1,
+  "id": "semantic-cpu-linux-x64-20261105.1",
+  "minimum_glibc": "2.39",
+  "engine": {
+    "id": "engine-linux-x64-de18f02c57832a648e7c617d7238f6998ad42aec36fa657cd089d8980e9a75fc",
+    "url": "https://github.com/Rycen7822/metis-pi/releases/download/semantic-cpu-linux-x64-20261105.1/engine-linux-x64.tar.gz",
+    "bytes": 14183923,
+    "sha256": "de18f02c57832a648e7c617d7238f6998ad42aec36fa657cd089d8980e9a75fc",
+    "files": {
+      "bin/sgrep": 13676176,
+      "lib/libonnxruntime.so.1": 18146904,
+      "lib/libsgrep_cpu.so": 330512,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_c.so": 623280,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_c_sharp.so": 6197080,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_cpp.so": 5934016,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_go.so": 233712,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_java.so": 433720,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_javascript.so": 777408,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_python.so": 826248,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_ruby.so": 2466328,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_rust.so": 1478328,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_tsx.so": 1818232,
+      "parsers/tree-sitter-language-pack/v1.21.0/libs/libtree_sitter_typescript.so": 1785432,
+      "parsers/tree-sitter-language-pack/v1.21.0/manifest.json": 30054,
+      "notices/Apache-2.0.txt": 10847,
+      "notices/Bekko-MIT.txt": 1351,
+      "notices/Bekko-model-card.md": 22036,
+      "notices/LateOn-model-card.md": 135454,
+      "notices/ORT-LICENSE": 1073,
+      "notices/ORT-ThirdPartyNotices.txt": 338088,
+      "notices/Prepared-models-NOTICE.txt": 573,
+      "notices/sgrep-LICENSE": 1240
+    }
+  },
+  "models": {
+    "bekko128": {
+      "id": "model-bekko128-b3909bdf23ceaa066efc16265095747ea5b92903409958ac24e554487a064c22",
+      "url": "https://github.com/Rycen7822/metis-pi/releases/download/semantic-cpu-linux-x64-20261105.1/model-bekko128.tar.gz",
+      "bytes": 26049951,
+      "sha256": "b3909bdf23ceaa066efc16265095747ea5b92903409958ac24e554487a064c22",
+      "catalog": {
+        "revision": "c18167b8f244c1bc6de21ce9b710bac8a29c4615",
+        "files": {
+          "manifest.json": {
+            "bytes": 952,
+            "sha256": "399221191a3f0bd6cd1a736b476621dda98d3662ea27092bacc325b6e545ed80"
+          },
+          "tokenizer.json": {
+            "bytes": 5104874,
+            "sha256": "308823060352e35bf9fff6b42ef343f31cc68fa800e284568cc44e9cc0f70a73"
+          },
+          "bekko128.pack": {
+            "bytes": 26400064,
+            "sha256": "edfe83c2237d835e9280cbb80b384c60566c07132dbef3c70f43fb998cfbaa34"
+          }
+        }
+      },
+      "notices": {
+        "notices/Prepared-models-NOTICE.txt": 573,
+        "notices/Bekko-model-card.md": 22036,
+        "notices/Bekko-MIT.txt": 1351
+      }
+    },
+    "lateon-edge": {
+      "id": "model-lateon-edge-1c28ea9df1ec97f897f4666f4535023e5bae7d7d6d19ae9fab593456b9cf5017",
+      "url": "https://github.com/Rycen7822/metis-pi/releases/download/semantic-cpu-linux-x64-20261105.1/model-lateon-edge.tar.gz",
+      "bytes": 40096885,
+      "sha256": "1c28ea9df1ec97f897f4666f4535023e5bae7d7d6d19ae9fab593456b9cf5017",
+      "catalog": {
+        "revision": "4bcdf5ed93f791259eb130b577a240f753d68dd8",
+        "files": {
+          "manifest.json": {
+            "bytes": 1741,
+            "sha256": "73a52a78ef558deacbca09673effeb50ce712408a41bb4b69d3ebf77ee423f76"
+          },
+          "tokenizer.json": {
+            "bytes": 3583847,
+            "sha256": "a388b94942e98e5c661c6c23f919842285738bfd123a0d148dea0c56287505d0"
+          },
+          "embedding_preln_f16.pack": {
+            "bytes": 25789504,
+            "sha256": "a91f03608e49e815b4064ee6f00f32af12d07658354d726e1b71eb76ce3398f3"
+          },
+          "backbone.ort": {
+            "bytes": 16747000,
+            "sha256": "75b248b4ca2dd0c5286687399ca299734565e0cd8233a4ded72998416f232898"
+          }
+        }
+      },
+      "notices": {
+        "notices/Prepared-models-NOTICE.txt": 573,
+        "notices/LateOn-model-card.md": 135454,
+        "notices/Apache-2.0.txt": 10847
+      }
+    }
+  }
+}

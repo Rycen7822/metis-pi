@@ -52,6 +52,8 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/neural-search/assets/win32-x64/metis_neural_search.dll", "src/neural-search/assets/win32-x64-manifest.json",
     "src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/THIRD_PARTY_NOTICES-win32-x64.txt",
     "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
+    "src/neural-search/assets/semantic/linux-x64/bin/sgrep",
+    "src/neural-search/runtime/install.mjs", "src/neural-search/runtime/distribution.json",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
   for (const path of files) {

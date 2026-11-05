@@ -42,7 +42,16 @@ changing byte ranges, line ranges, or chunk content.
 
 ## CLI and shared service
 
-Use a prepared runtime, not the original model downloads:
+Metis installation and `pi update --extensions` prepare the CPU runtime automatically
+on Linux x64 with glibc 2.39+. Unsupported platforms retain other Metis features;
+semantic reports the required platform instead of attempting an incompatible binary.
+The lifecycle uses production dependencies only; local packages or skipped install scripts
+are completed automatically by semantic before dispatch. There is no manual installation command.
+Engine and model release assets are separate: unchanged models are neither downloaded nor
+copied again when only the engine changes. Data persists outside the extension checkout;
+real model execution precedes atomic selection, without symlinks or killing existing services.
+
+For an explicitly selected independent runtime:
 
 ```sh
 export SGREP_RUNTIME_DIR=/absolute/path/to/runtime
@@ -137,21 +146,28 @@ process-resident decompressed corpus.
 
 `SGREP_RUNTIME_DIR` selects a bundle containing `assets.json`, `bin/sgrep`,
 `lib/libsgrep_cpu.so`, sibling ORT libraries/SONAME-named regular copies, and prepared
-`models/bekko128` / `models/lateon-edge` directories. The trusted catalog pins an
-immutable prepared-artifact revision, source models and exact file sizes/SHA256;
-it ships with the runtime, not a model-server response. Updates replace the
-runtime/catalog together. No query-time Python, compiler or conversion runs.
+`models/bekko128` / `models/lateon-edge` directories. The trusted catalog ships with
+the runtime, not a model-server response. V1 pins an immutable Hub prepared-artifact
+revision; V2 declares a complete local bundle without a fictitious remote origin.
+Both retain fixed model revisions and exact file sizes/SHA256. Updates replace the
+runtime/catalog together; no query-time Python, compiler or conversion runs.
+`sgrep --check-runtime` loads, encodes and scores both models without a corpus index
+or shared service. Automatic setup uses it before publishing `current`; this operational
+check does not replace numerical/quality qualification.
 
-- Online acquisition uses the HF client and `HF_ENDPOINT`, verifies approved
+- V1 online acquisition uses the HF client and `HF_ENDPOINT`, verifies approved
   files, then replaces them atomically without truncating mapped inodes. Warm
   verification receipts bind device/inode/size/mtime/ctime; changed files require
   full verification. When disk receipts cannot be persisted, the process can reuse
   at most two proofs bound to those same file identities; it never skips the first
   or changed-file SHA. No new fingerprint key or receipt directory is introduced.
 - `HF_HUB_OFFLINE` values `1`, `true`, `YES` or `On` prohibit acquisition; missing
-  or damaged assets fail explicitly. A `--cache-dir` override isolates models,
-  parsers and indexes and cannot borrow assets from another store.
-- `--fresh-assets` rejects offline mode, downloads models/parsers privately,
+  or damaged assets fail explicitly. V1 `--cache-dir` isolates models, parsers and
+  indexes and cannot borrow assets from another store. V2 keeps models inside its
+  local bundle or shared immutable absolute model directories. Acquisition/repair belongs
+  to automatic setup, not the CLI scorer. V2 `--cache-dir` relocates only corpus/parser
+  state and rejects `--fresh-assets`.
+- V1 `--fresh-assets` rejects offline mode, downloads models/parsers privately,
   bypasses all corpus-index reads/writes and cleans up on normal success/failure.
   Later invocations reclaim only marked directories whose PID/start-time owner
   exited, never live/unmarked objects or symlink targets. Installed assets stay intact.
@@ -232,6 +248,10 @@ Stage native libraries through CMake: installation sets `$ORIGIN`-only RPATH,
 unlike copying the build-tree `.so`. Supply the CLI, pinned sibling ORT and assets
 separately to complete the bundle; missing siblings must not load development
 fallbacks. These commands stage a library, not install or activate Metis.
+Maintainers use `scripts/build-semantic-assets.mjs` to package a qualified runtime into
+an engine archive and independently pinned model archives plus the trusted distribution
+record. Model URLs remain unchanged when their approved file sets are unchanged.
+Publish those assets with their matching source; end users only install/update through Pi.
 
 ## Diagnostics and evidence
 
@@ -251,6 +271,6 @@ Counters/traces are not quality labels, cold-page evidence or memory qualificati
 Plans, benchmarks, raw results and comparison fixtures belong in repository
 `.work/`, not this source tree. Keep bundle identity/numerical admission in
 `manifests/runtime.lock.json` and `manifests/quality-gates.json` alongside the
-staged runtime. The development catalog is an unpublished fixture; public release
-requires a real prepared-artifact revision. Qualification applies to the pinned
+staged runtime. A V1 development catalog is an unpublished fixture, not a public
+Hub release; V2 local bundles make no remote-publication claim. Qualification applies to the pinned
 candidate, host and execution mode, not other bundles or concurrency.

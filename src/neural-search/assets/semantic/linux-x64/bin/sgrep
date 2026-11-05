@@ -1,0 +1,29 @@
+#!/bin/sh
+# Stable package entrypoint. Payloads are physical copies outside the extension checkout.
+set -eu
+fail() {
+    printf '%s\n' "$1" >&2
+    exit 78
+}
+agent_dir=${METIS_SEMANTIC_AGENT_DIR:-${PI_CODING_AGENT_DIR:-"$HOME/.pi/agent"}}
+case "$agent_dir" in
+    '~') agent_dir=$HOME ;;
+    '~/'*) agent_dir="$HOME/${agent_dir#\~/}" ;;
+esac
+base="$agent_dir/metis/neural-search/semantic/linux-x64"
+if ! IFS= read -r version < "$base/current"; then
+    fail 'Semantic CPU runtime is not ready. Run pi update --extensions and reload Pi; setup is automatic.'
+fi
+case "$version" in
+    runtime-*) ;;
+    *) fail 'Invalid semantic runtime selection; reinstall the prepared runtime.' ;;
+esac
+case "$version" in
+    *[!a-zA-Z0-9-]*) fail 'Invalid semantic runtime selection; reinstall the prepared runtime.' ;;
+esac
+export SGREP_RUNTIME_DIR="$base/$version"
+if [ -z "${TREE_SITTER_LANGUAGE_PACK_CACHE_DIR:-}" ] && [ -d "$SGREP_RUNTIME_DIR/parsers" ]; then
+    export TREE_SITTER_LANGUAGE_PACK_CACHE_DIR="$SGREP_RUNTIME_DIR/parsers"
+fi
+[ -x "$SGREP_RUNTIME_DIR/bin/sgrep" ] || fail 'Selected semantic runtime is incomplete; reinstall the prepared runtime.'
+exec "$SGREP_RUNTIME_DIR/bin/sgrep" "$@"

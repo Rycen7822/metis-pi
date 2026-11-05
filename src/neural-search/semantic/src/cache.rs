@@ -37,8 +37,8 @@ pub struct Cache {
 #[serde(deny_unknown_fields)]
 struct Catalog {
     format_version: u32,
-    repository: String,
-    revision: String,
+    repository: Option<String>,
+    revision: Option<String>,
     models: BTreeMap<String, ModelAssets>,
 }
 
@@ -46,6 +46,7 @@ struct Catalog {
 #[serde(deny_unknown_fields)]
 struct ModelAssets {
     revision: String,
+    directory: Option<PathBuf>,
     files: BTreeMap<String, Asset>,
 }
 
@@ -103,19 +104,27 @@ impl Catalog {
             return Err("ARTIFACT_MISMATCH: oversized asset catalog".into());
         }
         let catalog: Self = serde_json::from_reader(BufReader::new(file))?;
-        let parts: Vec<_> = catalog.repository.split('/').collect();
-        if catalog.format_version != 1
-            || !hex(&catalog.revision, 40)
-            || parts.len() != 2
-            || parts
-                .iter()
-                .any(|p| p.is_empty() || *p == "." || *p == "..")
-            || !catalog
-                .repository
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"/_-.".contains(&b))
-            || catalog.models.len() != 2
-        {
+        // V1 names immutable Hub assets; V2 is a complete local bundle, never a fictitious remote repository.
+        let valid_source = match (
+            catalog.format_version,
+            &catalog.repository,
+            &catalog.revision,
+        ) {
+            (2, None, None) => true,
+            (1, Some(repository), Some(revision)) => {
+                let parts: Vec<_> = repository.split('/').collect();
+                hex(revision, 40)
+                    && parts.len() == 2
+                    && parts
+                        .iter()
+                        .all(|p| !p.is_empty() && *p != "." && *p != "..")
+                    && repository
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/_-.".contains(&b))
+            }
+            _ => false,
+        };
+        if !valid_source || catalog.models.len() != 2 {
             return Err("ARTIFACT_MISMATCH: invalid prepared-asset catalog".into());
         }
         for (name, revision, files) in [
@@ -127,6 +136,9 @@ impl Catalog {
                 .get(name)
                 .ok_or("ARTIFACT_MISMATCH: missing model catalog entry")?;
             if entry.revision != revision
+                || entry.directory.as_ref().is_some_and(|directory| {
+                    catalog.format_version != 2 || !directory.is_absolute()
+                })
                 || entry.files.len() != files.len()
                 || files.iter().any(|file| !entry.files.contains_key(*file))
                 || entry
@@ -204,12 +216,31 @@ impl Cache {
             .get_or_init(|| Catalog::open(&self.runtime.join("assets.json")))
             .as_ref()
             .map_err(|e| e.to_string())?;
+        if catalog.format_version == 2 && self._temporary.is_some() {
+            return Err("--fresh-assets is unavailable for a local bundle; reinstall its prepared runtime instead".into());
+        }
         let assets = &catalog.models[model];
-        let directory = self.models.join(model);
-        Temporary::reap(&self.models, &format!("sgrep-assets-{model}"))?;
+        // V2 may share immutable installed weights across engine generations.
+        let directory = if catalog.format_version == 2 {
+            assets
+                .directory
+                .clone()
+                .unwrap_or_else(|| self.runtime.join("models").join(model))
+        } else {
+            self.models.join(model)
+        };
+        let model_root = directory.parent().ok_or("invalid model directory")?;
+        Temporary::reap(model_root, &format!("sgrep-assets-{model}"))?;
         if verified(&directory, assets)? {
             return Ok(directory.canonicalize()?);
         }
+        let (repository, revision) = match (&catalog.repository, &catalog.revision) {
+            (Some(repository), Some(revision)) => (repository, revision),
+            _ => return Err(format!(
+                "ASSET_MISSING_OR_CORRUPT: bundled {model} is incomplete or damaged; reinstall the prepared runtime. \
+                 Local bundles do not download assets or support --fresh-assets"
+            ).into()),
+        };
         if offline() {
             return Err(format!(
                 "ASSET_MISSING_OR_CORRUPT: prepared {model} at {} is not cached or failed integrity verification; \
@@ -236,9 +267,9 @@ impl Cache {
             .with_progress(false)
             .build()?;
         let repository = api.repo(hf_hub::Repo::with_revision(
-            catalog.repository.clone(),
+            repository.clone(),
             hf_hub::RepoType::Model,
-            catalog.revision.clone(),
+            revision.clone(),
         ));
         // Each name always has the same pinned content in this runtime catalog.
         // Repair by atomic FILE replacement, never truncate a live mapped inode.

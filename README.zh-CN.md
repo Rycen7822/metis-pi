@@ -7,8 +7,8 @@ Pi 的 Codex 风格转录界面与工作流扩展。**Metis 0.21.0 仅适配 Pi 
 ## 安装
 
 ```bash
-pi install .  # 在本地检出目录执行
-# 或：pi install git:git@github.com:Rycen7822/metis-pi.git
+pi install git:git@github.com:Rycen7822/metis-pi.git
+# 本地开发：npm install 后执行 pi install .
 ```
 
 重启 Pi 并选择 `metis-pi` 主题。先禁用同名独立提供者：`@howaboua/pi-codex-conversion`、`pi-web-access`、`pi-session-recall`、`@narumitw/pi-lsp`，以及 agent-stuff 的 BTW/commit/github/uv 资源；原文件和会话保留。详见[内置维护扩展](docs/features/managed-plugins.md)与 [LSP](docs/features/lsp.md)。

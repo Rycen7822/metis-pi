@@ -7,8 +7,8 @@ Codex-style transcripts and workflow extensions for Pi. **Metis 0.21.0 targets P
 ## Installation
 
 ```bash
-pi install .  # from a local checkout
-# or: pi install git:git@github.com:Rycen7822/metis-pi.git
+pi install git:git@github.com:Rycen7822/metis-pi.git
+# Local development: npm install, then pi install .
 ```
 
 Restart Pi and select the `metis-pi` theme. Disable matching standalone providers first: `@howaboua/pi-codex-conversion`, `pi-web-access`, `pi-session-recall`, `@narumitw/pi-lsp`, and agent-stuff's BTW/commit/github/uv resources. Metis retains their original files and sessions; see [managed extensions](docs/features/managed-plugins.md) and [LSP](docs/features/lsp.md).

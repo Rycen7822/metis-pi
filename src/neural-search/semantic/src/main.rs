@@ -33,7 +33,8 @@ enum ModelChoice {
 #[derive(Parser)]
 #[command(
     version,
-    about = "Search code and text with ripgrep and local CPU semantic models."
+    about = "Search code and text with ripgrep and local CPU semantic models.",
+    after_help = "Installation: --check-runtime loads and scores both prepared models without a corpus or service."
 )]
 struct Args {
     /// Store models, parsers and search indexes under this directory.
@@ -369,7 +370,32 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
     Ok(result)
 }
 
+fn check_runtime() -> Result<ExitCode> {
+    let assets = cache::Cache::new(None, false)?;
+    for model in [ModelChoice::Text, ModelChoice::Code] {
+        let mut scorer = semantic::Scorer::open(model, false, "runtime installation", &assets)?;
+        let score = scorer.score_document(
+            "runtime.txt".into(),
+            "Prepared CPU model installation.".into(),
+        )?;
+        if !score.is_finite() {
+            return Err("ARTIFACT_MISMATCH: runtime check produced a non-finite score".into());
+        }
+    }
+    println!(
+        "{}",
+        serde_json::json!({"runtime_check": 1, "models": ["bekko128", "lateon-edge"]})
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 fn run() -> Result<ExitCode> {
+    if std::env::args().nth(1).as_deref() == Some("--check-runtime") {
+        if std::env::args_os().count() != 2 {
+            return Err("--check-runtime does not accept search arguments".into());
+        }
+        return check_runtime();
+    }
     if std::env::args().nth(1).as_deref() == Some("--service-control") {
         service::control()?;
         return Ok(ExitCode::SUCCESS);
