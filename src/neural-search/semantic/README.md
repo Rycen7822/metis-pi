@@ -219,7 +219,10 @@ per-row arithmetic, stable maxima and partial-error stores remain bit-identical.
 ## CPU and memory bounds
 
 - Each request uses at most four computing threads including the caller;
-  inter-op=1, no spinning. Validation, encoding, scanning/ranking and source
+  inter-op=1. ORT's shared Env allows bounded spin only while a global-pool
+  session Run is active. An Env-owned count keeps overlapping Runs alive; the
+  last Run stops spin on success, cancellation or error. Resident models do not
+  keep idle workers spinning. Validation, encoding, scanning/ranking and source
   verification do not overlap their compute pools. Owned `rg --files` is serial.
 - Normal Format08 fuses metadata/DF, query frequencies and scoring, with geometry
   admission limiting additional query state to 1MiB. Wide/large geometries and
@@ -259,7 +262,10 @@ cmake --install "$BUILD_ROOT/native" --prefix "$BUILD_ROOT/runtime-stage"
 ```
 
 `ORT_SOURCE` must be commit `402979ac1bef89dcd55add41eaa7277c407599eb` with the
-owned patches applied. `ORT_BUILD` is its reduced non-minimal CPU `Release` build,
+owned [Flash/arena](native/patches/ort-required-cpu-flash.patch) and
+[Env/Run spin](native/patches/ort-env-run-spinning.patch) patches applied.
+Native and ORT must be rebuilt/staged together; the required private exports
+fail linking against an older ORT. `ORT_BUILD` is its reduced non-minimal CPU `Release` build,
 with `onnxruntime_USE_TELEMETRY=OFF` and the exports in
 [native/ort-extra-symbols.txt](native/ort-extra-symbols.txt). Its reduced registry must
 include [native/ort-required-operators.config](native/ort-required-operators.config):
@@ -298,6 +304,9 @@ A cache hit has zero document encodes but still scores every scope chunk;
 scope is zero). Scored token rows mean one vector per Bekko chunk or selected
 48D LateOn rows. Traces publish only after source verification; keep diagnostics
 outside the searched scope and disable tracing for normal latency measurements.
+Native diagnostics include `global_active_runs`, the Env's current Run count
+across sessions, distinct from this Runtime's `active_request`. It returns to
+zero after the last Run; no cumulative spin/tile experiment counters are retained.
 Counters/traces are not quality labels, cold-page evidence or memory qualification.
 
 Plans, benchmarks, raw results and comparison fixtures belong in repository

@@ -23,6 +23,8 @@
 #include <unistd.h>
 #include <nlohmann/json.hpp>
 
+extern "C" OrtStatus* ORT_API_CALL OrtSgrepEnableRunScopedSpinning(OrtEnv*) noexcept;
+extern "C" OrtStatus* ORT_API_CALL OrtSgrepGetActiveRunCount(const OrtEnv*,uint64_t*) noexcept;
 extern "C" void OrtSgrepConfigureGlobalAttention(int);
 extern "C" void OrtSgrepGetGlobalAttentionStats(uint64_t*,uint64_t*,uint64_t*);
 extern "C" void OrtSgrepTraceMarker(const char*,uint64_t);
@@ -115,8 +117,10 @@ struct sgrep_runtime {
     require(std::memcmp(table.data,"SGRPLN16",8)==0 && u32(table,8)==1 && u32(table,12)==50370 &&
       u32(table,16)==256 && u32(table,20)==0 && u64(table,24)==64 && u64(table,32)==0 &&
       u64(table,40)==table.bytes,"invalid pre-LN table header");
-    threading.SetGlobalIntraOpNumThreads(settings.threads).SetGlobalInterOpNumThreads(1).SetGlobalSpinControl(0);
+    // The pool needs a spin budget; Env-owned Run scopes stop it between requests.
+    threading.SetGlobalIntraOpNumThreads(settings.threads).SetGlobalInterOpNumThreads(1).SetGlobalSpinControl(1);
     env=Ort::Env(threading,ORT_LOGGING_LEVEL_WARNING,"sgrep-cpu");
+    Ort::ThrowOnError(OrtSgrepEnableRunScopedSpinning(env));
     // Geometric regions avoid the measured shape-order fragmentation; the hard cap is unchanged.
     Ort::ArenaCfg arena(settings.temp_bytes_cap,0,1<<20,0);
     env.CreateAndRegisterAllocator(memory,arena);
@@ -154,8 +158,9 @@ struct sgrep_runtime {
     }
   }
   json diagnostics(bool include_allocator) {
-    uint64_t calls=0,scratch=0,fallbacks=0;
+    uint64_t calls=0,scratch=0,fallbacks=0,active_runs=0;
     OrtSgrepGetGlobalAttentionStats(&calls,&scratch,&fallbacks);
+    Ort::ThrowOnError(OrtSgrepGetActiveRunCount(env,&active_runs));
     json result={{"backend","ort_cpu_mlas"},{"ort_version",OrtGetApiBase()->GetVersionString()},
       {"device","cpu"},{"threads",state.threads},
       {"query_forward_count",query_forwards.load()},{"document_forward_count",document_forwards.load()},
@@ -163,7 +168,7 @@ struct sgrep_runtime {
       {"graph_format",graph_format},{"arithmetic_revision","ort-1.31-erf-v1"},
       {"embedding_storage_dtype","float16"},
       {"embedding_compute_dtype","float32"},{"embedding_mapped_bytes",table.bytes},
-      {"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},
+      {"arena_cap_bytes",arena_cap},{"active_request",active_request.load()},{"global_active_runs",active_runs},
       {"forward_count",forward_count.load()},{"max_input_tokens",longest_input.load()},
       {"global_flash_calls",calls},{"global_flash_scratch_peak_bytes",scratch},
       {"global_fallback_attempts",fallbacks},{"local_attention_calls",state.local_calls.load()},

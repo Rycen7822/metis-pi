@@ -2,3 +2,5 @@ OrtSgrepConfigureGlobalAttention
 OrtSgrepGetGlobalAttentionStats
 OrtSgrepTraceNode
 OrtSgrepTraceMarker
+OrtSgrepEnableRunScopedSpinning
+OrtSgrepGetActiveRunCount

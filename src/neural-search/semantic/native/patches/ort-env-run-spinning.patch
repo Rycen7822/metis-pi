@@ -1,0 +1,152 @@
+diff --git a/onnxruntime/core/session/inference_session.cc b/onnxruntime/core/session/inference_session.cc
+index 9227930..0589f7f 100644
+--- a/onnxruntime/core/session/inference_session.cc
++++ b/onnxruntime/core/session/inference_session.cc
+@@ -87,6 +87,7 @@
+ #include "core/optimizer/stft_decomposition.h"
+ #endif
+ #include "core/session/environment.h"
++#include "core/session/ort_env.h"
+ #include "core/session/IOBinding.h"
+ #include "core/session/inference_session_utils.h"
+ #include "core/session/onnxruntime_ep_device_ep_metadata_keys.h"
+@@ -3642,6 +3643,16 @@ Status InferenceSession::PartialRun(onnxruntime::RunOptions& run_options,
+ #endif
+ 
+ namespace {
++// Keep the shared Env alive and balance global runs on success, cancellation and errors.
++struct SgrepEnvironmentRunSpinScope {
++  OrtEnvPtr owner_;
++  bool active_;
++  explicit SgrepEnvironmentRunSpinScope(const onnxruntime::Environment& environment)
++      : owner_(OrtEnv::TryGetInstance()),
++        active_(owner_ && owner_->BeginSgrepRunSpinning(environment)) {}
++  ~SgrepEnvironmentRunSpinScope() { if (active_) owner_->EndSgrepRunSpinning(); }
++};
++
+ // Concurrent runs counting and thread-pool spin control
+ struct ThreadPoolSpinningSwitch {
+   concurrency::ThreadPool* intra_tp_{nullptr};
+@@ -3771,6 +3782,8 @@ Status InferenceSession::RunImpl(const RunOptions& run_options,
+                                 !cached_execution_provider_for_graph_replay_.IsGraphCaptured(graph_annotation_id);
+   auto* intra_tp = (control_spinning) ? thread_pool_.get() : nullptr;
+   auto* inter_tp = (control_spinning) ? inter_op_thread_pool_.get() : nullptr;
++  std::optional<SgrepEnvironmentRunSpinScope> sgrep_global_scope;
++  if (!use_per_session_threads_) sgrep_global_scope.emplace(environment_);
+   ThreadPoolSpinningSwitch runs_refcounter_and_tp_spin_control(intra_tp, inter_tp, current_num_runs_);
+ 
+   // Check if this Run() can skip normal execution and replay a previously captured graph.
+diff --git a/onnxruntime/core/session/ort_env.cc b/onnxruntime/core/session/ort_env.cc
+index 7786a05..8e8d0e7 100644
+--- a/onnxruntime/core/session/ort_env.cc
++++ b/onnxruntime/core/session/ort_env.cc
+@@ -4,9 +4,12 @@
+ // this file contains implementations of the C API
+ 
+ #include <cassert>
++#include <initializer_list>
+ #include <utility>
+ 
+ #include "ort_env.h"
++#include "core/framework/error_code_helper.h"
++#include "core/platform/threadpool.h"
+ #include "core/session/ort_apis.h"
+ #include "core/session/environment.h"
+ #include "core/session/allocator_adapters.h"
+@@ -169,6 +172,60 @@ onnxruntime::logging::LoggingManager* OrtEnv::GetLoggingManager() const {
+   return value_->GetLoggingManager();
+ }
+ 
++// Serialize the counter and the pool transition together: End racing a new Begin
++// must not disable an active peer or leave an idle pool spinning.
++void OrtEnv::SetSgrepPoolSpinning(bool enabled) {
++  for (auto* pool : {value_->GetIntraOpThreadPool(), value_->GetInterOpThreadPool()}) {
++    if (pool) {
++      if (enabled) pool->EnableSpinning();
++      else pool->DisableSpinning();
++    }
++  }
++}
++
++bool OrtEnv::EnableSgrepRunSpinning() {
++  std::lock_guard<std::mutex> lock(sgrep_spin_mutex_);
++  if (!value_->EnvCreatedWithGlobalThreadPools()) return false;
++  sgrep_run_spinning_ = true;
++  if (sgrep_active_runs_ == 0) SetSgrepPoolSpinning(false);
++  return true;
++}
++
++bool OrtEnv::BeginSgrepRunSpinning(const onnxruntime::Environment& expected) {
++  std::lock_guard<std::mutex> lock(sgrep_spin_mutex_);
++  if (!sgrep_run_spinning_ || &expected != value_.get()) return false;
++  if (sgrep_active_runs_++ == 0) SetSgrepPoolSpinning(true);
++  return true;
++}
++
++void OrtEnv::EndSgrepRunSpinning() {
++  std::lock_guard<std::mutex> lock(sgrep_spin_mutex_);
++  ORT_ENFORCE(sgrep_active_runs_ > 0, "Unbalanced Env Run spin scope");
++  if (--sgrep_active_runs_ == 0) SetSgrepPoolSpinning(false);
++}
++
++uint64_t OrtEnv::SgrepActiveRuns() const {
++  std::lock_guard<std::mutex> lock(sgrep_spin_mutex_);
++  return sgrep_active_runs_;
++}
++
++extern "C" ORT_EXPORT ORT_API_STATUS_IMPL(OrtSgrepEnableRunScopedSpinning, OrtEnv* env) {
++  API_IMPL_BEGIN
++  if (!env || !env->EnableSgrepRunSpinning()) {
++    return OrtApis::CreateStatus(ORT_INVALID_ARGUMENT, "Run-scoped spinning requires an Env with global pools");
++  }
++  return nullptr;
++  API_IMPL_END
++}
++
++extern "C" ORT_EXPORT ORT_API_STATUS_IMPL(OrtSgrepGetActiveRunCount, const OrtEnv* env, uint64_t* active) {
++  API_IMPL_BEGIN
++  if (!env || !active) return OrtApis::CreateStatus(ORT_INVALID_ARGUMENT, "Env and active-run output are required");
++  *active = env->SgrepActiveRuns();
++  return nullptr;
++  API_IMPL_END
++}
++
+ void OrtEnv::SetLoggingManager(std::unique_ptr<onnxruntime::logging::LoggingManager> logging_manager) {
+   value_->SetLoggingManager(std::move(logging_manager));
+ }
+diff --git a/onnxruntime/core/session/ort_env.h b/onnxruntime/core/session/ort_env.h
+index fbfaa57..a6b4ae9 100644
+--- a/onnxruntime/core/session/ort_env.h
++++ b/onnxruntime/core/session/ort_env.h
+@@ -3,6 +3,7 @@
+ 
+ #pragma once
+ #include <atomic>
++#include <cstdint>
+ #include <string>
+ #include <mutex>
+ #include "core/common/status.h"
+@@ -66,6 +67,12 @@ struct OrtEnv {
+   onnxruntime::logging::LoggingManager* GetLoggingManager() const;
+   void SetLoggingManager(std::unique_ptr<onnxruntime::logging::LoggingManager> logging_manager);
+ 
++  // The global pool's spin lifetime belongs to the Env, not individual sessions.
++  bool EnableSgrepRunSpinning();
++  bool BeginSgrepRunSpinning(const onnxruntime::Environment& expected);
++  void EndSgrepRunSpinning();
++  uint64_t SgrepActiveRuns() const;
++
+   OrtEnv(std::unique_ptr<onnxruntime::Environment> value);
+   ~OrtEnv();
+ 
+@@ -88,6 +95,10 @@ struct OrtEnv {
+   static int ref_count_;
+ 
+   std::unique_ptr<onnxruntime::Environment> value_;
++  mutable std::mutex sgrep_spin_mutex_;
++  bool sgrep_run_spinning_{false};
++  uint64_t sgrep_active_runs_{0};
++  void SetSgrepPoolSpinning(bool enabled);
+ 
+   ORT_DISALLOW_COPY_AND_ASSIGNMENT(OrtEnv);
+ };
