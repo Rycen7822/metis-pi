@@ -1,5 +1,5 @@
 use super::native::Runtime;
-use crate::Result;
+use crate::{Chunk, Result};
 use half::f16;
 use serde::Deserialize;
 use std::{
@@ -7,6 +7,7 @@ use std::{
     fs::File,
     io::BufReader,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 // This prepared asset is BPE. Avoid ModelWrapper's dynamic JSON dispatch while
 // retaining the same normalizer, added tokens, processors and BPE implementation.
@@ -31,6 +32,8 @@ struct Manifest {
     arithmetic_revision: String,
     embedding_file: String,
     graph_format: String,
+    #[serde(default)]
+    sequence_layout: String,
     backbone_dtype: String,
     embedding_dtype: String,
     query_length: usize,
@@ -41,6 +44,13 @@ struct Manifest {
     do_lower_case: bool,
     skiplist: HashSet<u32>,
 }
+struct Window {
+    document: usize,
+    source: std::ops::Range<usize>,
+    ids: Vec<u32>,
+    mask: Vec<u8>,
+}
+
 pub struct Encoder {
     runtime: Option<Runtime>,
     library: PathBuf,
@@ -56,7 +66,8 @@ impl Encoder {
         let manifest_path = model.join("manifest.json");
         let config: Manifest =
             serde_json::from_reader(BufReader::new(File::open(&manifest_path)?))?;
-        if config.format_version != 3
+        if config.format_version != 4
+            || config.sequence_layout != "segmented-v1"
             || config.arithmetic_revision != "ort-1.31-erf-v1"
             || config.graph_format != "ort"
             || config.backbone_dtype != "float32"
@@ -177,46 +188,104 @@ impl Encoder {
             None => error,
         }
     }
-    pub fn score_to(
+    pub fn score_documents_to(
         &mut self,
         query: &[f32],
-        path: &str,
-        content: &str,
+        documents: &[Arc<Chunk>],
         mut sink: Option<&mut super::EncodeSink<'_>>,
-    ) -> Result<(f64, super::Work)> {
-        let prefix = format!("{path}\n");
-        let mut maxima = vec![f32::NEG_INFINITY; query.len() / TOKEN_EMBEDDING_DIMENSION];
+    ) -> Result<(Vec<f64>, super::Work)> {
+        let mut maxima =
+            vec![vec![f32::NEG_INFINITY; query.len() / TOKEN_EMBEDDING_DIMENSION]; documents.len()];
         let mut work = super::Work::default();
-        let mut start = 0;
-        loop {
-            crate::request::check()?;
-            let (end, ids, mask) = self.window(&prefix, content, start)?;
-            let encoded = self.runtime()?.encode(&ids, &mask, false)?;
-            let rounded: Vec<f16> = encoded.into_iter().map(f16::from_f32).collect();
-            self.runtime()?
-                .update_maxima(query, &rounded, &mut maxima)?;
-            work.actual_encoded_windows += 1;
-            work.actual_encoded_tokens += ids.len();
-            work.scored_document_tokens += rounded.len() / TOKEN_EMBEDDING_DIMENSION;
-            if let Some(deliver) = sink.as_mut() {
-                if deliver(super::DocumentBlock::Code {
-                    source: start..end,
-                    input_tokens: ids.len(),
-                    values: &rounded,
-                })? == super::Delivery::ScoreOnly
+        let mut pending = Vec::with_capacity(super::MAX_BATCH_WINDOWS);
+        let mut tokens = 0;
+        for (document, chunk) in documents.iter().enumerate() {
+            let prefix = format!("{}\n", chunk.path);
+            let mut start = 0;
+            loop {
+                crate::request::check()?;
+                let (end, ids, mask) = self.window(&prefix, &chunk.content, start)?;
+                if !pending.is_empty()
+                    && (pending.len() == super::MAX_BATCH_WINDOWS
+                        || tokens + ids.len() > MAX_WINDOW_TOKENS)
                 {
-                    sink = None;
+                    self.score_windows(query, &mut pending, &mut maxima, &mut work, &mut sink)?;
+                    tokens = 0;
                 }
+                tokens += ids.len();
+                pending.push(Window {
+                    document,
+                    source: start..end,
+                    ids,
+                    mask,
+                });
+                if end == chunk.content.len() {
+                    break;
+                }
+                start = end;
             }
-            if end == content.len() {
-                break;
-            }
-            start = end;
         }
-        let score = maxima.into_iter().sum::<f32>();
-        if !score.is_finite() {
+        self.score_windows(query, &mut pending, &mut maxima, &mut work, &mut sink)?;
+        let scores: Vec<f64> = maxima
+            .into_iter()
+            .map(|values| values.into_iter().sum::<f32>() as f64)
+            .collect();
+        if scores.iter().any(|score| !score.is_finite()) {
             return Err("UNVERIFIED_BACKEND: non-finite MaxSim".into());
         }
-        Ok((score as f64, work))
+        Ok((scores, work))
+    }
+    fn score_windows(
+        &mut self,
+        query: &[f32],
+        pending: &mut Vec<Window>,
+        maxima: &mut [Vec<f32>],
+        work: &mut super::Work,
+        sink: &mut Option<&mut super::EncodeSink<'_>>,
+    ) -> Result<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        crate::request::check()?;
+        let inputs: Vec<_> = pending
+            .iter()
+            .map(|window| (window.ids.as_slice(), window.mask.as_slice()))
+            .collect();
+        let encoded = self.runtime()?.encode_documents(&inputs)?;
+        work.actual_encoded_batches += 1;
+        let mut offset = 0;
+        for window in pending.drain(..) {
+            let size = window
+                .mask
+                .iter()
+                .filter(|selected| **selected != 0)
+                .count()
+                * TOKEN_EMBEDDING_DIMENSION;
+            let rounded: Vec<f16> = encoded[offset..offset + size]
+                .iter()
+                .copied()
+                .map(f16::from_f32)
+                .collect();
+            offset += size;
+            self.runtime()?
+                .update_maxima(query, &rounded, &mut maxima[window.document])?;
+            work.actual_encoded_windows += 1;
+            work.actual_encoded_tokens += window.ids.len();
+            work.scored_document_tokens += rounded.len() / TOKEN_EMBEDDING_DIMENSION;
+            if let Some(deliver) = sink.as_mut()
+                && deliver(
+                    window.document,
+                    super::DocumentBlock::Code {
+                        source: window.source,
+                        input_tokens: window.ids.len(),
+                        values: &rounded,
+                    },
+                )? == super::Delivery::ScoreOnly
+            {
+                *sink = None;
+            }
+        }
+        debug_assert_eq!(offset, encoded.len());
+        Ok(())
     }
 }

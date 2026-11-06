@@ -1,10 +1,12 @@
 #include "custom_ops.h"
+#include "include/sgrep_runtime.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #if defined(__x86_64__)
 #include <immintrin.h>
@@ -36,6 +38,25 @@ template<class F> void parallel(Ort::KernelContext& ctx, size_t work, KernelStat
 }
 std::vector<int64_t> shape(const Ort::ConstValue& value) {
   return value.GetTensorTypeAndShapeInfo().GetShape();
+}
+struct SequenceBounds {
+  const int64_t* offsets;
+  size_t count;
+  std::pair<size_t, size_t> containing(size_t row) const {
+    const auto* end = std::upper_bound(offsets+1, offsets+count, static_cast<int64_t>(row));
+    return {static_cast<size_t>(end[-1]), static_cast<size_t>(*end)};
+  }
+};
+SequenceBounds sequence_bounds(Ort::KernelContext& ctx, size_t input_index, size_t length) {
+  auto input = ctx.GetInput(input_index);
+  const auto dimensions = shape(input);
+  require(dimensions.size() == 1 && dimensions[0] >= 2 && dimensions[0] <= SGREP_MAX_BATCH_WINDOWS+1, "invalid sequence count");
+  const auto* offsets = input.GetTensorData<int64_t>();
+  const size_t count = static_cast<size_t>(dimensions[0]);
+  require(offsets[0] == 0 && offsets[count-1] == static_cast<int64_t>(length), "invalid sequence extent");
+  for (size_t index = 1; index < count; ++index)
+    require(offsets[index] > offsets[index-1], "empty or unordered sequence");
+  return {offsets, count};
 }
 float dot64_scalar(const float* a, const float* b) {
   float sum = 0;
@@ -134,7 +155,7 @@ void normalize_four_rows(const float* input, const float* gamma, float* output) 
 struct Kernel {
   Kind kind;
   KernelState* state;
-  Ort::Op matmul{nullptr}, erf{nullptr};
+  Ort::Op matmul{nullptr}, erf{nullptr}, attention{nullptr};
   Kernel(const CustomOp& op, const OrtKernelInfo* info) : kind(op.kind), state(op.state) {
     if (kind == Kind::GeGLU) {
       const char* names[] = {"T"};
@@ -145,6 +166,16 @@ struct Kernel {
         throw std::runtime_error(std::string("ORT CPU Erf kernel required (ort-required-operators.config): ") + error.what());
       }
     }
+    if (kind == Kind::GlobalAttention) {
+      const char* names[] = {"T"};
+      const ONNXTensorElementDataType types[] = {ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+      const int64_t heads = 4, causal = 0; // Original exported MHA attributes.
+      const Ort::OpAttr attributes[] = {
+        Ort::OpAttr("num_heads", &heads, 1, ORT_OP_ATTR_INT),
+        Ort::OpAttr("unidirectional", &causal, 1, ORT_OP_ATTR_INT)
+      };
+      attention = Ort::Op::Create(info, "MultiHeadAttention", "com.microsoft", 1, names, types, 1, attributes, 2, 3, 1);
+    }
     if (kind == Kind::Output) {
       const char* names[] = {"T"};
       const ONNXTensorElementDataType types[] = {ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
@@ -154,9 +185,10 @@ struct Kernel {
   void rope(Ort::KernelContext& ctx) {
     auto input = ctx.GetInput(0), cosine = ctx.GetInput(1), sine = ctx.GetInput(2);
     const auto dimensions = shape(input);
-    require(dimensions.size() == 2 && dimensions[1] == 768 && dimensions[0] > 0 && dimensions[0] <= 2048, "invalid RoPE QKV");
+    require(dimensions.size() == 2 && dimensions[1] == 768 && dimensions[0] > 0 && dimensions[0] <= SGREP_MAX_WINDOW_TOKENS, "invalid RoPE QKV");
     require(shape(cosine) == std::vector<int64_t>({2048,64}) && shape(sine) == shape(cosine), "invalid RoPE table");
     const size_t length = dimensions[0];
+    const auto sequences = sequence_bounds(ctx, 3, length);
     const int64_t output_shape[] = {1, static_cast<int64_t>(length), 256};
     float* outputs[3];
     for (size_t i = 0; i < 3; ++i) outputs[i] = ctx.GetOutput(i, output_shape, 3).GetTensorMutableData<float>();
@@ -168,6 +200,7 @@ struct Kernel {
     const float* cos = cosine.GetTensorData<float>();
     const float* sin = sine.GetTensorData<float>();
     parallel(ctx, length, *state, [&](size_t row, size_t) {
+      const size_t position = row-sequences.containing(row).first;
       for (size_t part = 0; part < 3; ++part) {
         for (size_t head = 0; head < 4; ++head) {
           for (size_t d = 0; d < 64; ++d) {
@@ -175,7 +208,7 @@ struct Kernel {
             if (part < 2) {
               const size_t other = d < 32 ? d+32 : d-32;
               const float rotated = values[row*768+part*256+head*64+other] * (d < 32 ? -1.0f : 1.0f);
-              value = value*cos[row*64+d] + rotated*sin[row*64+d];
+              value = value*cos[position*64+d] + rotated*sin[position*64+d];
             }
             outputs[part][row*256+head*64+d] = value;
           }
@@ -187,9 +220,10 @@ struct Kernel {
     auto query = ctx.GetInput(0), key = ctx.GetInput(1), value = ctx.GetInput(2);
     const auto dimensions = shape(query);
     require(dimensions.size()==3 && dimensions[0]==1 && dimensions[2]==256 &&
-      dimensions[1]>0 && dimensions[1]<=2048, "invalid local attention shape");
+      dimensions[1]>0 && dimensions[1]<=SGREP_MAX_WINDOW_TOKENS, "invalid local attention shape");
     require(shape(key)==dimensions && shape(value)==dimensions, "local Q/K/V shape mismatch");
     const size_t length = dimensions[1], blocks = (length+31)/32, work = 4*blocks;
+    const auto sequences = sequence_bounds(ctx, 3, length);
     const size_t jobs = std::min<size_t>(state->threads, work);
     const size_t scratch_bytes = jobs * 32 * 160 * sizeof(float);
     auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -203,7 +237,9 @@ struct Kernel {
       const size_t head = block/blocks, begin = (block%blocks)*32, end = std::min(begin+32, length);
       float* scores = scratch + rank*32*160;
       for (size_t row = begin; row < end && !state->cancelled.load(); ++row) {
-        const size_t low = row > 64 ? row-64 : 0, high = std::min(length, row+65);
+        const auto bounds = sequences.containing(row);
+        const size_t low = std::max(bounds.first, row > 64 ? row-64 : 0);
+        const size_t high = std::min(bounds.second, row+65);
         float* row_scores = scores+(row-begin)*160;
         float maximum = -std::numeric_limits<float>::infinity();
         for (size_t j = low; j < high; ++j) {
@@ -229,6 +265,33 @@ struct Kernel {
       }
     });
     state->local_calls.fetch_add(1);
+  }
+  void global(Ort::KernelContext& ctx) {
+    auto query = ctx.GetInput(0), key = ctx.GetInput(1), value = ctx.GetInput(2);
+    const auto dimensions = shape(query);
+    require(dimensions.size() == 3 && dimensions[0] == 1 && dimensions[2] == 256 &&
+            dimensions[1] > 0 && dimensions[1] <= SGREP_MAX_WINDOW_TOKENS, "invalid global attention shape");
+    require(shape(key) == dimensions && shape(value) == dimensions, "global Q/K/V shape mismatch");
+    const auto sequences = sequence_bounds(ctx, 3, static_cast<size_t>(dimensions[1]));
+    auto output = ctx.GetOutput(0, dimensions);
+    auto memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    const float* sources[] = {query.GetTensorData<float>(), key.GetTensorData<float>(), value.GetTensorData<float>()};
+    for (size_t sequence = 0; sequence+1 < sequences.count; ++sequence) {
+      cancelled(*state);
+      const size_t begin = static_cast<size_t>(sequences.offsets[sequence]);
+      const size_t length = static_cast<size_t>(sequences.offsets[sequence+1])-begin;
+      const int64_t tensor_shape[] = {1, static_cast<int64_t>(length), 256};
+      auto tensor = [&](const float* pointer) {
+        return Ort::Value::CreateTensor<float>(memory, const_cast<float*>(pointer), length*256, tensor_shape, 3);
+      };
+      std::array<Ort::Value, 3> inputs = {
+        tensor(sources[0]+begin*256), tensor(sources[1]+begin*256), tensor(sources[2]+begin*256)
+      };
+      auto result = tensor(output.GetTensorMutableData<float>()+begin*256);
+      // Invoke the same fixed original MHA/flash kernel on one independent sequence.
+      attention.Invoke(ctx.GetOrtKernelContext(), inputs.data(), inputs.size(), &result, 1);
+      cancelled(*state);
+    }
   }
   void residual_norm(Ort::KernelContext& ctx) {
     auto skip=ctx.GetInput(0), addition=ctx.GetInput(1), gamma=ctx.GetInput(2);
@@ -333,6 +396,7 @@ struct Kernel {
         case Kind::ResidualNorm: residual_norm(ctx); break;
         case Kind::GeGLU: geglu(ctx); break;
         case Kind::Output: output(ctx); break;
+        case Kind::GlobalAttention: global(ctx); break;
       }
       return nullptr;
     } catch(const Ort::Exception& error) { return Ort::GetApi().CreateStatus(error.GetOrtErrorCode(),error.what()); }
@@ -342,13 +406,22 @@ struct Kernel {
 
 CustomOp::CustomOp(Kind value,KernelState* owner):kind(value),state(owner) {}
 const char* CustomOp::GetName() const {
-  constexpr const char* names[]={"SgrepRopePackF32","SgrepLocalAttentionF32","SgrepResidualNormF32","SgrepGeGLUF32","SgrepOutputF32"};
+  constexpr const char* names[] = {
+    "SgrepRopePackF32", "SgrepLocalAttentionF32", "SgrepResidualNormF32",
+    "SgrepGeGLUF32", "SgrepOutputF32", "SgrepSegmentedGlobalAttentionF32"
+  };
   return names[static_cast<unsigned>(kind)];
 }
-size_t CustomOp::GetInputTypeCount() const { return kind==Kind::Output?4:kind==Kind::GeGLU?1:3; }
+size_t CustomOp::GetInputTypeCount() const {
+  if (kind == Kind::GeGLU) return 1;
+  if (kind == Kind::ResidualNorm) return 3;
+  return 4;
+}
 size_t CustomOp::GetOutputTypeCount() const { return kind==Kind::Rope?3:kind==Kind::ResidualNorm?2:1; }
 ONNXTensorElementDataType CustomOp::GetInputType(size_t index) const {
-  return kind==Kind::Output && index==1?ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+  const bool offsets = index == 3 && (kind == Kind::Rope || kind == Kind::LocalAttention || kind == Kind::GlobalAttention);
+  return offsets || (kind == Kind::Output && index == 1)
+    ? ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 : ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 }
 OrtStatus* CustomOp::CreateKernelV2(const OrtApi& api,const OrtKernelInfo* info,void** out) const noexcept {
   try { *out=new Kernel(*this,info); return nullptr; }

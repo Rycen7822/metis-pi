@@ -83,8 +83,9 @@ struct Metadata {
     counts: HashMap<String, usize>,
 }
 
-pub struct RecordWriter<'a, W: Write + Seek> {
-    output: &'a mut W,
+/// One record's format state; the scope owns the file and lends it for each I/O.
+/// This keeps only one record open while a batch advances in document order.
+pub struct RecordWriter<'a> {
     start: u64,
     metadata_bytes: u64,
     metadata_raw_bytes: u64,
@@ -94,8 +95,12 @@ pub struct RecordWriter<'a, W: Write + Seek> {
     blocks: usize,
     next_source: usize,
 }
-impl<'a, W: Write + Seek> RecordWriter<'a, W> {
-    pub fn begin(output: &'a mut W, chunk: &'a Chunk, kind: ModelKind) -> Result<Self> {
+impl<'a> RecordWriter<'a> {
+    pub fn begin(
+        output: &mut (impl Write + Seek),
+        chunk: &'a Chunk,
+        kind: ModelKind,
+    ) -> Result<Self> {
         let (metadata_raw_bytes, metadata) =
             codec::pack_metadata(serde_json::to_vec(&MetadataRef {
                 chunk,
@@ -109,7 +114,6 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
         output.write_all(&metadata)?;
         let semantic_start = output.stream_position()?;
         Ok(Self {
-            output,
             start,
             metadata_bytes: semantic_start - start - HEADER_BYTES as u64,
             metadata_raw_bytes: metadata_raw_bytes as u64,
@@ -120,7 +124,7 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
             next_source: 0,
         })
     }
-    pub fn push(&mut self, block: DocumentBlock<'_>) -> Result<()> {
+    pub fn push(&mut self, output: &mut impl Write, block: DocumentBlock<'_>) -> Result<()> {
         match block {
             DocumentBlock::Text {
                 values,
@@ -134,8 +138,8 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
                 {
                     return Err(invalid("invalid text representation"));
                 }
-                half_bytes(values, self.output)?;
-                self.output.write_all(&inverse_norm.to_le_bytes())?;
+                half_bytes(values, output)?;
+                output.write_all(&inverse_norm.to_le_bytes())?;
             }
             DocumentBlock::Code {
                 source,
@@ -159,21 +163,19 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
                     return Err(invalid("invalid source window or token representation"));
                 }
                 for read_usize in [source.start as u64, source.end as u64] {
-                    self.output.write_all(&read_usize.to_le_bytes())?;
+                    output.write_all(&read_usize.to_le_bytes())?;
                 }
-                self.output
-                    .write_all(&(input_tokens as u32).to_le_bytes())?;
-                self.output
+                output.write_all(&(input_tokens as u32).to_le_bytes())?;
+                output
                     .write_all(&((values.len() / CODE_EMBEDDING_DIMENSION) as u32).to_le_bytes())?;
                 let encoded = codec::pack_code(values)?;
                 let bytes = encoded.as_ref().map_or(values.len() * 2, Vec::len);
-                self.output.write_all(&(bytes as u32).to_le_bytes())?;
-                self.output
-                    .write_all(&u32::from(encoded.is_some()).to_le_bytes())?;
+                output.write_all(&(bytes as u32).to_le_bytes())?;
+                output.write_all(&u32::from(encoded.is_some()).to_le_bytes())?;
                 if let Some(encoded) = encoded {
-                    self.output.write_all(&encoded)?;
+                    output.write_all(&encoded)?;
                 } else {
-                    half_bytes(values, self.output)?;
+                    half_bytes(values, output)?;
                 }
                 self.next_source = source.end;
             }
@@ -184,13 +186,13 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
             .ok_or_else(|| invalid("window count overflow"))?;
         Ok(())
     }
-    pub fn finish(self) -> Result<(u64, u64)> {
+    pub fn finish(self, output: &mut (impl Write + Seek)) -> Result<(u64, u64)> {
         if self.blocks == 0
             || (self.kind == ModelKind::Code && self.next_source != self.source.len())
         {
             return Err(invalid("incomplete document representation"));
         }
-        let end = self.output.stream_position()?;
+        let end = output.stream_position()?;
         let fields = [
             end - self.start,
             self.metadata_bytes,
@@ -200,11 +202,11 @@ impl<'a, W: Write + Seek> RecordWriter<'a, W> {
             self.source.len() as u64,
             self.metadata_raw_bytes,
         ];
-        self.output.seek(SeekFrom::Start(self.start + 8))?;
+        output.seek(SeekFrom::Start(self.start + 8))?;
         for field in fields {
-            self.output.write_all(&field.to_le_bytes())?;
+            output.write_all(&field.to_le_bytes())?;
         }
-        self.output.seek(SeekFrom::Start(end))?;
+        output.seek(SeekFrom::Start(end))?;
         Ok((self.start, end - self.start))
     }
 }
@@ -452,6 +454,73 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn adjacent_records_keep_their_windows_and_file_boundaries() -> Result<()> {
+        let chunks = ["abcdef", "uvwxyz"].map(|content| Chunk {
+            path: format!("{content}.rs"),
+            start: 1,
+            end: 1,
+            content: content.into(),
+            counts: HashMap::from([(content.into(), 1)]),
+            scores: None,
+        });
+        let values = [f16::from_f32(0.25); CODE_EMBEDDING_DIMENSION];
+        let mut output = Cursor::new(Vec::new());
+        let mut locations = Vec::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            let mut record = RecordWriter::begin(&mut output, chunk, ModelKind::Code)?;
+            let windows = if index == 0 {
+                vec![0..3, 3..6]
+            } else {
+                std::iter::once(0..6).collect()
+            };
+            for source in windows {
+                record.push(
+                    &mut output,
+                    DocumentBlock::Code {
+                        source,
+                        input_tokens: 2,
+                        values: &values,
+                    },
+                )?;
+            }
+            locations.push(record.finish(&mut output)?);
+        }
+        assert_eq!(locations[1].0, locations[0].0 + locations[0].1);
+        let mut decoder = codec::Decoder::new()?;
+        for (index, (offset, bytes)) in locations.into_iter().enumerate() {
+            let record = Record::open(output.get_ref(), offset as usize, &mut decoder)?;
+            assert_eq!(record.data.len(), bytes as usize);
+            assert_eq!(record.chunk.path, chunks[index].path);
+            assert_eq!(record.chunk.content, chunks[index].content);
+            assert_eq!(record.chunk.counts, chunks[index].counts);
+            let mut ranges = Vec::new();
+            record.visit(&mut decoder, &mut |block| {
+                let DocumentBlock::Code {
+                    source,
+                    input_tokens,
+                    values: restored,
+                } = block
+                else {
+                    panic!("code record expected");
+                };
+                assert_eq!(input_tokens, 2);
+                assert_eq!(restored, values);
+                ranges.push(source);
+                Ok(())
+            })?;
+            assert_eq!(
+                ranges,
+                if index == 0 {
+                    vec![0..3, 3..6]
+                } else {
+                    std::iter::once(0..6).collect()
+                }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn relocated_record_keeps_payload_and_counts_but_updates_lines() -> Result<()> {
         let chunk = Chunk {
             path: "source.py".into(),
@@ -464,12 +533,15 @@ mod tests {
         let mut original = Cursor::new(Vec::new());
         let mut writer = RecordWriter::begin(&mut original, &chunk, ModelKind::Code)?;
         let values = [f16::from_f32(0.25); 2 * CODE_EMBEDDING_DIMENSION];
-        writer.push(DocumentBlock::Code {
-            source: 0..chunk.content.len(),
-            input_tokens: 4,
-            values: &values,
-        })?;
-        writer.finish()?;
+        writer.push(
+            &mut original,
+            DocumentBlock::Code {
+                source: 0..chunk.content.len(),
+                input_tokens: 4,
+                values: &values,
+            },
+        )?;
+        writer.finish(&mut original)?;
         let mut decoder = codec::Decoder::new()?;
         let record = Record::open(original.get_ref(), 0, &mut decoder)?;
         assert_eq!(record.scored_rows()?, 2);

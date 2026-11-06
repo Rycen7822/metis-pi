@@ -64,7 +64,7 @@ sgrep_error serialize(const std::string& text,char* buffer,size_t capacity,size_
 struct sgrep_runtime {
   // Declaration order keeps domain, env and mappings alive until Session dies.
   sgrep::KernelState state;
-  std::array<sgrep::CustomOp,5> operators;
+  std::array<sgrep::CustomOp,6> operators;
   Ort::CustomOpDomain domain{"com.metis.sgrep"};
   Ort::ThreadingOptions threading;
   Ort::Env env{nullptr};
@@ -84,13 +84,15 @@ struct sgrep_runtime {
 
   explicit sgrep_runtime(const sgrep_options& settings):operators{{
     {sgrep::Kind::Rope,&state},{sgrep::Kind::LocalAttention,&state},
-    {sgrep::Kind::ResidualNorm,&state},{sgrep::Kind::GeGLU,&state},{sgrep::Kind::Output,&state}}},arena_cap(settings.temp_bytes_cap) {
+    {sgrep::Kind::ResidualNorm,&state},{sgrep::Kind::GeGLU,&state},{sgrep::Kind::Output,&state},
+    {sgrep::Kind::GlobalAttention,&state}}},arena_cap(settings.temp_bytes_cap) {
     state.threads=settings.threads;
     const fs::path manifest_path=settings.artifact_manifest_utf8;
     std::ifstream stream(manifest_path);
     if(!stream) throw std::runtime_error("cannot open LateOn manifest");
     const json manifest=json::parse(stream);
-    require(manifest.at("format_version")==3 && manifest.at("arithmetic_revision")=="ort-1.31-erf-v1" &&
+    require(manifest.at("format_version")==4 && manifest.at("sequence_layout")=="segmented-v1" &&
+      manifest.at("arithmetic_revision")=="ort-1.31-erf-v1" &&
       manifest.at("model")=="lateon_code_edge" &&
       manifest.at("revision")=="4bcdf5ed93f791259eb130b577a240f753d68dd8" &&
       manifest.at("rows")==50370 && manifest.at("hidden")==256 && manifest.at("dimensions")==48 &&
@@ -115,7 +117,8 @@ struct sgrep_runtime {
       u64(table,40)==table.bytes,"invalid pre-LN table header");
     threading.SetGlobalIntraOpNumThreads(settings.threads).SetGlobalInterOpNumThreads(1).SetGlobalSpinControl(0);
     env=Ort::Env(threading,ORT_LOGGING_LEVEL_WARNING,"sgrep-cpu");
-    Ort::ArenaCfg arena(settings.temp_bytes_cap,1,1<<20,0);
+    // Geometric regions avoid the measured shape-order fragmentation; the hard cap is unchanged.
+    Ort::ArenaCfg arena(settings.temp_bytes_cap,0,1<<20,0);
     env.CreateAndRegisterAllocator(memory,arena);
     for(auto& op:operators) domain.Add(&op);
     options.Add(domain);
@@ -196,17 +199,29 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_create(const sgrep_options* setti
     }
 }
 
-extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,const sgrep_encoded_input* input,sgrep_encoded_output* output) {
+extern "C" SGREP_API sgrep_error sgrep_runtime_encode_segments(
+    sgrep_runtime* runtime, const sgrep_encoded_input* input, sgrep_encoded_output* output,
+    const int64_t* offsets, size_t offset_count) {
   if(!runtime || !input || !output) return SG_INVALID;
   output->rows_written=0;output->required_float_capacity=0;output->dimensions=48;
   if(!input->token_ids || !input->output_mask || input->mask_count!=input->token_count ||
       input->token_count==0 || input->request_id==0 ||
       (input->role!=SG_QUERY && input->role!=SG_DOCUMENT) ||
-      input->token_count>(input->role==SG_QUERY?256:2048)) return SG_INVALID;
-  size_t rows=0;
+      input->token_count>(input->role==SG_QUERY?256:SGREP_MAX_WINDOW_TOKENS)) return SG_INVALID;
+  if (!offsets || offset_count < 2 || offset_count > SGREP_MAX_BATCH_WINDOWS+1 || offsets[0] != 0 ||
+      offsets[offset_count-1] != static_cast<int64_t>(input->token_count) ||
+      (input->role == SG_QUERY && offset_count != 2)) return SG_INVALID;
+  for (size_t index = 1; index < offset_count; ++index)
+    if (offsets[index] <= offsets[index-1]) return SG_INVALID;
+  size_t rows=0, segment=1, previous_rows=0;
   for(size_t i=0;i<input->token_count;++i) {
     if(input->token_ids[i]>=50370 || input->output_mask[i]>1) return SG_INVALID;
     rows+=input->output_mask[i];
+    if (i+1 == static_cast<size_t>(offsets[segment])) {
+      if (rows == previous_rows) return SG_INVALID;
+      previous_rows = rows;
+      ++segment;
+    }
   }
   if(!rows) return SG_INVALID;
   output->required_float_capacity=rows*48;
@@ -245,12 +260,14 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,con
     const int64_t embed_shape[]={static_cast<int64_t>(input->token_count),256};
     const int64_t row_shape[]={static_cast<int64_t>(rows)};
     const int64_t out_shape[]={static_cast<int64_t>(rows),48};
-    std::array<Ort::Value,2> values={
+    const int64_t offset_shape[] = {static_cast<int64_t>(offset_count)};
+    std::array<Ort::Value,3> values={
       Ort::Value::CreateTensor<float>(runtime->memory,embeddings,input->token_count*256,embed_shape,2),
-      Ort::Value::CreateTensor<int64_t>(runtime->memory,selected,rows,row_shape,1)};
+      Ort::Value::CreateTensor<int64_t>(runtime->memory,selected,rows,row_shape,1),
+      Ort::Value::CreateTensor<int64_t>(runtime->memory,const_cast<int64_t*>(offsets),offset_count,offset_shape,1)};
     std::vector<Ort::Value> encoded;
     encoded.push_back(Ort::Value::CreateTensor<float>(runtime->memory,output->vectors,rows*48,out_shape,2));
-    const char* names[]={"embedding_input","output_rows"};
+    const char* names[]={"embedding_input","output_rows","sequence_offsets"};
     std::vector<const char*> outputs={"embeddings"};
     for(const auto& name:runtime->debug_names) {outputs.push_back(name.c_str());encoded.emplace_back(nullptr);}
     runtime->session.Run(runtime->run_options,names,values.data(),values.size(),outputs.data(),encoded.data(),encoded.size());
@@ -258,9 +275,9 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,con
 
     if(runtime->state.cancelled.load()) throw std::runtime_error("cancelled");
     if (!sgrep::finite_checker()(output->vectors, rows*48)) throw std::runtime_error("non-finite model output");
-    output->rows_written=rows;runtime->forward_count.fetch_add(1);
+    output->rows_written=rows;runtime->forward_count.fetch_add(offset_count-1);
     if(input->role==SG_QUERY) {runtime->query_forwards.fetch_add(1);runtime->query_tokens.fetch_add(input->token_count);}
-    else {runtime->document_forwards.fetch_add(1);runtime->document_tokens.fetch_add(input->token_count);}
+    else {runtime->document_forwards.fetch_add(offset_count-1);runtime->document_tokens.fetch_add(input->token_count);}
     uint64_t longest=runtime->longest_input.load();
     while(longest<input->token_count && !runtime->longest_input.compare_exchange_weak(longest,input->token_count)) {}
   } catch(const std::bad_alloc& error) {runtime->last_error=error.what();result=SG_BUDGET_EXCEEDED;}
@@ -275,6 +292,12 @@ extern "C" SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime* runtime,con
   }
   OrtSgrepTraceMarker("forward_end_status",result);
   return result;
+}
+
+extern "C" SGREP_API sgrep_error sgrep_runtime_encode(
+    sgrep_runtime* runtime, const sgrep_encoded_input* input, sgrep_encoded_output* output) {
+  const int64_t offsets[] = {0, input ? static_cast<int64_t>(input->token_count) : 0};
+  return sgrep_runtime_encode_segments(runtime, input, output, offsets, 2);
 }
 
 extern "C" SGREP_API sgrep_error sgrep_runtime_cancel(sgrep_runtime* runtime,uint64_t request_id) {

@@ -163,80 +163,89 @@ impl ScopeIndexWriter {
         scorer.accept_reused_score(record.scored_rows)?;
         Ok(Some(record.score))
     }
-    pub fn score_chunk(&mut self, scorer: &mut Scorer, mut chunk: Chunk) -> Result<f64> {
-        if self.output.is_none() {
-            return scorer.score_document(chunk.path, chunk.content);
-        }
-        chunk.counts = crate::ranking::term_counts(&chunk.path, &chunk.content);
-        // Each record already owns its full query-independent word counts.
-        // Do not retain a second corpus-wide dictionary/posting representation.
-        let mut output = self.output.take().unwrap();
-        let mut writer = match RecordWriter::begin(&mut output, &chunk, scorer.kind()) {
-            Ok(writer) => writer,
-            Err(error) => {
-                if !recoverable(error.as_ref()) {
-                    return Err(error);
-                }
-                output.failure(&error);
-                drop(output);
-                self.offsets.clear();
-                crate::request::diagnostic(format_args!("sgrep: cache write disabled: {error}"));
-                return scorer.score_document(chunk.path, chunk.content);
+    pub fn score_chunks(
+        &mut self,
+        scorer: &mut Scorer,
+        mut chunks: Vec<Chunk>,
+    ) -> Result<Vec<f64>> {
+        if self.output.is_some() {
+            for chunk in &mut chunks {
+                // The source reader carries no counts; persist them once per new record.
+                chunk.counts = crate::ranking::term_counts(&chunk.path, &chunk.content);
             }
+        }
+        let chunks: Vec<_> = chunks.into_iter().map(std::sync::Arc::new).collect();
+        let Some(mut output) = self.output.take() else {
+            return scorer.score_documents(chunks);
         };
+        let kind = scorer.kind();
+        let mut active: Option<RecordWriter<'_>> = None;
+        let mut document = None;
+        let mut locations = Vec::with_capacity(chunks.len());
         let mut write_error = None;
-        // Only a live writer still needs the original text for UTF-8/window
-        // validation. Score-only paths transfer their strings without a copy.
-        let score = scorer.score_document_to(
-            chunk.path.clone(),
-            chunk.content.clone(),
-            Some(&mut |block| {
-                if write_error.is_none() {
-                    if let Err(error) = writer.push(block) {
-                        if !recoverable(error.as_ref()) {
-                            return Err(error);
+        let scores = scorer.score_documents_to(
+            chunks.clone(),
+            Some(&mut |index, block| {
+                let result = (|| -> Result<()> {
+                    if document != Some(index) {
+                        if index != locations.len() + usize::from(active.is_some()) {
+                            return Err("out-of-order encoded document".into());
                         }
-                        write_error = Some(error);
+                        if let Some(writer) = active.take() {
+                            locations.push(writer.finish(&mut output)?);
+                        }
+                        let chunk = chunks
+                            .get(index)
+                            .ok_or("encoded document outside source batch")?;
+                        active = Some(RecordWriter::begin(&mut output, chunk, kind)?);
+                        document = Some(index);
                     }
+                    active
+                        .as_mut()
+                        .ok_or("missing record writer")?
+                        .push(&mut output, block)
+                })();
+                match result {
+                    Ok(()) => Ok(crate::semantic::Delivery::Blocks),
+                    Err(error) if recoverable(error.as_ref()) => {
+                        write_error = Some(error);
+                        Ok(crate::semantic::Delivery::ScoreOnly)
+                    }
+                    Err(error) => Err(error),
                 }
-                Ok(if write_error.is_some() {
-                    crate::semantic::Delivery::ScoreOnly
-                } else {
-                    crate::semantic::Delivery::Blocks
-                })
             }),
         )?;
+        if write_error.is_none() {
+            let result = active
+                .take()
+                .ok_or("empty encoded document batch")?
+                .finish(&mut output);
+            match result {
+                Ok(location) => locations.push(location),
+                Err(error) if recoverable(error.as_ref()) => write_error = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
         if let Some(error) = write_error {
-            drop(writer);
             output.failure(&error);
-            drop(output);
             self.offsets.clear();
             crate::request::diagnostic(format_args!(
                 "sgrep: cache write disabled; remaining scope still evaluated: {error}"
             ));
-            return Ok(score);
+            return Ok(scores);
         }
-        let location = match writer.finish() {
-            Ok(location) => location,
-            Err(error) => {
-                if !recoverable(error.as_ref()) {
-                    return Err(error);
-                }
-                output.failure(&error);
-                drop(output);
-                self.offsets.clear();
-                crate::request::diagnostic(format_args!("sgrep: cache finish disabled: {error}"));
-                return Ok(score);
-            }
-        };
+        if locations.len() != chunks.len() {
+            return Err("incomplete encoded document batch".into());
+        }
+        for chunk in &chunks {
+            self.total_length = self
+                .total_length
+                .checked_add(chunk.counts.values().sum::<usize>())
+                .ok_or("corpus length overflow")?;
+        }
+        self.offsets.extend(locations);
         self.output = Some(output);
-        let length = chunk.counts.values().sum::<usize>();
-        self.offsets.push(location);
-        self.total_length = self
-            .total_length
-            .checked_add(length)
-            .ok_or("corpus length overflow")?;
-        Ok(score)
+        Ok(scores)
     }
     pub fn finish(mut self) -> Result<()> {
         let Some(mut output) = self.output.take() else {

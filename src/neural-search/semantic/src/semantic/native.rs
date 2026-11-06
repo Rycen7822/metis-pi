@@ -1,4 +1,4 @@
-use super::CODE_EMBEDDING_DIMENSION;
+use super::{CODE_EMBEDDING_DIMENSION, MAX_BATCH_WINDOWS, MAX_CODE_WINDOW_TOKENS};
 use crate::Result;
 use half::f16;
 use libloading::Library;
@@ -35,7 +35,8 @@ struct Output {
     dimensions: u32,
 }
 type Create = unsafe extern "C" fn(*const Options, *mut *mut c_void) -> c_int;
-type Encode = unsafe extern "C" fn(*mut c_void, *const Input, *mut Output) -> c_int;
+type Encode =
+    unsafe extern "C" fn(*mut c_void, *const Input, *mut Output, *const i64, usize) -> c_int;
 type Destroy = unsafe extern "C" fn(*mut c_void);
 type Cancel = unsafe extern "C" fn(*mut c_void, u64) -> c_int;
 type Diagnostics = unsafe extern "C" fn(*mut c_void, *mut c_char, usize, *mut usize) -> c_int;
@@ -43,8 +44,8 @@ type MaxSim = unsafe extern "C" fn(*const f32, usize, *const u16, usize, *mut f3
 
 // Shared service admission is three searches, each with at most four compute lanes.
 const MAX_COMPUTING_THREADS: usize = 4;
-// Must match native/sgrep_cpu.h; model manifests require the strict ABI2 contract.
-const NATIVE_ABI_VERSION: u32 = 2;
+// Must match native/include/sgrep_runtime.h and the segmented prepared graph.
+const NATIVE_ABI_VERSION: u32 = 3;
 // Native execution scratch only, separate from the on-disk corpus cache budget.
 const NATIVE_SCRATCH_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -119,7 +120,7 @@ impl Runtime {
         }
         let library = Arc::new(unsafe { Library::new(library)? });
         let create: Create = unsafe { *library.get(b"sgrep_runtime_create\0")? };
-        let encode_fn = unsafe { *library.get(b"sgrep_runtime_encode\0")? };
+        let encode_fn = unsafe { *library.get(b"sgrep_runtime_encode_segments\0")? };
         let destroy_fn = unsafe { *library.get(b"sgrep_runtime_destroy\0")? };
         let cancel_fn = unsafe { *library.get(b"sgrep_runtime_cancel\0")? };
         let diagnostics_fn = unsafe { *library.get(b"sgrep_runtime_diagnostics\0")? };
@@ -160,6 +161,40 @@ impl Runtime {
         Ok(runtime)
     }
     pub fn encode(&mut self, ids: &[u32], mask: &[u8], query: bool) -> Result<Vec<f32>> {
+        self.encode_segments(ids, mask, query, &[0, ids.len() as i64])
+    }
+    pub fn encode_documents(&mut self, windows: &[(&[u32], &[u8])]) -> Result<Vec<f32>> {
+        if windows.is_empty() || windows.len() > MAX_BATCH_WINDOWS {
+            return Err("invalid native document batch size".into());
+        }
+        if windows.len() == 1 {
+            return self.encode(windows[0].0, windows[0].1, false);
+        }
+        let count: usize = windows.iter().map(|(ids, _)| ids.len()).sum();
+        if count > MAX_CODE_WINDOW_TOKENS {
+            return Err("native document batch exceeds token budget".into());
+        }
+        let mut ids = Vec::with_capacity(count);
+        let mut mask = Vec::with_capacity(count);
+        let mut offsets = Vec::with_capacity(windows.len() + 1);
+        offsets.push(0);
+        for (tokens, selected) in windows {
+            if tokens.len() != selected.len() {
+                return Err("invalid native window mask length".into());
+            }
+            ids.extend_from_slice(tokens);
+            mask.extend_from_slice(selected);
+            offsets.push(ids.len() as i64);
+        }
+        self.encode_segments(&ids, &mask, false, &offsets)
+    }
+    fn encode_segments(
+        &mut self,
+        ids: &[u32],
+        mask: &[u8],
+        query: bool,
+        offsets: &[i64],
+    ) -> Result<Vec<f32>> {
         if ids.len() != mask.len() || mask.iter().any(|m| *m > 1) {
             return Err("invalid encoder IDs/output mask".into());
         }
@@ -190,9 +225,17 @@ impl Runtime {
         let _registration = unsafe {
             crate::request::register_native(self.handle, self.cancel_fn, input.request_id)
         };
-        let status = unsafe { (self.encode_fn)(self.handle, &input, &mut output) };
+        let status = unsafe {
+            (self.encode_fn)(
+                self.handle,
+                &input,
+                &mut output,
+                offsets.as_ptr(),
+                offsets.len(),
+            )
+        };
         if status == 0 {
-            crate::request::encoded(query);
+            crate::request::encoded(query, offsets.len() - 1);
         }
         crate::request::check()?;
         if status != 0 {

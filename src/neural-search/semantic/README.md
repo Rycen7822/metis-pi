@@ -184,15 +184,24 @@ activations, normalization, query vectors and score accumulation remain FP32.
 AVX2/F16C or scalar decoding fills the existing bounded arena, never a full FP32
 table copy. Document representations remain FP16; Bekko's contract is unchanged.
 
-The supported bundle requires native **ABI2**, `strict_artifact_contract=1` and
-LateOn manifest3 (`arithmetic_revision=ort-1.31-erf-v1`, FP16 embeddings/FP32 backbone).
-Its `embedding_preln_f16.pack` table uses magic `SGRPLN16`, pack-layout version1,
-a 64-byte header and 50370×256 half values (25,789,504 bytes). Update CLI/native/assets as
-one bundle: ABI1 callers, FP32 tables and older arithmetic manifests fail closed.
+The supported bundle requires native **ABI3**, `strict_artifact_contract=1` and
+LateOn manifest4 (`sequence_layout=segmented-v1`, `arithmetic_revision=ort-1.31-erf-v1`,
+FP16 embeddings/FP32 backbone). Its `embedding_preln_f16.pack` table retains magic
+`SGRPLN16`, pack-layout version1, a 64-byte header and 50370×256 half values
+(25,789,504 bytes). Update CLI/native/prepared graph together: earlier ABI callers,
+unsegmented graphs, FP32 tables and older arithmetic manifests fail closed.
 The complete manifest invalidates old document indexes; no new fingerprint is needed.
 The [C header](native/include/sgrep_runtime.h) defines buffer ownership and errors.
 FP16 storage is intentionally lossy relative to the FP32 source; valid asset
 integrity does not imply zero numerical or retrieval-quality loss.
+
+Cold code encoding shares at most four source chunks with the model owner and
+batches at most four windows / 2048 total tokens from one request. Linear layers
+use flat rows; RoPE resets within each sequence, local attention clamps to its
+sequence, and global attention invokes the original MHA kernel per sequence. Output
+masks route each window back to its own MaxSim/record. Query and text encoding stay
+single; cache hits do not wait for a batch. Record I/O remains synchronous with its
+window ACK; a failed cache write falls back to scoring without re-encoding.
 
 GeGLU owns one public ORT CPU `Erf` operator per graph kernel. It reuses its output
 for scale → in-place Erf → gate, sharing the existing ORT pool without a new
@@ -224,8 +233,10 @@ per-row arithmetic, stable maxima and partial-error stores remain bit-identical.
   only the current window's slice; retained capacity never exposes a previous
   window's tail. Twelve concurrent decoders need at most 3.375MiB for these two
   buffers, excluding existing Zstd/metadata state; no decoded scope is retained.
-- Native temporary allocations use a hard arena cap of 128MiB, not a whole-process
-  memory limit. Misses/no-cache rehydrate one source file at a time; hits consume
+- Native temporary allocations use a hard arena cap of 128MiB with geometric region
+  growth, not a whole-process memory limit. Misses/no-cache retain one source-reader
+  file plus at most four shared chunks; native vectors are bounded to one window
+  batch, never the whole corpus. Hits consume
   immutable mappings in bounded resident windows. Releasing this reader's PTEs
   does not evict shared file-cache pages or remove their cgroup/PSS charge.
 - Attention/scoring use guarded SIMD and scalar fallbacks. Adapter builds disable
@@ -252,16 +263,26 @@ owned patches applied. `ORT_BUILD` is its reduced non-minimal CPU `Release` buil
 with `onnxruntime_USE_TELEMETRY=OFF` and the exports in
 [native/ort-extra-symbols.txt](native/ort-extra-symbols.txt). Its reduced registry must
 include [native/ort-required-operators.config](native/ort-required-operators.config):
-serialized graph operators alone omit the runtime-invoked CPU Erf kernel. A system
+serialized graph operators alone omit runtime-invoked CPU Erf and MHA kernels. A system
 ORT is not interchangeable; telemetry otherwise adds a process-lifetime SDK worker.
 
 Stage native libraries through CMake: installation sets `$ORIGIN`-only RPATH,
 unlike copying the build-tree `.so`. Supply the CLI, pinned sibling ORT and assets
 separately to complete the bundle; missing siblings must not load development
 fallbacks. These commands stage a library, not install or activate Metis.
-Maintainers use `scripts/build-semantic-assets.mjs` to package a qualified runtime into
-an engine archive and independently pinned model archives plus the trusted distribution
-record. Model URLs remain unchanged when their approved file sets are unchanged.
+For the format3→4 graph migration, maintainers run from the repository root:
+
+```sh
+uv run scripts/prepare-semantic-batch-model.py --source "$APPROVED_CODE_MODEL" \
+  --output "$NEW_CODE_MODEL" --library "$BUILD_ROOT/runtime-stage/lib/libsgrep_cpu.so"
+```
+
+This one-time tool preserves original weights/BPE, uses the pinned native converter,
+and emits the new approved catalog entry. It is not an installation command; users
+need no Python or compiler. Reuse a qualified format4 model on later engine updates.
+Maintainers then use `scripts/build-semantic-assets.mjs` to package the matched runtime
+into engine and model archives plus the trusted distribution record. Model URLs remain
+unchanged when their approved file sets are unchanged.
 Publish those assets with their matching source; end users only install/update through Pi.
 
 ## Diagnostics and evidence

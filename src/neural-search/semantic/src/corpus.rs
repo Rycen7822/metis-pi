@@ -433,6 +433,11 @@ pub struct ChunkReader {
     pub peak: usize,
 }
 impl ChunkReader {
+    pub fn retained_bytes(&self) -> usize {
+        self.view
+            .as_ref()
+            .map_or(0, |(_, _, source)| source.resident_bytes())
+    }
     pub fn chunk(&mut self, corpus: &Corpus, index: usize) -> Result<Chunk> {
         let doc = corpus
             .documents

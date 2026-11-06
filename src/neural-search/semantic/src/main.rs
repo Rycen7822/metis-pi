@@ -114,6 +114,24 @@ struct Scores {
     exact_identifier: bool,
 }
 
+fn score_pending(
+    scorer: &mut semantic::Scorer,
+    writer: &mut Option<scope_index::ScopeIndexWriter>,
+    pending: &mut Vec<Chunk>,
+    similarities: &mut Vec<f64>,
+) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let chunks = std::mem::take(pending);
+    let scores = match writer {
+        Some(writer) => writer.score_chunks(scorer, chunks)?,
+        None => scorer.score_documents(chunks.into_iter().map(std::sync::Arc::new).collect())?,
+    };
+    similarities.extend(scores);
+    Ok(())
+}
+
 fn make_chunk(path: String, start: usize, end: usize, content: String) -> Chunk {
     let counts = ranking::term_counts(&path, &content);
     Chunk {
@@ -329,26 +347,54 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         None
     };
     let mut similarities = Vec::with_capacity(corpus.len());
+    let mut pending = Vec::with_capacity(semantic::MAX_BATCH_WINDOWS);
+    let source_batch_size = if scorer.kind() == semantic::ModelKind::Code {
+        semantic::MAX_BATCH_WINDOWS
+    } else {
+        1
+    };
+    let mut buffered_source_peak = 0;
     let scoring_source_peak = corpus.visit(|id, reader| {
-        let reused = match (index_writer.as_mut(), corpus.reused(id)) {
-            (Some(writer), Some((record, range))) => {
-                writer
-                    .score_reused_record(&mut scorer, record, range, || reader.chunk(&corpus, id))?
+        if let Some((record, range)) = corpus.reused(id).filter(|_| index_writer.is_some()) {
+            // Seal new records before a reused record so the scope retains corpus order.
+            score_pending(
+                &mut scorer,
+                &mut index_writer,
+                &mut pending,
+                &mut similarities,
+            )?;
+            if let Some(score) = index_writer
+                .as_mut()
+                .ok_or("missing index writer")?
+                .score_reused_record(&mut scorer, record, range, || reader.chunk(&corpus, id))?
+            {
+                similarities.push(score);
+                return Ok(());
             }
-            _ => None,
-        };
-        let score = if let Some(score) = reused {
-            score
-        } else {
-            let chunk = reader.chunk(&corpus, id)?;
-            match index_writer.as_mut() {
-                Some(writer) => writer.score_chunk(&mut scorer, chunk)?,
-                None => scorer.score_document(chunk.path, chunk.content)?,
-            }
-        };
-        similarities.push(score);
+        }
+        pending.push(reader.chunk(&corpus, id)?);
+        let buffered: usize = pending
+            .iter()
+            .map(|chunk| chunk.path.capacity() + chunk.content.capacity())
+            .sum();
+        buffered_source_peak = buffered_source_peak.max(reader.retained_bytes() + buffered);
+        if pending.len() == source_batch_size {
+            score_pending(
+                &mut scorer,
+                &mut index_writer,
+                &mut pending,
+                &mut similarities,
+            )?;
+        }
         Ok(())
     })?;
+    score_pending(
+        &mut scorer,
+        &mut index_writer,
+        &mut pending,
+        &mut similarities,
+    )?;
+    let scoring_source_peak = scoring_source_peak.max(buffered_source_peak);
     let documents_ready = std::time::Instant::now();
     let work = scorer.work();
     diagnostics::check_scope(work, scope_chunks, extra_chunks)?;
@@ -407,10 +453,16 @@ fn check_runtime() -> Result<ExitCode> {
     let assets = cache::Cache::new(None, false)?;
     for model in [ModelChoice::Text, ModelChoice::Code] {
         let mut scorer = semantic::Scorer::open(model, false, "runtime installation", &assets)?;
-        let score = scorer.score_document(
+        let document = std::sync::Arc::new(make_chunk(
             "runtime.txt".into(),
+            1,
+            1,
             "Prepared CPU model installation.".into(),
-        )?;
+        ));
+        let score = scorer
+            .score_documents(vec![document])?
+            .pop()
+            .ok_or("missing runtime check score")?;
         if !score.is_finite() {
             return Err("ARTIFACT_MISMATCH: runtime check produced a non-finite score".into());
         }

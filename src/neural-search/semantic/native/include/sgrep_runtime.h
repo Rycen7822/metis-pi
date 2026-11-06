@@ -1,8 +1,8 @@
 #ifndef SGREP_RUNTIME_ABI_H
 #define SGREP_RUNTIME_ABI_H
-/* CPU ABI v2: FP16 pre-LN storage, FP32 model inputs and output buffers.
+/* CPU ABI v3: independent sequence boundaries, FP16 pre-LN storage and FP32 computation.
  * Rust owns tokenization/window mapping. Buffers remain caller-owned;
- * destroy only after encode returns. ABI v1 assets/callers are rejected. */
+ * destroy only after encode returns. Earlier ABI callers/assets are rejected. */
 #include <stddef.h>
 #include <stdint.h>
 #if defined(_WIN32)
@@ -13,7 +13,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define SGREP_RUNTIME_ABI_VERSION 2u
+#define SGREP_RUNTIME_ABI_VERSION 3u
+/* Bound one request's independent windows without changing its four-thread budget. */
+#define SGREP_MAX_BATCH_WINDOWS 4u
+#define SGREP_MAX_WINDOW_TOKENS 2048u
 typedef struct sgrep_runtime sgrep_runtime;
 typedef enum {SG_OK=0,SG_INVALID=1,SG_BUFFER_TOO_SMALL=2,SG_CANCELLED=3,
  SG_ASSET_MISMATCH=4,SG_BUDGET_EXCEEDED=5,SG_UNVERIFIED=6} sgrep_error;
@@ -31,6 +34,10 @@ typedef struct {float *vectors;size_t float_capacity;size_t rows_written;
  * destroy is permitted only after encode has returned. */
 SGREP_API sgrep_error sgrep_runtime_create(const sgrep_options*,sgrep_runtime**);
 SGREP_API sgrep_error sgrep_runtime_encode(sgrep_runtime*,const sgrep_encoded_input*,sgrep_encoded_output*);
+/* Ordered offsets include 0 and token_count. A batch belongs to one request;
+ * every independent sequence must select at least one output row. Queries stay single. */
+SGREP_API sgrep_error sgrep_runtime_encode_segments(sgrep_runtime*,const sgrep_encoded_input*,sgrep_encoded_output*,
+ const int64_t *offsets,size_t offset_count);
 SGREP_API sgrep_error sgrep_runtime_cancel(sgrep_runtime*,uint64_t request_id);
 SGREP_API sgrep_error sgrep_runtime_diagnostics(sgrep_runtime*,char *json,size_t capacity,size_t *required);
 SGREP_API void sgrep_runtime_destroy(sgrep_runtime*);

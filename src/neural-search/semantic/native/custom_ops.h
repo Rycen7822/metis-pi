@@ -11,7 +11,7 @@ struct KernelState {
   std::atomic<uint64_t> scratch_peak{0};
   std::atomic<uint64_t> local_calls{0};
 };
-enum class Kind { Rope, LocalAttention, ResidualNorm, GeGLU, Output };
+enum class Kind { Rope, LocalAttention, ResidualNorm, GeGLU, Output, GlobalAttention };
 struct Kernel;
 struct CustomOp : Ort::CustomOpBase<CustomOp, Kernel, true> {
   Kind kind;

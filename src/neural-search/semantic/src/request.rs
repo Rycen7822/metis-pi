@@ -194,7 +194,7 @@ pub(crate) unsafe fn register_native(
         models: c.models.clone(),
     })
 }
-pub(crate) fn encoded(query: bool) {
+pub(crate) fn encoded(query: bool, windows: usize) {
     if let Some(c) = current() {
         let mut m = c.control.metrics.lock().unwrap_or_else(|e| e.into_inner());
         let key = if query {
@@ -203,7 +203,11 @@ pub(crate) fn encoded(query: bool) {
             "document_forward_count"
         };
         let n = m[key].as_u64().unwrap_or(0);
-        m[key] = (n + 1).into();
+        m[key] = (n + windows as u64).into();
+        if !query {
+            let batches = m["document_batch_count"].as_u64().unwrap_or(0);
+            m["document_batch_count"] = (batches + 1).into();
+        }
     }
 }
 

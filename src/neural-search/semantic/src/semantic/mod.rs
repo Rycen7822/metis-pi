@@ -10,7 +10,7 @@ pub(crate) use lateon::{
     TOKEN_EMBEDDING_DIMENSION as CODE_EMBEDDING_DIMENSION,
 };
 
-use crate::{ModelChoice, Result, cache::Cache};
+use crate::{Chunk, ModelChoice, Result, cache::Cache};
 use half::f16;
 use std::{ops::Range, sync::Arc};
 
@@ -44,7 +44,7 @@ impl ModelKind {
     }
 }
 
-/// Borrowed output of ONE encode. Consumers must write/score it before return;
+/// Borrowed output of ONE window. Consumers must write/score it before return;
 /// they cannot retain a whole corpus (or unbounded long-document token matrix).
 pub enum DocumentBlock<'a> {
     Text {
@@ -65,7 +65,10 @@ pub enum Delivery {
     Blocks,
     ScoreOnly,
 }
-pub type EncodeSink<'a> = dyn FnMut(DocumentBlock<'_>) -> Result<Delivery> + 'a;
+/// Windows arrive in document order, including every window of a long document.
+pub type EncodeSink<'a> = dyn FnMut(usize, DocumentBlock<'_>) -> Result<Delivery> + 'a;
+/// Bound both pending source chunks and native sequences, not the thread count.
+pub(crate) const MAX_BATCH_WINDOWS: usize = 4;
 
 /// Observations at successful encode/score consumption points, not requested
 /// scope sizes. For Bekko a scored row is its one aggregated document vector;
@@ -79,6 +82,7 @@ pub struct Work {
     pub semantic_scored_chunks: usize,
     pub actual_encoded_chunks: usize,
     pub actual_encoded_windows: usize,
+    pub actual_encoded_batches: usize,
     pub actual_encoded_tokens: usize,
     pub scored_document_tokens: usize,
     pub discarded_cached_chunks: usize,
@@ -264,53 +268,68 @@ impl Scorer {
         work.reused_scored_document_tokens += rows;
         Ok(())
     }
-    pub fn score_document(&mut self, path: String, content: String) -> Result<f64> {
-        self.score_document_to(path, content, None)
+    pub fn score_documents(&mut self, documents: Vec<Arc<Chunk>>) -> Result<Vec<f64>> {
+        self.score_documents_to(documents, None)
     }
     /// The index writer observes the SAME rounded output that determines score.
     /// A caller handling recoverable cache I/O must drop that writer and return
     /// ScoreOnly from its sink, so search continues without replaying any encode.
-    pub fn score_document_to(
+    pub fn score_documents_to(
         &mut self,
-        path: String,
-        content: String,
+        documents: Vec<Arc<Chunk>>,
         mut sink: Option<&mut EncodeSink<'_>>,
-    ) -> Result<f64> {
+    ) -> Result<Vec<f64>> {
         crate::request::check()?;
+        if documents.is_empty() || documents.len() > MAX_BATCH_WINDOWS {
+            return Err("invalid document batch size".into());
+        }
         match self {
             Self::Bekko {
                 encoder,
                 query,
                 work,
             } => {
-                let (vector, tokens) = encoder.encode(&format!("{path}\n{content}"))?;
-                work.actual_encoded_windows += 1;
-                work.actual_encoded_tokens += tokens;
-                let document = bekko::Document::from_normalized(&vector);
-                let (values, inverse_norm) = document.stored();
-                if let Some(sink) = sink.as_mut() {
-                    sink(DocumentBlock::Text {
-                        values,
-                        inverse_norm,
-                    })?;
+                let mut scores = Vec::with_capacity(documents.len());
+                for (index, source) in documents.iter().enumerate() {
+                    crate::request::check()?;
+                    let (vector, tokens) =
+                        encoder.encode(&format!("{}\n{}", source.path, source.content))?;
+                    work.actual_encoded_windows += 1;
+                    work.actual_encoded_batches += 1;
+                    work.actual_encoded_tokens += tokens;
+                    let document = bekko::Document::from_normalized(&vector);
+                    let (values, inverse_norm) = document.stored();
+                    if let Some(deliver) = sink.as_mut()
+                        && deliver(
+                            index,
+                            DocumentBlock::Text {
+                                values,
+                                inverse_norm,
+                            },
+                        )? == Delivery::ScoreOnly
+                    {
+                        sink = None;
+                    }
+                    work.actual_encoded_chunks += 1;
+                    work.semantic_scored_chunks += 1;
+                    work.scored_document_tokens += 1;
+                    scores.push(document.score(query));
                 }
-                work.actual_encoded_chunks += 1;
-                work.semantic_scored_chunks += 1;
-                work.scored_document_tokens += 1;
-                Ok(document.score(query))
+                Ok(scores)
             }
             Self::LateOn {
                 encoder,
                 query,
                 work,
             } => {
-                let (score, encoded) = encoder.score_to(query, path, content, sink)?;
+                let (scores, encoded) = encoder.score_documents_to(query, documents, sink)?;
                 work.actual_encoded_windows += encoded.actual_encoded_windows;
+                work.actual_encoded_batches += encoded.actual_encoded_batches;
                 work.actual_encoded_tokens += encoded.actual_encoded_tokens;
                 work.scored_document_tokens += encoded.scored_document_tokens;
-                work.actual_encoded_chunks += 1;
-                work.semantic_scored_chunks += 1;
-                Ok(score)
+                work.actual_encoded_chunks += scores.len();
+                work.semantic_scored_chunks += scores.len();
+                Ok(scores)
             }
         }
     }

@@ -1,6 +1,6 @@
 //! One model owner per service. ORT stays on its owner thread, never Send/Sync.
 use super::{Delivery, DocumentBlock, EncodeSink, Work, bekko, lateon, native};
-use crate::{Result, cache::Cache, request};
+use crate::{Chunk, Result, cache::Cache, request};
 use half::f16;
 use std::{
     path::PathBuf,
@@ -63,24 +63,24 @@ enum Command {
         context: Arc<request::Context>,
         reply: SyncSender<QueryReply>,
     },
-    Document {
+    Documents {
         assets: Arc<Assets>,
         query: Arc<Vec<f32>>,
         blocks: bool,
-        path: String,
-        text: String,
+        documents: Vec<Arc<Chunk>>,
         context: Arc<request::Context>,
         reply: SyncSender<Event>,
     },
 }
 enum Event {
     Window {
+        document: usize,
         source: std::ops::Range<usize>,
         tokens: usize,
         values: Vec<f16>,
         ack: SyncSender<Result<Delivery>>,
     },
-    Done(Result<(f64, Work)>),
+    Done(Result<(Vec<f64>, Work)>),
 }
 pub(crate) struct Models {
     sender: Option<SyncSender<Command>>,
@@ -113,28 +113,28 @@ impl Models {
                         });
                         let _ = reply.send(result);
                     }
-                    Command::Document { assets, query, blocks, path, text, context, reply } => {
-                        let result = request::enter(context, || -> Result<(f64, Work)> {
+                    Command::Documents { assets, query, blocks, documents, context, reply } => {
+                        let result = request::enter(context, || -> Result<(Vec<f64>, Work)> {
                             request::check()?;
                             if model.as_ref().is_none_or(|(key, _)| *key != assets) {
                                 return Err("ARTIFACT_MISMATCH: code assets changed during a request; retry after drain".into());
                             }
                             let encoder = &mut model.as_mut().expect("matching model").1;
-                            let mut deliver = |block: DocumentBlock<'_>| -> Result<Delivery> {
+                            let mut deliver = |document, block: DocumentBlock<'_>| -> Result<Delivery> {
                                 request::check()?;
                                 let DocumentBlock::Code { source, input_tokens, values } = block else {
                                     return Err("shared code model returned text".into());
                                 };
                                 let (ack, done) = mpsc::sync_channel(0);
                                 reply.send(Event::Window {
-                                    source, tokens: input_tokens, values: values.to_vec(), ack,
+                                    document, source, tokens: input_tokens, values: values.to_vec(), ack,
                                 }).map_err(|_| "shared document consumer disconnected")?;
                                 // Encoding and writer/CRC must not compute concurrently.
                                 let delivery = done.recv().map_err(|_| "shared document sink disconnected")??;
                                 request::check()?;
                                 Ok(delivery)
                             };
-                            encoder.score_to(&query, &path, &text, if blocks { Some(&mut deliver) } else { None })
+                            encoder.score_documents_to(&query, &documents, if blocks { Some(&mut deliver) } else { None })
                         });
                         let _ = reply.send(Event::Done(result));
                     }
@@ -241,23 +241,21 @@ impl Client {
     fn kernel(&self) -> native::ScoringKernel {
         self.kernel.clone()
     }
-    pub fn score_to(
+    pub fn score_documents_to(
         &self,
         query: &Arc<Vec<f32>>,
-        path: String,
-        text: String,
+        documents: Vec<Arc<Chunk>>,
         mut sink: Option<&mut EncodeSink<'_>>,
-    ) -> Result<(f64, Work)> {
+    ) -> Result<(Vec<f64>, Work)> {
         request::check()?;
         let context = request::current().ok_or("shared encoder requires request context")?;
         let (reply, rx) = mpsc::sync_channel(0);
         self.sender
-            .send(Command::Document {
+            .send(Command::Documents {
                 assets: self.assets.clone(),
                 query: query.clone(),
                 blocks: sink.is_some(),
-                path,
-                text,
+                documents,
                 context,
                 reply,
             })
@@ -265,6 +263,7 @@ impl Client {
         for event in rx {
             match event {
                 Event::Window {
+                    document,
                     source,
                     tokens,
                     values,
@@ -272,11 +271,14 @@ impl Client {
                 } => {
                     let result = request::check().and_then(|_| {
                         let delivery = sink.as_mut().ok_or("unexpected code model window")?;
-                        delivery(DocumentBlock::Code {
-                            source,
-                            input_tokens: tokens,
-                            values: &values,
-                        })
+                        delivery(
+                            document,
+                            DocumentBlock::Code {
+                                source,
+                                input_tokens: tokens,
+                                values: &values,
+                            },
+                        )
                     });
                     ack.send(result)
                         .map_err(|_| "code model window owner stopped")?;
@@ -293,16 +295,15 @@ pub(crate) enum CodeEncoder {
     Shared(Client),
 }
 impl CodeEncoder {
-    pub fn score_to(
+    pub fn score_documents_to(
         &mut self,
         query: &Arc<Vec<f32>>,
-        path: String,
-        text: String,
+        documents: Vec<Arc<Chunk>>,
         sink: Option<&mut EncodeSink<'_>>,
-    ) -> Result<(f64, Work)> {
+    ) -> Result<(Vec<f64>, Work)> {
         match self {
-            Self::Local(e) => e.score_to(query, &path, &text, sink),
-            Self::Shared(e) => e.score_to(query, path, text, sink),
+            Self::Local(e) => e.score_documents_to(query, &documents, sink),
+            Self::Shared(e) => e.score_documents_to(query, documents, sink),
         }
     }
     pub(super) fn scoring_kernel(&self) -> Result<native::ScoringKernel> {
