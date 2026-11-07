@@ -25,6 +25,9 @@ and the ported source files. The semantic runtime targets Linux x64.
 - `semantic/`: inference contracts. LateOn vectors are 48-wide, with query/window
   limits of 256/2048 tokens including specials; Bekko vectors are 128-wide.
   Stable model tags, header layouts and separate budgets are documented beside their definitions.
+  `lateon.rs` owns Native; `lateon/tokenization.rs` owns the shared immutable BPE
+  and four model-lifetime workers. Both query and document tokenization stay on
+  these workers, which close/join on model replacement to release BPE TLS.
 
 ### Search behavior
 
@@ -224,6 +227,14 @@ per-row arithmetic, stable maxima and partial-error stores remain bit-identical.
   last Run stops spin on success, cancellation or error. Resident models do not
   keep idle workers spinning. Validation, encoding, scanning/ranking and source
   verification do not overlap their compute pools. Owned `rg --files` is serial.
+- LateOn uses tokenizers 0.23.1 with its default 10,000-entry BPE cache per worker,
+  not an additional corpus/embedding cache. Each source prefetches at most its
+  first window; later windows and errors are consumed in original source order.
+  Raw path+source batches above 64KiB prepare sequentially to avoid multiplying
+  large-input scratch. This is a scheduling gate, not truncation or an RSS cap.
+  All preparation finishes before Native/sink; native batch geometry is unchanged.
+  Model-lifetime BPE caches are released on join; shared regex scratch and allocator
+  pages may remain resident, independently of the native arena.
 - Normal Format08 fuses metadata/DF, query frequencies and scoring, with geometry
   admission limiting additional query state to 1MiB. Wide/large geometries and
   Format07 retain the bounded two-pass fallback, not an unbounded corpus dictionary.
