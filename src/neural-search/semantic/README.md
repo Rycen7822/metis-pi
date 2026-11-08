@@ -323,8 +323,9 @@ across sessions, distinct from this Runtime's `active_request`. It returns to
 zero after the last Run; no cumulative spin/tile experiment counters are retained.
 Counters/traces are not quality labels, cold-page evidence or memory qualification.
 
-Plans, benchmarks, raw results and comparison fixtures belong in repository
-`.work/`, not this source tree. Keep bundle identity/numerical admission in
+The shared [retrieval benchmark](../../../benchmarks/semantic/README.md) is a Git-tracked
+repository tool, excluded from Pi packages. Plans, prepared corpora, raw results and
+experiment fixtures stay in `.work/`. Keep bundle identity/numerical admission in
 `manifests/runtime.lock.json` and `manifests/quality-gates.json` alongside the
 staged runtime. A V1 development catalog is an unpublished fixture, not a public
 Hub release; V2 local bundles make no remote-publication claim. Qualification applies to the pinned

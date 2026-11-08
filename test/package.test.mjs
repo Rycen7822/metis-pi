@@ -56,6 +56,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/neural-search/runtime/install.mjs", "src/neural-search/runtime/distribution.json",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
+  assert.ok([...files].every((path) => !path.startsWith("benchmarks/")));
   for (const path of files) {
     if (!path.startsWith("src/")) continue;
     assert.ok(!path.startsWith("src/neural-search/engine/"), path);
