@@ -4,6 +4,9 @@ Metis-owned [sgrep](https://github.com/context-dot-dev/sgrep) fork, based on
 `dec6122c05be553c5a60bd647d1350b221b7b9c3`. MIT notices remain in [LICENSE](LICENSE)
 and the ported source files. The semantic runtime targets Linux x64.
 
+See [optimization history](OPTIMIZATION_HISTORY.md) for adopted/rejected approaches
+and the scope and limitations of their evidence.
+
 ## Ownership and search behavior
 
 | Owner | Responsibility |
