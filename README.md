@@ -11,6 +11,8 @@ pi install git:git@github.com:Rycen7822/metis-pi.git
 # Local development: npm install, then pi install .
 ```
 
+On a managed Pi 1.5.0 installation, normal Git/npm installation and `pi update --extensions` automatically install all six [SDK patches](sdk-patches/pi-1.5.0/README.md) from bundled builds. Metis prepares a complete new release and switches the launch pointer; the previous release and user data remain intact. Restart Pi to load it—`/reload` cannot replace a running SDK. Other Pi versions or non-managed layouts are not patched.
+
 Restart Pi and select the `metis-pi` theme. Disable matching standalone providers first: `@howaboua/pi-codex-conversion`, `pi-web-access`, `pi-session-recall`, `@narumitw/pi-lsp`, and agent-stuff's BTW/commit/github/uv resources. Metis retains their original files and sessions; see [managed extensions](docs/features/managed-plugins.md) and [LSP](docs/features/lsp.md).
 
 Use Pi package entry filters to disable features, for example `"extensions": ["-extensions/goal.ts"]` inside the package configuration. The [feature manual](docs/README.md) is currently in Chinese.

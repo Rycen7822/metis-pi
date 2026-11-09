@@ -4,7 +4,9 @@
 提交 `f9a26365568127461c47a07a37dcb42c140a3ac5`。不支持把本补丁集应用到1.4、预发布或其他版本。
 MIT许可保留在[LICENSE.upstream](LICENSE.upstream)。以下实体依赖准备与构建用于Linux/WSL、Node ≥22.19。
 
-**这些补丁修改SDK，不是扩展运行时猴子补丁。** 安装Metis或`/reload`不会应用它们；本目录不自动安装或替换正在运行的Pi。
+**这些补丁修改 SDK，不是扩展运行时猴子补丁。** 普通 Metis Git/npm 安装和 `pi update --extensions` 会把随包预编译产物交付到官方 managed Pi 1.5.0。安装器准备独立发行目录、验证完整 CLI 后原子切换启动指针，保留旧目录和个人数据。新进程加载全部六个补丁；已有进程需重启，`/reload` 无法替换 SDK。managed 宿主版本不符时安装命令报错；非 managed 布局只报告补丁未安装，原宿主保持。
+
+本目录用于审查和重建。完成下方源码准备后，执行 `npm run build:pi-sdk -- "$SDK"` 生成 `assets/pi-sdk/pi-1.5.0.tgz` 与交付元数据；`npm run verify:pi-sdk` 校验归档和补丁身份。用户安装无需编译器或额外下载 SDK。
 
 ## 顺序与owner
 
@@ -118,7 +120,7 @@ OAuth 凭据中的 `authSession` 将 ID 绑定到当前 access/refresh token 对
 
 登录和成功刷新才写入元数据；失败刷新保留原凭据。原版宿主或其他程序轮换 token 而未更新绑定时，下一次读取按新归属处理。此标识只用于执行中的结果提交，持久检查点的账户范围规则保持原样。
 
-构建 `0006` 时先运行 `npm --prefix packages/ai run build:offline`，将完整 ai `dist/` 实体复制到隔离依赖中的同版 `pi-ai/dist/`，再构建 coding-agent。最终交付 ai、coding-agent、CLI bundle 及前五补丁的配套产物；当前会话需重启宿主。未安装时这些能力尚未在用户会话激活。
+构建时先生成 ai 并实体复制到隔离依赖，再构建 tui 和 coding-agent；`build:pi-sdk` 已包含这些步骤。最终归档同时交付三个完整 dist 和 CLI bundle，安装器沿用 Pi 的 update 锁串行切换发行目录；`metis-sdk.json` 记录补丁身份、归档校验值和上一发行目录，可据此恢复启动指针；同一补丁源码重新构建了不同产物时，也会采用新归档。Metis 更新会创建新快照；卸载扩展保留 SDK 快照，避免破坏仍在使用它的进程。
 
 2026-11-09 在 Node 24.15.0/Linux/WSL 完成：SDK 完整 check、ai 与 coding-agent 正式构建、81 项 ai 认证/模型测试和 149 项宿主认证/存储测试通过；Metis 压缩、Condense、Goal 及压缩显示在原版与补丁版 SDK 下各 283 项通过，三组类型检查均通过。全部补丁从干净 v1.5.0 重放后，35 个变更路径与构建源逐字节一致。独立子进程刷新同一临时凭据文件的实验也确认了归属连续性；外部替换和同 token 重登会改变归属。以上为离线验证，未连接真实 provider 或安装用户 SDK。
 

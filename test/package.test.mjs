@@ -19,6 +19,7 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
 test("package exposes extensions, themes and portable skills with their references", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
+  assert.ok(pkg.scripts.postinstall.includes("src/pi-sdk/install.mjs"));
   const args = ["pack", "--dry-run", "--json", "--ignore-scripts"];
   const windows = process.platform === "win32";
   const packed = Object.values(JSON.parse(execFileSync(windows ? process.env.ComSpec || "cmd.exe" : "npm",
@@ -26,7 +27,10 @@ test("package exposes extensions, themes and portable skills with their referenc
       cwd: new URL("..", import.meta.url), encoding: "utf8", windowsHide: true,
     })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp", "ask-user-question", "btw"]) {
+  for (const name of [
+    "config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp",
+    "ask-user-question", "btw", "pi-sdk",
+  ]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of [
@@ -41,6 +45,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/presentation/components/tool-components.ts", "src/presentation/components/transcript-components.ts",
     "src/configuration/store.ts", "src/configuration/web-access.ts",
     "src/remote-compaction/runtime.ts", "src/remote-compaction/checkpoint.ts",
+    "src/pi-sdk/install.mjs", "src/pi-sdk/artifact.mjs", "src/pi-sdk/distribution.json", "assets/pi-sdk/pi-1.5.0.tgz",
     "src/skills/host-patch.ts", "src/extension-paths.ts",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
     "src/pi-lsp/config.ts", "src/pi-lsp/pi-lsp.ts", "src/pi-lsp/code-actions.ts", "src/pi-lsp/published-diagnostics.ts", "src/pi-lsp/LICENSE", "src/pi-lsp/METIS.md", "docs/features/lsp.md",

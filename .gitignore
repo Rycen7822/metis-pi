@@ -1,5 +1,6 @@
 node_modules/
 *.tgz
+!/assets/pi-sdk/pi-1.5.0.tgz
 .DS_Store
 coverage/
 *.log

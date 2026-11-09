@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "piVersion": "1.5.0",
+  "upstreamCommit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
+  "patches": [
+    {
+      "file": "0000-physical-workspace-bundling.patch",
+      "sha256": "79b0c56efbf8437cd44ba1dc111af250de20d0c492b7c4b392a4fe07adeeb37f"
+    },
+    {
+      "file": "0001-reuse-visible-row-composition.patch",
+      "sha256": "cbf28215ef5f56e37c314e908904bd4980932e02741aca99ea1fe43cb0e8d957"
+    },
+    {
+      "file": "0003-load-session-bodies-on-demand.patch",
+      "sha256": "406e45f4fc9938ab946c366c884cddcc600701f876cafe1e7e8ea65c17db2c24"
+    },
+    {
+      "file": "0004-preview-session-trees-without-history-bodies.patch",
+      "sha256": "468a01d8017663e01c8e0d519d1c10649344f51a69098693a3baed057578eb2c"
+    },
+    {
+      "file": "0005-preserve-hot-bodies-during-history-scans.patch",
+      "sha256": "c0e57818af4d8ec456d3a81ca5b3eca40880389ef1942dd3ab5ae70b0a82ffd2"
+    },
+    {
+      "file": "0006-preserve-oauth-login-continuity.patch",
+      "sha256": "b0e4eaa5b0d7f01abab24153a40e5b864cef51e64cb8cce70f0a561e0e0c8d09"
+    }
+  ],
+  "patchSet": "afe4cf96912e7de8f7fcf988a05fe93b6447ec436d307563171f830a353387a6",
+  "archive": {
+    "file": "pi-1.5.0.tgz",
+    "sha256": "abac9b3ebd3f99b60263f77b4f182fe5a57882f1773ffd5da2655431965cd3ba",
+    "bytes": 5760051,
+    "unpackedBytes": 25588774
+  }
+}

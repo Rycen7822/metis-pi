@@ -11,6 +11,8 @@ pi install git:git@github.com:Rycen7822/metis-pi.git
 # 本地开发：npm install 后执行 pi install .
 ```
 
+官方 managed 布局的 Pi 1.5.0 通过普通 Git/npm 安装或 `pi update --extensions`，会自动安装随包预编译的六个 [SDK 补丁](sdk-patches/pi-1.5.0/README.md)。Metis 准备完整新发行目录后切换启动指针，旧目录和用户数据保留；重启 Pi 后生效，`/reload` 无法替换运行中的 SDK。其他 Pi 版本或非 managed 布局保持原样并提示。
+
 重启 Pi 并选择 `metis-pi` 主题。先禁用同名独立提供者：`@howaboua/pi-codex-conversion`、`pi-web-access`、`pi-session-recall`、`@narumitw/pi-lsp`，以及 agent-stuff 的 BTW/commit/github/uv 资源；原文件和会话保留。详见[内置维护扩展](docs/features/managed-plugins.md)和 [LSP](docs/features/lsp.md)。
 
 用 Pi 包入口过滤单独停用功能，例如在包配置中设 `"extensions": ["-extensions/goal.ts"]`；详见[功能手册](docs/README.md)。

@@ -44,7 +44,9 @@ CI 在 Ubuntu/Windows 的 Pi 1.5.0 上跑 verify；Linux 加严格 tmux/PTY，�
 
 ## Pi SDK 源码补丁
 
-[`sdk-patches/pi-1.5.0/`](../sdk-patches/pi-1.5.0/README.md)放构建、CPU/历史内存补丁和实体依赖准备工具。只在显式重建并另行安装自定义 SDK 后生效；Metis 安装、postinstall、`/reload` 都不会应用它。源码验证和用户安装是两条线，当前进程跟随已安装的 SDK。
+[`sdk-patches/pi-1.5.0/`](../sdk-patches/pi-1.5.0/README.md)保存补丁源码和重建配方。`npm run build:pi-sdk -- "$SDK"` 从已应用补丁的隔离源码正式构建 ai/tui/coding-agent，再生成随包归档；`npm run verify:pi-sdk` 校验补丁身份与产物，prepack 同样检查。
+
+普通 Git/npm 安装和更新通过 postinstall 自动交付到 managed Pi 1.5.0；启动入口为脚本被禁用、本地包和宿主重装提供兜底。安装沿用 Pi 的 update 锁，在独立实体目录准备、验证并原子切换启动指针，旧发行目录和个人数据保留。已有进程仍运行旧 SDK，须重启；版本或布局不匹配时明确提示，开发测试应使用隔离 managedRoot。
 
 ## 源码与交付
 
@@ -52,7 +54,7 @@ CI 在 Ubuntu/Windows 的 Pi 1.5.0 上跑 verify；Linux 加严格 tmux/PTY，�
 
 根 manifest 管构建依赖；`scripts/build-web-access.mjs` 构建两个 Web bundle，子代理 prepack 从 Python schema 生成工具目录。
 
-安装带运行时 TS、Web bundle、Python/JS 核心、shell WASM、两平台 x64 PTY 和搜索资产、主题、skills、许可，以及手动应用的 SDK 补丁；测试、构建工具、Rust 源码留 Git。
+安装带运行时 TS、Web bundle、Python/JS 核心、shell WASM、两平台 x64 PTY 和搜索资产、主题、skills、许可，以及 SDK 补丁源码和预编译归档；测试、构建工具、Rust 源码留 Git。
 
 发布范围变了，实际打包解包检查入口、动态资源、二进制和执行权限；用户安装用随包资产，构建只在开发机。
 

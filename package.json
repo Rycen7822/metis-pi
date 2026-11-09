@@ -41,11 +41,13 @@
     "check:condense": "node node_modules/typescript/bin/tsc -p config/typescript/condense.json",
     "prepare:subagents": "node --experimental-strip-types scripts/python.mjs scripts/prepare-subagents.py",
     "prepare": "npm run prepare:subagents",
-    "postinstall": "node src/neural-search/runtime/install.mjs",
+    "postinstall": "node src/pi-sdk/install.mjs && node src/neural-search/runtime/install.mjs",
+    "build:pi-sdk": "node scripts/pi-sdk.mjs package",
+    "verify:pi-sdk": "node scripts/pi-sdk.mjs verify",
     "build:neural-engine": "node scripts/neural-engine.mjs",
     "verify:neural-engine": "node scripts/neural-engine.mjs verify",
     "verify:native-assets": "node scripts/verify-native-assets.mjs",
-    "prepack": "npm run verify:native-assets && npm run build:plugins && npm run prepare:subagents",
+    "prepack": "npm run verify:pi-sdk && npm run verify:native-assets && npm run build:plugins && npm run prepare:subagents",
     "test:subagents": "node --experimental-strip-types scripts/python.mjs -m pytest -q test/subagents -n 4 --dist=loadfile",
     "build:plugins": "node scripts/build-web-access.mjs",
     "test:plugins": "node scripts/test.mjs plugins",
@@ -126,6 +128,7 @@
     "docs/provenance/mcp/LICENSE",
     "vendor/tree-sitter-bash",
     "assets/native-tools",
+    "assets/pi-sdk",
     "docs/provenance/subagents/LICENSE"
   ],
   "engines": {
