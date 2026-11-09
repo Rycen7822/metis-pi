@@ -3,7 +3,7 @@
 更新：2026-11-09 10:21（UTC+08:00）。已推送提交 `4222723`（Bekko 文档并行与 JSON 映射），此前基线为 `c2af8e8`。发布资产和安装激活另行处理。
 Native 基线资产位于仓库根目录的 `external/semantic-engine-candidates/ae3f9ee/`。
 
-本文是纳入 Git 的优化历史唯一维护入口，运行契约以 [README](README.md) 和源码为准。各轮原始报告、benchmark 数据和私有原型保存在 Git 忽略的 `.work/` 中，只有本文随仓库分发。证据链接仅在保留这些资料的本地副本上可用，克隆仓库或网页阅读时原始文件可能缺失。
+本文是纳入 Git 的优化历史唯一维护入口，运行契约以 [README](README.md) 和源码为准。各轮原始报告、benchmark 数据和私有原型保存在本地未纳入版本管理的证据目录中，只有本文随仓库分发。本文不依赖这些外部路径；克隆仓库或网页阅读时，证据编号可能无法对应到原始文件。
 
 本文只记结论：已采用什么，未采用什么及原因，哪些尚未验证。时间线、失败样本和复现命令见各轮报告。提交层面核对过 63 个相关路径提交和 9 个无文件变更的验证 checkpoint，来源与覆盖范围见 [E29]。
 
@@ -289,7 +289,7 @@ E64 的首用小门只能说明首用成本，长期摊销仍需单独验证。�
 - 组织对拍使用 actual MLAS、真实输入和四 lane：每 lane 16 行时，XSMM 比原 MLAS 快约 17.44%；总 M=1515 时，整段 MLAS 4.274ms → tile16 MLAS 6.214ms → tile16 XSMM 4.969ms，大 M 三轮都变慢。原 packing 可以跨 M 复用，拆成小调用后摊销随之丢失。packing、调用和访存各占多少，尚未拆开测。
 - loaded-only 的 Run 为 −0.0197%，相同控制副本为 +3.5279%；同 Runtime 的 CC/PP 第二次为 −1.95%/−3.29%。E65 整轮的 +8.332% 未能隔离出进程或执行状态的差异，因此只能说它尚未归因于库的固定开销；也没有证据表明那 9 秒全是系统噪声。
 - tick 全为 10000，主线程 MXCSR 相同；WSL 的 cycles 事件不受支持，旧现场也没有宿主或节点层面的证据。频率、迁移、cache 等物理来源仍未确认。
-- 末投影只占约 0.17%，局部没有净收益，未采用。大 N/K 主干仍未测，本轮结果无法否定它。E65 的观测与失败均已保留；源码只放在 `.work` 中，Bitter Lessons 只补充通用的摊销与归因经验。[E66]
+- 末投影只占约 0.17%，局部没有净收益，未采用。大 N/K 主干仍未测，本轮结果无法否定它。E65 的观测与失败均已保留；源码只保留在本地证据目录中，Bitter Lessons 只补充通用的摊销与归因经验。[E66]
 
 ### 3.11 E67：每 lane 整段 JIT，对比 16 行碎调用
 
@@ -411,83 +411,4 @@ N48/K256、精度与四 lane 保持原样；每个 lane 一次处理自己的连
 
 ## 证据索引
 
-共72份证据报告保留在仓库根目录的 `.work/`，以下链接已按本文位置调整。源提交/会话核对见[E29]；逐次命令、模型/编译器、失败和资源边界以原报告为准。
-另见[T1纠正清单](../../../.work/semantic-speed-exploration-20261031/OPTIMIZATION_CHECKLIST.md)、
-[FP16 gather采用验收](../../../.work/sgrep-cache-query-improvement/fp16-gather-adoption/REPORT.md)、
-[Native逐次HISTORY](../../../.work/semantic-native-research-20261106/HISTORY.md)。
-
-[E01]: ../../../.work/sgrep-cache-query-improvement/REPORT.md
-[E02]: ../../../.work/sgrep-cache-query-improvement/p0/REPORT.md
-[E03]: ../../../.work/sgrep-cache-query-improvement/io-followup/REPORT.md
-[E04]: ../../../.work/sgrep-cache-query-improvement/record-parallel/REPORT.md
-[E05]: ../../../.work/sgrep-cache-query-improvement/shared-service/REPORT.md
-[E06]: ../../../.work/sgrep-cache-query-improvement/warm-path/REPORT.md
-[E07]: ../../../.work/sgrep-cache-query-improvement/cold-start/REPORT.md
-[E08]: ../../../.work/sgrep-cache-query-improvement/first-build-pv/REPORT.md
-[E09]: ../../../.work/sgrep-cache-query-improvement/fp16-storage/quality-full/REPORT.md
-[E10]: ../../../.work/semantic-redundancy-implementation/REPORT.md
-[E11]: ../../../.work/semantic-operator-implementation/REPORT.md
-[E12]: ../../../.work/semantic-deterministic-implementation-20261031/REPORT.md
-[E13]: ../../../.work/semantic-t1-t4-20261031/REPORT.md
-[E14]: ../../../.work/semantic-adoption-20261101/REPORT.md
-[E15]: ../../../.work/semantic-edit-rebuild-20261106/RESULT.md
-[E16]: ../../../.work/semantic-cold-build-exploration-20261106/REPORT.md
-[E17]: ../../../.work/semantic-evertrace-cold-build-exploration-20261106/REPORT.md
-[E18]: ../../../.work/semantic-native-forward-20261106/REPORT.md
-[E19]: ../../../.work/semantic-native-forward-20261106/adoption/RESULT.md
-[E20]: ../../../.work/semantic-native-forward-20261106/followup/REPORT.md
-[E21]: ../../../.work/semantic-native-forward-20261106/eight-adoption/RESULT.md
-[E22]: ../../../.work/semantic-native-research-20261106/RESULT.md
-[E23]: ../../../.work/semantic-native-research-20261106/adoption/RESULT.md
-[E24]: ../../../.work/sgrep-cache-query-improvement/first-build-validation/REPORT.md
-[E25]: ../../../.work/sgrep-cache-query-improvement/fp16-storage/REPORT.md
-[E26]: ../../../.work/semantic-operator-fusion-audit/REPORT.md
-[E27]: ../../../.work/sgrep-cache-query-improvement/astra-p95-audit/REPORT.md
-[E28]: ../../../.work/sgrep-cache-query-improvement/265k-bf16-research/REPORT.md
-[E29]: ../../../.work/semantic-history-audit-20261107/REPORT.md
-[E30]: ../../../.work/semantic-history-audit-20261107/decision-excerpts.md
-[E31]: ../../../.work/sgrep-retrieval-benchmark/REPORT.md
-[E32]: ../../../.work/sgrep-v4-dev/reports/FINAL_DELIVERY.md
-[E33]: ../../../.work/semantic-native-forward-research-20261107/REPORT.md
-[E34]: ../../../.work/semantic-native-route-validation-20261107/REPORT.md
-[E35]: ../../../.work/semantic-native-next-research-20261107/REPORT.md
-[E36]: ../../../.work/semantic-native-next-validation-20261107/REPORT.md
-[E37]: ../../../.work/semantic-native-kernel-research-20261107/REPORT.md
-[E38]: ../../../.work/semantic-native-v1-querytile-validation-20261107/REPORT.md
-[E39]: ../../../.work/lateon-modernbert-research-20261107/REPORT.md
-[E40]: ../../../.work/lateon-modernbert-validation-20261107/REPORT.md
-[E41]: ../../../.work/lateon-selected-query-followup-20261107/REPORT.md
-[E42]: ../../../.work/semantic-native-architecture-research-20261107/REPORT.md
-[E43]: ../../../.work/semantic-native-pending-validation-20261107/REPORT.md
-[E44]: ../../../.work/semantic-w8a8-repeatability-20261107/REPORT.md
-[E45]: ../../../.work/semantic-first-cold-build-research-20261107/sol-int16/PARENT_REVIEW.md
-[E46]: ../../../.work/semantic-int16-first-build-20261107/REPORT.md
-[E47]: ../../../.work/semantic-first-cold-build-research-20261107/REPORT.md
-[E48]: ../../../.work/semantic-cold-flow-validation-20261107/REPORT.md
-[E49]: ../../../.work/semantic-growth-adoption-20261107/REPORT.md
-[E50]: ../../../.work/zvec-grep-tokenization-audit-20261107/REPORT.md
-[E51]: ../../../.work/semantic-tokenizer-validation-20261108/REPORT.md
-[E52]: ../../../.work/semantic-tokenizer-integration-20261108/REPORT.md
-[E53]: ../../../.work/gigatoken-tokenization-audit-20261108/REPORT.md
-[E54]: ../../../.work/zvec-first-build-audit-20261108/REPORT.md
-[E55]: ../../../.work/zvec-first-build-validation-20261108/REPORT.md
-[E56]: ../../../.work/semantic-first-cold-research-20261108/REPORT.md
-[E57]: ../../../.work/semantic-e56-route-validation-20261108/REPORT.md
-[E58]: ../../../.work/semantic-e57-followup-validation-20261108/REPORT.md
-[E59]: ../../../.work/semantic-geglu-stability-20261108/REPORT.md
-[E60]: ../../../.work/semantic-local-geglu-research-20261108/REPORT.md
-[E61]: ../../../.work/semantic-geglu-clock-fixed-20261108/REPORT.md
-[E62]: ../../../.work/semantic-local-clock-fixed-20261108/REPORT.md
-[E63]: ../../../.work/semantic-first-cold-next-20261108/REPORT.md
-[E64]: ../../../.work/semantic-e63-sol-validation-20261108/REPORT.md
-[E65]: ../../../.work/semantic-libxsmm-evertrace-20261108/REPORT.md
-[E66]: ../../../.work/semantic-libxsmm-cause-20261108/REPORT.md
-[E67]: ../../../.work/semantic-libxsmm-large-block-20261108/REPORT.md
-[E68]: ../../../.work/semantic-bekko-adoption/REPORT.md
-[E69]: ../../../.work/semantic-bekko-issue30/REPORT.md
-[E69a]: ../../../.work/semantic-bekko-issue30/B2_REVIEW.md
-[E69b]: ../../../.work/semantic-bekko-issue30/ROUTING.md
-[E69c]: ../../../.work/semantic-bekko-issue30/A2_REVIEW.md
-[E70]: ../../../.work/semantic-bekko-small-request/REPORT.md
-[E71]: ../../../.work/semantic-bekko-small-acceleration/REPORT.md
-[E72]: ../../../.work/semantic-bekko-finalize/REVIEW.md
+本文引用的 E01–E72 为本地证据编号，对应原始报告、命令与原始数据。这些材料只保留在本地未纳入版本管理的目录中，不随仓库分发；仓库内的文字即为结论依据，原始细节以本地记录为准。源提交/会话核对见 E29；逐次命令、模型/编译器、失败和资源边界以原报告为准。
