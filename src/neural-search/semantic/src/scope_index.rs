@@ -175,39 +175,62 @@ impl ScopeIndexWriter {
             }
         }
         let chunks: Vec<_> = chunks.into_iter().map(std::sync::Arc::new).collect();
-        let Some(mut output) = self.output.take() else {
+        let Some(output) = self.output.take() else {
             return scorer.score_documents(chunks);
         };
+        let mut output = Some(output);
         let kind = scorer.kind();
         let mut active: Option<RecordWriter<'_>> = None;
         let mut document = None;
         let mut locations = Vec::with_capacity(chunks.len());
         let mut write_error = None;
-        let scores = scorer.score_documents_to(
+        let scores = scorer.score_documents_with_completion(
             chunks.clone(),
             Some(&mut |index, block| {
                 let result = (|| -> Result<()> {
+                    let output = output.as_mut().ok_or("missing index output")?;
+                    let Some(block) = block else {
+                        // Text has one block; seal it before consuming the next result,
+                        // but after the scorer has counted this successful document.
+                        locations.push(
+                            active
+                                .take()
+                                .ok_or("missing text record writer")?
+                                .finish(output)?,
+                        );
+                        document = None;
+                        return Ok(());
+                    };
                     if document != Some(index) {
                         if index != locations.len() + usize::from(active.is_some()) {
                             return Err("out-of-order encoded document".into());
                         }
                         if let Some(writer) = active.take() {
-                            locations.push(writer.finish(&mut output)?);
+                            locations.push(writer.finish(output)?);
                         }
                         let chunk = chunks
                             .get(index)
                             .ok_or("encoded document outside source batch")?;
-                        active = Some(RecordWriter::begin(&mut output, chunk, kind)?);
+                        active = Some(RecordWriter::begin(output, chunk, kind)?);
                         document = Some(index);
                     }
                     active
                         .as_mut()
                         .ok_or("missing record writer")?
-                        .push(&mut output, block)
+                        .push(output, block)
                 })();
                 match result {
                     Ok(()) => Ok(crate::semantic::Delivery::Blocks),
                     Err(error) if recoverable(error.as_ref()) => {
+                        if kind == ModelKind::Text {
+                            if let Some(mut output) = output.take() {
+                                output.failure(&error);
+                            }
+                            self.offsets.clear();
+                            crate::request::diagnostic(format_args!(
+                                "sgrep: cache write disabled; remaining scope still evaluated: {error}"
+                            ));
+                        }
                         write_error = Some(error);
                         Ok(crate::semantic::Delivery::ScoreOnly)
                     }
@@ -215,7 +238,11 @@ impl ScopeIndexWriter {
                 }
             }),
         )?;
-        if write_error.is_none() {
+        if kind == ModelKind::Text && write_error.is_some() {
+            return Ok(scores);
+        }
+        let mut output = output.ok_or("missing index output")?;
+        if kind != ModelKind::Text && write_error.is_none() {
             let result = active
                 .take()
                 .ok_or("empty encoded document batch")?

@@ -1,6 +1,6 @@
 # Semantic 优化历史
 
-更新：2026-11-08 17:53（UTC+08:00）。源码基线 `7ef8e44`（已 push，未安装激活）。源码合入后，Native 资产是否已发布、运行环境是否生效，需另行确认。
+更新：2026-11-09 10:10（UTC+08:00）。本轮开发基线 `c2af8e8`；Bekko 文档并行与 JSON 映射已接入源码。发布资产和安装激活另行处理。
 Native 基线资产位于仓库根目录的 `external/semantic-engine-candidates/ae3f9ee/`。
 
 本文是纳入 Git 的优化历史唯一维护入口，运行契约以 [README](README.md) 和源码为准。各轮原始报告、benchmark 数据和私有原型保存在 Git 忽略的 `.work/` 中，只有本文随仓库分发。证据链接仅在保留这些资料的本地副本上可用，克隆仓库或网页阅读时原始文件可能缺失。
@@ -9,16 +9,17 @@ Native 基线资产位于仓库根目录的 `external/semantic-engine-candidates
 
 ## 1. 当前结论与比较口径
 
-### 最新候选
+### 最新进展
 
 | 方向 | 当前证据 | 状态 |
 | --- | --- | --- |
+| Bekko 文档并行与 JSON 映射 | 两个大文档 scope 相对正式串行版快约 30%–36%；小范围首次调用约快 4%，暖模型收益不一致 | 用户接受波动范围后采用，见 2.4。[E68] |
 | 首 QKV 批内行复用 | 完整 EverTrace 的 FP16 表示与分数逐位相同；正常 CLI 两对平均快 2.018%，daemon HWM 增约 6.50MiB | 尚未采用，见 3.3。[E57]、[E58] |
 | 七层 GeGLU producer | 健康时钟下消费活动段快 1.792%，5/6 轮更快；A/A 波动约 ±1.6%，短场景波动大 | 未采用。arena 峰低 2.91MiB，这是实际的资源收益。[E61] |
 | 原 local banded | 健康时钟下六轮全部更快，消费活动段快 2.133%；表示和分数仍会变化 | 保留为小幅候选，需单独取得数值资格后才能替换原算术。[E62] |
 | local exact | 恢复原值，但消费活动段慢 0.329%，只有 2/6 轮更快 | 缺少加速依据，未采用。[E60]、[E62] |
 
-E64 之后没有新增采用项。E63 提出的五条线均已做成独立小实现并完成有限判别：R4 跨 query 共享 K 在完整 Native 中接近零；真实 RN 复用使 arena 峰增加 11.01MiB；投影 prepack 与批量 F16C 没有稳定的完整收益；LIBXSMM 小形状只测了首用门，长期摊销留待 3.9–3.11 的整库与归因验证。[E64]
+E64–E67 的 Native 候选均未采用。E63 提出的五条线均已做成独立小实现并完成有限判别：R4 跨 query 共享 K 在完整 Native 中接近零；真实 RN 复用使 arena 峰增加 11.01MiB；投影 prepack 与批量 F16C 没有稳定的完整收益；LIBXSMM 小形状只测了首用门，长期摊销留待 3.9–3.11 的整库与归因验证。[E64]
 
 分词版本升级和有界 worker 池已随 `7ef8e44` 采用。全量或权重 FP16、W8A8 质量恢复、Gigatoken 和 ZG 的两条原型已由用户叫停；历史研究须重新立项，才能成为执行计划。
 
@@ -93,6 +94,10 @@ LateOn 侧在进入 Native 之前完成 embedding 与 LayerNorm 预处理，并�
 | arena 几何增长 | 随 `bba4002` | 在同一 128MiB 上限内，修复了长度重排导致的碎片与分配失败。单独面板未见稳定提速，采用依据是资源正确性。[E18]、[E19] |
 | Run 期间 spin，末次 Run 立即停止 | `ae3f9ee` | 由 Env mutex、活动计数和 RAII 处理取消与异常；空闲时停止持续 spin。完整 Native 100.114→88.792s，正常首建 111.480→98.399s；值与载荷相同，CPU 累计 +0.93%，暖 H 无稳定收益。[E23] |
 | tokenizers 0.23.1 + 模型生命周期分词池 | `7ef8e44` | query 与 doc 都在四个 worker 上分词；drop 后 join，释放 BPE TLS。有界首窗准备、大批串行、按源报错，Native 分组保持原样。组合分词首遍快 37.83%，正常 CLI 两对快 3.56%，CPU 与 RSS 代价见 3.1。[E52] |
+
+本轮采用 Bekko 请求内文档并行与 JSON 只读映射。少于 8 个唯一块时逐块直接处理；大范围每批最多 4 块、64KiB，由最多 3 个 worker 加 caller 编码，共享一份模型。长单块和单块尾批仍直接处理。按 source 顺序消费结果，成功计数后完成 record；写入降级立即释放事务，继续完整评分。JSON 沿用原解析器，解析完释放映射，表示和算术保持原样。[E68]
+
+最后一轮 EverTrace/Pi 文档范围对正式串行版分别快 30.46%/36.30%。JSON 增量使小 1/4 块首次调用对上一候选快 3.33%/5.87%，暖模型没有一致改善；Pi 文档范围相对上一候选慢 2.47%，用户接受这一取舍。数字只覆盖 Bekko 文档检索，与 LateOn 全代码仓库首建分开。缩小 TextScan scratch 的试验已撤回：内核与空间改善未转化为稳定的真实 H 收益。[E68]
 
 “逐位相同”仅与当时的基线比较；此前已接受的 FP16 存表与 Erf 误差依然有效。
 无损 codec 与 SIMD 解包还原的是原 FP16 位值；最初的 FP32 embedding 转为 FP16 仍是有损的。
@@ -361,7 +366,7 @@ N48/K256、精度与四 lane 保持原样；每个 lane 一次处理自己的连
 
 ## 证据索引
 
-共67份证据报告保留在仓库根目录的 `.work/`，以下链接已按本文位置调整。源提交/会话核对见[E29]；逐次命令、模型/编译器、失败和资源边界以原报告为准。
+共68份证据报告保留在仓库根目录的 `.work/`，以下链接已按本文位置调整。源提交/会话核对见[E29]；逐次命令、模型/编译器、失败和资源边界以原报告为准。
 另见[T1纠正清单](../../../.work/semantic-speed-exploration-20261031/OPTIMIZATION_CHECKLIST.md)、
 [FP16 gather采用验收](../../../.work/sgrep-cache-query-improvement/fp16-gather-adoption/REPORT.md)、
 [Native逐次HISTORY](../../../.work/semantic-native-research-20261106/HISTORY.md)。
@@ -433,3 +438,4 @@ N48/K256、精度与四 lane 保持原样；每个 lane 一次处理自己的连
 [E65]: ../../../.work/semantic-libxsmm-evertrace-20261108/REPORT.md
 [E66]: ../../../.work/semantic-libxsmm-cause-20261108/REPORT.md
 [E67]: ../../../.work/semantic-libxsmm-large-block-20261108/REPORT.md
+[E68]: ../../../.work/semantic-bekko-adoption/REPORT.md

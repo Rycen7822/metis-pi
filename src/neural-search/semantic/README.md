@@ -31,6 +31,8 @@ and the scope and limitations of their evidence.
   `lateon.rs` owns Native; `lateon/tokenization.rs` owns the shared immutable BPE
   and four model-lifetime workers. Both query and document tokenization stay on
   these workers, which close/join on model replacement to release BPE TLS.
+  `text_pool.rs` owns Bekko's request-lifetime document workers, sharing one immutable
+  encoder; it creates workers only for actual batches and closes/joins them on request drop.
 
 ### Search behavior
 
@@ -45,6 +47,15 @@ delivery without stopping or replaying encoding. There is no ANN, FFF prefilter 
 Each lane selects its exact stable Top200 before sorting; supplied and exact
 matches remain uncapped. AST splitting bisects sorted boundaries without
 changing byte ranges, line ranges, or chunk content.
+
+Bekko reads/encodes scopes below eight unique chunks one chunk at a time. Larger
+scopes batch at most four chunks and 64KiB of path/content bytes, with up to three
+request-owned workers plus the caller. Eight chunks give the pool at least two full
+batches of work; oversized chunks and single-chunk tails run directly in the caller.
+Results, accounting and cache-record completion are consumed in source order;
+recoverable cache-write failures release the writer and continue full scoring.
+Code retains its separate four-window batching. Bekko's immutable tokenizer JSON is
+mapped only while parsing, avoiding a full file String without retaining a second copy.
 
 ## CLI and shared service
 

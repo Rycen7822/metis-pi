@@ -76,7 +76,12 @@ impl Encoder {
         {
             return Err("ARTIFACT_MISMATCH: invalid Bekko pack header".into());
         }
-        let mut tokenizer = Tokenizer::from_file(directory.join("tokenizer.json"))?;
+        let mut tokenizer: Tokenizer = {
+            let file = File::open(directory.join("tokenizer.json"))?;
+            // Prepared JSON is immutable like the weights; parsing owns its data before this map drops.
+            let json = unsafe { Mmap::map(&file)? };
+            std::str::from_utf8(&json)?.parse()?
+        };
         tokenizer.with_truncation(None)?;
         tokenizer.with_padding(None);
         #[cfg(target_arch = "x86_64")]

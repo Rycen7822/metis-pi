@@ -347,12 +347,17 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
         None
     };
     let mut similarities = Vec::with_capacity(corpus.len());
-    let mut pending = Vec::with_capacity(semantic::MAX_BATCH_WINDOWS);
-    let source_batch_size = if scorer.kind() == semantic::ModelKind::Code {
-        semantic::MAX_BATCH_WINDOWS
-    } else {
-        1
+    // Text workers need at least two full batches to be reused within this request.
+    let batch_text = scorer.kind() == semantic::ModelKind::Text
+        && corpus.len() >= 2 * semantic::MAX_TEXT_BATCH_DOCUMENTS;
+    let source_batch_size = match scorer.kind() {
+        semantic::ModelKind::Text if batch_text => semantic::MAX_TEXT_BATCH_DOCUMENTS,
+        semantic::ModelKind::Text => 1,
+        semantic::ModelKind::Code => semantic::MAX_BATCH_WINDOWS,
     };
+    let mut pending = Vec::with_capacity(source_batch_size);
+    const MAX_TEXT_SOURCE_BYTES: usize = 64 * 1024;
+    let mut pending_source_bytes = 0;
     let mut buffered_source_peak = 0;
     let scoring_source_peak = corpus.visit(|id, reader| {
         if let Some((record, range)) = corpus.reused(id).filter(|_| index_writer.is_some()) {
@@ -363,6 +368,7 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                 &mut pending,
                 &mut similarities,
             )?;
+            pending_source_bytes = 0;
             if let Some(score) = index_writer
                 .as_mut()
                 .ok_or("missing index writer")?
@@ -372,19 +378,52 @@ fn search_once(args: &Args) -> Result<Vec<Chunk>> {
                 return Ok(());
             }
         }
-        pending.push(reader.chunk(&corpus, id)?);
+        let chunk = match reader.chunk(&corpus, id) {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                if batch_text {
+                    // A later pre-read must not mask an earlier encode/record error.
+                    score_pending(
+                        &mut scorer,
+                        &mut index_writer,
+                        &mut pending,
+                        &mut similarities,
+                    )?;
+                }
+                return Err(error);
+            }
+        };
         let buffered: usize = pending
             .iter()
             .map(|chunk| chunk.path.capacity() + chunk.content.capacity())
             .sum();
-        buffered_source_peak = buffered_source_peak.max(reader.retained_bytes() + buffered);
-        if pending.len() == source_batch_size {
+        buffered_source_peak = buffered_source_peak.max(
+            reader.retained_bytes() + buffered + chunk.path.capacity() + chunk.content.capacity(),
+        );
+        if batch_text {
+            let source_bytes = chunk.path.len() + chunk.content.len();
+            if !pending.is_empty() && pending_source_bytes + source_bytes > MAX_TEXT_SOURCE_BYTES {
+                score_pending(
+                    &mut scorer,
+                    &mut index_writer,
+                    &mut pending,
+                    &mut similarities,
+                )?;
+                pending_source_bytes = 0;
+            }
+            pending_source_bytes += source_bytes;
+        }
+        pending.push(chunk);
+        if pending.len() == source_batch_size
+            || (batch_text && pending_source_bytes >= MAX_TEXT_SOURCE_BYTES)
+        {
             score_pending(
                 &mut scorer,
                 &mut index_writer,
                 &mut pending,
                 &mut similarities,
             )?;
+            pending_source_bytes = 0;
         }
         Ok(())
     })?;
