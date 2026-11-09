@@ -13,9 +13,9 @@
 | EverTrace | Git 已跟踪的现存文件与未忽略的未跟踪文件，实体复制 | 完整首建、真实命中、结果一致性；没有人为构造的相关性金标 |
 
 公开任务沿用此前检索适配：RepoQA 最多返回 50 个 passage，CoSQA 最多 100 个。
-文件排名按 passage 中第一次出现的文件去重；Hit@100 也受这些输出上限约束。
-RepoQA 覆盖只计完整落入 token 预算的源码行；这不是官方代码生成/SNF 分数。
-失败或超长 query 计入分母，记为 miss；原始 query 保留原文。
+文件排名按 passage 中第一次出现的文件去重，Hit@100 同样受输出上限约束。
+RepoQA 覆盖只计完整落入 token 预算的源码行，口径与官方代码生成/SNF 分数不同。
+失败或超长 query 计入分母并记为 miss，原始 query 保留原文。
 
 `panel.json` 固定原来的 120 题延迟 panel：RepoQA 每 scope 一题、CoSQA60 题。
 EverTrace 使用 `datasets.py` 的五条固定查询。任何抽样修改须作为新协议另报。
@@ -25,7 +25,7 @@ EverTrace 使用 `datasets.py` 的五条固定查询。任何抽样修改须作�
 
 需要 Linux x64、系统 Python 3.12+、uv、Git、rg，以及已准备好的完整 semantic runtime bundle。
 bundle 应包含 `bin/sgrep`、配套 `lib/`、`models/`、`parsers/` 和 `assets.json`。
-采用 semantic README 中的正式构建/staging 流程；这里不会编译或下载模型。
+构建/staging 沿用 semantic README 的正式流程，模型在本目录只做引用。
 
 下列命令从仓库根目录运行。依赖使用实体副本安装到私有目录，避免 venv/包的链接组装：
 
@@ -84,7 +84,7 @@ uv run --no-project --python /usr/bin/python3.12 python -B benchmarks/semantic/b
 ```
 
 `--smoke` 每数据集只取一个完整 scope 和一题。EverTrace 仍处理完整快照。
-这能检查入口、真实 publication、H 和回收，不能作为 1100 题质量或正式性能结论。
+它覆盖入口、真实 publication、H 和回收；1100 题质量和正式性能结论另跑全量。
 运行目录也必须是新的；失败记录保留，程序没有自动重跑或续跑逻辑。
 
 ### 完整质量：与计时分开
@@ -145,7 +145,7 @@ uv run --no-project --python /usr/bin/python3.12 python -B benchmarks/semantic/b
 - RSS/HWM 是服务请求后快照，见 `service.status`；既非全进程组峰值，也非硬内存验收。
 - summary 的 `passed` 只表示本轮入口、结果与一致性检查通过，性能采用由人审阅。
   查看固定配对差、均值、中位数、样本方差及 A/A 波动；各 scope 单列，失败样本单列。
-  小样本只报原始分布，不给出可靠性不足的 P95/P99。
+  小样本只报原始分布，P95/P99 需要足量样本。
 
 ## 输出
 
@@ -154,7 +154,7 @@ uv run --no-project --python /usr/bin/python3.12 python -B benchmarks/semantic/b
   源码 HEAD 属于 benchmark 仓库；bundle 的 SOURCE_COMMIT 及构建记录单独保留。
   每个服务另保存真实 exe、映射库路径和状态，核对加载的是指定 Native/ORT。
   编译器与 flags 由已有构建记录提供；省略构建记录时该项留空，正式采用前应补齐。
-  工具复用既有模型身份，不额外反复 hash 模型。
+  工具复用既有模型身份，避免反复 hash 模型。
 - `runs/*/`：私有 profile、逐调用命令、stdout/stderr、阶段/发布诊断、质量 trace、服务退出记录。
 - `records.jsonl`：逐调用日志，异常时保留已完成内容；
   `records.json`：收口后的调用记录（含首建后 H 验证状态）。

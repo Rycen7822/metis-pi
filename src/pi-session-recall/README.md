@@ -1,7 +1,7 @@
 # Metis Session Recall
 
-Shipped by [metis-pi](../../README.md), not a separate package; disable standalone `@ogulcancelik/pi-session-recall` to avoid duplicate tools. [METIS.md](METIS.md) records source/maintenance contracts; [LICENSE](LICENSE) retains MIT attribution.
+随 [metis-pi](../../README.md) 发布，与独立包 `@ogulcancelik/pi-session-recall` 同时只能启用一个，避免工具重复。来源和维护契约见 [METIS.md](METIS.md)，MIT 署名见 [LICENSE](LICENSE)。
 
-Deferred `session_recall` exposes search/query/describe: search is literal saved-JSONL scanning (rg recommended, grep/streaming Node fallback), query reads a selected branch through Pi's current model runtime. No background index/vector database. Global `[sessionRecall].queryModel` optionally selects another registered model; Pi owns authentication.
+deferred `session_recall` 提供 search/query/describe：search 逐字扫已存 JSONL（先 rg，fallback 走 grep 或流式 Node），query 经 Pi 当前模型运行时读指定分支。检索全部发生在本地文件上。全局 `[sessionRecall].queryModel` 可换另一个已注册模型；认证归 Pi。
 
-See [usage/configuration](../../docs/features/managed-plugins.md). Root dependencies/checks own direct TypeScript loading; no nested manifest/build.
+用法和配置见[内置扩展指南](../../docs/features/managed-plugins.md)。根依赖和检查直接载 TypeScript，无需另建 manifest 和构建。

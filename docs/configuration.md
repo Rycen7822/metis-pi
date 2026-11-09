@@ -4,10 +4,10 @@
 
 Metis 偏好使用全局 **`<agentDir>/metis-pi.toml`**。agentDir 默认 `~/.pi/agent`，跟随 `PI_CODING_AGENT_DIR`。
 
-- [默认模板](../metis-pi.toml)也是运行时默认值来源；[参数说明](../metis-pi-config.md)列出类型、单位、合法值和生效时机。
-- `/metis-config` 查看路径；`/metis-config init` 创建缺失的 TOML 和说明，保留已有文件。缺失字段采用默认值，读取不写盘。
-- 命令保存按模板重建注释并保留未知字段；自定义注释请放旁边说明。跨进程锁串行化读取、合并与原子发布；不重叠 patch 合并，重叠字段以后一次写入为准。手动编辑不在锁保护内，损坏 TOML 不能通过保存覆盖。
-- TOML 没有 null；可选触发器用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。
+- [默认模板](../metis-pi.toml)同时是运行时默认值来源；[参数说明](../metis-pi-config.md)列出类型、单位、合法值和生效时机。
+- `/metis-config` 查看路径；`/metis-config init` 创建缺失的 TOML 和说明，已有文件原样保留。缺失字段采用默认值，读取只进内存。
+- 命令保存按模板重建注释并保留未知字段，自定义注释请放旁边说明。跨进程锁串行化读取、合并与原子发布，重叠字段以最后一次写入为准；手工编辑自担时序，损坏的 TOML 保持原状。
+- TOML 没有 null；可选触发器用 `false` 关闭，`maxImagesPerRequest=false` 表示使用 API 默认。
 
 | 内容 | 位置 | 生效方式 |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ Metis 偏好使用全局 **`<agentDir>/metis-pi.toml`**。agentDir 默认 `~/.pi
 | 会话回忆 | `[sessionRecall]` | `query` 操作重读；`queryModel="default"` 跟随当前模型，也可填 `provider/model-id`。 |
 | 网页访问 | `[webAccess]` 及子表 | `/websearch`、`/curator` 保存普通选项。 |
 
-网页凭据来自同目录 **`web-search.json`** 或环境变量；密钥命令在实际请求时执行。模型、主题、packages、trust、reserve、MCP 定义与认证由 Pi 管理。goal 状态保存在 session custom entries，原文和命令日志保存在会话旁 `<sessionId>-blobs/`；这些状态不写入偏好配置。
+网页凭据来自同目录 **`web-search.json`** 或环境变量；密钥命令在实际请求时执行。模型、主题、packages、trust、reserve、MCP 定义与认证由 Pi 管理。goal 状态保存在 session custom entries，原文和命令日志保存在会话旁 `<sessionId>-blobs/`，与偏好文件分开。
 
 ## 显示字段
 
@@ -68,9 +68,9 @@ keepAliveServers = []
 
 支持 stdio 和 Streamable HTTP。所有调用经过 Pi 工具事件与权限检查；环境变量、密钥命令和 provider auth 遵循 Pi 规则。
 
-目录缓存位于 `<agentDir>/cache/metis-mcp/`，绑定配置、cwd、可信状态、环境与认证；启动只注册可信目录，调用时连接并重查 schema。缓存不保存明文令牌，权限 0600；动态认证以实际发现为准。无缓存时后台发现，启动最多等待 3 秒；冷发现后断开，keepAlive 连接保留。
+目录缓存位于 `<agentDir>/cache/metis-mcp/`，绑定配置、cwd、可信状态、环境与认证；启动只注册可信目录，调用时连接并重查 schema。缓存只存目录信息，令牌留在 Pi 原生存储，权限 0600；动态认证以实际发现为准。无缓存时后台发现，启动最多等 3 秒；冷发现后断开，keepAlive 连接保留。
 
-连接先发现工具，资源和模板按需查询；目录消费者会等待相关发现，等待可取消。namespace 接受服务器原名或 `mcp__server`，结果保留文本、图片和 JSON `structuredContent`。网络失败、超时和取消不自动重放；明确会话过期才重建并重试一次。
+连接先发现工具，资源和模板按需查询；目录消费者会等待相关发现，等待可取消。namespace 接受服务器原名或 `mcp__server`，结果保留文本、图片和 JSON `structuredContent`。网络失败、超时和取消原样上报，只有明确会话过期才重建并重试一次。
 
 `/mcp` 查看状态，`/mcp reload` 重读配置，`/mcp refresh [server]` 更新目录。停用时设置 `mcp.enabled=false` 并重启，再选择所需 owner；配置和凭据保留。
 
@@ -116,4 +116,4 @@ Pi package entry filters 控制扩展加载。在 `settings.json` 的 packages �
 
 移除排除项恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示，`/pruner off` 只停自动精简、保留历史回读。
 
-网关分类将 `workspace_billing_scope_unavailable` 交给 Pi 原生 retry 策略，不增加独立重试循环。Pi 文档指引位于 `<agentDir>/PI_Documentation_Guide.md`；带 Metis 首行标记的文件按当前 SDK 路径更新，非托管内容保留。
+网关分类把 `workspace_billing_scope_unavailable` 交给 Pi 原生 retry 策略处理。Pi 文档指引位于 `<agentDir>/PI_Documentation_Guide.md`；带 Metis 首行标记的文件按当前 SDK 路径更新，其余内容保持用户手写。

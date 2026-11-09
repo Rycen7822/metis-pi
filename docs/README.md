@@ -1,6 +1,6 @@
 # metis-pi 文档
 
-安装与更新见[中文 README](../README.zh-CN.md) / [English README](../README.md)。本目录说明当前用法；默认值与字段以[配置参考](configuration.md)为入口。
+安装步骤在[中文 README](../README.zh-CN.md)或 [English README](../README.md)里；本目录逐项介绍用法，默认值以[配置参考](configuration.md)为准。
 
 ## 使用
 
@@ -27,7 +27,4 @@
 
 ## 维护
 
-- [架构](architecture.md)：模块与所有权。
-- [开发说明](development.md)：检查、构建、发布和预览生成。
-- [Pi 文档指引](PI_Documentation_Guide.md)：SDK 文档定位模板。
-- [执行来源](provenance/execution/README.md) · [子代理来源](provenance/subagents/README.md)：来源与许可；其他组件在各源码目录保留记录。
+模块归属见[架构](architecture.md)，检查与发布流程见[开发说明](development.md)，SDK 文档定位模板见[Pi 文档指引](PI_Documentation_Guide.md)。执行与子代理的来源和许可分别在[执行说明](provenance/execution/README.md)与[子代理来源](provenance/subagents/README.md)，其余组件的记录放在各自源码目录。
