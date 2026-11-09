@@ -1,6 +1,5 @@
-//! A short policy lock is separate from the long corpus-writer lock. A new
-//! configuration can therefore request a downgrade while a writer is encoding;
-//! that writer must observe it before its next allocation or publication.
+//! Shared cache policy: acquire quota.lock before policy.lock for admission and growth.
+//! Pending decreases settle once active reader/writer charges fit the target.
 use super::*;
 use serde::{Deserialize, Serialize};
 
@@ -156,7 +155,7 @@ impl Locked {
             ledger: ledger.to_path_buf(),
             state,
         };
-        if value.state.version != 1
+        if !matches!(value.state.version, 1 | 2)
             || bytes(value.state.active_mib)? < bytes(value.state.target_mib)?
         {
             return Err("invalid cache policy state".into());
@@ -200,6 +199,15 @@ impl Locked {
             }
         }
         if !self.ledger.join("budget.json").exists() {
+            self.save()?;
+        }
+        Ok(())
+    }
+    /// Version 2 counts durable writer claims. Old engines reject it instead of undercharging.
+    /// The caller holds quota.lock, so no version-1 long writer is still active.
+    pub fn upgrade_writers(&mut self) -> Result<()> {
+        if self.state.version == 1 {
+            self.state.version = 2;
             self.save()?;
         }
         Ok(())

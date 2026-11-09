@@ -136,6 +136,14 @@ through full-manifest identity, without changing the corpus-record format.
   One ledger at `$HOME/.cache/sgrep-cpu-quota` covers all registered cache roots;
   `--cache-dir`, `SGREP_CACHE_DIR` and `XDG_CACHE_HOME` do not create extra quotas.
   Model assets and FFF indexes are outside this budget.
+- Writers hold the global quota lock only for admission, growth checks and publication,
+  not source parsing, model encoding or CRC work. A locked temporary inode and a
+  durable writer charge protect unfinished data. With spare quota, larger writers
+  reuse credit based on a 1MiB growth estimate to amortize ledger syncs; every
+  physical growth still checks current roots and policy. Speculative credit does
+  not trigger extra eviction or raise the budget. Small writers use exact bounds.
+  Code forwards still share one Native owner: simultaneous cold builds interleave,
+  so the first cold result can arrive later even as warm peers stop waiting.
 - Standalone CLI calls inherit the recorded policy. `SGREP_CACHE_MAX_BYTES` can
   only impose a stricter request ceiling. Metis sends stat-bound policy selections
   through internal `SGREP_CACHE_POLICY_REQUEST`; stale/conflicting selections
@@ -143,9 +151,9 @@ through full-manifest identity, without changing the corpus-record format.
   fits; upgrades preserve valid indexes.
 - Admission counts allocated blocks, in-flight reservations, old generations and
   reader leases. Growing writers reclaim idle indexes in LRU order, protecting
-  active readers and the target being replaced. Failed refresh preserves the old
-  target; explicit budget-shrink eviction is separate. Last-reader release updates
-  LRU age without changing payload bytes.
+  active readers and every in-flight refresh target, including peer writers.
+  Failed refresh preserves the old target; explicit budget-shrink eviction is
+  separate. Reader admission refreshes LRU age without changing payload bytes.
 - Allocation is qualified on ext4/tmpfs. Unsupported allocation, permissions,
   insufficient peak space or unavailable locks fall back to complete evaluation
   without publication; compatible records can still be reused for scoring.
@@ -155,9 +163,21 @@ through full-manifest identity, without changing the corpus-record format.
 ### Integrity and lifetime
 
 Private index/ledger records use mode 0600. Immutable payloads and locked reader
-leases are published atomically; recovery removes only recognized abandoned
-stages with an exited owner and a free kernel lock. Unknown/live objects and
-symlinks remain preserved and charged; unverifiable leases disable caching.
+leases are published atomically. Inode accounting takes the maximum of allocated
+blocks and reader/writer charges. A stable writer-owner lock survives JSON
+replacement, so ended transactions can be reclaimed while the daemon stays alive.
+Interrupted serialization stages require an exited process incarnation and a free
+kernel lock before cleanup. Unknown/live objects are preserved; owned regular
+files and reservations stay charged, and symlinks are not followed. Unverifiable
+leases disable caching. Writers append at logical EOF or backpatch written bytes;
+preallocation cannot create an uncharged sparse range.
+
+The shared ledger upgrades to policy version 2 under the quota lock, after any
+legacy long writer finishes. Existing index payloads and reader leases remain
+compatible. Older engines reject the new ledger rather than omit active writer
+charges; rolling back an engine therefore disables its cache admission. Leave
+ledger-version changes to the engine, particularly while requests are active.
+
 Bounded scope metadata can reject a known identity mismatch before the full CRC;
 a possible hit still checks its complete CRC and layout. Record metadata and
 vectors are validated during the full scan. Ranking reopens text without rebuilding

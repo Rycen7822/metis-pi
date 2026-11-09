@@ -5,7 +5,7 @@
 use crate::{ModelChoice, Result};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::{
@@ -18,9 +18,16 @@ use std::{
 };
 
 mod policy;
+mod writer_reservation;
 pub use policy::MAX_BYTES;
+use writer_reservation::WriterReservation;
 const QUANTUM: u64 = 64 << 10;
+// Reuse durable credit for a 1MiB growth estimate, only when spare quota is already available.
+const WRITER_GRANT: u64 = 1 << 20;
 const CONTROL_RESERVE: u64 = 64 << 10;
+const MAX_ROOTS_JSON: u64 = 1 << 20;
+// Reader/writer control JSON stays small even when corpus payloads grow.
+const MAX_CHARGE_RECORD: u64 = 4096;
 const MAX_ENTRIES: usize = 128;
 const MAX_AGE: Duration = Duration::from_secs(30 * 86400);
 
@@ -156,7 +163,10 @@ impl IndexCache {
         }))
     }
     fn select_policy(&self) -> Result<()> {
-        policy::Locked::open(&self.ledger)?.select(self.selection.as_ref())
+        let _maintenance = lock_quota(&self.ledger)?;
+        let mut policy = policy::Locked::open(&self.ledger)?;
+        policy.select(self.selection.as_ref())?;
+        policy.upgrade_writers()
     }
     pub fn source_filter(&self) -> SourceFilter {
         let mut roots = read_roots(&self.ledger).unwrap_or_default();
@@ -196,10 +206,8 @@ impl IndexCache {
         self.select_policy()?;
         // Brief exclusive admission registers a durable reader lease. There is
         // no need to inspect unrelated same-UID services or their private FDs.
-        let maintenance = open(&self.ledger.join("quota.lock"), false, true)?;
-        crate::request::lock_exclusive(&maintenance)?;
-        supported(&maintenance)?;
-        cleanup_reader_stages(&self.ledger)?;
+        let _quota = lock_quota(&self.ledger)?;
+        cleanup_charge_stages(&self.ledger)?;
         let roots = read_roots(&self.ledger)?;
         let mut policy = policy::Locked::open(&self.ledger)?;
         policy.settle(&roots)?;
@@ -231,7 +239,7 @@ impl IndexCache {
         lease.as_file().try_lock()?;
         // Fixed integer fields bound this buffer; avoid one syscall per JSON
         // fragment without changing the locked staging/sync/publish boundary.
-        let charge = serde_json::to_vec(&ReaderCharge {
+        let charge = serde_json::to_vec(&InodeCharge {
             device: metadata.dev(),
             inode: metadata.ino(),
             bytes: allocated(&metadata),
@@ -249,7 +257,6 @@ impl IndexCache {
         let path = self.ledger.join(format!("lease-{stem}.json"));
         // persist retains the locked descriptor across the atomic rename.
         let control = lease.persist_noclobber(&path)?;
-        drop(maintenance);
         Ok(IndexLease {
             file: Some(file),
             control: Some(control),
@@ -261,109 +268,114 @@ impl IndexCache {
             return Err(unavailable("budget too small for transaction metadata").into());
         }
         self.select_policy()?;
-        let maintenance = open(&self.ledger.join("quota.lock"), true, true)?;
-        crate::request::lock_exclusive(&maintenance)?;
-        supported(&maintenance)?;
-        cleanup_reader_stages(&self.ledger)?;
-        let registry = self.ledger.join("roots.json");
-        let mut roots: Vec<PathBuf> = if registry.exists() {
-            regular(&registry)?;
-            let mut bytes = Vec::new();
-            open(&registry, false, false)?
-                .take((1 << 20) + 1)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 1 << 20 {
-                return Err(unavailable("cache-root registry too large").into());
-            }
-            serde_json::from_slice::<Vec<Vec<u8>>>(&bytes)?
-                .iter()
-                .map(|p| crate::paths::path_from_bytes(p))
-                .collect()
+        std::fs::create_dir_all(&self.directory)?;
+        let maintenance = lock_quota(&self.ledger)?;
+        let mut policy = policy::Locked::open(&self.ledger)?;
+        let roots_path = self.ledger.join("roots.json");
+        let mut roots = if roots_path.exists() {
+            read_roots(&self.ledger)?
         } else {
             Vec::new()
         };
-        // Missing roots remain registered: an old reader can still hold one of
-        // their deleted inodes, which durable reader leases must still charge.
-        std::fs::create_dir_all(&self.directory)?;
-        let directory = self.directory.canonicalize()?;
-        supported(&File::open(&directory)?)?;
-        let target = directory.join(target.file_name().ok_or("missing cache filename")?);
-        let added = !roots.contains(&directory);
+        let root = self.directory.canonicalize()?;
+        let target = root.join(target.file_name().ok_or("missing cache filename")?);
+        cleanup_charge_stages(&self.ledger)?;
+        writer_reservation::recover(&roots, &self.ledger)?;
+        cleanup(&roots, &self.ledger, &target)?;
+        policy.settle(&roots)?;
+        let limit = policy.state.limit(self.max_bytes)?;
+        let added = !roots.contains(&root);
         if added {
-            roots.push(directory.clone());
+            roots.push(root.clone());
         }
-        let data = serde_json::to_vec(
+        supported(&File::open(&root)?)?;
+        let raw = serde_json::to_vec(
             &roots
                 .iter()
-                .map(|p| p.as_os_str().as_bytes())
+                .map(|path| path.as_os_str().as_bytes())
                 .collect::<Vec<_>>(),
         )?;
-        if data.len() > 1 << 20 {
+        if raw.len() as u64 > MAX_ROOTS_JSON {
             return Err(unavailable("cache-root registry too large").into());
         }
+        let amount = rounded(raw.len() as u64)?;
         let registry_reserve = if added {
-            rounded(data.len() as u64)? * 2 + CONTROL_RESERVE
+            amount * 2 + CONTROL_RESERVE
         } else {
             CONTROL_RESERVE
         };
-        cleanup(&roots, &target)?;
-        let mut policy = policy::Locked::open(&self.ledger)?;
-        policy.settle(&roots)?;
-        let cap = policy.state.limit(self.max_bytes)?;
         prune(
             &roots,
             &self.ledger,
             &target,
-            cap.saturating_sub(registry_reserve),
+            limit.saturating_sub(registry_reserve),
         )?;
-        let before = measure(&roots, &self.ledger)?;
-        if before > cap.saturating_sub(registry_reserve) {
+        let before = measure_usage_except(&roots, &self.ledger, None)?;
+        if before.charged > limit.saturating_sub(registry_reserve) {
             return Err(
                 unavailable("unreclaimable readers leave no safe transaction reserve").into(),
             );
         }
-        let mut actual_peak = before;
-        let mut reservation_peak = before;
+        let mut allocated_peak = before.allocated;
         if added {
-            reservation_peak = before + registry_reserve;
-            let mut temporary = tempfile::Builder::new()
+            let mut registry = tempfile::Builder::new()
                 .prefix("roots-")
                 .suffix(".tmp")
                 .tempfile_in(&self.ledger)?;
-            let amount = rounded(data.len() as u64)?;
-            preallocate(temporary.as_file(), 0, amount)?;
-            actual_peak = actual_peak.max(measure(&roots, &self.ledger)?);
-            temporary.write_all(&data)?;
-            temporary.as_file().set_len(data.len() as u64)?;
-            temporary.as_file().sync_all()?;
-            temporary.persist(&registry)?;
+            preallocate(registry.as_file(), 0, amount)?;
+            allocated_peak =
+                allocated_peak.max(measure_usage_except(&roots, &self.ledger, None)?.allocated);
+            registry.write_all(&raw)?;
+            registry.as_file().set_len(raw.len() as u64)?;
+            registry.as_file().sync_all()?;
+            registry.persist(&roots_path)?;
             File::open(&self.ledger)?.sync_all()?;
         }
-        let base = measure(&roots, &self.ledger)?;
-        let temporary = tempfile::Builder::new()
+        let file = tempfile::Builder::new()
             .prefix("sgrep-index-")
             .suffix(".tmp")
-            .tempfile_in(&directory)?;
-        supported(temporary.as_file())?;
-        let (file, temp) = temporary.keep()?;
-        Ok(BudgetFile {
+            .tempfile_in(&root)?;
+        supported(file.as_file())?;
+        let usage = measure_usage_except(&roots, &self.ledger, None)?;
+        let (file, temp) = file.keep().map_err(|error| error.error)?;
+        let mut value = BudgetFile {
             file: Some(file),
             temp,
             target,
-            _maintenance: maintenance,
             roots,
             ledger: self.ledger.clone(),
-            cap,
+            reservation: None,
+            cap: limit,
             local_limit: self.max_bytes,
-            base,
+            base_allocated: usage.allocated,
             reserved_end: 0,
             logical_end: 0,
             published: false,
-            peak: actual_peak.max(base),
-            reservation_peak: reservation_peak.max(base),
+            peak: usage.allocated.max(allocated_peak),
+            reservation_peak: usage.charged.max(before.charged + registry_reserve),
             reason: None,
-        })
+        };
+        value.file().try_lock()?;
+        value.reservation = Some(WriterReservation::new(
+            &value.ledger,
+            &value.temp,
+            &value.target,
+            &value.file().metadata()?,
+        )?);
+        value.reservation.as_mut().unwrap().update(0)?;
+        drop(policy);
+        drop(maintenance);
+        value.ensure(CONTROL_RESERVE)?;
+        Ok(value)
     }
+}
+
+fn lock_quota(ledger: &Path) -> Result<File> {
+    std::fs::create_dir_all(ledger)?;
+    let file = open(&ledger.join("quota.lock"), true, true)?;
+    supported(&file)?;
+    crate::request::lock_exclusive(&file)?;
+    Ok(file)
 }
 
 fn reclaim(path: &Path) -> bool {
@@ -398,9 +410,10 @@ fn entries(roots: &[PathBuf]) -> Result<Vec<(SystemTime, PathBuf, u64)>> {
     result.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     Ok(result)
 }
-fn cleanup(roots: &[PathBuf], replacing: &Path) -> Result<()> {
+fn cleanup(roots: &[PathBuf], ledger: &Path, replacing: &Path) -> Result<()> {
+    let protected = writer_reservation::protected_targets(roots, ledger)?;
     for (modified, path, _) in entries(roots)? {
-        if path == replacing {
+        if path == replacing || protected.contains(&path) {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy();
@@ -417,6 +430,7 @@ fn cleanup(roots: &[PathBuf], replacing: &Path) -> Result<()> {
     Ok(())
 }
 fn prune(roots: &[PathBuf], ledger: &Path, replacing: &Path, limit: u64) -> Result<()> {
+    let protected = writer_reservation::protected_targets(roots, ledger)?;
     let files = entries(roots)?;
     let mut count = files
         .iter()
@@ -426,86 +440,129 @@ fn prune(roots: &[PathBuf], ledger: &Path, replacing: &Path, limit: u64) -> Resu
         if measure(roots, ledger)? <= limit && count < MAX_ENTRIES {
             break;
         }
-        if path != replacing && path.extension().is_some_and(|x| x == "bin") && reclaim(&path) {
+        if path != replacing
+            && !protected.contains(&path)
+            && path.extension().is_some_and(|x| x == "bin")
+            && reclaim(&path)
+        {
             count = count.saturating_sub(1);
         }
     }
     Ok(())
 }
 fn measure(roots: &[PathBuf], ledger: &Path) -> Result<u64> {
-    measure_except(roots, ledger, None)
+    Ok(measure_usage_except(roots, ledger, None)?.charged)
 }
-fn measure_except(roots: &[PathBuf], ledger: &Path, exclude: Option<(u64, u64)>) -> Result<u64> {
-    let mut seen = HashSet::new();
-    if let Some(inode) = exclude {
-        seen.insert(inode);
-    }
-    let mut total = 0u64;
-    let mut charge = |metadata: std::fs::Metadata| -> Result<()> {
-        if seen.insert((metadata.dev(), metadata.ino())) {
-            total = total
-                .checked_add(allocated(&metadata))
-                .ok_or("cache allocation overflow")?;
+#[derive(Default)]
+struct Usage {
+    allocated: u64,
+    charged: u64,
+}
+fn measure_usage_except(
+    roots: &[PathBuf],
+    ledger: &Path,
+    excluded: Option<(u64, u64)>,
+) -> Result<Usage> {
+    let mut inodes = HashMap::<(u64, u64), Usage>::new();
+    let mut usage = Usage::default();
+    let mut charge = |device: u64, inode: u64, allocated: u64, reserved: u64| -> Result<()> {
+        if excluded == Some((device, inode)) {
+            return Ok(());
         }
+        let previous = inodes.entry((device, inode)).or_default();
+        usage.allocated = usage
+            .allocated
+            .checked_add(allocated.saturating_sub(previous.allocated))
+            .ok_or("cache allocation overflow")?;
+        usage.charged = usage
+            .charged
+            .checked_add(reserved.saturating_sub(previous.charged))
+            .ok_or("cache reservation overflow")?;
+        previous.allocated = previous.allocated.max(allocated);
+        previous.charged = previous.charged.max(reserved);
         Ok(())
     };
-    charge(std::fs::metadata(ledger)?)?;
+    let metadata = std::fs::metadata(ledger)?;
+    charge(
+        metadata.dev(),
+        metadata.ino(),
+        allocated(&metadata),
+        allocated(&metadata),
+    )?;
     for root in roots {
         match std::fs::metadata(root) {
-            Ok(metadata) => charge(metadata)?,
+            Ok(metadata) => charge(
+                metadata.dev(),
+                metadata.ino(),
+                allocated(&metadata),
+                allocated(&metadata),
+            )?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
     }
     for (_, path, _) in entries(roots)? {
-        charge(regular(&path)?)?;
+        let metadata = regular(&path)?;
+        charge(
+            metadata.dev(),
+            metadata.ino(),
+            allocated(&metadata),
+            allocated(&metadata),
+        )?;
     }
     for entry in std::fs::read_dir(ledger)? {
         let entry = entry?;
         if entry.file_type()?.is_file() {
-            charge(regular(&entry.path())?)?;
+            let metadata = regular(&entry.path())?;
+            charge(
+                metadata.dev(),
+                metadata.ino(),
+                allocated(&metadata),
+                allocated(&metadata),
+            )?;
         }
     }
-    // Explicit, kernel-locked reader records survive target unlink/replace or
-    // even removal of a cache root. Each record contains the immutable inode's
-    // actual allocation, deduplicated against its live paths and other readers.
+    // Immutable reader inodes may no longer have a live path; their actual bytes remain charged.
     for entry in std::fs::read_dir(ledger)? {
         let entry = entry?;
         let name = entry.file_name();
-        if !name.as_encoded_bytes().starts_with(b"lease-") {
-            continue;
-        }
-        let control = open(&entry.path(), false, true)?;
-        let unlocked = control.try_lock().is_ok();
-        let metadata = regular(&entry.path())?;
-        if metadata.len() > 4096 {
-            return Err("invalid reader lease record".into());
-        }
-        let record: ReaderCharge = serde_json::from_reader(&control)?;
-        // Unlocking one descriptor does not prove that every data FD/mmap has
-        // gone. Normal Drop removes its record only after data closes. Orphans
-        // are reclaimable only once this exact process incarnation has exited.
-        if unlocked && record.owner_gone() {
-            drop(control);
-            std::fs::remove_file(entry.path())?;
-        } else if seen.insert((record.device, record.inode)) {
-            total = total
-                .checked_add(record.bytes)
-                .ok_or("reader allocation overflow")?;
+        if name.as_encoded_bytes().starts_with(b"lease-") {
+            let control = open(&entry.path(), false, true)?;
+            let unlocked = control.try_lock().is_ok();
+            if regular(&entry.path())?.len() > MAX_CHARGE_RECORD {
+                return Err("invalid reader lease record".into());
+            }
+            let record: InodeCharge = serde_json::from_reader(&control)?;
+            if unlocked && record.owner_gone() {
+                drop(control);
+                std::fs::remove_file(entry.path())?;
+            } else {
+                charge(record.device, record.inode, record.bytes, record.bytes)?;
+            }
+        } else if name.as_encoded_bytes().starts_with(b"writer-")
+            && name.as_encoded_bytes().ends_with(b".json")
+        {
+            let record = writer_reservation::read_record(&entry.path())?;
+            charge(
+                record.charge.device,
+                record.charge.inode,
+                0,
+                record.charge.bytes,
+            )?;
         }
     }
-    Ok(total)
+    Ok(usage)
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct ReaderCharge {
+struct InodeCharge {
     device: u64,
     inode: u64,
     bytes: u64,
     process: u32,
     start_time: u64,
 }
-impl ReaderCharge {
+impl InodeCharge {
     fn owner_gone(&self) -> bool {
         process_gone(self.process, self.start_time)
     }
@@ -537,7 +594,7 @@ fn process_state(pid: u32) -> io::Result<(u8, u64)> {
 // Called only under quota.lock. A live creator holds that same lock until its
 // complete lease is published. All staging bytes, including unknown records,
 // remain in measure(); recovery never invents credit for deleted data inodes.
-fn cleanup_reader_stages(ledger: &Path) -> Result<()> {
+fn cleanup_charge_stages(ledger: &Path) -> Result<()> {
     let owner = std::fs::metadata(ledger)?.uid();
     for entry in std::fs::read_dir(ledger)? {
         let entry = entry?;
@@ -547,7 +604,10 @@ fn cleanup_reader_stages(ledger: &Path) -> Result<()> {
         let name = entry.file_name();
         let Some(identity) = name
             .to_str()
-            .and_then(|s| s.strip_prefix(".reader-v1-"))
+            .and_then(|s| {
+                s.strip_prefix(".reader-v1-")
+                    .or_else(|| s.strip_prefix(".writer-v2-"))
+            })
             .and_then(|s| s.strip_suffix(".tmp"))
         else {
             continue;
@@ -566,7 +626,7 @@ fn cleanup_reader_stages(ledger: &Path) -> Result<()> {
             continue;
         }
         let metadata = regular(&entry.path())?;
-        if metadata.uid() != owner || metadata.nlink() != 1 || metadata.len() > 4096 {
+        if metadata.uid() != owner || metadata.nlink() != 1 || metadata.len() > MAX_CHARGE_RECORD {
             continue;
         }
         let control = open(&entry.path(), false, true)?;
@@ -576,8 +636,10 @@ fn cleanup_reader_stages(ledger: &Path) -> Result<()> {
             Err(error) => return Err(error.into()),
         }
         let mut bytes = Vec::new();
-        (&control).take(4097).read_to_end(&mut bytes)?;
-        let owned = match serde_json::from_slice::<ReaderCharge>(&bytes) {
+        (&control)
+            .take(MAX_CHARGE_RECORD + 1)
+            .read_to_end(&mut bytes)?;
+        let owned = match serde_json::from_slice::<InodeCharge>(&bytes) {
             Ok(record) => record.process == process && record.start_time == start,
             Err(error) if error.is_eof() => {
                 b"{\"device\":".starts_with(&bytes) || bytes.starts_with(b"{\"device\":")
@@ -597,9 +659,9 @@ fn read_roots(ledger: &Path) -> Result<Vec<PathBuf>> {
     regular(&path)?;
     let mut bytes = Vec::new();
     open(&path, false, false)?
-        .take((1 << 20) + 1)
+        .take(MAX_ROOTS_JSON + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > 1 << 20 {
+    if bytes.len() as u64 > MAX_ROOTS_JSON {
         return Err("cache root registry exceeds its bound".into());
     }
     Ok(serde_json::from_slice::<Vec<Vec<u8>>>(&bytes)?
@@ -633,12 +695,12 @@ pub struct BudgetFile {
     file: Option<File>,
     temp: PathBuf,
     target: PathBuf,
-    _maintenance: File,
+    reservation: Option<WriterReservation>,
     roots: Vec<PathBuf>,
     ledger: PathBuf,
     cap: u64,
     local_limit: u64,
-    base: u64,
+    base_allocated: u64,
     reserved_end: u64,
     logical_end: u64,
     published: bool,
@@ -651,77 +713,132 @@ impl BudgetFile {
         if end <= self.reserved_end {
             return Ok(());
         }
-        // Keep this guard until fallocate finishes: a configuration change may
-        // not slip between checking the current policy and acquiring blocks.
-        let policy = policy::Locked::open(&self.ledger).map_err(policy::into_io)?;
+        let _maintenance = lock_quota(&self.ledger).map_err(policy::into_io)?;
+        let mut policy = policy::Locked::open(&self.ledger).map_err(policy::into_io)?;
+        self.roots = read_roots(&self.ledger).map_err(policy::into_io)?;
+        writer_reservation::recover(&self.roots, &self.ledger).map_err(policy::into_io)?;
+        let metadata = self.file().metadata()?;
+        let current = allocated(&metadata);
+        if policy.state.pending() {
+            // Unused credit must not prevent a requested downgrade from settling.
+            let bound = current
+                .checked_add(CONTROL_RESERVE)
+                .ok_or_else(|| unavailable("cache reservation overflow"))?;
+            if bound < self.reservation.as_ref().unwrap().record.charge.bytes {
+                self.reservation
+                    .as_mut()
+                    .unwrap()
+                    .update(bound)
+                    .map_err(policy::into_io)?;
+            }
+        }
+        policy.settle(&self.roots).map_err(policy::into_io)?;
         self.cap = policy
             .state
             .limit(self.local_limit)
             .map_err(policy::into_io)?;
-        let metadata = self.file.as_ref().unwrap().metadata()?;
-        self.base = measure_except(
-            &self.roots,
-            &self.ledger,
-            Some((metadata.dev(), metadata.ino())),
-        )
-        .map_err(policy::into_io)?;
+        let identity = Some((metadata.dev(), metadata.ino()));
         let next = rounded(end)?;
         let growth = next - self.reserved_end;
-        let current = allocated(&metadata);
-        // Conservative transient charge for new data blocks and extent metadata.
-        // Release unused reservation only after fstat establishes actual blocks.
-        let reserve = growth
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(CONTROL_RESERVE))
-            .ok_or_else(|| unavailable("cache reservation overflow"))?;
+        // Retain the qualified 2×growth + control bound for transient filesystem allocation.
+        let bound_for = |growth: u64| {
+            growth
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(current))
+                .and_then(|n| n.checked_add(CONTROL_RESERVE))
+                .ok_or_else(|| unavailable("cache reservation overflow"))
+        };
+        let required = bound_for(growth)?;
         let ceiling = self
             .cap
-            .checked_sub(reserve)
+            .checked_sub(required)
+            .and_then(|n| n.checked_sub(CONTROL_RESERVE))
             .ok_or_else(|| unavailable("complete index/update peak exceeds shared cache budget"))?;
-        // The transaction-start prune only reserves control space. As the
-        // payload grows, reclaim idle complete indexes under the same policy
-        // and maintenance guards before giving up on caching this scope.
-        if self.base.saturating_add(current) > ceiling && current <= ceiling {
-            prune(&self.roots, &self.ledger, &self.target, ceiling).map_err(policy::into_io)?;
-            self.base = measure_except(
+        let previous = self.reservation.as_ref().unwrap().record.charge.bytes;
+        let mut usage =
+            measure_usage_except(&self.roots, &self.ledger, identity).map_err(policy::into_io)?;
+        if usage.charged > ceiling {
+            // prune measures the whole ledger; this inode is excluded only from our base.
+            prune(
                 &self.roots,
                 &self.ledger,
-                Some((metadata.dev(), metadata.ino())),
+                &self.target,
+                ceiling.saturating_add(current.max(previous)),
             )
             .map_err(policy::into_io)?;
+            usage = measure_usage_except(&self.roots, &self.ledger, identity)
+                .map_err(policy::into_io)?;
         }
-        let upper = self
-            .base
-            .checked_add(current)
-            .and_then(|n| n.checked_add(reserve))
-            .ok_or_else(|| unavailable("cache reservation overflow"))?;
-        if upper > self.cap {
+        let available = self
+            .cap
+            .saturating_sub(CONTROL_RESERVE)
+            .saturating_sub(usage.charged);
+        if required > available {
             return Err(unavailable(
                 "complete index/update peak exceeds shared cache budget",
             ));
         }
-        self.reservation_peak = self.reservation_peak.max(upper);
-        preallocate(self.file.as_ref().unwrap(), self.reserved_end, growth)?;
-        let actual = self.base + allocated(&self.file.as_ref().unwrap().metadata()?);
-        self.peak = self.peak.max(actual);
-        if actual > self.cap {
-            return Err(unavailable(
-                "filesystem allocation exceeded its reserved bound",
-            ));
+        let preferred = if self.logical_end >= QUANTUM {
+            bound_for(growth.max(WRITER_GRANT))?
+        } else {
+            required
+        };
+        let bound = if previous >= required && previous <= available {
+            previous
+        } else if preferred <= available {
+            preferred
+        } else {
+            required
+        };
+        // Every growth still checks current roots/policy. Persist only a changed reservation.
+        if bound != previous || !self.reservation.as_ref().unwrap().durable {
+            self.reservation
+                .as_mut()
+                .unwrap()
+                .update(bound)
+                .map_err(policy::into_io)?;
         }
+        self.base_allocated = usage.allocated;
+        self.reservation_peak = self
+            .reservation_peak
+            .max(usage.charged + bound + CONTROL_RESERVE);
+        preallocate(self.file(), self.reserved_end, growth)?;
+        self.verify()?;
         self.reserved_end = next;
         Ok(())
     }
-    pub fn file(&self) -> &File {
+    fn verify(&mut self) -> io::Result<()> {
+        let actual = allocated(&self.file().metadata()?);
+        self.peak = self.peak.max(self.base_allocated.saturating_add(actual));
+        if actual > self.reservation.as_ref().unwrap().record.charge.bytes {
+            return Err(unavailable(
+                "filesystem allocation exceeded its durable reservation",
+            ));
+        }
+        Ok(())
+    }
+    fn file(&self) -> &File {
         self.file.as_ref().unwrap()
     }
     pub fn truncate(&mut self, bytes: u64) -> Result<()> {
+        if bytes > self.logical_end {
+            return Err("cache writer cannot create sparse ranges".into());
+        }
         self.file().set_len(bytes)?;
         self.logical_end = bytes;
+        self.reserved_end = self.reserved_end.min(bytes);
         Ok(())
     }
     pub fn publish(mut self) -> Result<()> {
-        let policy = policy::Locked::open(&self.ledger)?;
+        let _maintenance = lock_quota(&self.ledger)?;
+        let mut policy = policy::Locked::open(&self.ledger)?;
+        self.roots = read_roots(&self.ledger)?;
+        // No more writes follow: release unused reservation before settling a pending downgrade.
+        self.truncate(self.logical_end)?;
+        self.file().sync_all()?;
+        let actual = allocated(&self.file().metadata()?);
+        self.reservation.as_mut().unwrap().update(actual)?;
+        policy.settle(&self.roots)?;
         self.cap = policy.state.limit(self.local_limit)?;
         if measure(&self.roots, &self.ledger)? > self.cap.saturating_sub(CONTROL_RESERVE) {
             return Err(unavailable(
@@ -729,9 +846,7 @@ impl BudgetFile {
             )
             .into());
         }
-        self.file().sync_all()?;
         let directory = self.target.parent().unwrap();
-        // Keep old readers charged through an owned hardlink after replace.
         let retired = directory.join(format!(
             "retired-{}.bin",
             self.temp.file_name().unwrap().to_string_lossy()
@@ -744,10 +859,15 @@ impl BudgetFile {
         std::fs::rename(&self.temp, &self.target)?;
         self.published = true;
         File::open(directory)?.sync_all()?;
+        drop(self.file.take()); // Readers cannot enter until quota releases, after this exclusive lock closes.
         if retired.exists() {
             reclaim(&retired);
         }
-        self.peak = self.peak.max(measure(&self.roots, &self.ledger)?);
+        self.reservation.as_ref().unwrap().release()?;
+        self.reservation = None;
+        self.peak = self
+            .peak
+            .max(measure_usage_except(&self.roots, &self.ledger, None)?.allocated);
         Ok(())
     }
     pub fn failure(&mut self, error: &dyn std::fmt::Display) {
@@ -764,6 +884,7 @@ impl Write for BudgetFile {
         )?;
         let count = self.file.as_mut().unwrap().write(bytes)?;
         self.logical_end = self.logical_end.max(start + count as u64);
+        self.verify()?;
         Ok(count)
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -772,7 +893,27 @@ impl Write for BudgetFile {
 }
 impl Seek for BudgetFile {
     fn seek(&mut self, at: SeekFrom) -> io::Result<u64> {
-        self.file.as_mut().unwrap().seek(at)
+        // Reservation extends physical EOF. Only written bytes belong to the append/backpatch contract.
+        let position = match at {
+            SeekFrom::Start(n) => Some(n),
+            SeekFrom::End(n) => self.logical_end.checked_add_signed(n),
+            SeekFrom::Current(n) => self
+                .file
+                .as_mut()
+                .unwrap()
+                .stream_position()?
+                .checked_add_signed(n),
+        }
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid cache writer offset")
+        })?;
+        if position > self.logical_end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cache writer cannot create sparse ranges",
+            ));
+        }
+        self.file.as_mut().unwrap().seek(SeekFrom::Start(position))
     }
 }
 impl Read for BudgetFile {
@@ -783,8 +924,29 @@ impl Read for BudgetFile {
 impl Drop for BudgetFile {
     fn drop(&mut self) {
         drop(self.file.take()); // close before unlink: no uncharged deleted FD
-        if !self.published {
-            let _ = std::fs::remove_file(&self.temp);
+        let released = match self
+            .reservation
+            .as_ref()
+            .map(WriterReservation::release)
+            .transpose()
+        {
+            Ok(_) => true,
+            Err(error) => {
+                crate::request::diagnostic(format_args!(
+                    "sgrep: writer reservation cleanup failed: {error}"
+                ));
+                false
+            }
+        };
+        // Keep an unlocked temp as a recovery anchor if its charge could not be removed.
+        if released && !self.published {
+            if let Err(error) = std::fs::remove_file(&self.temp) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    crate::request::diagnostic(format_args!(
+                        "sgrep: cache writer cleanup failed: {error}"
+                    ));
+                }
+            }
         }
         if let Some(path) = crate::request::var_os("SGREP_CACHE_DIAGNOSTICS_PATH") {
             let state = policy::Locked::open(&self.ledger)
