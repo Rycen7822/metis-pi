@@ -2,8 +2,6 @@
 // (adapted upstream from Ben Brandt's text-splitter) and intel/walk.rs, MIT.
 // Metadata collection is intentionally omitted; chunk boundaries are unchanged.
 
-use std::ops::Range;
-
 use memchr::memchr;
 
 pub fn split_code(
@@ -20,13 +18,7 @@ pub fn split_code(
     }
 
     let root = tree.root_node();
-    let (node_ranges, _truncated) = collect_node_ranges(&root);
-    let max_depth = node_ranges.iter().map(|nr| nr.depth).max().unwrap_or(0);
-
-    let mut split_points_by_depth: Vec<Vec<usize>> = vec![Vec::new(); max_depth + 1];
-    for nr in &node_ranges {
-        split_points_by_depth[nr.depth].push(nr.range.start);
-    }
+    let (mut split_points_by_depth, _truncated) = collect_split_points(&root);
     for points in &mut split_points_by_depth {
         points.push(source.len());
         points.sort_unstable();
@@ -44,24 +36,18 @@ pub fn split_code(
     chunks
 }
 
-#[derive(Debug, Clone)]
-struct NodeRange {
-    depth: usize,
-    range: Range<usize>,
-}
-
-fn collect_node_ranges(root: &tree_sitter::Node<'_>) -> (Vec<NodeRange>, usize) {
-    let mut ranges = Vec::new();
+fn collect_split_points(root: &tree_sitter::Node<'_>) -> (Vec<Vec<usize>>, usize) {
+    let mut points = vec![Vec::new()];
     let truncated = walk_bounded(root, |node, depth| {
         if depth > 0 {
-            ranges.push(NodeRange {
-                depth,
-                range: node.byte_range(),
-            });
+            if points.len() <= depth {
+                points.resize_with(depth + 1, Vec::new);
+            }
+            points[depth].push(node.start_byte());
         }
         Descend::Children
     });
-    (ranges, truncated)
+    (points, truncated)
 }
 
 struct Splitter<'a> {
