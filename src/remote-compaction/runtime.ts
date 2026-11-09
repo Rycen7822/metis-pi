@@ -1,8 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   cleanupSessionResources, getCurrentSystemMessage, normalizeContext,
   type Model, type Api, type ThinkingLevel,
@@ -19,15 +16,18 @@ import {
 import {
   KEY, MARKER, MAX_BYTES, record, digest, ours, checkpoint, rawBranch,
   summaryText, matchesMarker, replaceMarker, responsesHistory,
-  type Item, type BindingScope, type CheckpointScope, type Checkpoint,
+  type Item, type Checkpoint,
 } from "./checkpoint.ts";
+
+import {
+  bindingState, codexRequest, matchesLegacyBinding, requestChange, resolveRequest, safeError, sameRoute, scopeState,
+} from "./auth.ts";
 
 const TIMEOUT = 300_000;
 const PORTABLE = "metisCodexPortableSummary";
 const MAX_SUMMARY_BYTES = 64 * 1024;
 const isPortableSummary = (value: unknown): value is string => typeof value === "string"
   && value.trim().length > 0 && !value.trimStart().startsWith(MARKER) && Buffer.byteLength(value) <= MAX_SUMMARY_BYTES;
-type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 // Native entries are append-only: the last source entry identifies its ancestry, excluding extension journals.
 const sourceVersion = ({ sessionManager }: ExtensionContext) => {
@@ -36,31 +36,6 @@ const sourceVersion = ({ sessionManager }: ExtensionContext) => {
       return entry.id;
   }
 };
-const safeError = (value: unknown, secrets: string[] = []): string => {
-  let text = typeof value === "string" ? value : value instanceof Error ? value.message : "provider request failed";
-  for (const secret of secrets) text = text.replaceAll(secret, "[redacted]");
-  return text.replace(/Bearer\s+[^\s";,]+/gi, "Bearer [redacted]")
-    .replace(/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\b/g, "[redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]+/g, "[redacted]").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1500);
-};
-const tokenAccount = (key: string): unknown => {
-  try {
-    const account = JSON.parse(Buffer.from(key.split(".")[1], "base64url").toString())["https://api.openai.com/auth"]?.chatgpt_account_id;
-    return typeof account === "string" && account ? account : undefined;
-  } catch { return undefined; }
-};
-const accountHeader = (model: Model<Api>, auth: { headers?: Record<string, string | null> }) =>
-  Object.entries({ ...model.headers, ...auth.headers }).findLast(([name]) => name.toLowerCase() === "chatgpt-account-id")?.[1] ?? undefined;
-const route = (model: Model<Api>, baseUrl = model.baseUrl) => [model.provider, model.api, model.id, baseUrl];
-// Pi emits model_select for model identity, not same-ID endpoint/API changes.
-const sameRoute = (before: Model<Api>, after: Model<Api> | undefined) => after !== undefined
-  && before.provider === after.provider && before.api === after.api && before.id === after.id && before.baseUrl === after.baseUrl;
-const boundIdentity = (model: Model<Api>, url: string, identity: unknown, header?: string) =>
-  hash([...route(model, url), identity, header]);
-const bindingScope = (model: Model<Api>, url: string, account: unknown, header?: string): Pick<BindingScope, "route" | "account"> => ({
-  route: hash(route(model, url.replace(/\/+$/, ""))),
-  ...(account !== undefined || header !== undefined ? { account: hash([account, header]) } : {}),
-});
 function isRemoteModel(model: ExtensionContext["model"]): model is Model<Api>;
 function isRemoteModel(model: CodexCompactionOwnerRequest["model"]): boolean;
 function isRemoteModel(model: CodexCompactionOwnerRequest["model"]): boolean {
@@ -84,93 +59,6 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   return { entry, origin: origin?.type === "model_change" ? origin : undefined,
     data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
 }
-async function resolveRequest(ctx: ExtensionContext, model: Model<Api>, resolvedAuth?: RequestAuth) {
-  const provider = ctx.modelRegistry.getProvider(model.provider);
-  // The catalog's OAuth flag can lag another process's login/logout. Read the
-  // source with live broker auth, preserving Pi's model-level header resolution.
-  const live = resolvedAuth === undefined ? await ctx.modelRegistry.getProviderAuth(model.provider) : undefined;
-  const auth = resolvedAuth ?? await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? "Codex authentication unavailable" : safeError(auth.error));
-  if (!provider) throw new Error("Unsupported Codex API");
-  if (resolvedAuth === undefined && live?.auth.apiKey !== auth.apiKey)
-    throw new Error("Codex authentication changed during resolution; retry with the current authentication");
-  const account = tokenAccount(auth.apiKey), header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
-  const baseScope = bindingScope(model, url, account, header);
-  // The only explicit auth override is the read-only legacy Codex CLI login.
-  const scope: CheckpointScope = resolvedAuth !== undefined || live?.source === "OAuth"
-    ? { ...baseScope, credential: "oauth" }
-    : { ...baseScope, credential: "api_key", apiKeyDigest: hash(auth.apiKey) };
-  const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };
-  return { scope,
-    registration: ctx.modelRegistry.getRegisteredProviderConfig(model.provider),
-    nativeOwner: ctx.modelRegistry.getRegisteredNativeProvider(model.provider),
-    provider, model: { ...model, headers: model.headers ? { ...model.headers } : undefined,
-      baseUrl: url }, auth: snapshot };
-}
-const sameProvider = (before: Awaited<ReturnType<typeof resolveRequest>>, after: Awaited<ReturnType<typeof resolveRequest>>) =>
-  before.registration === after.registration && before.nativeOwner === after.nativeOwner
-  && scopeState(before.scope, after.scope) === "valid"
-  // A stable known account can authorize an in-flight OAuth refresh. With an
-  // opaque account, a changed token cannot prove the result still belongs here.
-  && (before.auth.apiKey === after.auth.apiKey || before.scope.credential === "oauth" && before.scope.account !== undefined)
-  && JSON.stringify([before.auth.headers, before.auth.env, before.model.baseUrl])
-    === JSON.stringify([after.auth.headers, after.auth.env, after.model.baseUrl]);
-// V1 API keys and unscoped records need the old key/account binding. OAuth
-// checkpoints never pin access tokens, and Pi credentials are untouched.
-const matchesLegacyBinding = (binding: string | undefined, request: Awaited<ReturnType<typeof resolveRequest>>) => {
-  if (!binding) return false;
-  const account = tokenAccount(request.auth.apiKey!), header = accountHeader(request.model, request.auth);
-  return [request.model.baseUrl, request.model.baseUrl.replace(/\/+$/, "")].some(url =>
-    binding === boundIdentity(request.model, url, account ?? request.auth.apiKey, header));
-};
-const scopeState = (previous: BindingScope, current: BindingScope) => {
-  if (previous.route !== current.route || previous.credential && previous.credential !== current.credential
-    || previous.account && current.account && previous.account !== current.account
-    || previous.apiKeyDigest && previous.apiKeyDigest !== current.apiKeyDigest) return "incompatible";
-  if (previous.account !== current.account || previous.credential === "api_key" && !previous.apiKeyDigest) return "unverified";
-  return "valid";
-};
-const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof resolveRequest>>,
-  origin?: { provider: string; modelId: string }) => {
-  // Pi owns login and refresh. Opaque account metadata cannot establish a
-  // client-side identity: on the original route, the backend validates its
-  // encrypted checkpoint under Pi's current auth. Never pin OAuth to a token.
-  if (data.scope?.credential) {
-    const state = scopeState(data.scope, request.scope);
-    if (state === "unverified" && data.version === 1 && data.scope.credential === "api_key"
-      && data.scope.account === request.scope.account && matchesLegacyBinding(data.binding, request)) return "valid";
-    return state;
-  }
-  if (data.scope && scopeState(data.scope, request.scope) !== "valid") return "incompatible";
-  if (matchesLegacyBinding(data.binding, request)) return "valid";
-  const model = data.model ?? origin;
-  if (model && (model.provider !== request.model.provider || model.modelId !== request.model.id)) return "incompatible";
-  return "unverified";
-};
-
-async function codexRequest(ctx: ExtensionContext, model: Model<Api>) {
-  const legacyModel: Model<Api> = ctx.modelRegistry.find("openai-codex", model.id) ?? {
-    ...model, provider: "openai-codex", api: "openai-codex-responses",
-    baseUrl: "https://chatgpt.com/backend-api", headers: undefined,
-  };
-  if (legacyModel.api !== "openai-codex-responses") throw new Error("Unsupported Codex API");
-  if ((await ctx.modelRegistry.getProviderAuth(legacyModel.provider))?.source === "OAuth") {
-    const request = await resolveRequest(ctx, legacyModel);
-    if (request.scope.credential !== "oauth") throw new Error("Codex OAuth changed; retry with the current authentication");
-    return request;
-  }
-  let token: unknown;
-  try {
-    const data = record(JSON.parse(await readFile(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"), "utf8")));
-    if (data.auth_mode === "chatgpt") token = record(data.tokens).access_token;
-  } catch { /* A missing or unreadable CLI login cannot authorize compression. */ }
-  if (typeof token !== "string" || !token) throw new Error("Legacy Codex OAuth unavailable; sign in with codex login");
-  // CLI credentials belong to the official backend, not a configured proxy.
-  return resolveRequest(ctx,
-    { ...legacyModel, baseUrl: "https://chatgpt.com/backend-api", headers: undefined },
-    { ok: true, apiKey: token });
-}
-
 function responsesCompactionFetch(capture: (output: unknown) => void, fetcher: typeof fetch): typeof fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
@@ -355,8 +243,10 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         if (!isPortableSummary(summary))
           throw new Error("Portable summary is empty or invalid");
         const final = await resolveRequest(ctx, model);
-        if (signal.aborted || !sourceUnchanged() || !sameProvider(request, final))
+        if (signal.aborted || !sourceUnchanged())
           throw new Error("Portable summary source changed; retry with the current session");
+        const change = requestChange(request, final);
+        if (change) throw new Error(`Portable summary authentication changed: ${change}`);
         pi.appendEntry(PORTABLE, { checkpoint: current.entry.id, fingerprint: portableHash(current), summary, usage: result.usage });
       } finally {
         if (pending === controller) pending = undefined;
@@ -665,10 +555,14 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       if (JSON.stringify(history).length > MAX_BYTES) throw new Error("Codex checkpoint too large");
       const finalRequest = await resolveRequest(ctx, model);
       const finalCompactor = hybrid ? await codexRequest(ctx, model) : compactor;
-      if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== sourceVersion(ctx)
-        || !sameProvider(request, finalRequest)
-        || !sameProvider(compactor, finalCompactor) || signal.aborted)
-        throw new Error("Compaction source changed");
+      if (signal.aborted) throw new Error("Compaction was cancelled");
+      if (version !== generation) throw new Error("Compaction lifecycle changed");
+      if (session !== ctx.sessionManager.getSessionId()) throw new Error("Compaction session changed");
+      if (source !== sourceVersion(ctx)) throw new Error("Compaction history changed");
+      const change = requestChange(request, finalRequest);
+      if (change) throw new Error(`Compaction authentication changed: ${change}`);
+      const producerChange = requestChange(compactor, finalCompactor);
+      if (producerChange) throw new Error(`Compaction producer changed: ${producerChange}`);
       const marker = `${MARKER}${randomUUID()}]`;
       const readFiles = [...event.preparation.fileOps.read];
       const modifiedFiles = [...new Set([...event.preparation.fileOps.written, ...event.preparation.fileOps.edited])];

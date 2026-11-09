@@ -1,0 +1,297 @@
+diff --git a/packages/ai/src/auth/resolve.ts b/packages/ai/src/auth/resolve.ts
+index dfeb030..2b1dd2a 100644
+--- a/packages/ai/src/auth/resolve.ts
++++ b/packages/ai/src/auth/resolve.ts
+@@ -16,6 +16,36 @@ import type {
+ 	ProviderAuth,
+ } from "./types.ts";
+ 
++async function credentialBinding(credential: OAuthCredential): Promise<string> {
++	const input = new TextEncoder().encode(JSON.stringify([credential.access, credential.refresh]));
++	const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
++	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
++}
++
++/** Provider-scoped login ownership, independent of ordinary SDK-managed token rotation. */
++async function oauthSessionId(credential: OAuthCredential): Promise<string> {
++	const binding = await credentialBinding(credential);
++	const session = credential.authSession;
++	if (
++		session &&
++		typeof session.id === "string" &&
++		session.id.length > 0 &&
++		session.id.length <= 256 &&
++		session.credentialBinding === binding
++	)
++		return session.id;
++	// Old credentials need no write or re-login. The first locked refresh carries this ID forward.
++	return `legacy:${binding}`;
++}
++
++/** Only login and locked refresh establish continuity; external token edits invalidate stale metadata. */
++export async function withOAuthSession(
++	credential: OAuthCredential,
++	id: string = crypto.randomUUID(),
++): Promise<OAuthCredential> {
++	return { ...credential, authSession: { id, credentialBinding: await credentialBinding(credential) } };
++}
++
+ export interface AuthResolutionOverrides {
+ 	apiKey?: string;
+ 	env?: ProviderEnv;
+@@ -137,7 +167,9 @@ export async function refreshStoredOAuthCredential(
+ 				if (current?.type !== "oauth") return undefined; // logged out meanwhile
+ 				if (!needsRefresh(current)) return undefined; // another process/request refreshed
+ 				try {
+-					return await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS));
++					const owner = await oauthSessionId(current);
++					const refreshed = await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS));
++					return await withOAuthSession(refreshed, owner);
+ 				} catch (error) {
+ 					throw new ModelsError("oauth", `OAuth refresh failed for ${providerId}`, { cause: error });
+ 				}
+@@ -184,7 +216,11 @@ async function resolveStoredOAuth(
+ 	}
+ 
+ 	try {
+-		return { auth: await oauth.toAuth(credential), source: "OAuth" };
++		return {
++			auth: await oauth.toAuth(credential),
++			source: "OAuth",
++			oauthSessionId: await oauthSessionId(credential),
++		};
+ 	} catch (error) {
+ 		throw new ModelsError("oauth", `OAuth auth derivation failed for ${providerId}`, { cause: error });
+ 	}
+diff --git a/packages/ai/src/auth/types.ts b/packages/ai/src/auth/types.ts
+index 86a9268..14644fe 100644
+--- a/packages/ai/src/auth/types.ts
++++ b/packages/ai/src/auth/types.ts
+@@ -31,6 +31,8 @@ export interface OAuthCredentials {
+ /** Stored canonical OAuth credential. */
+ export interface OAuthCredential extends OAuthCredentials {
+ 	type: "oauth";
++	/** SDK-owned login continuity. Login replaces it; locked refresh preserves it. */
++	authSession?: { id: string; credentialBinding: string };
+ }
+ 
+ /** One type-tagged credential per provider — the shape of today's auth.json. */
+@@ -103,6 +105,9 @@ export interface AuthContext {
+ /** Result of resolving auth for a model. */
+ export interface AuthResult {
+ 	auth: ModelAuth;
++	/** Non-secret, provider-scoped OAuth login identity, stable across SDK-managed refreshes.
++	 * Routes, accounts and provider registrations must still be checked separately. */
++	oauthSessionId?: string;
+ 	/** Provider-scoped environment/config values resolved from credentials and ambient context. */
+ 	env?: ProviderEnv;
+ 	/** Human-readable label for status UI: "ANTHROPIC_API_KEY", "OAuth", "~/.aws/credentials". */
+diff --git a/packages/ai/src/models.ts b/packages/ai/src/models.ts
+index 3d26dcb..c64576e 100644
+--- a/packages/ai/src/models.ts
++++ b/packages/ai/src/models.ts
+@@ -6,6 +6,7 @@ import {
+ 	ModelsError,
+ 	refreshStoredOAuthCredential,
+ 	resolveProviderAuth,
++	withOAuthSession,
+ } from "./auth/resolve.ts";
+ import type {
+ 	AuthCheck,
+@@ -787,7 +788,8 @@ class ModelsImpl implements MutableModels {
+ 			throw new ModelsError("auth", `${provider.name} does not support ${type} login`);
+ 		}
+ 		const loginOperation: Promise<Credential> = method.login({ ...interaction, signal }, options);
+-		const credential = await raceWithAbortSignal(loginOperation, signal);
++		const result = await raceWithAbortSignal(loginOperation, signal);
++		const credential = result.type === "oauth" ? await withOAuthSession(result) : result;
+ 		let mutationStarted = false;
+ 		let markMutationStarted: (() => void) | undefined;
+ 		const started = new Promise<void>((resolve) => {
+diff --git a/packages/ai/test/oauth-continuity.test.ts b/packages/ai/test/oauth-continuity.test.ts
+new file mode 100644
+index 0000000..15c0615
+--- /dev/null
++++ b/packages/ai/test/oauth-continuity.test.ts
+@@ -0,0 +1,123 @@
++import { describe, expect, it, vi } from "vitest";
++import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
++import type { OAuthCredential } from "../src/auth/types.ts";
++import { createModels } from "../src/models.ts";
++import { openaiProvider } from "../src/providers/openai.ts";
++
++function fixture() {
++	const credentials = new InMemoryCredentialStore();
++	const initial: OAuthCredential = {
++		type: "oauth",
++		access: "opaque-access",
++		refresh: "opaque-refresh",
++		expires: Date.now() + 3_600_000,
++	};
++	let rotations = 0;
++	const refresh = vi.fn(async (current: OAuthCredential) => ({
++		...current,
++		access: `access-${++rotations}`,
++		refresh: `refresh-${rotations}`,
++		expires: Date.now() + 3_600_000,
++	}));
++	const provider = {
++		...openaiProvider(),
++		auth: {
++			oauth: {
++				name: "Offline OAuth",
++				login: async () => initial,
++				refresh,
++				toAuth: async (credential: OAuthCredential) => ({ apiKey: credential.access }),
++			},
++		},
++	};
++	const instance = () => {
++		const models = createModels({ credentials });
++		models.setProvider(provider);
++		return models;
++	};
++	const models = instance();
++	const login = () => models.login("openai", "oauth", { prompt: async () => "", notify() {} });
++	const expire = () =>
++		credentials.modify("openai", async (current) => ({ ...(current as OAuthCredential), expires: 0 }));
++	return { credentials, initial, refresh, instance, models, login, expire };
++}
++
++describe("OAuth login continuity", () => {
++	it("reads legacy credentials without rewriting storage", async () => {
++		const h = fixture();
++		await h.credentials.modify("openai", async () => h.initial);
++		const first = await h.models.getAuth("openai");
++		const second = await h.instance().getAuth("openai");
++		expect(first?.oauthSessionId).toEqual(expect.any(String));
++		expect(second?.oauthSessionId).toBe(first?.oauthSessionId);
++		expect(await h.credentials.read("openai")).toEqual(h.initial);
++		expect(h.refresh).not.toHaveBeenCalled();
++	});
++
++	it("keeps opaque legacy ownership through the first native refresh and reload", async () => {
++		const h = fixture();
++		await h.credentials.modify("openai", async () => h.initial);
++		const before = await h.models.getAuth("openai");
++		await h.expire();
++		const refreshed = await h.models.getAuth("openai");
++		const reloaded = await h.instance().getAuth("openai");
++		expect(refreshed?.auth.apiKey).not.toBe(before?.auth.apiKey);
++		expect(refreshed?.oauthSessionId).toBe(before?.oauthSessionId);
++		expect(reloaded?.oauthSessionId).toBe(before?.oauthSessionId);
++		expect(h.refresh).toHaveBeenCalledTimes(1);
++	});
++
++	it("shares a single locked refresh between independent clients", async () => {
++		const h = fixture();
++		await h.login();
++		const before = await h.models.getAuth("openai");
++		await h.expire();
++		const results = await Promise.all([h.models.getAuth("openai"), h.instance().getAuth("openai")]);
++		expect(h.refresh).toHaveBeenCalledTimes(1);
++		for (const result of results) {
++			expect(result?.auth.apiKey).toBe("access-1");
++			expect(result?.oauthSessionId).toBe(before?.oauthSessionId);
++		}
++	});
++
++	it("starts a new ownership on re-login even when tokens are identical", async () => {
++		const h = fixture();
++		await h.login();
++		const before = await h.models.getAuth("openai");
++		await h.login();
++		const after = await h.models.getAuth("openai");
++		expect(after?.auth.apiKey).toBe(before?.auth.apiKey);
++		expect(after?.oauthSessionId).not.toBe(before?.oauthSessionId);
++	});
++
++	it("does not revive ownership after logout and re-login", async () => {
++		const h = fixture();
++		await h.login();
++		const before = await h.models.getAuth("openai");
++		await h.models.logout("openai");
++		expect(await h.models.getAuth("openai")).toBeUndefined();
++		await h.login();
++		expect((await h.models.getAuth("openai"))?.oauthSessionId).not.toBe(before?.oauthSessionId);
++	});
++
++	it.each(["access", "refresh"] as const)("rejects stale metadata after external %s replacement", async (field) => {
++		const h = fixture();
++		await h.login();
++		const before = await h.models.getAuth("openai");
++		await h.credentials.modify("openai", async (current) => ({
++			...(current as OAuthCredential),
++			[field]: "external",
++		}));
++		expect((await h.models.getAuth("openai"))?.oauthSessionId).not.toBe(before?.oauthSessionId);
++	});
++
++	it("preserves stored credentials when refresh fails", async () => {
++		const h = fixture();
++		await h.login();
++		await h.expire();
++		const before = await h.credentials.read("openai");
++		h.refresh.mockRejectedValueOnce(new Error("offline refresh failure"));
++		await expect(h.models.getAuth("openai")).rejects.toThrow(/OAuth refresh failed/);
++		expect(await h.credentials.read("openai")).toEqual(before);
++	});
++});
+diff --git a/packages/coding-agent/src/core/model-registry.ts b/packages/coding-agent/src/core/model-registry.ts
+index ffd3175..ebdcfd9 100644
+--- a/packages/coding-agent/src/core/model-registry.ts
++++ b/packages/coding-agent/src/core/model-registry.ts
+@@ -37,6 +37,8 @@ export type ResolvedRequestAuth =
+ 			headers?: ProviderHeaders;
+ 			baseUrl?: string;
+ 			env?: Record<string, string>;
++			source?: string;
++			oauthSessionId?: string;
+ 	  }
+ 	| { ok: false; error: string };
+ export { clearApiKeyCache } from "./provider-composer.ts";
+@@ -102,6 +104,8 @@ export class ModelRegistry {
+ 				headers: resolution.auth.headers,
+ 				...(resolution.auth.baseUrl ? { baseUrl: resolution.auth.baseUrl } : {}),
+ 				env: resolution.env,
++				source: resolution.source,
++				oauthSessionId: resolution.oauthSessionId,
+ 			};
+ 		} catch (error) {
+ 			const cause = error instanceof Error ? error.cause : undefined;
+diff --git a/packages/coding-agent/test/model-registry.test.ts b/packages/coding-agent/test/model-registry.test.ts
+index 67142f7..ad61a51 100644
+--- a/packages/coding-agent/test/model-registry.test.ts
++++ b/packages/coding-agent/test/model-registry.test.ts
+@@ -1255,6 +1255,7 @@ describe("ModelRegistry", () => {
+ 			expect(auth).toEqual({
+ 				ok: true,
+ 				apiKey: undefined,
++				source: "stored credential",
+ 				headers: {
+ 					"cf-aig-authorization": "Bearer stored-cf-token",
+ 					Authorization: null,
+@@ -2053,6 +2054,7 @@ describe("ModelRegistry", () => {
+ 				const auth1 = await registry.getApiKeyAndHeaders(model!);
+ 				expect(auth1).toEqual({
+ 					ok: true,
++					source: "configured API key",
+ 					apiKey: "token-1",
+ 					headers: { Authorization: "Bearer token-1" },
+ 				});
+@@ -2062,6 +2064,7 @@ describe("ModelRegistry", () => {
+ 				const auth2 = await registry.getApiKeyAndHeaders(model!);
+ 				expect(auth2).toEqual({
+ 					ok: true,
++					source: "configured API key",
+ 					apiKey: "token-2",
+ 					headers: { Authorization: "Bearer token-2" },
+ 				});
+@@ -2085,6 +2088,7 @@ describe("ModelRegistry", () => {
+ 
+ 				expect(auth).toEqual({
+ 					ok: true,
++					source: "configured API key",
+ 					apiKey: "token-1",
+ 					headers: { Authorization: "Bearer token-1" },
+ 				});

@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync, gunzipSync } from "node:zlib";
-import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { METIS_EVENTS } from "../../src/collaboration.ts";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { closeOpenAICodexWebSocketSessions, streamSimple as streamSimpleOpenAICodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
@@ -365,7 +367,7 @@ test("Pi OAuth refresh resumes scoped checkpoints through ciphertext rotation an
   assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
 });
 
-test("Pi refresh during checkpoint publication uses known account evidence, not token equality", async t => {
+test("Pi refresh during checkpoint publication preserves verified OAuth login ownership", async t => {
   for (const phase of ["compaction", "portable"]) for (const account of ["known", "opaque"]) {
     await t.test(`${phase}: ${account}`, async t => {
       const routeModel = account === "known" ? model : responsesModel;
@@ -388,27 +390,108 @@ test("Pi refresh during checkpoint publication uses known account evidence, not 
         });
       }, response: () => { expireCredential(); return sse(checkpointEvents()); },
       normalResponse: () => { expireCredential(); return answer(); } });
+      const acceptsRefresh = account === "known" || Boolean((await h.runtime.getAuth(routeModel))?.oauthSessionId);
       if (phase === "portable") {
         await h.session.compact();
         await h.session.setModel({ ...routeModel, id: "gpt-6-sol" });
       }
       expire = true;
       if (phase === "compaction") {
-        if (account === "known") await h.session.compact();
+        if (acceptsRefresh) await h.session.compact();
         else await assert.rejects(h.session.compact(), /cancel/i);
-        assert.equal(compactions(h).length, account === "known" ? 1 : 0);
+        assert.equal(compactions(h).length, acceptsRefresh ? 1 : 0);
       } else {
         const before = h.bodies.length;
         await h.session.prompt("FINISH THE PORTABLE SUMMARY ACROSS PI REFRESH");
         const portable = h.sm.getBranch().filter(entry => entry.type === "custom" && entry.customType === "metisCodexPortableSummary");
-        assert.equal(portable.length, account === "known" ? 1 : 0);
-        assert.equal(h.bodies.length, before + (account === "known" ? 2 : 1));
+        assert.equal(portable.length, acceptsRefresh ? 1 : 0);
+        assert.equal(h.bodies.length, before + (acceptsRefresh ? 2 : 1));
       }
       assert.equal(refreshed, 1, "the native Pi broker must actually refresh between resolution and publication");
-      if (account === "known") assert.deepEqual(h.notices, []);
-      else assert.match(h.notices.join("\n"), /source changed/);
+      if (acceptsRefresh) assert.deepEqual(h.notices, []);
+      else assert.match(h.notices.join("\n"), /OAuth refresh continuity unavailable/);
     });
   }
+});
+
+test("threshold compaction survives the native refresh window with verified login ownership", async t => {
+  for (const refresh of [false, true]) await t.test(refresh ? "refresh margin crossed" : "stable token", async t => {
+    let now = Date.now(), rotations = 0;
+    t.mock.method(Date, "now", () => now);
+    const events = [];
+    const h = await host(t, { routeModel: responsesModel, oauth: true, auto: true, condense: true,
+      credential: { type: "oauth", access: newOAuthKey, refresh: "initial-refresh", clientId: "dynamic_agent_client",
+        expires: now + 361_000 },
+      beforeBind(runtime) {
+        t.mock.method(runtime.getProvider("openai").auth.oauth, "refresh", async credential => {
+          rotations++;
+          return { ...credential, access: "rotated-opaque-access", refresh: "rotated-refresh", expires: now + 3_600_000 };
+        });
+      },
+      response() {
+        if (refresh) now += 62_000;
+        return sse(checkpointEvents());
+      },
+    });
+    const ownsSession = Boolean((await h.runtime.getAuth(responsesModel))?.oauthSessionId);
+    const before = h.sm.getBranch().filter(entry => entry.type === "message").map(entry => entry.id);
+    t.after(h.session.subscribe(event => {
+      if (event.type === "compaction_end") events.push(event);
+    }));
+    await h.session.prompt("CONTINUE THROUGH AUTOMATIC COMPACTION");
+    const accepted = !refresh || ownsSession;
+    assert.equal(rotations, refresh ? 1 : 0, "the clock crossing must execute the native refresh");
+    assert.equal(compactions(h).length, accepted ? 1 : 0);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].reason, "threshold");
+    assert.equal(Boolean(events[0].aborted), !accepted);
+    assert.ok(before.every(id => h.sm.getBranch().some(entry => entry.id === id)));
+    if (accepted) assert.deepEqual(h.notices, []);
+    else {
+      const failure = h.sm.getBranch().find(entry => entry.customType === "metisCodexCompactionFailure").data;
+      assert.equal(failure.status, 200);
+      assert.equal(failure.completed, true);
+      assert.equal(failure.checkpointCount, 1);
+      assert.match(failure.failure, /OAuth refresh continuity unavailable/);
+    }
+  });
+});
+
+test("compaction distinguishes a peer refresh from re-login and external credential replacement", async t => {
+  for (const kind of ["peer-refresh", "relogin", "external-replacement"]) await t.test(kind, async t => {
+    const h = await host(t, { routeModel: responsesModel, oauth: true, beforeBind(runtime) {
+      t.mock.method(runtime.getProvider("openai").auth.oauth, "refresh", async credential => ({
+        ...credential, access: "peer-rotated-access", refresh: "peer-rotated-refresh", expires: Date.now() + 3_600_000,
+      }));
+    }, async response() {
+      const path = join(h.dir, "auth.json"), auth = JSON.parse(readFileSync(path, "utf8"));
+      if (kind === "relogin") {
+        t.mock.method(h.runtime.getProvider("openai").auth.oauth, "login", async () => auth.openai);
+        await h.runtime.login("openai", "oauth", { prompt: async () => "", notify() {} });
+      } else if (kind === "peer-refresh") {
+        auth.openai.expires = 0;
+        writeFileSync(path, JSON.stringify(auth));
+        const peer = await ModelRuntime.create({ authPath: path, modelsPath: null,
+          modelsStorePath: join(h.dir, "peer-models.json"), refreshOnCreate: false });
+        t.mock.method(peer.getProvider("openai").auth.oauth, "refresh", h.runtime.getProvider("openai").auth.oauth.refresh);
+        await peer.getAuth(responsesModel);
+      } else {
+        auth.openai.access = "external-access";
+        auth.openai.refresh = "external-refresh";
+        writeFileSync(path, JSON.stringify(auth));
+      }
+      return sse(checkpointEvents());
+    } });
+    const ownsSession = Boolean((await h.runtime.getAuth(responsesModel))?.oauthSessionId);
+    let accepted = false;
+    if (kind === "peer-refresh") accepted = ownsSession;
+    if (kind === "relogin") accepted = !ownsSession; // Stock Pi cannot identify re-login with identical tokens.
+    if (accepted) await h.session.compact();
+    else await assert.rejects(h.session.compact(), /cancel/i);
+    assert.equal(compactions(h).length, accepted ? 1 : 0);
+    if (accepted) assert.deepEqual(h.notices, []);
+    else assert.match(h.notices.join("\n"), /OAuth login changed|OAuth refresh continuity unavailable/);
+  });
 });
 
 async function rotateOAuth(t, h, catalog = false) {
@@ -595,7 +678,7 @@ test("credential kind changes during compaction prevent publication without a ca
   } });
   await assert.rejects(h.session.compact(), /cancel/i);
   assert.equal(compactions(h).length, 0);
-  assert.match(h.notices.join("\n"), /source changed/);
+  assert.match(h.notices.join("\n"), /Authentication scope changed/);
 });
 
 test("plain API key rotation cannot replay v1 or v2 checkpoints under another tenant", async t => {
@@ -1012,7 +1095,7 @@ test("hybrid compaction cancels without legacy OAuth or when its producer change
     assert.equal(JSON.stringify(history(h)), source);
     assert.equal(compactions(h).length, 0);
     assert.equal(h.bodies.length, kind === "changed" ? 1 : 0);
-    assert.match(h.notices.join("\n"), kind === "changed" ? /Compaction source changed/ : /codex login/);
+    assert.match(h.notices.join("\n"), kind === "changed" ? /Compaction producer changed: Authentication scope changed/ : /codex login/);
   });
 });
 
