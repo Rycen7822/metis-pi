@@ -1,41 +1,34 @@
-# Pi 1.5.0 显式源码补丁
+# Pi 1.5.0 SDK 补丁
 
-唯一基线：[Pi v1.5.0](https://github.com/earendil-works/pi/tree/v1.5.0)，
-提交 `f9a26365568127461c47a07a37dcb42c140a3ac5`。不支持把本补丁集应用到1.4、预发布或其他版本。
-MIT许可保留在[LICENSE.upstream](LICENSE.upstream)。以下实体依赖准备与构建用于Linux/WSL、Node ≥22.19。
+基线为 [Pi v1.5.0](https://github.com/earendil-works/pi/tree/v1.5.0)，提交
+`f9a26365568127461c47a07a37dcb42c140a3ac5`。仅支持该版本；上游 MIT 许可见 [LICENSE.upstream](LICENSE.upstream)。
+这些是 SDK 源码补丁，随 Metis 交付预编译产物。
 
-**这些补丁修改 SDK，不是扩展运行时猴子补丁。** 普通 Metis Git/npm 安装和 `pi update --extensions` 会把随包预编译产物交付到官方 managed Pi 1.5.0。安装器准备独立发行目录、验证完整 CLI 后原子切换启动指针，保留旧目录和个人数据。新进程加载全部六个补丁；已有进程需重启，`/reload` 无法替换 SDK。managed 宿主版本不符时安装命令报错；非 managed 布局只报告补丁未安装，原宿主保持。
+## 补丁作用
 
-本目录用于审查和重建。完成下方源码准备后，执行 `npm run build:pi-sdk -- "$SDK"` 生成 `assets/pi-sdk/pi-1.5.0.tgz` 与交付元数据；`npm run verify:pi-sdk` 校验归档和补丁身份。用户安装无需编译器或额外下载 SDK。
-
-## 顺序与owner
-
-| 补丁 | 职责 |
+| 补丁 | 作用 |
 | --- | --- |
-| 0000 physical workspace bundling | 正式esbuild入口直接解析实体workspace，保留exports/subpath条件，不用软链接拼装依赖。 |
-| 0001 visible row composition | 每个layout root只留上一帧可见行合成，继续执行组件render/布局/选区/复制/scrollbar；不缓存图片，保留1.5裁剪和扫描上界。 |
-| 0003 lazy session bodies | JSONL元数据与UTF-8位置常驻、正文按需读；迁移启动/统计/计费/恢复/压缩等消费者，保留1.5持久化失败回滚与messageMeta。 |
-| 0004 tree previews | 元数据树与有界短预览；完整复制、全文查询、取消、分页及旧getTree合同保留。 |
-| 0005 scan cache admission | 扫描miss不准入正文LRU，命中仍复用/更新热记录；不把一次性扫描变成全局禁用缓存。 |
-| 0006 OAuth login continuity | 原生登录建立归属标识，锁内刷新保留归属；认证来源和标识随同一次请求解析返回，压缩可区分正常刷新与重新登录。 |
+| `0000-physical-workspace-bundling.patch` | 让正式 CLI 构建解析实体 workspace，保留 exports/subpath 规则，解决无软链接构建时的模块解析。 |
+| `0001-reuse-visible-row-composition.patch` | 复用上一帧可见行的合成结果，减少重复拼接；组件 render、布局、选区、复制和滚动仍由 Pi 执行。 |
+| `0003-load-session-bodies-on-demand.patch` | 常驻历史元数据，按需读取 JSONL 正文；同步调整启动、统计、恢复和压缩等消费者。 |
+| `0004-preview-session-trees-without-history-bodies.patch` | 树浏览使用元数据和有界预览，完整复制、全文查询、分页与取消保留原语义。 |
+| `0005-preserve-hot-bodies-during-history-scans.patch` | 扫描命中时复用热正文，未命中内容只供本次读取，避免一次性扫描挤占正文缓存。 |
+| `0006-preserve-oauth-login-continuity.patch` | 由原生认证层区分登录归属与 token 刷新，使正常刷新期间的压缩结果仍可采用；新登录和外部凭据替换改变归属。 |
 
-编号0002不再交付：上游`0f21a3319`已提供assistant markdownSlots、Markdown块缓存和Text更新短路，
-无需叠加旧正文复用实现。动态transform、thinking、streaming、主题与padding继续服从1.5原生owner。
+按编号顺序应用。`0002` 对应能力已被上游覆盖，编号留空。
 
-文件正文LRU按序列化UTF-8字节计16 MiB，普通读复用至多1 MiB Buffer；单条超预算仍完整读，不假装截断或缓存。
-预算不是进程heap/RSS硬限制；不持有长期FD，不加持久索引或内容hash。内存会话/显式预加载仍eager。
-元数据API不带正文；独立树预览每条至多200个UTF-16单元，短字符串脱离大parent。
-查询按8ms工作片让出事件循环；复制/显式旧历史读取、JSONL v3及旧格式迁移不缩减语义。
+## 安装与生效
 
-SDK `_appendEntry`保留失败后的store/索引/leaf回滚；后续条目不得指向未写入的parent。
-保留1.5 context-edit branch summary、单FD fork、Windows pathsEqual、原生OAuth summary与图片修复。
-Metis的`src/session-history.ts`集中探测元数据能力：stock1.5回退完整读取，补丁版使用按需能力；
-这是同版stock/补丁形态，不是继续承诺1.4兼容。第三方长期持有完整正文仍会占内存。
+- 官方 managed 布局的 Node Pi 1.5.0：普通 Git/npm 安装或 `pi update --extensions` 自动交付全部补丁，用户侧无需编译。
+- 安装器与 Pi 自更新共用锁，准备完整新发行目录、验证 CLI 后原子切换启动指针；旧目录、依赖和个人数据保留。
+- 已有进程继续使用原 SDK，重启 Pi 后加载新目录；`/reload` 仅重载扩展。启动入口为本地包、禁用安装脚本等情况提供安装兜底，并提示重启。
+- managed 宿主版本不符时安装命令报错；非 managed 布局只提示补丁未安装，原宿主保持。
+- `pi --version` 仍显示 `1.5.0`。补丁状态以当前发行目录的 `metis-sdk.json` 为准，其中记录源码补丁身份、归档校验值和上一发行目录。
 
-## 隔离准备与应用
+## 隔离重建
 
-`METIS`是当前完整Metis开发目录（已安装精确Pi1.5依赖）；`SDK`必须是新建隔离目录，不能是用户安装目录。
-所有npm安装禁用workspace/bin链接和脚本。配方复用同版发布产物给未修改workspace，不冒称重编译整个monorepo。
+使用 Linux/WSL、Node ≥22.19 和完整 Metis checkout。Metis 开发依赖须已安装；开发准备使用
+`--ignore-scripts --bin-links=false`，避免触发个人安装。`SDK` 必须是新的隔离目录。
 
 ```bash
 METIS=/absolute/path/to/metis-pi
@@ -58,73 +51,34 @@ for patch in "$PATCHES"/000*.patch; do
   git apply --check "$patch" || exit
   git apply "$patch" || exit
 done
+npm --prefix "$METIS" run build:pi-sdk -- "$SDK"
+npm --prefix "$SDK" run check
+npm --prefix "$METIS" run verify:pi-sdk
 ```
 
-额外依赖来自1.5声明，包含上游完整check需要的schema benchmark类型；不是Metis新依赖。
-准备工具校验同版ai/tui/coding-agent/schema，拒绝目标软链接，保留根工具链，复制缺失/nested实体依赖、
-十个未改workspace的同版dist及模型数据，`.bin`用普通shell文件。正常无nested目录不再报错，其他I/O错误不吞。
-1.5已用`scripts/package-files.mjs`代替shx，配方不再依赖shx或旧模型生成入口。
+`prepare-build.mjs` 校验同版依赖、复制实体依赖与模型数据，并生成普通文件形式的工具入口。
+未修改的 workspace 复用同版发布产物。额外测试依赖用于上游完整 check，属于构建环境。
 
-## 正式检查与构建
+`build:pi-sdk` 先核对 Git 基线，再重放六个补丁并比对源码，随后正式构建 ai、tui、coding-agent。
+产物为 `assets/pi-sdk/pi-1.5.0.tgz` 和 `src/pi-sdk/distribution.json`；prepack 会检查两者与补丁是否一致。
+发布前还应运行受影响的 SDK 认证、历史或 TUI 测试，以及 Metis 宿主与安装测试。
+SDK check 若改写源码，须先同步补丁，再重新构建归档。
 
-```bash
-npm --prefix packages/ai run build:offline
-cp -a packages/ai/dist/. node_modules/@earendil-works/pi-ai/dist/
-npm run check
-npm --prefix packages/tui run build
-npm --prefix packages/coding-agent run build
-(cd packages/ai && node ../../node_modules/vitest/dist/cli.js --run \
-  test/models-runtime.test.ts test/oauth-auth.test.ts test/oauth-continuity.test.ts \
-  test/openai-chatgpt-oauth.test.ts test/openai-codex-oauth.test.ts)
-(cd packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run \
-  test/model-registry.test.ts test/model-runtime-auth-options.test.ts test/model-runtime-credential-sync.test.ts \
-  test/auth-storage.test.ts test/runtime-credentials.test.ts test/credential-print.test.ts)
-(cd packages/tui && node --test test/layout.test.ts test/tui-alt-screen.test.ts test/wheel-scroll.test.ts)
-(cd packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run --maxWorkers=2 \
-  test/assistant-message.test.ts test/max-thinking.test.ts test/codemode-renderer.test.ts \
-  test/session-manager test/session-context-edit.test.ts test/agent-session-stats.test.ts \
-  test/cache-stats.test.ts test/cache-warmer.test.ts test/virtual-models.test.ts \
-  test/interactive-mode-assistant-diagnostics.test.ts test/interactive-mode-compaction.test.ts \
-  test/tree-selector.test.ts test/agent-session-tree-navigation.test.ts test/interactive-mode-tree-navigation.test.ts \
-  test/suite/regressions/9178-tree-during-compaction.test.ts test/suite/regressions/tree-during-streaming.test.ts \
-  test/suite/regressions/2860-replaced-session-context.test.ts test/suite/regressions/3688-tree-cancel-compacting.test.ts)
-```
+## 关键约束
 
-产物为ai/tui/coding-agent的`dist/`，正式CLI入口为coding-agent的`dist/bundle/cli.js`。
-实际CLI必须包含本workspace代码；不能只核build exit0或只替换某个chunk。最终安装需一致交付包、TUI、
-coding-agent、bundle和资源并重启宿主/worker；`/reload`不能换已加载核心。用户配置、历史、tokens和blobs不属清理对象。
-显示版本仍为上游1.5.0，应明确称“1.5.0 + 本补丁集”，不是官方原版或新的官方版本。
+- 三个 SDK 包的完整 dist、CLI bundle 和资源作为一组交付；局部替换容易混用模块实例。依赖使用实体副本。
+- 历史格式、迁移、context edit、图片及持久化失败回滚沿用 Pi 1.5。
+  正文 LRU 按序列化 UTF-8 字节计 16 MiB，普通读取复用至多 1 MiB Buffer；超预算单条完整读取并跳过缓存。
+  树预览每条至多 200 个 UTF-16 单元。缓存预算与进程总内存分开，第三方长期持有的正文仍占内存。
+- OAuth 登录标识用于执行中的归属检查，信任边界为本机凭据存储；账户、路由、headers 和持久检查点范围仍由调用方校验。旧凭据读取保持原样，原生登录或成功刷新时才写入连续性元数据。
+- 补丁增删需同步 `scripts/pi-sdk.mjs`、`src/pi-sdk/artifact.mjs` 的数量校验，并重建归档和元数据。
+  升级 Pi 时重新核对上游实现和版本约束，保留仍有必要的补丁。
 
-## 本轮开发验证（2026-11-04）
+## 撤回与清理
 
-本机Linux/WSL、Node24.15.0；不是Windows/Node22、用户现有终端或付费provider验收。
-- SDK完整check通过，包含依赖/导入图/install-lock、类型和browser smoke。
-- 正式两包构建通过，CLI bundle 82文件、约8.9 MiB。
-- 五补丁从原版1.5干净重放后，29个变更/新增文件与本次构建源码逐一字节比较一致。
-- 最近TUI 93项通过；SDK session/tree/assistant等260项通过，10项按上游既有无密钥条件跳过。
-- 将新TUI与coding-agent完整dist放入实体测试包，Metis界面/复制/历史/压缩/OCC/MCP等418项通过，0skip。
-- 真实新CLI的离线tmux E2/E4通过，使用临时HOME、本地provider与剪贴板sink；不触及用户桌面剪贴板。
-- 129×59、两格侧边的布局实验ABBA每臂两例、各240帧：稳定行CPU均值132.85→4.02ms，
-  所有行持续变化控制154.04→161.80ms（约+5.0%）。各样本最终完整ANSI帧一致；不是每帧/端到端/P95保证。
-- 2049条、约39.3 MiB的Unicode历史：两臂模型上下文均9条、完整扫描和热正文身份一致。
-  单次新进程实验、显式lab GC后新增heap约54.59→2.17 MiB；这不是自然RSS平台、24小时保证或整机速度结论。
+先暂停 Metis 安装/更新并禁用 `extensions/pi-sdk.ts`，或移除 Metis，避免自动安装入口再次触发。
+将安装根目录的 `current-version` 恢复为当前 `metis-sdk.json` 中的 `previousRelease`，再重启 Pi。
+恢复原版时应选择保留的官方发行目录。通常安装根目录为 `~/.pi/agent/install`，实际路径以 Pi launcher 为准。
 
-脚本/原始失败/对照/退出码见`.work/pi-1.5-upgrade-20261104/`，不随运行时代码交付；
-旧1.4数字不沿用，未做全量SDK测试、自然长期RSS/CPU或Windows图形/剪贴板验证，也未安装用户SDK。
-
-## OAuth 登录连续性
-
-`0006` 由 Pi 的认证解析和凭据存储维护归属，Metis 只消费 `source` 与 `oauthSessionId`。新登录生成新 ID，原生刷新在存储锁内保留当前 ID；跨进程通过同一凭据文件延续。原有凭据无需重新登录，读取也无需写回。
-
-OAuth 凭据中的 `authSession` 将 ID 绑定到当前 access/refresh token 对。这里的 SHA-256 只用于识别带旧元数据的外部凭据替换，输入是单份凭据；账户、路由、headers 和 provider 的检查仍由请求消费者承担。它以凭据存储为信任边界，无法防止有权修改凭据和元数据的本机程序伪造状态。
-
-登录和成功刷新才写入元数据；失败刷新保留原凭据。原版宿主或其他程序轮换 token 而未更新绑定时，下一次读取按新归属处理。此标识只用于执行中的结果提交，持久检查点的账户范围规则保持原样。
-
-构建时先生成 ai 并实体复制到隔离依赖，再构建 tui 和 coding-agent；`build:pi-sdk` 已包含这些步骤。最终归档同时交付三个完整 dist 和 CLI bundle，安装器沿用 Pi 的 update 锁串行切换发行目录；`metis-sdk.json` 记录补丁身份、归档校验值和上一发行目录，可据此恢复启动指针；同一补丁源码重新构建了不同产物时，也会采用新归档。Metis 更新会创建新快照；卸载扩展保留 SDK 快照，避免破坏仍在使用它的进程。
-
-2026-11-09 在 Node 24.15.0/Linux/WSL 完成：SDK 完整 check、ai 与 coding-agent 正式构建、81 项 ai 认证/模型测试和 149 项宿主认证/存储测试通过；Metis 压缩、Condense、Goal 及压缩显示在原版与补丁版 SDK 下各 283 项通过，三组类型检查均通过。全部补丁从干净 v1.5.0 重放后，35 个变更路径与构建源逐字节一致。独立子进程刷新同一临时凭据文件的实验也确认了归属连续性；外部替换和同 token 重登会改变归属。以上为离线验证，未连接真实 provider 或安装用户 SDK。
-
-## 维护与撤回
-
-后续升级重新核owner/合同，再移植仍必要的能力；已上游覆盖的实现删除，不为保持旧diff应用而覆盖新修复。
-未安装时撤回只涉及代码/补丁；安装后必须恢复完整同版官方SDK并重启，不能靠局部文件或扩展reload回滚核心。
+卸载 Metis 会保留 SDK 快照；清理备份或中断遗留的暂存目录前，先确认相关进程已退出。
+保持完整发行目录进行恢复，个人认证、设置、会话和 blobs 留在原处。
