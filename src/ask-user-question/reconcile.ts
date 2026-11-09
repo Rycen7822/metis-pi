@@ -4,9 +4,9 @@ import { ASK_USER_QUESTION_TOOL_NAME, registerAskUserQuestionTool } from "./ask-
 import { type AskUserQuestionConfig, loadConfig } from "./config.ts";
 
 const ownerPath = fileURLToPath(new URL("../../extensions/ask-user-question.ts", import.meta.url));
-const guidance = "For a blocking decision, discover ask_user_question with codemode " +
+const guidance = "For a user decision, discover ask_user_question with codemode " +
 	"describeTool('ask_user_question'), then await tools.ask_user_question(args).";
-const searchGuidance = "For a blocking decision, discover ask_user_question with tool_search, " +
+const searchGuidance = "For a user decision, discover ask_user_question with tool_search, " +
 	"then call it with the discovered parameters.";
 
 /** Deferred availability follows UI/config; discovery never auto-activates the questionnaire. */

@@ -23,7 +23,7 @@ import {
 	rowBudgetForHost,
 	YIELD_TO_OVERLAY,
 } from "./presentation.ts";
-import { type DialogUI, runRpcQuestionnaire } from "./rpc-fallback.ts";
+import { runRpcQuestionnaire } from "./rpc-fallback.ts";
 import { displayLabel, t } from "./state/i18n-bridge.ts";
 import { sentinelsToAppend } from "./state/row-intent.ts";
 import { prepareQuestionArguments } from "./tool/normalize-params.ts";
@@ -39,6 +39,7 @@ import {
 	QuestionParamsSchema,
 } from "./tool/types.ts";
 import { validateQuestionnaire } from "./tool/validate-questionnaire.ts";
+import { waitForQuestionnaire } from "./tool/wait.ts";
 import type { QuestionRow } from "./state/row-intent.ts";
 
 function emitAskUserPromptEvent(pi: ExtensionAPI, params: QuestionParams): void {
@@ -75,12 +76,22 @@ function rejectWithoutUi() {
 	return buildToolResult(ERROR_NO_UI, { answers: [], cancelled: true, error: "no_ui" });
 }
 
-/** Sequential native-dialog walker for RPC hosts; brackets it with the blocked-event pair + terminal bell. */
-async function runRpcPath(pi: ExtensionAPI, ui: DialogUI, typed: QuestionParams, signal?: AbortSignal) {
+/** Both hosts share one deadline and blocked lifecycle; switching mounts does not restart either. */
+async function runQuestionnaireWait(
+	pi: ExtensionAPI,
+	typed: QuestionParams,
+	signal: AbortSignal | undefined,
+	open: (signal: AbortSignal | undefined) => Promise<QuestionnaireResult | undefined>,
+) {
 	emitAskUserBlockedEvent(pi, true);
 	try {
 		emitTerminalAttention();
-		return buildQuestionnaireResponse(await runRpcQuestionnaire(ui, typed, signal), typed);
+		const result = await waitForQuestionnaire(typed, signal, open);
+		// No rendered UI is not a user decline; do not open another dialog.
+		if (result === undefined) {
+			return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
+		}
+		return buildQuestionnaireResponse(result, typed);
 	} finally {
 		emitAskUserBlockedEvent(pi, false);
 	}
@@ -401,6 +412,7 @@ export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	`Use ask_user_question whenever the user's request is underspecified and you cannot proceed without concrete decisions — you can ask up to ${MAX_QUESTIONS} questions per invocation.`,
 	`Each question MUST have ${MIN_OPTIONS}-${MAX_OPTIONS} options. Every option requires a concise label (1-5 words) and a description explaining what the choice means or its trade-offs. The user can additionally type a custom answer via the automatically appended "Type something." row on every question, or press Esc to abandon the questionnaire. Do NOT author "Other" or "Type something." labels yourself — reserved labels are rejected at runtime.`,
 	`Set multiSelect: true when multiple answers are valid. Provide an options[].preview markdown string when an option benefits from richer side-by-side context (mockups, code snippets, diagrams, configs) — single-select only. The "Type something." row is appended to every question; in preview mode it expands to the full pane width while typing so the custom answer is not cramped into the narrow options column. If you recommend a specific option, make that the first option and append "(Recommended)" to its label.`,
+	'Choose mode: "blocking" (default) for required decisions; "skip" returns after 10 minutes without submission. Timeout is not approval.',
 	"Do not stack multiple ask_user_question calls back-to-back — group all clarifying questions into one invocation.",
 ];
 
@@ -409,6 +421,11 @@ export const DEFAULT_TOOL_DESCRIPTION = `Ask the user one or more structured que
 2. Clarify ambiguous instructions
 3. Get decisions on implementation choices as you work
 4. Offer choices to the user about what direction to take
+
+Waiting modes:
+- mode: "blocking" (default) waits until the user submits or cancels.
+- mode: "skip" waits at most 10 minutes for the whole questionnaire, then closes it and returns timedOut so you can continue.
+- Use blocking for required decisions or authorization. A timeout is not consent; continue only work that does not need the missing answer.
 
 Usage notes:
 - Users can type a custom answer via the automatically appended "Type something." row on every question or press Esc to abandon the questionnaire. Do NOT author "Other" or "Type something." labels yourself — reserved labels are rejected at runtime.
@@ -461,7 +478,7 @@ export function registerAskUserQuestionTool(
 
 			// Pi's RPC UI supports native select/input, not custom TUI components.
 			if (ctx.mode === "rpc") {
-				return runRpcPath(pi, ctx.ui, typed, signal);
+				return runQuestionnaireWait(pi, typed, signal, waitingSignal => runRpcQuestionnaire(ctx.ui, typed, waitingSignal));
 			}
 
 			const itemsByTab: QuestionRow[][] = typed.questions.map((q) => buildItemsForQuestion(q));
@@ -478,27 +495,18 @@ export function registerAskUserQuestionTool(
 			// via the `collapseKey` config field. `resolveCollapseKey` also accepts the
 			// sentinel value `"off"` to disable the shortcut entirely.
 			const collapseKey = resolveCollapseKey(loadConfig());
-			const mount = (presentation: Presentation) =>
-				mountQuestionnaire({ ctx, typed, itemsByTab, collapseKey, presentation, Session: QuestionnaireSession, signal });
-
-			emitAskUserBlockedEvent(pi, true);
-			try {
-				emitTerminalAttention();
+			return runQuestionnaireWait(pi, typed, signal, async waitingSignal => {
+				const mount = (presentation: Presentation) => mountQuestionnaire({
+					ctx, typed, itemsByTab, collapseKey, presentation, Session: QuestionnaireSession, signal: waitingSignal,
+				});
 				let result = await mount(INLINE_PRESENTATION);
 				if (result === YIELD_TO_OVERLAY) {
 					// Stay visible above another overlay (see mustYieldInlineSlot).
 					result = await mount(OVERLAY_PRESENTATION);
 				}
 
-				// No rendered UI is not a user decline; do not open another dialog.
-				if (result === undefined) {
-					return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
-				}
-
-				return buildQuestionnaireResponse(result, typed);
-			} finally {
-				emitAskUserBlockedEvent(pi, false);
-			}
+				return result;
+			});
 		},
 	});
 

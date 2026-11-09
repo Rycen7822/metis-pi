@@ -21,6 +21,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { displayLabel, t } from "./state/i18n-bridge.ts";
 import type { QuestionAnswer, QuestionData, QuestionnaireResult, QuestionParams } from "./tool/types.ts";
+import { QUESTIONNAIRE_TIMEOUT } from "./tool/wait.ts";
 
 /**
  * Canonical-English fallbacks; resolved through `t()` at dialog time so the
@@ -78,14 +79,20 @@ export async function runRpcQuestionnaire(ui: DialogUI, params: QuestionParams, 
 		input: async (title, placeholder) => { const value = await ui.input(title, placeholder, { signal }); signal.throwIfAborted(); return value; },
 	} : ui;
 	const answers: QuestionAnswer[] = [];
-	for (let qi = 0; qi < params.questions.length; qi++) {
-		const q = params.questions[qi];
-		const header = q.header ? `[${q.header}] ` : "";
-		const answer = q.multiSelect ? await askMultiSelect(dialogs, q, qi, header) : await askSingleSelect(dialogs, q, qi, header);
-		if (answer === undefined) return { answers, cancelled: true };
-		answers.push(answer);
+	try {
+		for (let qi = 0; qi < params.questions.length; qi++) {
+			const q = params.questions[qi];
+			const header = q.header ? `[${q.header}] ` : "";
+			const answer = q.multiSelect ? await askMultiSelect(dialogs, q, qi, header) : await askSingleSelect(dialogs, q, qi, header);
+			if (answer === undefined) return { answers, cancelled: true };
+			answers.push(answer);
+		}
+		return { answers, cancelled: false };
+	} catch (error) {
+		if (error !== QUESTIONNAIRE_TIMEOUT || signal?.reason !== QUESTIONNAIRE_TIMEOUT) throw error;
+		// Earlier RPC dialogs have already committed their answers; retain them on timeout.
+		return { answers, cancelled: true, timedOut: true };
 	}
-	return { answers, cancelled: false };
 }
 
 /**

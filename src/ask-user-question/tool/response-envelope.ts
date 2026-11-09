@@ -6,18 +6,12 @@ export const ENVELOPE_PREFIX = "User has answered your questions:";
 export const ENVELOPE_SUFFIX = "You can now continue with the user's answers in mind.";
 
 /**
- * Map a `QuestionnaireResult` (or null/cancelled) to the LLM-facing tool envelope.
- * Pure of `(result, params)`; cancelled and "no segments" both fall to `DECLINE_MESSAGE`
- * so the model sees a single canonical "didn't answer" signal regardless of why.
- * "No segments" means no answers AND no global note — the `global note:` segment is
- * pushed before the zero-segments check, so a note-bearing submit with zero answers
- * still yields the answered envelope. A partial submit names the questions left blank
- * in an `unanswered:` segment (and `details.unanswered`, their indexes) so the model can
- * tell "not decided yet" from "settled" (#291); it never counts as an answer, and a fully
- * answered result stays byte-identical.
+ * Keep explicit declines distinct from timeouts, retaining answers/notes in details.
+ * Format answers in question order; partial submissions name missing questions.
+ * A global note alone is a valid response, even with no answered questions.
  */
 export function buildQuestionnaireResponse(result: QuestionnaireResult | null | undefined, params: QuestionParams) {
-	if (!result || result.cancelled) {
+	if (!result || (result.cancelled && !result.timedOut)) {
 		// Decline text stays canonical even when a global note rides the cancelled result;
 		// the note survives in `details` (like partial `answers`) for replay consumers.
 		return buildToolResult(DECLINE_MESSAGE, {
@@ -32,6 +26,14 @@ export function buildQuestionnaireResponse(result: QuestionnaireResult | null | 
 		const a = result.answers.find((x) => x.questionIndex === i);
 		if (a) segments.push(buildAnswerSegment(a));
 		else unanswered.push(i);
+	}
+	if (result.timedOut) {
+		const received = segments.length > 0 ? ` Answers already received: ${segments.join(" ")}` : "";
+		return buildToolResult(
+			"User did not submit the complete questionnaire within 10 minutes. The questionnaire timed out." + received +
+				" Continue work that does not require the missing answers. This timeout is not a user decision or approval.",
+			{ ...result, unanswered },
+		);
 	}
 	const hasGlobalNote = result.globalNote !== undefined && result.globalNote.length > 0;
 	if (segments.length === 0 && !hasGlobalNote) {

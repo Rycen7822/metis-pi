@@ -139,7 +139,9 @@ test("native tool_search loads questions on demand and later turns preserve the 
   assert.ok(f.session.getActiveToolNames().includes("ask_user_question"));
 });
 
-test("real SDK RPC abort propagates through custom-answer input without reopening the dialog", { timeout: 10000 }, async t => {
+for (const mode of ["blocking", "skip"] as const) test(
+  `real SDK RPC ${mode === "skip" ? "timeout" : "abort"} closes custom-answer input without reopening the dialog`,
+  { timeout: 10000 }, async t => {
   const f = await fixture(t, true);
   await f.session.prompt("Offline execution context");
   const controller = new AbortController();
@@ -153,10 +155,18 @@ test("real SDK RPC abort propagates through custom-answer input without reopenin
     entered();
   })) as any;
   await f.session.bindExtensions({ mode: "rpc", uiContext: f.ui as any });
-  const pending = f.ctx.executeTool("ask_user_question", args, { signal: controller.signal });
+  if (mode === "skip") t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = f.ctx.executeTool("ask_user_question", { ...args, mode }, { signal: controller.signal });
   await Promise.race([waiting, pending.then((value: any) => { throw new Error(`Dialog never opened: ${JSON.stringify(value)}`); })]);
-  controller.abort();
-  assert.equal((await pending).isError, true);
+  if (mode === "skip") t.mock.timers.tick(600_000);
+  else controller.abort();
+  const outcome = await pending;
+  assert.equal(outcome.isError, mode === "blocking");
+  if (mode === "skip") {
+    assert.equal(outcome.result.details.timedOut, true);
+    assert.deepEqual(outcome.result.details.answers, []);
+    assert.match(output(outcome.result), /not a user decision or approval/);
+  }
   assert.equal(selections, 1);
   f.ui.select = async (_title, options) => options[0];
   f.ui.input = async () => "typed";

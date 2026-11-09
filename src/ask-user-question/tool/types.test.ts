@@ -148,6 +148,14 @@ describe("QuestionSchema — option/preview/multiSelect/header shape", () => {
 });
 
 describe("QuestionParamsSchema — top-level shape", () => {
+	it.each(["blocking", "skip"])("accepts the %s waiting mode", mode => {
+		expect(Value.Check(QuestionParamsSchema, { questions: [makeQuestion()], mode })).toBe(true);
+	});
+
+	it.each(["optional", null, 600])("rejects invalid waiting mode %s", mode => {
+		expect(Value.Check(QuestionParamsSchema, { questions: [makeQuestion()], mode })).toBe(false);
+	});
+
 	it("accepts { questions: [...] }", () => {
 		expect(Value.Check(QuestionParamsSchema, { questions: [makeQuestion()] })).toBe(true);
 	});

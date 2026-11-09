@@ -60,6 +60,11 @@ export const QuestionsSchema = Type.Array(QuestionSchema, {
 
 export const QuestionParamsSchema = Type.Object({
 	questions: QuestionsSchema,
+	mode: Type.Optional(Type.Union([Type.Literal("blocking"), Type.Literal("skip")], {
+		default: "blocking",
+		description: '"blocking" waits indefinitely (default). "skip" returns timedOut after 10 minutes without submission. ' +
+			"Use blocking for required decisions or authorization; a timeout is not approval.",
+	})),
 });
 
 export type QuestionData = Static<typeof QuestionSchema>;
@@ -102,12 +107,15 @@ export type QuestionnaireError =
 	| "duplicate_question"
 	| "duplicate_option_label"
 	| "reserved_label"
+	| "invalid_mode"
 	| "session_load_failed"
 	| "stale_module_cache";
 
 export interface QuestionnaireResult {
 	answers: QuestionAnswer[];
 	cancelled: boolean;
+	/** Set only when skip mode reaches its deadline, not when the user declines or execution aborts. */
+	timedOut?: boolean;
 	/**
 	 * Global note authored on the Submit tab: `n` opens the shared notes editor there,
 	 * and the committed text lives at the `notesByTab[questions.length]` pseudo-index
@@ -120,9 +128,8 @@ export interface QuestionnaireResult {
 	 */
 	globalNote?: string;
 	/**
-	 * Indexes of the questions left blank on a partial submit (#291), set only by the
-	 * envelope builder on an answered result — never present when every question is
-	 * answered or the result is a decline, so those stay byte-identical.
+	 * Indexes left blank on a partial submit (#291) or timeout, set by the envelope
+	 * builder. Absent on a fully answered result or an ordinary decline.
 	 */
 	unanswered?: number[];
 	error?: QuestionnaireError;

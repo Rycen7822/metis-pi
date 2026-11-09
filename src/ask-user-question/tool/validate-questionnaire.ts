@@ -17,6 +17,9 @@ export type ValidationResult = { ok: true } | { ok: false; error: QuestionnaireE
  * `reserved_label` MUST short-circuit before `duplicate_option_label`.
  */
 export function validateQuestionnaire(typed: QuestionParams): ValidationResult {
+	if (typed.mode !== undefined && typed.mode !== "blocking" && typed.mode !== "skip") {
+		return { ok: false, error: "invalid_mode", message: 'Error: mode must be "blocking" or "skip"' };
+	}
 	if (typed.questions.length === 0) {
 		return { ok: false, error: "no_questions", message: ERROR_NO_QUESTIONS };
 	}
