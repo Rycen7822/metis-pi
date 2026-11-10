@@ -13,6 +13,7 @@ const DEFINITION_OWNER = Symbol.for("metis-pi.codemode-definition-observer.v1");
 const SANDBOX_OWNER = Symbol.for("metis-pi.codemode-sandbox-observer.v1");
 const MAX_ACTIONS = 128; // Bound persisted helper metadata; keep recent actions like the native call preview.
 const MAX_ARGUMENT_CHARS = 200; // Same argument-preview bound as native codemode calls; never copy full helper results.
+const MAX_DISCOVERY_NAMES = 8; // Names only; declarations and descriptions stay in the original result.
 
 class ActionRun {
   readonly calls: CodemodeAction[] = [];
@@ -60,6 +61,11 @@ class ActionRun {
       this.refresh();
       try {
         const value = await original.call(global, args, context);
+        if (name === "searchTools" && Array.isArray(value)) {
+          call.discovery = { count: value.length, names: value.slice(0, MAX_DISCOVERY_NAMES)
+            .map(item => asRecord(item).name).filter((name): name is string => typeof name === "string")
+            .map(name => name.slice(0, MAX_ARGUMENT_CHARS)) };
+        }
         call.status = "ok";
         return value;
       } catch (error) {

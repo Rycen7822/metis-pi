@@ -18,6 +18,8 @@ export interface CodemodeAction {
   beforeCall: number;
   status: "running" | "ok" | "error" | "cancelled";
   error?: string;
+  /** Search result count and a bounded list of names, never tool schemas or descriptions. */
+  discovery?: { count: number; names: string[] };
 }
 
 export interface CodemodeActions {
@@ -39,10 +41,15 @@ export function readCodemodeActions(details: unknown): CodemodeActions {
       || !Array.isArray(row.arguments) || !row.arguments.every(value => typeof value === "string")
       || !Number.isSafeInteger(row.beforeCall) || Number(row.beforeCall) < 0
       || !["running", "ok", "error", "cancelled"].includes(String(row.status))) continue;
+    const result = asRecord(row.discovery);
+    const discovery = row.name === "searchTools" && typeof result.count === "number" && Number.isSafeInteger(result.count)
+      && Array.isArray(result.names) && result.names.every(name => typeof name === "string") && result.count >= result.names.length
+      ? { count: result.count, names: result.names } : undefined;
     calls.push({
       id: row.id, name: row.name, arguments: row.arguments, beforeCall: Number(row.beforeCall),
       status: row.status as CodemodeAction["status"],
       ...(typeof row.error === "string" ? { error: row.error } : {}),
+      ...(discovery ? { discovery } : {}),
     });
   }
   return { calls, omitted: Number.isSafeInteger(data.omitted) && Number(data.omitted) > 0 ? Number(data.omitted) : 0 };

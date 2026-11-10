@@ -517,9 +517,17 @@ function helperSummary(action: CodemodeAction, theme: Palette, expanded: boolean
   const previewLimit = 80; // Match the native compact argument preview; details stay independently expandable.
   const preview = !expanded && target.length > previewLimit ? `${target.slice(0, previewLimit - 1)}…` : target;
   const title = theme.fg("toolTitle", theme.bold(CODEMODE_HELPERS[action.name]));
-  const details = expanded ? `\n  ${theme.fg("dim", `Status: ${action.status}`)}` : "";
+  const discovery = action.discovery;
+  const count = discovery ? theme.fg("dim", ` · ${discovery.count} ${discovery.count === 1 ? "tool" : "tools"}`) : "";
+  let details = expanded ? `\n  ${theme.fg("dim", `Status: ${action.status}`)}` : "";
+  if (expanded && discovery?.names.length) {
+    let names = safeText(discovery.names.join(", "));
+    const omitted = discovery.count - discovery.names.length;
+    if (omitted) names += `, … ${omitted} more`;
+    details += `\n  ${theme.fg("dim", `Tools: ${names}`)}`;
+  }
   const error = expanded && action.error ? `\n  ${theme.fg("error", safeText(action.error))}` : "";
-  return `${icon} ${title}${preview ? ` ${preview}` : ""}${details}${error}`;
+  return `${icon} ${title}${preview ? ` ${preview}` : ""}${count}${details}${error}`;
 }
 
 function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expanded: boolean): string {
