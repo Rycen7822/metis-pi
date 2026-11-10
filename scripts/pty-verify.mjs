@@ -168,6 +168,8 @@ fs.writeFileSync(path.join(AGENT_DIR, "settings.json"), JSON.stringify({
   quietStartup: true,
   tuiMode: "fullscreen",
   packages: [],
+  // Metis owns discovery; explicitly disable the replaced builtin in this isolated profile.
+  extensions: ["-builtin:tool-search"],
 }));
 // Avoid the vendor alt+q/Pi built-in collision, which adds an extension-issues banner.
 fs.writeFileSync(path.join(AGENT_DIR, "metis-pi.toml"), '[execution.ui]\nbackgroundShellPrevShortcut="alt+u"\n');
