@@ -20,9 +20,7 @@ async function fixture(t, { version = "1.5.2", cliVersion = "1.5.2" } = {}) {
   const pkg = path.join(dir, "metis"), managedRoot = path.join(dir, "agent/install");
   const source = path.join(managedRoot, "releases", version);
   const sdkDir = (release, name) => path.join(release, "node_modules/@earendil-works", `pi-${name}`);
-  await mkdir(path.join(pkg, "src/pi-sdk"), { recursive: true });
-  for (const file of ["install.mjs", "artifact.mjs"])
-    await cp(path.join(root, "src/pi-sdk", file), path.join(pkg, "src/pi-sdk", file));
+  await cp(path.join(root, "src/pi-sdk"), path.join(pkg, "src/pi-sdk"), { recursive: true });
   for (const name of sdkPackages) {
     await mkdir(path.join(sdkDir(source, name), "dist/bundle"), { recursive: true });
     await writeFile(path.join(sdkDir(source, name), "package.json"),
@@ -91,12 +89,20 @@ test("normal SDK install activates all packages together and retains source and 
   await h.preserved();
 });
 
-test("updated package replaces the snapshot while preserving both previous runtimes", async t => {
+test("package postinstall replaces the snapshot while preserving both previous runtimes", async t => {
   const h = await fixture(t);
   await h.ensureSDK({ managedRoot: h.managedRoot });
   const previous = await h.active();
   await h.payload("updated-sdk");
-  await h.ensureSDK({ managedRoot: h.managedRoot });
+  await cp(path.join(root, "src/neural-search/runtime"), path.join(h.pkg, "src/neural-search/runtime"), { recursive: true });
+  await cp(path.join(root, "package.json"), path.join(h.pkg, "package.json"));
+  const command = "npm run postinstall --ignore-scripts";
+  await run(process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm",
+    process.platform === "win32" ? ["/d", "/s", "/c", command] : ["run", "postinstall", "--ignore-scripts"], {
+      cwd: h.pkg, timeout: 30_000, windowsHide: true,
+      // Semantic setup is separately tested; its supported external override prevents downloads here.
+      env: { ...process.env, PI_MANAGED_INSTALL_ROOT: h.managedRoot, SGREP_RUNTIME_DIR: h.dir },
+    });
   assert.notEqual(await h.active(), previous);
   const active = path.join(h.managedRoot, "releases", await h.active());
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(active, name), "dist/owner.txt"), "utf8"), "updated-sdk");

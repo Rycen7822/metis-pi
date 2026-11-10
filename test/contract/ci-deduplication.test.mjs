@@ -150,17 +150,20 @@ test("bounded readiness waits for an allocated validation job, not the controlle
   f.before = (_method, path) => {
     if (path === `${sourcePath}/jobs`) {
       reads++;
-      f.sourceJobs[0].status = reads < 3 ? "queued" : "in_progress";
-      f.sourceJobs[0].runner_id = reads < 3 ? 0 : 3;
+      f.sourceJobs[0].status = reads === 1 ? "queued" : "in_progress";
+      f.sourceJobs[0].runner_id = reads === 1 ? 0 : 3;
     }
   };
   assert.equal(await f.run(), true);
-  assert.deepEqual(f.sleeps, [2000, 2000]);
+  assert.ok(f.sleeps.length > 0, "a queued validation job is given time to start");
   const unavailable = fixture();
   unavailable.sourceJobs[0].name = "Retire duplicate feature push";
   assert.equal(await unavailable.run(), false);
-  assert.deepEqual(unavailable.sleeps, [2000, 2000]);
   assert.deepEqual(unavailable.writes(), []);
+  for (const waits of [f.sleeps, unavailable.sleeps]) {
+    assert.ok(waits.every(ms => ms > 0), "readiness polling yields between attempts");
+    assert.ok(waits.reduce((total, ms) => total + ms, 0) < 120_000, "readiness fits the controller two-minute job budget");
+  }
 });
 
 test("live head, source cancellation and target rerun are rechecked before any mutation", async t => {

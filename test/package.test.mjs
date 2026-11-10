@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { temporaryDirectory } from "./helpers/temp-dir.mjs";
 const load = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 
 test("theme removes tool backgrounds through the supported palette mechanism", () => {
@@ -16,10 +20,16 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("package exposes extensions, themes and portable skills with their references", () => {
+test("package exposes extensions, themes and portable skills with their references", async t => {
   const pkg = load("package.json");
-  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
-  assert.ok(pkg.scripts.postinstall.includes("src/pi-sdk/install.mjs"));
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const manager = new DefaultPackageManager({
+    cwd: root, agentDir: temporaryDirectory(t), settingsManager: SettingsManager.inMemory(),
+  });
+  const resources = await manager.resolveExtensionSources([root], { temporary: true });
+  assert.deepEqual(resources.installFailures, []);
+  const extensions = new Set(resources.extensions.filter(entry => entry.enabled)
+    .map(entry => relative(root, entry.path).replaceAll("\\", "/")));
   const args = ["pack", "--dry-run", "--json", "--ignore-scripts"];
   const windows = process.platform === "win32";
   const packed = Object.values(JSON.parse(execFileSync(windows ? process.env.ComSpec || "cmd.exe" : "npm",
@@ -27,6 +37,8 @@ test("package exposes extensions, themes and portable skills with their referenc
       cwd: new URL("..", import.meta.url), encoding: "utf8", windowsHide: true,
     })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
+  const packagedExtensions = [...files].filter(path => /^extensions\/[^/]+\.ts$/.test(path));
+  assert.deepEqual([...extensions].sort(), packagedExtensions.sort(), "Pi discovers every shipped extension and no unpackaged entries");
   for (const name of [
     "config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp",
     "ask-user-question", "btw", "pi-sdk", "tool-search",
