@@ -55,6 +55,7 @@
     "check:plugins": "node node_modules/typescript/bin/tsc -p src/pi-web-access && node node_modules/typescript/bin/tsc -p src/pi-session-recall"
   },
   "dependencies": {
+    "@earendil-works/pi-codemode": "1.5.1",
     "@earendil-works/pi-mcp": "1.5.1",
     "marked": "18.0.11",
     "marked-cjk-friendly": "0.1.2",
@@ -80,7 +81,6 @@
     "@earendil-works/pi-agent-core": "1.5.1",
     "@earendil-works/pi-ai": "1.5.1",
     "@earendil-works/pi-coding-agent": "1.5.1",
-    "@earendil-works/pi-codemode": "1.5.1",
     "@earendil-works/pi-tui": "1.5.1",
     "@types/node": "^22.20.2",
     "@types/proper-lockfile": "4.1.4",
@@ -145,7 +145,6 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "1.5.1",
     "@earendil-works/pi-coding-agent": "1.5.1",
-    "@earendil-works/pi-codemode": "1.5.1",
     "@earendil-works/pi-tui": "1.5.1",
     "typebox": "*"
   },
@@ -154,9 +153,6 @@
       "optional": true
     },
     "@earendil-works/pi-tui": {
-      "optional": true
-    },
-    "@earendil-works/pi-codemode": {
       "optional": true
     }
   },
