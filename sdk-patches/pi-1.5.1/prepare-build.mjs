@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Prepare an isolated source build; never applies patches or changes an installed SDK.
 import { chmod, cp, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 const [sourceArgument, dependenciesArgument] = process.argv.slice(2);
 if (!sourceArgument || !dependenciesArgument) {
@@ -91,6 +91,27 @@ for (const entry of await readdir(resolve(source, "packages"), { withFileTypes: 
 }
 await cp(resolve(target, "@earendil-works/pi-ai/dist/providers/data"),
   resolve(source, "packages/ai/src/providers/data"), { recursive: true, dereference: true });
+
+// Keep the tutorial's API bound to its real source. Copying it would break its
+// relative Chord imports; .mjs avoids Node's ban on stripping TS in node_modules.
+const tutorial = resolve(source, "packages/chord/test/examples/61-tutorial");
+const tutorialManifest = await manifest(tutorial);
+const tutorialPackage = resolve(target, tutorialManifest.name);
+const tutorialExports = {};
+await mkdir(tutorialPackage, { recursive: true });
+for (const [subpath, input] of Object.entries(tutorialManifest.exports)) {
+  const file = subpath.slice(2);
+  const output = resolve(tutorialPackage, `${file}.mjs`);
+  const actual = relative(dirname(output), resolve(tutorial, input)).split(sep).join("/");
+  const body = `export * from ${JSON.stringify(actual.startsWith(".") ? actual : `./${actual}`)};\n`;
+  await mkdir(dirname(output), { recursive: true });
+  await writeFile(output, body);
+  await writeFile(resolve(tutorialPackage, `${file}.d.mts`), body);
+  tutorialExports[subpath] = { types: `./${file}.d.mts`, default: `./${file}.mjs` };
+}
+await writeFile(resolve(tutorialPackage, "package.json"), JSON.stringify({
+  name: tutorialManifest.name, version: tutorialManifest.version, private: true, type: "module", exports: tutorialExports,
+}, null, 2) + "\n");
 
 // npm's workspace/bin links are disabled. These regular shell files preserve each tool's actual entry path.
 await mkdir(resolve(target, ".bin"), { recursive: true });

@@ -47,13 +47,16 @@ npm ci --ignore-scripts --workspaces=false --bin-links=false --no-audit --no-fun
 npm install --no-save --package-lock=false --ignore-scripts --workspaces=false --bin-links=false \
   --no-audit --no-fund vitest@4.1.12 @xterm/headless@5.5.0 chalk@6.0.0 \
   @types/cross-spawn@6.0.6 @types/hosted-git-info@3.0.5 @types/semver@7.7.1 \
-  @types/proper-lockfile@4.1.4 @types/ws@8.18.2 @types/ms@2.1.0
+  @types/proper-lockfile@4.1.4 @types/ws@8.18.2 @types/ms@2.1.0 \
+  @types/react@19.2.14 @types/react-dom@19.2.3 react@19.3.0 react-dom@19.3.0 \
+  miniflare@5.20261023.2-beta @cloudflare/vitest-plugin@1.4.10 \
+  @silvia-odwyer/photon@0.3.3 fake-indexeddb@6.2.6 \
+  @vitest-evals/core@0.15.0 vitest-evals@0.15.0 @cfworker/json-schema@4.1.1 ata-validator@1.61.3
 node "$PATCHES/prepare-build.mjs" "$SDK" "$METIS/node_modules"
 for patch in "$PATCHES"/000*.patch; do
   git apply --check "$patch"
   git apply "$patch"
 done
-# 完整 check 还需下述 monorepo 测试依赖和实体 workspace。
 npm --prefix "$SDK" run check
 npm --prefix "$METIS" run build:pi-sdk -- "$SDK"
 npm --prefix "$METIS" run verify:pi-sdk
@@ -61,9 +64,8 @@ npm --prefix "$METIS" run verify:pi-sdk
 
 准备脚本校验同版 SDK 与源码声明的工具链（TypeScript 7.0.2、Biome、Vitest），
 复制真实发布依赖/模型数据，并生成普通文件形式的工具入口；自有源码的 dist 由正式构建覆盖。
-完整 monorepo check 还需要各 workspace 的测试开发依赖（包括 React types、Miniflare、Cloudflare、
-evals、schema validator 和浏览器图片包）及 tutorial 的实体 `@todo/app` exports。
-依赖或夹具缺失必须单列为阻塞，不添加假声明、不删测试、不放宽 entry-graph 预算或类型/格式检查。
+上述测试依赖版本来自上游 lock，覆盖完整仓库检查。教程 `@todo/app` 使用指回原源码的实体转发入口，
+避免副本破坏相对引用或制造第二个模块实例；类型也由同一源码导出，不添加假声明或放宽检查。
 
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
 `build:pi-sdk` 核对官方 SHA，干净重放七补丁并逐路径比对源码，再构建三个 SDK 包；
