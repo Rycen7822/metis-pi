@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-export const sdkVersion = "1.5.1";
-export const sdkUpstreamCommit = "dd30101cfc5b0609411dd80b6f93adbc14db14cf";
+export const sdkVersion = "1.5.2";
+export const sdkUpstreamCommit = "b4afdddf44e059c67ccf5097e5317d913521b470";
 export const sdkPatchCount = 8;
 export const sdkPackages = ["ai", "tui", "codemode", "coding-agent"];
 export const sdkFiles = ["coding-agent/docs/codemode.md"];

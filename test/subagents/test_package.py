@@ -267,7 +267,7 @@ class SdkTransport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
             node=str(root/'node'); Path(node).touch(); Path(node).chmod(0o755)
-            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.5.1"}')
+            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.5.2"}')
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli'); cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
@@ -285,7 +285,7 @@ class SdkTransport(unittest.TestCase):
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             argv=[sys.executable,str(cli),'--mode','rpc']
             # Build metadata does not change the release, so it stays admissible.
-            for version in ('1.5.1','1.5.1+build.5','1.5.1+sha.abcdef'):
+            for version in ('1.5.2','1.5.2+build.5','1.5.2+sha.abcdef'):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):
                     self.assertEqual(managed_command(argv,sdk_path=str(sdk)),
@@ -293,16 +293,16 @@ class SdkTransport(unittest.TestCase):
             # Older releases, prereleases and future/implicit releases are refused: no
             # compatibility matrix and no implicit permission for unknown ones.
             for version in (
-                None, '', 'unknown', '0.85.1', '1.3.0', '1.4.0', '1.5.0', '1.5.1-rc.1', '1.5.2', '2.0.0',
-                '01.5.1', '1.05.1', '1.5.01', '1.5.1+build..5', '1.5.1+.',
+                None, False, 152, [], {}, '', 'unknown', '0.85.1', '1.3.0', '1.4.0', '1.5.0', '1.5.1',
+                '1.5.2-rc.1', '1.5.3', '2.0.0', '01.5.2', '1.05.2', '1.5.02', '1.5.2+build..5', '1.5.2+.',
             ):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):
                     with self.assertRaises(AgentError) as error:
                         managed_command(argv,sdk_path=str(sdk))
                     self.assertEqual(error.exception.code,'unsupported_pi_version')
-            # A different package that happens to carry 1.5.1 is still not the Pi SDK.
-            manifest.write_text(json.dumps({'name':'@example/not-pi','version':'1.5.1'}))
+            # A different package that happens to carry 1.5.2 is still not the Pi SDK.
+            manifest.write_text(json.dumps({'name':'@example/not-pi','version':'1.5.2'}))
             with self.assertRaises(AgentError) as foreign:
                 managed_command(argv,sdk_path=str(sdk))
             self.assertEqual(foreign.exception.code,'unsupported_pi_version')

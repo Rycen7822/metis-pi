@@ -55,8 +55,8 @@
     "check:plugins": "node node_modules/typescript/bin/tsc -p src/pi-web-access && node node_modules/typescript/bin/tsc -p src/pi-session-recall"
   },
   "dependencies": {
-    "@earendil-works/pi-codemode": "1.5.1",
-    "@earendil-works/pi-mcp": "1.5.1",
+    "@earendil-works/pi-codemode": "1.5.2",
+    "@earendil-works/pi-mcp": "1.5.2",
     "marked": "18.0.11",
     "marked-cjk-friendly": "0.1.2",
     "proper-lockfile": "4.1.2",
@@ -78,10 +78,10 @@
     "ffi-rs": "1.3.7"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "1.5.1",
-    "@earendil-works/pi-ai": "1.5.1",
-    "@earendil-works/pi-coding-agent": "1.5.1",
-    "@earendil-works/pi-tui": "1.5.1",
+    "@earendil-works/pi-agent-core": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
     "@types/node": "^22.20.2",
     "@types/proper-lockfile": "4.1.4",
     "typebox": "1.3.27",
@@ -143,9 +143,9 @@
     "appearance"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-ai": "1.5.1",
-    "@earendil-works/pi-coding-agent": "1.5.1",
-    "@earendil-works/pi-tui": "1.5.1",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
     "typebox": "*"
   },
   "peerDependenciesMeta": {

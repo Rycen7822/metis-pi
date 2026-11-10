@@ -4,7 +4,7 @@
 
 | 组件 | 要求 |
 | --- | --- |
-| Pi | **只认 1.5.1**；依赖、lock、CI 与 SDK 产物同版，不兼容旧 SDK。 |
+| Pi | **只认 1.5.2**；依赖、lock、CI 与 SDK 产物同版，不兼容旧 SDK。 |
 | Node.js | **22.19.0+**。 |
 | 子代理 | Linux/WSL 或 Windows，Python **3.11+**；沿用父端 SDK 和 Node。 |
 | PTY | 随包 Linux x64 静态 helper、Windows x64 EXE；ConPTY 要 Windows 10 1809+ / 11。 |

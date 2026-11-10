@@ -2,7 +2,7 @@
 
 ## 环境与常用命令
 
-根依赖和 lock 固定 Pi 1.5.1，平台见[兼容性](compatibility.md)。使用完整 checkout 和根工具链，依赖安装在根目录；禁用 bin links，检查调用 TypeScript 实体入口，PTY 使用同版 SDK 的真实 CLI。
+根依赖和 lock 固定 Pi 1.5.2，平台见[兼容性](compatibility.md)。使用完整 checkout 和根工具链，依赖安装在根目录；禁用 bin links，检查调用 TypeScript 实体入口，PTY 使用同版 SDK 的真实 CLI。
 
 ```bash
 npm ci --ignore-scripts --bin-links=false --no-audit --no-fund
@@ -40,13 +40,13 @@ npm run prepare:subagents
 | E3 / E4 | 思考手势 / 复制、草稿、实际提交。 |
 | E6 | 多 skill 补全、payload、折叠。 |
 
-CI 在 Ubuntu/Windows 的 Pi 1.5.1 上跑 verify；Linux 加严格 tmux/PTY，独立 job 重建搜索引擎并核对二进制和单元检查。功能分支已有同 SHA、开放且可合并 PR 时跳过重复 push 全测，状态未知照跑；同 PR 新提交取消旧运行，main/tag/手动各自分组。Node compile cache 保持进程和配置隔离；包检查实际跑 `npm pack --dry-run --json --ignore-scripts`，安装验收另做。
+CI 在 Ubuntu/Windows 的 Pi 1.5.2 上跑 verify；Linux 加严格 tmux/PTY，独立 job 重建搜索引擎并核对二进制和单元检查。功能分支已有同 SHA、开放且可合并 PR 时跳过重复 push 全测，状态未知照跑；同 PR 新提交取消旧运行，main/tag/手动各自分组。Node compile cache 保持进程和配置隔离；包检查实际跑 `npm pack --dry-run --json --ignore-scripts`，安装验收另做。
 
 ## Pi SDK 源码补丁
 
-[`sdk-patches/pi-1.5.1/`](../sdk-patches/pi-1.5.1/README.md)保存补丁源码和重建配方。`npm run build:pi-sdk -- "$SDK"` 从已应用补丁的隔离源码正式构建 ai/tui/coding-agent，再生成随包归档；`npm run verify:pi-sdk` 校验补丁身份与产物，prepack 同样检查。
+[`sdk-patches/pi-1.5.2/`](../sdk-patches/pi-1.5.2/README.md)保存补丁源码和重建配方。`npm run build:pi-sdk -- "$SDK"` 从已应用补丁的隔离源码正式构建 ai/tui/codemode/coding-agent 并同步 codemode 文档，再生成随包归档；`npm run verify:pi-sdk` 校验补丁身份与产物，prepack 同样检查。
 
-普通 Git/npm 安装和更新通过 postinstall 自动交付到 managed Pi 1.5.1；启动入口为脚本被禁用、本地包和宿主重装提供兜底。安装沿用 Pi 的 update 锁，在独立实体目录准备、验证并原子切换启动指针，旧发行目录和个人数据保留。已有进程仍运行旧 SDK，须重启；版本或布局不匹配时明确提示，开发测试应使用隔离 managedRoot。
+普通 Git/npm 安装和更新通过 postinstall 自动交付到 managed Pi 1.5.2；启动入口为脚本被禁用、本地包和宿主重装提供兜底。安装沿用 Pi 的 update 锁，在独立实体目录准备、验证并原子切换启动指针，旧发行目录和个人数据保留。已有进程仍运行旧 SDK，须重启；版本或布局不匹配时明确提示，开发测试应使用隔离 managedRoot。
 
 ## 源码与交付
 

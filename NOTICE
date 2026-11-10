@@ -147,10 +147,10 @@ The standalone web MCP bundle also includes typebox 1.3.27 (MIT).
 Its upstream copyright and full license are retained in
 src/pi-web-access/licenses/typebox.LICENSE.
 
-The bundled Pi SDK runtime in assets/pi-sdk/pi-1.5.1.tgz contains modified
-builds of Pi 1.5.1 ai, tui and coding-agent from earendil-works/pi,
-commit dd30101cfc5b0609411dd80b6f93adbc14db14cf. Pi is copyright its
+The bundled Pi SDK runtime in assets/pi-sdk/pi-1.5.2.tgz contains modified
+builds of Pi 1.5.2 ai, tui, codemode and coding-agent from earendil-works/pi,
+commit b4afdddf44e059c67ccf5097e5317d913521b470. Pi is copyright its
 contributors and licensed MIT; the full upstream license is retained in
-sdk-patches/pi-1.5.1/LICENSE.upstream. The corresponding source changes and
-rebuild instructions are in sdk-patches/pi-1.5.1/. Runtime installation
+sdk-patches/pi-1.5.2/LICENSE.upstream. The corresponding source changes and
+rebuild instructions are in sdk-patches/pi-1.5.2/. Runtime installation
 retains the host dependency packages and their licenses.

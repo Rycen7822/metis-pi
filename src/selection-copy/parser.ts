@@ -1,4 +1,4 @@
-// Fallback lexer aligned with Pi 1.5.1: marked 18.0.11 +
+// Fallback lexer aligned with Pi 1.5.2: marked 18.0.11 +
 // marked-cjk-friendly 0.1.2 emStrong, strict strikethrough and latex extensions.
 // Narrow adaptation of pi-tui src/components/markdown.ts (MIT). Keep native
 // tokens authoritative; fallback rows are checked against the actual render so

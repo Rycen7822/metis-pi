@@ -25,7 +25,7 @@ Metis 偏好使用全局 **`<agentDir>/metis-pi.toml`**。agentDir 默认 `~/.pi
 
 网页凭据来自同目录 **`web-search.json`** 或环境变量；密钥命令在实际请求时执行。模型、主题、packages、trust、reserve、MCP 定义与认证由 Pi 管理。goal 状态保存在 session custom entries，原文和命令日志保存在会话旁 `<sessionId>-blobs/`，与偏好文件分开。
 
-## Pi 1.5.1 模型与预热
+## Pi 1.5.2 模型与预热
 
 模型和预热属于 Pi 配置，不写进 Metis TOML。全局 `<agentDir>/settings.json` 的 `cacheWarming` 默认是 `"idle"`：符合条件时在运行中及回答后继续预热，空闲窗口最长 30 分钟；经济阈值和上下文有效性仍由 Pi 判断。`"streaming"` 仅在运行中预热，`"off"` 关闭。主会话、BTW 和 worker 沿用该设置，Metis 不替用户改默认值。
 

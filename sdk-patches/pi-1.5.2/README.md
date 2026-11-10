@@ -1,7 +1,7 @@
-# Pi 1.5.1 SDK 补丁
+# Pi 1.5.2 SDK 补丁
 
-唯一基线：[Pi v1.5.1](https://github.com/earendil-works/pi/tree/v1.5.1)，提交
-`dd30101cfc5b0609411dd80b6f93adbc14db14cf`。不支持旧版、预发布版或未来版本。
+唯一基线：[Pi v1.5.2](https://github.com/earendil-works/pi/tree/v1.5.2)，提交
+`b4afdddf44e059c67ccf5097e5317d913521b470`。不支持旧版、预发布版或未来版本。
 上游 MIT 许可见 [LICENSE.upstream](LICENSE.upstream)。补丁随 Metis 的完整预编译 SDK 交付。
 
 ## 作用与边界
@@ -18,7 +18,7 @@
 | `0008` | 脚本可调用 `tool_search` 时收起 `searchTools()`；模型说明和错误提示同步，无网关时保留原生发现。 |
 
 按编号顺序应用；`0002` 已由上游覆盖，编号留空。
-保留 1.5.1 的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
+保留 1.5.2 的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
 warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 设置、费用格式和连续预热合并展示；
 树选择器保留 SearchLine、IME 光标与 label 输入焦点传播，不恢复旧算法来迁就补丁。
 
@@ -33,17 +33,17 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
 
 ## 隔离重建
 
-Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.5.1 且已使用
+Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.5.2 且已使用
 `--ignore-scripts --bin-links=false` 准备。`SDK` 必须是新的私有目录。
 
 ```bash
 set -eu
 METIS=/absolute/path/to/metis-pi
-SDK=/absolute/path/to/isolated-pi-1.5.1
-PATCHES="$METIS/sdk-patches/pi-1.5.1"
-git clone --no-hardlinks --branch v1.5.1 https://github.com/earendil-works/pi.git "$SDK"
+SDK=/absolute/path/to/isolated-pi-1.5.2
+PATCHES="$METIS/sdk-patches/pi-1.5.2"
+git clone --no-hardlinks --branch v1.5.2 https://github.com/earendil-works/pi.git "$SDK"
 cd "$SDK"
-test "$(git rev-parse HEAD)" = dd30101cfc5b0609411dd80b6f93adbc14db14cf
+test "$(git rev-parse HEAD)" = b4afdddf44e059c67ccf5097e5317d913521b470
 npm ci --ignore-scripts --workspaces=false --bin-links=false --no-audit --no-fund
 npm install --no-save --package-lock=false --ignore-scripts --workspaces=false --bin-links=false \
   --no-audit --no-fund vitest@4.1.12 @xterm/headless@5.5.0 chalk@6.0.0 \
@@ -71,14 +71,14 @@ npm --prefix "$METIS" run verify:pi-sdk
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
 `build:pi-sdk` 核对官方 SHA，干净重放八补丁并逐路径比对源码，再构建四个 SDK 包；
 归档包含 `coding-agent/docs/codemode.md`，使运行时指向的文档同步更新；独立沙箱和 bundled worker 均使用补丁后的规则。
-输出 `assets/pi-sdk/pi-1.5.1.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
+输出 `assets/pi-sdk/pi-1.5.2.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
 若 check 格式化改写源码，先同步补丁，再重新构建；不能沿用旧归档改名充当新版本。
 
 ## 生效与撤回
 
 安装只切换完整发行目录；已运行的进程需重启 Pi，`/reload` 不替换进程内 SDK。
-补丁身份以当前发行目录的 `metis-sdk.json` 为准，`pi --version` 仍为 `1.5.1`。
-原版 1.5.1 缺少展示接口时保持原生标题，不通过正文改写模拟补丁能力。
+补丁身份以当前发行目录的 `metis-sdk.json` 为准，`pi --version` 仍为 `1.5.2`。
+原版 1.5.2 缺少展示接口时保持原生标题，不通过正文改写模拟补丁能力。
 npm 脚本策略拦住 `postinstall` 时，会话入口仍会补装并提示重启；不自动修改 `allowScripts` 授权。
 
 撤回前暂停 Metis 安装/更新并禁用其 SDK 安装入口，避免自动重装；

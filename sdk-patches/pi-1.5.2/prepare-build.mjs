@@ -10,7 +10,7 @@ if (!sourceArgument || !dependenciesArgument) {
 const source = resolve(sourceArgument);
 const dependencies = resolve(dependenciesArgument);
 const target = resolve(source, "node_modules");
-const version = "1.5.1";
+const version = "1.5.2";
 const manifest = async (directory) => JSON.parse(await readFile(resolve(directory, "package.json"), "utf8"));
 if ((await manifest(resolve(source, "packages/coding-agent"))).version !== version) {
   throw new Error(`This preparation recipe requires Pi ${version} source.`);

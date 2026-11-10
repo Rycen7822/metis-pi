@@ -46,7 +46,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/presentation/components/tool-components.ts", "src/presentation/components/transcript-components.ts",
     "src/configuration/store.ts", "src/configuration/web-access.ts",
     "src/remote-compaction/runtime.ts", "src/remote-compaction/checkpoint.ts",
-    "src/pi-sdk/install.mjs", "src/pi-sdk/artifact.mjs", "src/pi-sdk/distribution.json", "assets/pi-sdk/pi-1.5.1.tgz",
+    "src/pi-sdk/install.mjs", "src/pi-sdk/artifact.mjs", "src/pi-sdk/distribution.json", "assets/pi-sdk/pi-1.5.2.tgz",
     "src/presentation/host-patch.ts", "src/extension-paths.ts",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
     "src/pi-lsp/config.ts", "src/pi-lsp/pi-lsp.ts", "src/pi-lsp/code-actions.ts", "src/pi-lsp/published-diagnostics.ts",
@@ -62,8 +62,8 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/neural-search/assets/semantic/linux-x64/bin/sgrep",
     "src/neural-search/runtime/install.mjs", "src/neural-search/runtime/distribution.json",
   ]) assert.ok(files.has(path), path);
-  assert.deepEqual([...files].filter(path => /^assets\/pi-sdk\/.*\.tgz$/.test(path)), ["assets/pi-sdk/pi-1.5.1.tgz"]);
-  assert.ok([...files].filter(path => path.startsWith("sdk-patches/")).every(path => path.startsWith("sdk-patches/pi-1.5.1/")),
+  assert.deepEqual([...files].filter(path => /^assets\/pi-sdk\/.*\.tgz$/.test(path)), ["assets/pi-sdk/pi-1.5.2.tgz"]);
+  assert.ok([...files].filter(path => path.startsWith("sdk-patches/")).every(path => path.startsWith("sdk-patches/pi-1.5.2/")),
     "only the supported SDK patch release is distributed");
   assert.ok([...files].every((path) => !path.startsWith("references/")));
   assert.ok([...files].every((path) => !path.startsWith("benchmarks/")));

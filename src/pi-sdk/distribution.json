@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "piVersion": "1.5.1",
-  "upstreamCommit": "dd30101cfc5b0609411dd80b6f93adbc14db14cf",
+  "piVersion": "1.5.2",
+  "upstreamCommit": "b4afdddf44e059c67ccf5097e5317d913521b470",
   "patches": [
     {
       "file": "0000-physical-workspace-bundling.patch",
@@ -38,9 +38,9 @@
   ],
   "patchSet": "5906b511b06b6e0d2ed63f0db70161ee38bd9b544c5206b49bde703c5ec8be21",
   "archive": {
-    "file": "pi-1.5.1.tgz",
-    "sha256": "b198299c52e12b16731607978ddc6e2406ea2f198e6ca71c1e7fddbb94e1596c",
-    "bytes": 6022229,
-    "unpackedBytes": 26705303
+    "file": "pi-1.5.2.tgz",
+    "sha256": "9773a0f6b6b9a0a816a25d557accd12e38302a974189756be5b7ad465ef18c1c",
+    "bytes": 6011928,
+    "unpackedBytes": 26654502
   }
 }

@@ -14,7 +14,7 @@ Metis exposes one deferred `web_access` tool. The operation names below (`web_se
 
 ## Install
 
-Run the Pi extension on **Pi 1.5.1 only**, following the root installation instructions. Disable a separately installed `pi-web-access` copy so tools, commands, and caches have one owner.
+Run the Pi extension on **Pi 1.5.2 only**, following the root installation instructions. Disable a separately installed `pi-web-access` copy so tools, commands, and caches have one owner.
 
 Ordinary preferences belong in `[webAccess]` in the global `<agentDir>/metis-pi.toml`; credentials remain in `<agentDir>/web-search.json`, environment variables, or trusted credential commands. `PI_CODING_AGENT_DIR` selects the agent directory. `/metis-config init` creates defaults and the parameter guide without importing or rewriting old files. Ordinary JSON preference fields are ignored by Metis.
 

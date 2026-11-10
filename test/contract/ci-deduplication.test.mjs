@@ -27,7 +27,7 @@ function fixture() {
   const push = { ...run, id: 100, event: "push", created_at: "2026-10-16T07:03:24Z" };
   const pull = { number: 7, state: "open", mergeable: true, merge_commit_sha: mergeRef,
     head: { repo, ref: "feature", sha: head }, base: { repo, ref: "main" } };
-  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head, name: "Pi 1.5.1 · ubuntu-latest", status: "in_progress", runner_id: 3 });
+  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head, name: "Pi 1.5.2 · ubuntu-latest", status: "in_progress", runner_id: 3 });
   const sourceJobs = [validation(200)];
   const pushJobs = [validation(100), { run_id: 100, run_attempt: 1, head_sha: head,
     name: "Check duplicate feature push", status: "completed", conclusion: "success" }];
@@ -61,7 +61,7 @@ function fixture() {
 test("PR matrix validation retires only the exact older internal feature push", async t => {
   for (const os of ["ubuntu-latest", "windows-latest"]) await t.test(os, async () => {
     const f = fixture();
-    f.sourceJobs[0].name = f.pushJobs[0].name = `Pi 1.5.1 · ${os}`;
+    f.sourceJobs[0].name = f.pushJobs[0].name = `Pi 1.5.2 · ${os}`;
     assert.equal(await f.run(), true);
     assert.deepEqual(f.writes(), [{ method: "POST", path: `${pushPath}/cancel`, query: undefined }]);
     assert.deepEqual(f.sleeps, []);

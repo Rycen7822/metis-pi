@@ -61,7 +61,7 @@ jobs:
           console.log(duplicate ? 'Matching mergeable PR covers this push; skipping duplicate tests.' : 'Full push validation required.');
           NODE
   test:
-    name: Pi 1.5.1 · ${{ matrix.os }}
+    name: Pi 1.5.2 · ${{ matrix.os }}
     needs: admission
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:
@@ -91,12 +91,12 @@ jobs:
       - name: Verify selected host packages
         shell: bash
         env:
-          EXPECTED_PI_VERSION: '1.5.1'
+          EXPECTED_PI_VERSION: '1.5.2'
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
-          for (const name of ['pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-codemode', 'pi-tui', 'pi-mcp', 'pi-schema']) {
+          for (const name of ['pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-codemode', 'pi-tui', 'pi-mcp', 'pi-schema', 'pi-telemetry']) {
             const manifest = JSON.parse(readFileSync(`node_modules/@earendil-works/${name}/package.json`, 'utf8'));
             assert.equal(manifest.version, process.env.EXPECTED_PI_VERSION, name);
           }
