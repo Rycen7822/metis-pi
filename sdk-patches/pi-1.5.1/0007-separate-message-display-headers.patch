@@ -1,0 +1,77 @@
+diff --git a/packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts b/packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts
+index 8b6ebb224..d96851ee5 100644
+--- a/packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts
++++ b/packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts
+@@ -48,17 +48,22 @@ export class CompactionSummaryMessageComponent extends Box {
+ 		this.updateDisplay();
+ 	}
+ 
++	/** Presentation data for both views; summary content and transformers stay independent. */
++	getDisplayHeader(message: CompactionSummaryMessage): { title: string; subtitle?: string } {
++		return { title: `Compacted from ${message.tokensBefore.toLocaleString()} tokens` };
++	}
++
+ 	private updateDisplay(): void {
+ 		this.clear();
+ 		const content = new Container();
+ 
+-		const tokenStr = this.message.tokensBefore.toLocaleString();
++		const { title, subtitle } = this.getDisplayHeader(this.message);
+ 		const label = theme.fg("customMessageLabel", `\x1b[1m[compaction]\x1b[22m`);
+ 		content.addChild(new Text(label, 0, 0));
+ 		content.addChild(new Spacer(1));
+ 
+ 		if (this.expanded) {
+-			const header = `**Compacted from ${tokenStr} tokens**\n\n`;
++			const header = `**${title}**\n\n${subtitle ? `${subtitle}\n\n` : ""}`;
+ 			const transform = createMarkdownTransform(
+ 				"summary",
+ 				() => false,
+@@ -80,9 +85,9 @@ export class CompactionSummaryMessageComponent extends Box {
+ 		} else {
+ 			content.addChild(
+ 				new Text(
+-					theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (`) +
++					theme.fg("customMessageText", `${title} (`) +
+ 						theme.fg("dim", keyText("app.tools.expand")) +
+-						theme.fg("customMessageText", " to expand)"),
++						theme.fg("customMessageText", ` to expand)${subtitle ? `\n${subtitle}` : ""}`),
+ 					0,
+ 					0,
+ 				),
+diff --git a/packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts b/packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts
+index 9ad309563..bd3845d76 100644
+--- a/packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts
++++ b/packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts
+@@ -49,15 +49,21 @@ export class SkillInvocationMessageComponent extends Box {
+ 		this.updateDisplay();
+ 	}
+ 
++	/** Display-only name shared by both views; the skill body is never rewritten. */
++	getDisplayName(skillBlock: ParsedSkillBlock): string {
++		return skillBlock.name;
++	}
++
+ 	private updateDisplay(): void {
+ 		this.clear();
+ 		const content = new Container();
++		const displayName = this.getDisplayName(this.skillBlock);
+ 
+ 		if (this.expanded) {
+ 			// Expanded: label + skill name header + full content
+ 			const label = theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m`);
+ 			content.addChild(new Text(label, 0, 0));
+-			const header = `**${this.skillBlock.name}**\n\n`;
++			const header = `**${displayName}**\n\n`;
+ 			const transform = createMarkdownTransform(
+ 				"custom",
+ 				() => false,
+@@ -80,7 +86,7 @@ export class SkillInvocationMessageComponent extends Box {
+ 			// Collapsed: single line - [skill] name (hint to expand)
+ 			const line =
+ 				theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) +
+-				theme.fg("customMessageText", this.skillBlock.name) +
++				theme.fg("customMessageText", displayName) +
+ 				theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
+ 			content.addChild(new Text(line, 0, 0));
+ 		}

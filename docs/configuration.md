@@ -25,6 +25,29 @@ Metis 偏好使用全局 **`<agentDir>/metis-pi.toml`**。agentDir 默认 `~/.pi
 
 网页凭据来自同目录 **`web-search.json`** 或环境变量；密钥命令在实际请求时执行。模型、主题、packages、trust、reserve、MCP 定义与认证由 Pi 管理。goal 状态保存在 session custom entries，原文和命令日志保存在会话旁 `<sessionId>-blobs/`，与偏好文件分开。
 
+## Pi 1.5.1 模型与预热
+
+模型和预热属于 Pi 配置，不写进 Metis TOML。全局 `<agentDir>/settings.json` 的 `cacheWarming` 默认是 `"idle"`：符合条件时在运行中及回答后继续预热，空闲窗口最长 30 分钟；经济阈值和上下文有效性仍由 Pi 判断。`"streaming"` 仅在运行中预热，`"off"` 关闭。主会话、BTW 和 worker 沿用该设置，Metis 不替用户改默认值。
+
+主界面 footer 的会话 I/O、最近缓存率以及内部对话 ledger 只统计 assistant 与 compaction/branch_summary；独立 `cache_warm` usage 不计入。当前 footer 不显示费用金额，ledger 的 cost 也不是完整账单；预热和其他独立请求的费用以 provider 记录为准。
+
+OpenAI-compatible 请求没有当前工具时，默认省略 `tools`。仅当指定旧网关在已有 tool history 时明确要求 `tools: []`，才在该模型的 `models.json` 定义中设 `compat.requiresToolsWithToolHistory: true`，例如：
+
+```json
+{
+  "providers": {
+    "gateway": {
+      "api": "openai-completions",
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "$GATEWAY_API_KEY",
+      "models": [{ "id": "model-id", "compat": { "requiresToolsWithToolHistory": true } }]
+    }
+  }
+}
+```
+
+此开关只针对已确认的模型差异；标准 OpenAI-compatible/vLLM 路径保持默认，当前仍有工具时正常发送工具定义，不全局补空数组。
+
 ## 显示字段
 
 有效值见 `/codex-ui`；字段、单位、默认值见 [appearance 参数](../metis-pi-config.md#appearance-及其子表)。例如 `appearance.thinking.peekLines` 控制思考预览，`appearance.footer` 控制状态字段与默认展开。
@@ -71,6 +94,10 @@ keepAliveServers = []
 目录缓存位于 `<agentDir>/cache/metis-mcp/`，绑定配置、cwd、可信状态、环境与认证；启动只注册可信目录，调用时连接并重查 schema。缓存只存目录信息，令牌留在 Pi 原生存储，权限 0600；动态认证以实际发现为准。无缓存时后台发现，启动最多等 3 秒；冷发现后断开，keepAlive 连接保留。
 
 连接先发现工具，资源和模板按需查询；目录消费者会等待相关发现，等待可取消。namespace 接受服务器原名或 `mcp__server`，结果保留文本、图片和 JSON `structuredContent`。网络失败、超时和取消原样上报，只有明确会话过期才重建并重试一次。
+
+HTTP JSON 回复与 SSE 单事件沿用 Pi 的 **16 MiB** 默认传输限制；超限取消读取并报告 `MCP JSON response exceeds … bytes` 或对应 SSE 错误。它不同于成功返回后约 20 KiB 的模型展示截断：传输已失败时没有完整回复可落盘。大结果优先让服务端分页、返回资源链接或分块，不通过关闭限额绕过保护。
+
+后台 OAuth 只刷新已有登录，不发起隐藏授权或重注册客户端；失败时保留待完成浏览器登录的 PKCE verifier。需要新授权时显式使用 `pi mcp login`，原生 CLI 与 Metis 共用刷新锁和凭据。
 
 `/mcp` 查看状态，`/mcp reload` 重读配置，`/mcp refresh [server]` 更新目录。停用时设置 `mcp.enabled=false` 并重启，再选择所需 owner；配置和凭据保留。
 

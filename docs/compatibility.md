@@ -4,7 +4,7 @@
 
 | 组件 | 要求 |
 | --- | --- |
-| Pi | **只认 1.5.0**；依赖、lock、CI 同版。 |
+| Pi | **只认 1.5.1**；依赖、lock、CI 与 SDK 产物同版，不兼容旧 SDK。 |
 | Node.js | **22.19.0+**。 |
 | 子代理 | Linux/WSL 或 Windows，Python **3.11+**；沿用父端 SDK 和 Node。 |
 | PTY | 随包 Linux x64 静态 helper、Windows x64 EXE；ConPTY 要 Windows 10 1809+ / 11。 |
@@ -12,6 +12,9 @@
 | semantic | 另准备 Linux x64 运行包，见[搜索指南](features/neural-search.md)。 |
 
 Windows Python 通过 PATH 或 `py` 查找；shell 使用 Git for Windows。Git Bash 安装在非默认路径时，在 Pi `settings.json` 设 `shellPath`，如 `"D:\\app\\Git\\bin\\bash.exe"`；指向 WSL 的 `bash.exe` 会造成脚本语义错乱。普通安装无需 Rust/MSVC；更新原生资产前退出所有相关 Pi 进程，避免 DLL 占用。
+
+Metis 通过 `postinstall` 安装完整 SDK 补丁；若 npm 12 的 `allowScripts` 或禁脚本策略拦住该钩子，
+首次加载 Metis 时的会话入口仍会补装并提示重启。不要把 `/reload` 当成 SDK 激活；不绕过包管理器的脚本授权策略。
 
 其他平台、在线服务、模型、图片协议、插件组合，都要在目标环境实测。
 

@@ -65,11 +65,8 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   const bootConfig = loadConfig(getAgentDir(), readFile).config;
   const bootWritePreview = bootConfig.writePreview;
   registerCompactionPresentation(pi, {
-    prototype: Pi.CompactionSummaryMessageComponent.prototype,
+    component: Pi.CompactionSummaryMessageComponent,
     enabled: bootConfig.enabled,
-    host: { Text: Tui.Text, Markdown: Tui.Markdown, Spacer: Tui.Spacer,
-      Container: Tui.Container, MouseRegion: Tui.MouseRegion,
-      expandKey: () => Pi.keyText("app.tools.expand") },
   });
 
   activate(pi, {

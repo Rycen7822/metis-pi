@@ -12,7 +12,7 @@ import { digest, sdkPackages } from "../../src/pi-sdk/artifact.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const run = promisify(execFile);
-async function fixture(t, { version = "1.5.0", cliVersion = "1.5.0" } = {}) {
+async function fixture(t, { version = "1.5.1", cliVersion = "1.5.1" } = {}) {
   const work = path.join(root, ".work");
   await mkdir(work, { recursive: true });
   const dir = await mkdtemp(path.join(work, "sdk-install-"));
@@ -47,13 +47,13 @@ async function fixture(t, { version = "1.5.0", cliVersion = "1.5.0" } = {}) {
     let unpackedBytes = 0;
     for (const name of sdkPackages) unpackedBytes += Buffer.byteLength(label);
     unpackedBytes += Buffer.byteLength(`console.log(${JSON.stringify(cliVersion)});\n`);
-    const archive = path.join(pkg, "assets/pi-sdk/pi-1.5.0.tgz");
+    const archive = path.join(pkg, "assets/pi-sdk/pi-1.5.1.tgz");
     await mkdir(path.dirname(archive), { recursive: true });
     await tar.c({ file: archive, cwd: staging, gzip: true, portable: true }, sdkPackages.map(name => `${name}/dist`));
     const bytes = await readFile(archive);
-    const manifest = { schemaVersion: 1, piVersion: "1.5.0", patchSet: digest(label),
-      patches: Array.from({ length: 6 }, (_, index) => ({ file: `${index}.patch`, sha256: "0".repeat(64) })),
-      archive: { file: "pi-1.5.0.tgz", sha256: digest(bytes), bytes: bytes.length, unpackedBytes } };
+    const manifest = { schemaVersion: 1, piVersion: "1.5.1", upstreamCommit: "dd30101cfc5b0609411dd80b6f93adbc14db14cf",
+      patchSet: digest(label), patches: Array.from({ length: 7 }, (_, index) => ({ file: `${index}.patch`, sha256: "0".repeat(64) })),
+      archive: { file: "pi-1.5.1.tgz", sha256: digest(bytes), bytes: bytes.length, unpackedBytes } };
     await writeFile(path.join(pkg, "src/pi-sdk/distribution.json"), JSON.stringify(manifest));
     return { archive, manifest };
   }
@@ -72,11 +72,11 @@ test("normal SDK install activates all packages together and retains source and 
   const installed = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: h.sdkDir(h.source, "coding-agent") });
   assert.equal(installed.status, "installed");
   assert.equal(installed.restartRequired, true);
-  assert.equal(installed.patches, 6);
+  assert.equal(installed.patches, 7);
   const active = await h.active(), directory = path.join(h.managedRoot, "releases", active);
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(directory, name), "dist/owner.txt"), "utf8"), "new-sdk");
-  assert.equal(JSON.parse(await readFile(path.join(directory, "metis-sdk.json"), "utf8")).previousRelease, "1.5.0");
-  if (process.platform !== "win32") assert.equal((await run(path.join(directory, "node_modules/.bin/pi"), ["--version"])).stdout.trim(), "1.5.0");
+  assert.equal(JSON.parse(await readFile(path.join(directory, "metis-sdk.json"), "utf8")).previousRelease, "1.5.1");
+  if (process.platform !== "win32") assert.equal((await run(path.join(directory, "node_modules/.bin/pi"), ["--version"])).stdout.trim(), "1.5.1");
   const again = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: installed.packageDir });
   assert.equal(again.status, "current");
   assert.equal(again.restartRequired, false);
@@ -97,15 +97,15 @@ test("updated package replaces the snapshot while preserving both previous runti
   await h.preserved();
 });
 
-for (const failure of ["unsupported-version", "corrupt-archive", "bad-cli", "symlink-entry", "reserved-entry"]) {
+for (const failure of ["legacy-version", "future-version", "corrupt-archive", "bad-size", "bad-cli", "symlink-entry", "reserved-entry"]) {
   test(`SDK installation failure (${failure}) leaves the previous runtime active`, async t => {
-    const h = await fixture(t, { version: failure === "unsupported-version" ? "1.6.0" : "1.5.0",
-      cliVersion: failure === "bad-cli" ? "wrong-version" : "1.5.0" });
+    const version = failure === "legacy-version" ? "1.5.0" : failure === "future-version" ? "1.5.2" : "1.5.1";
+    const h = await fixture(t, { version, cliVersion: failure === "bad-cli" ? "wrong-version" : "1.5.1" });
     const before = await h.active();
-    if (failure === "corrupt-archive") {
-      const archive = path.join(h.pkg, "assets/pi-sdk/pi-1.5.0.tgz"), bytes = await readFile(archive);
-      bytes[0] ^= 0xff;
-      await writeFile(archive, bytes);
+    if (failure === "corrupt-archive" || failure === "bad-size") {
+      const archive = path.join(h.pkg, "assets/pi-sdk/pi-1.5.1.tgz"), bytes = await readFile(archive);
+      if (failure === "corrupt-archive") bytes[0] ^= 0xff;
+      await writeFile(archive, failure === "bad-size" ? Buffer.concat([bytes, Buffer.from("extra")]) : bytes);
     } else if (failure === "symlink-entry" || failure === "reserved-entry") {
       const header = new tar.Header({ path: failure === "symlink-entry" ? "ai/dist/escape" : "ai/dist/AUX",
         type: failure === "symlink-entry" ? "SymbolicLink" : "File",
@@ -113,12 +113,12 @@ for (const failure of ["unsupported-version", "corrupt-archive", "bad-cli", "sym
       header.encode();
       const archive = Buffer.concat([header.block, Buffer.alloc(1024)]);
       const { manifest } = await h.payload();
-      await writeFile(path.join(h.pkg, "assets/pi-sdk/pi-1.5.0.tgz"), archive);
+      await writeFile(path.join(h.pkg, "assets/pi-sdk/pi-1.5.1.tgz"), archive);
       manifest.archive = { ...manifest.archive, bytes: archive.length, sha256: digest(archive) };
       await writeFile(path.join(h.pkg, "src/pi-sdk/distribution.json"), JSON.stringify(manifest));
     }
     await assert.rejects(h.ensureSDK({ managedRoot: h.managedRoot }),
-      /requires Pi|checksum mismatch|version verification failed|Unsafe or duplicate/);
+      /requires Pi|checksum mismatch|size\/type mismatch|version verification failed|Unsafe or duplicate/);
     assert.equal(await h.active(), before);
     assert.deepEqual(await readdir(path.join(h.managedRoot, "releases")), [before]);
     await h.preserved();
@@ -138,8 +138,8 @@ test("activation failure removes only its candidate and preserves pre-existing t
     crypto.randomUUID = original;
     syncBuiltinESMExports();
   }
-  assert.equal(await h.active(), "1.5.0");
-  assert.deepEqual(await readdir(path.join(h.managedRoot, "releases")), ["1.5.0"]);
+  assert.equal(await h.active(), "1.5.1");
+  assert.deepEqual(await readdir(path.join(h.managedRoot, "releases")), ["1.5.1"]);
   assert.equal(await readFile(sentinel, "utf8"), "not-owned-by-installer");
   await h.preserved();
 });
@@ -174,6 +174,6 @@ test("embedded SDK sessions cannot patch an unrelated managed installation", asy
   await mkdir(foreign);
   const result = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: foreign });
   assert.equal(result.status, "unmanaged");
-  assert.equal(await h.active(), "1.5.0");
+  assert.equal(await h.active(), "1.5.1");
   await h.preserved();
 });

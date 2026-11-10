@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/session-entry-metadata.ts b/packages/coding-agent/src/core/session-entry-metadata.ts
-index 37a2e46..8269222 100644
+index 37a2e469a..8269222d8 100644
 --- a/packages/coding-agent/src/core/session-entry-metadata.ts
 +++ b/packages/coding-agent/src/core/session-entry-metadata.ts
 @@ -42,7 +42,7 @@ export type SessionEntryMetadata = Readonly<
@@ -27,7 +27,7 @@ index 37a2e46..8269222 100644
  					stopReason: entry.message.stopReason,
  					timestamp: entry.message.timestamp,
 diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
-index f8c91d5..2fad08e 100644
+index f8c91d5de..2fad08e78 100644
 --- a/packages/coding-agent/src/core/session-entry-store.ts
 +++ b/packages/coding-agent/src/core/session-entry-store.ts
 @@ -1,6 +1,7 @@
@@ -71,7 +71,7 @@ index f8c91d5..2fad08e 100644
  		const entries: SessionEntryMetadata[] = [];
  		for (const record of this.records) if (record.kind === "entry") entries.push(record.metadata);
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 2a7c350..f87cd8e 100644
+index 5c6aea6f5..4278deaf3 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -37,6 +37,7 @@ import {
@@ -138,7 +138,7 @@ index 2a7c350..f87cd8e 100644
  			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
 diff --git a/packages/coding-agent/src/core/session-tree-preview.ts b/packages/coding-agent/src/core/session-tree-preview.ts
 new file mode 100644
-index 0000000..04be69b
+index 000000000..04be69b89
 --- /dev/null
 +++ b/packages/coding-agent/src/core/session-tree-preview.ts
 @@ -0,0 +1,51 @@
@@ -194,7 +194,7 @@ index 0000000..04be69b
 +	return result;
 +}
 diff --git a/packages/coding-agent/src/core/session-types.ts b/packages/coding-agent/src/core/session-types.ts
-index 69fa9a8..c9e82da 100644
+index 69fa9a85d..c9e82da53 100644
 --- a/packages/coding-agent/src/core/session-types.ts
 +++ b/packages/coding-agent/src/core/session-types.ts
 @@ -167,9 +167,9 @@ export type SessionEntry =
@@ -211,10 +211,10 @@ index 69fa9a8..c9e82da 100644
  	label?: string;
  	/** Timestamp of the latest label change for this entry, if any */
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 913443e..0e16f06 100644
+index 2cb036112..2765ed799 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -307,6 +307,7 @@ export {
+@@ -310,6 +310,7 @@ export {
  	type SessionMessageMetadata,
  	type SessionProjection,
  	type SessionTreeNode,
@@ -223,7 +223,7 @@ index 913443e..0e16f06 100644
  	type ThinkingLevelChangeEntry,
  } from "./core/session-manager.ts";
 diff --git a/packages/coding-agent/src/modes/interactive/components/tree-selector.ts b/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
-index 5bcdd84..608cf63 100644
+index 1a9d4b1f1..82482b254 100644
 --- a/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
 @@ -1,3 +1,4 @@
@@ -231,7 +231,7 @@ index 5bcdd84..608cf63 100644
  import {
  	type Component,
  	Container,
-@@ -12,7 +13,21 @@ import {
+@@ -13,7 +14,21 @@ import {
  	visibleWidth,
  	wrapTextWithAnsi,
  } from "@earendil-works/pi-tui";
@@ -254,7 +254,7 @@ index 5bcdd84..608cf63 100644
  import { formatReadLineRange } from "../../../core/tools/render-utils.ts";
  import { shortenHomePath } from "../../../utils/paths.ts";
  import { theme } from "../theme/theme.ts";
-@@ -49,6 +64,7 @@ interface HorizontalViewportRow {
+@@ -50,6 +65,7 @@ interface HorizontalViewportRow {
  }
  
  const TREE_GUTTER_WIDTH = 2;
@@ -262,7 +262,7 @@ index 5bcdd84..608cf63 100644
  const MIN_VISIBLE_ANCHOR_CONTENT_WIDTH = 4;
  const MAX_VISIBLE_ANCHOR_CONTENT_WIDTH = 20;
  const MIN_ANCHOR_CONTEXT_WIDTH = 2;
-@@ -101,8 +117,8 @@ export type FilterMode = "default" | "no-tools" | "user-only" | "labeled-only" |
+@@ -102,8 +118,8 @@ export type FilterMode = "default" | "no-tools" | "user-only" | "labeled-only" |
   */
  /** Tool call info for lookup */
  interface ToolCallInfo {
@@ -273,7 +273,7 @@ index 5bcdd84..608cf63 100644
  }
  
  class TreeList implements Component {
-@@ -114,6 +130,14 @@ class TreeList implements Component {
+@@ -115,6 +131,14 @@ class TreeList implements Component {
  	private filterMode: FilterMode = "default";
  	private searchQuery = "";
  	private toolCallMap: Map<string, ToolCallInfo> = new Map();
@@ -288,7 +288,7 @@ index 5bcdd84..608cf63 100644
  	private multipleRoots = false;
  	private showLabelTimestamps = false;
  	private activePathIds: Set<string> = new Set();
-@@ -128,17 +152,33 @@ class TreeList implements Component {
+@@ -129,17 +153,33 @@ class TreeList implements Component {
  	public onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
  
  	constructor(
@@ -325,7 +325,7 @@ index 5bcdd84..608cf63 100644
  		this.buildActivePath();
  		this.applyFilter();
  
-@@ -253,18 +293,11 @@ class TreeList implements Component {
+@@ -254,18 +294,11 @@ class TreeList implements Component {
  		while (stack.length > 0) {
  			const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] = stack.pop()!;
  
@@ -348,7 +348,7 @@ index 5bcdd84..608cf63 100644
  			}
  
  			result.push({ node, indent, showConnector, isLast, gutters, isVirtualRootChild });
-@@ -330,6 +363,7 @@ class TreeList implements Component {
+@@ -331,6 +364,7 @@ class TreeList implements Component {
  	}
  
  	private applyFilter(): void {
@@ -356,7 +356,7 @@ index 5bcdd84..608cf63 100644
  		// Update lastSelectedId only when we have a valid selection (non-empty list)
  		// This preserves the selection when switching through empty filter results
  		if (this.filteredNodes.length > 0) {
-@@ -338,7 +372,7 @@ class TreeList implements Component {
+@@ -339,7 +373,7 @@ class TreeList implements Component {
  
  		const searchTokens = this.searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
  
@@ -365,7 +365,7 @@ index 5bcdd84..608cf63 100644
  			const entry = flatNode.node.entry;
  			if (entry.type === "usage") return false;
  			const isCurrentLeaf = entry.id === this.currentLeafId;
-@@ -346,8 +380,8 @@ class TreeList implements Component {
+@@ -347,8 +381,8 @@ class TreeList implements Component {
  			// Skip assistant messages with only tool calls (no text) unless error/aborted
  			// Always show current leaf so active position is visible
  			if (entry.type === "message" && entry.message.role === "assistant" && !isCurrentLeaf) {
@@ -376,7 +376,7 @@ index 5bcdd84..608cf63 100644
  				const isErrorOrAborted = msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
  				// Only hide if no text AND not an error/aborted message
  				if (!hasText && !isErrorOrAborted) {
-@@ -391,15 +425,59 @@ class TreeList implements Component {
+@@ -392,15 +426,59 @@ class TreeList implements Component {
  
  			if (!passesFilter) return false;
  
@@ -442,7 +442,7 @@ index 5bcdd84..608cf63 100644
  		// Filter out descendants of folded nodes.
  		if (this.foldedNodes.size > 0) {
  			const skipSet = new Set<string>();
-@@ -560,6 +638,28 @@ class TreeList implements Component {
+@@ -561,6 +639,28 @@ class TreeList implements Component {
  		this.visibleChildrenMap = visibleChildren;
  	}
  
@@ -471,7 +471,7 @@ index 5bcdd84..608cf63 100644
  	/** Get searchable text content from a node */
  	private getSearchableText(node: SessionTreeNode): string {
  		const entry = node.entry;
-@@ -573,30 +673,34 @@ class TreeList implements Component {
+@@ -574,30 +674,34 @@ class TreeList implements Component {
  			case "message": {
  				const msg = entry.message;
  				parts.push(msg.role);
@@ -519,7 +519,7 @@ index 5bcdd84..608cf63 100644
  			case "session_info":
  				parts.push("title");
  				if (entry.name) parts.push(entry.name);
-@@ -610,9 +714,12 @@ class TreeList implements Component {
+@@ -611,9 +715,12 @@ class TreeList implements Component {
  			case "custom":
  				parts.push("custom", entry.customType);
  				break;
@@ -534,7 +534,7 @@ index 5bcdd84..608cf63 100644
  			case "label":
  				parts.push("label", entry.label ?? "");
  				break;
-@@ -627,12 +734,36 @@ class TreeList implements Component {
+@@ -628,12 +735,36 @@ class TreeList implements Component {
  		return this.searchQuery;
  	}
  
@@ -573,7 +573,7 @@ index 5bcdd84..608cf63 100644
  		this.onCopy?.(node ? this.getEntryCopyText(node) : undefined);
  	}
  
-@@ -672,7 +803,8 @@ class TreeList implements Component {
+@@ -673,7 +804,8 @@ class TreeList implements Component {
  		const lines: string[] = [];
  
  		if (this.filteredNodes.length === 0) {
@@ -583,7 +583,7 @@ index 5bcdd84..608cf63 100644
  			lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.getStatusLabels()}`), width));
  			return lines;
  		}
-@@ -773,7 +905,7 @@ class TreeList implements Component {
+@@ -774,7 +906,7 @@ class TreeList implements Component {
  	}
  
  	private getEntryDisplayText(node: SessionTreeNode, isSelected: boolean): string {
@@ -592,7 +592,7 @@ index 5bcdd84..608cf63 100644
  		let result: string;
  
  		const normalize = (s: string) => s.replace(/[\n\t]/g, " ").trim();
-@@ -803,7 +935,14 @@ class TreeList implements Component {
+@@ -804,7 +936,14 @@ class TreeList implements Component {
  					const toolMsg = msg as { toolCallId?: string; toolName?: string };
  					const toolCall = toolMsg.toolCallId ? this.toolCallMap.get(toolMsg.toolCallId) : undefined;
  					if (toolCall) {
@@ -608,7 +608,7 @@ index 5bcdd84..608cf63 100644
  					} else {
  						result = theme.fg("muted", `[${toolMsg.toolName ?? "tool"}]`);
  					}
-@@ -887,24 +1026,11 @@ class TreeList implements Component {
+@@ -888,24 +1027,11 @@ class TreeList implements Component {
  	}
  
  	private extractContent(content: unknown): string {
@@ -635,7 +635,7 @@ index 5bcdd84..608cf63 100644
  		let text: string | undefined;
  
  		switch (entry.type) {
-@@ -912,14 +1038,14 @@ class TreeList implements Component {
+@@ -913,14 +1039,14 @@ class TreeList implements Component {
  				if (entry.message.role === "bashExecution") {
  					text = entry.message.command;
  				} else if ("content" in entry.message) {
@@ -652,7 +652,7 @@ index 5bcdd84..608cf63 100644
  				break;
  			case "compaction":
  				text = entry.summary;
-@@ -932,19 +1058,6 @@ class TreeList implements Component {
+@@ -933,19 +1059,6 @@ class TreeList implements Component {
  		return text?.trim() ? text : undefined;
  	}
  
@@ -672,7 +672,7 @@ index 5bcdd84..608cf63 100644
  	private formatToolCall(name: string, args: Record<string, unknown>): string {
  		const shortenPath = (p: string): string => shortenHomePath(p, process.env.HOME || process.env.USERPROFILE || "");
  
-@@ -1345,7 +1458,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
+@@ -1353,7 +1466,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
  	}
  
  	constructor(
@@ -681,7 +681,7 @@ index 5bcdd84..608cf63 100644
  		currentLeafId: string | null,
  		terminalHeight: number,
  		onSelect: (entryId: string) => void,
-@@ -1353,15 +1466,29 @@ export class TreeSelectorComponent extends Container implements Focusable {
+@@ -1361,15 +1474,29 @@ export class TreeSelectorComponent extends Container implements Focusable {
  		onLabelChange?: (entryId: string, label: string | undefined) => void,
  		initialSelectedId?: string,
  		initialFilterMode?: FilterMode,
@@ -713,8 +713,8 @@ index 5bcdd84..608cf63 100644
 +		};
  		this.treeList.onCopy = (text) => this.onCopy?.(text);
  		this.treeList.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
- 
-@@ -1382,8 +1509,8 @@ export class TreeSelectorComponent extends Container implements Focusable {
+ 		this.searchLine = new SearchLine(this.treeList);
+@@ -1391,8 +1518,8 @@ export class TreeSelectorComponent extends Container implements Focusable {
  		this.addChild(new Spacer(1));
  		this.addChild(new DynamicBorder());
  
@@ -726,10 +726,10 @@ index 5bcdd84..608cf63 100644
  	}
  
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 01fd5aa..976b797 100644
+index 5b091f408..9b93b7c9c 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -5667,11 +5667,11 @@ export class InteractiveMode {
+@@ -5749,11 +5749,11 @@ export class InteractiveMode {
  	}
  
  	private showTreeSelector(initialSelectedId?: string): void {
@@ -743,7 +743,7 @@ index 01fd5aa..976b797 100644
  			this.showStatus("No entries in session");
  			return;
  		}
-@@ -5798,6 +5798,7 @@ export class InteractiveMode {
+@@ -5880,6 +5880,7 @@ export class InteractiveMode {
  				},
  				initialSelectedId,
  				initialFilterMode,
@@ -752,7 +752,7 @@ index 01fd5aa..976b797 100644
  			selector.onCopy = async (text) => {
  				if (!text) {
 diff --git a/packages/coding-agent/test/session-manager/tree-traversal.test.ts b/packages/coding-agent/test/session-manager/tree-traversal.test.ts
-index 50980f7..5de02ad 100644
+index 50980f700..5de02adda 100644
 --- a/packages/coding-agent/test/session-manager/tree-traversal.test.ts
 +++ b/packages/coding-agent/test/session-manager/tree-traversal.test.ts
 @@ -173,6 +173,29 @@ describe("SessionManager append and tree traversal", () => {
@@ -786,12 +786,12 @@ index 50980f7..5de02ad 100644
  		it("returns empty array for empty session", () => {
  			const session = SessionManager.inMemory();
 diff --git a/packages/coding-agent/test/tree-selector.test.ts b/packages/coding-agent/test/tree-selector.test.ts
-index 579511b..a926774 100644
+index 06d1ee541..33d2a6b09 100644
 --- a/packages/coding-agent/test/tree-selector.test.ts
 +++ b/packages/coding-agent/test/tree-selector.test.ts
 @@ -1,12 +1,13 @@
  import { stripVTControlCharacters } from "node:util";
- import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+ import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 -import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 +import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
  import { KeybindingsManager } from "../src/core/keybindings.ts";
@@ -809,7 +809,7 @@ index 579511b..a926774 100644
  } from "../src/core/session-manager.ts";
  import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
  import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-@@ -126,6 +127,105 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
+@@ -126,6 +127,150 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
  }
  
  describe("TreeSelectorComponent", () => {
@@ -842,6 +842,48 @@ index 579511b..a926774 100644
 +			expect(complete?.children[0]?.entry).toEqual(session.getEntry(stateId));
 +		});
 +
++		test("pages metadata entries and keeps IME focus through label save and cancel", () => {
++			const session = SessionManager.inMemory();
++			const ids = Array.from({ length: 20 }, (_, index) =>
++				session.appendMessage({ role: "user", content: `message ${index} 界🙂é`, timestamp: index }),
++			);
++			const onLabel = vi.fn();
++			const selector = new TreeSelectorComponent(
++				session.getTreeSource(),
++				ids[19],
++				24,
++				() => {},
++				() => {},
++				onLabel,
++				ids[0],
++			);
++			selector.focused = true;
++			const list = selector.getTreeList();
++			selector.handleInput("\x1b[C");
++			expect(list.getSelectedReference()?.entry.id).toBe(ids[12]);
++			selector.handleInput("\x1b[6~");
++			expect(list.getSelectedReference()?.entry.id).toBe(ids[19]);
++			expect(stripVTControlCharacters(selector.render(120).join("\n"))).toContain("message 19 界🙂é");
++			selector.handleInput("\x1b[5~");
++			expect(list.getSelectedReference()?.entry.id).toBe(ids[7]);
++			selector.handleInput("\x1b[D");
++			expect(list.getSelectedReference()?.entry.id).toBe(ids[0]);
++
++			selector.handleInput("L");
++			selector.handleInput("标签🙂");
++			expect(selector.render(120).filter((line) => line.includes(CURSOR_MARKER))).toHaveLength(1);
++			selector.handleInput("\r");
++			expect(onLabel).toHaveBeenCalledWith(ids[0], "标签🙂");
++			selector.handleInput("L");
++			selector.focused = false;
++			expect(selector.render(120).join("\n")).not.toContain(CURSOR_MARKER);
++			selector.focused = true;
++			selector.handleInput("\x1b");
++			const cursors = selector.render(120).filter((line) => line.includes(CURSOR_MARKER));
++			expect(cursors).toHaveLength(1);
++			expect(stripVTControlCharacters(cursors[0])).toContain("Type to search:");
++		});
++
 +		test("cancels superseded and closed searches and reports body read failures", async () => {
 +			const session = SessionManager.inMemory();
 +			for (let i = 0; i < 60; i++) session.appendCustomMessageEntry("memo", `x content ${i}`, true);
@@ -872,11 +914,14 @@ index 579511b..a926774 100644
 +				undefined,
 +				redraw,
 +			);
++			selector.focused = true;
 +			try {
 +				selector.handleInput("x");
++				expect(selector.render(80).filter((line) => line.includes(CURSOR_MARKER))).toHaveLength(1);
 +				selector.handleInput("\x1b");
 +				selector.handleInput("y");
 +				await rendered;
++				expect(selector.render(80).filter((line) => line.includes(CURSOR_MARKER))).toHaveLength(1);
 +				expect(selector.getTreeList().getSelectedReference()?.entry.id).toBe(target);
 +				expect(redraw).toHaveBeenCalledTimes(1);
 +				selector.handleInput("x");

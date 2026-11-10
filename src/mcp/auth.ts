@@ -136,7 +136,7 @@ export function createAuth(entry: McpServerEntry, credentials: McpCredentials) {
         clientMetadataDocument: clientMetadataDocument(config.url, redirectUrl, settings),
         clientSecret: settings.clientSecret === undefined ? undefined : resolveValue(settings.clientSecret, "oauth.clientSecret"),
         store, onRedirect: () => {} });
-      const result = await authorizeMcp(provider, { serverUrl: config.url,
+      const result = await authorizeMcp(provider, { serverUrl: config.url, refreshOnly: true,
         resourceMetadataUrl: challenge?.resourceMetadataUrl,
         authorizationServerMetadataUrl: settings.authServerMetadataUrl ? new URL(settings.authServerMetadataUrl) : undefined,
         scope: challenge?.scope,

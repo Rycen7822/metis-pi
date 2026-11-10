@@ -186,6 +186,7 @@ export async function startHttp({ oauth = false } = {}) {
         return json({}, 404);
       }
       const result = await rpc(message, state);
+      if (state.reply && await state.reply(message, result, res)) return;
       if (message.method === "tools/call" && state.fail) return json({ error: "after-side-effect" }, 502);
       return json(
         { jsonrpc: "2.0", id: message.id, result },

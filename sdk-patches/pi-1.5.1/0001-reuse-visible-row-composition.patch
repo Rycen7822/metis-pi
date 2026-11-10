@@ -1,5 +1,5 @@
 diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
-index a64c262..ffa4a9d 100644
+index a64c262c1..ffa4a9d89 100644
 --- a/packages/tui/src/layout.ts
 +++ b/packages/tui/src/layout.ts
 @@ -50,6 +50,20 @@ export interface ScrollbarGeometry {
@@ -101,7 +101,7 @@ index a64c262..ffa4a9d 100644
  		root: rootBox,
  		width: safeWidth,
 diff --git a/packages/tui/test/layout.test.ts b/packages/tui/test/layout.test.ts
-index 5aa1cd3..2a152f7 100644
+index 5aa1cd347..2a152f780 100644
 --- a/packages/tui/test/layout.test.ts
 +++ b/packages/tui/test/layout.test.ts
 @@ -135,14 +135,12 @@ describe("viewport layout", () => {

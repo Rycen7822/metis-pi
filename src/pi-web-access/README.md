@@ -14,7 +14,7 @@ Metis exposes one deferred `web_access` tool. The operation names below (`web_se
 
 ## Install
 
-The Pi extension requires **Pi 1.5.0**. Follow the root installation instructions and disable a separately installed `pi-web-access` copy to avoid duplicate tools, commands, and caches.
+Run the Pi extension on **Pi 1.5.1 only**, following the root installation instructions. Disable a separately installed `pi-web-access` copy so tools, commands, and caches have one owner.
 
 Ordinary preferences belong in `[webAccess]` in the global `<agentDir>/metis-pi.toml`; credentials remain in `<agentDir>/web-search.json`, environment variables, or trusted credential commands. `PI_CODING_AGENT_DIR` selects the agent directory. `/metis-config init` creates defaults and the parameter guide without importing or rewriting old files. Ordinary JSON preference fields are ignored by Metis.
 
@@ -619,7 +619,7 @@ Copy it into a browser that can reach the Pi host, using a port-forward if neede
 
 The standalone Pi extension can start with compact `web_enable`, then register enabled operations for the next model request. Disabled operations stay absent and alternate names are preserved. Adding tools may invalidate a model's prompt-cache prefix for that request; later requests can cache again.
 
-`toolActivation` defaults to `auto`: new sessions use dynamic activation only if the initially selected model accepts added tools; otherwise tools are eager. `dynamic` forces `web_enable` despite possible cache cost; `eager` exposes enabled tools immediately. The choice is made once: switching models or restoring a session does not rewrite its recorded tool selection. A resumed session without `web_enable` does not acquire it after upgrade; start a new session. Restart after changing activation/registration preferences. This uses Pi 1.5.0 activation APIs; Metis's public tool remains the deferred grouped `web_access` entrypoint.
+`toolActivation` defaults to `auto`: new sessions use dynamic activation only if the initially selected model accepts added tools; otherwise tools are eager. `dynamic` forces `web_enable` despite possible cache cost; `eager` exposes enabled tools immediately. The choice is made once: switching models or restoring a session does not rewrite its recorded tool selection. A resumed session without `web_enable` does not acquire it after upgrade; start a new session. Restart after changing activation/registration preferences. Activation follows the native Pi APIs; Metis exposes the deferred grouped `web_access` entrypoint.
 
 ### Shortcuts
 

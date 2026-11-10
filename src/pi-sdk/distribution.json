@@ -1,38 +1,42 @@
 {
   "schemaVersion": 1,
-  "piVersion": "1.5.0",
-  "upstreamCommit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
+  "piVersion": "1.5.1",
+  "upstreamCommit": "dd30101cfc5b0609411dd80b6f93adbc14db14cf",
   "patches": [
     {
       "file": "0000-physical-workspace-bundling.patch",
-      "sha256": "79b0c56efbf8437cd44ba1dc111af250de20d0c492b7c4b392a4fe07adeeb37f"
+      "sha256": "09487ca28de0f1dcf399938e835f738abf7f533dd02e9a74b976c66739cb3e4e"
     },
     {
       "file": "0001-reuse-visible-row-composition.patch",
-      "sha256": "cbf28215ef5f56e37c314e908904bd4980932e02741aca99ea1fe43cb0e8d957"
+      "sha256": "df3750f3f1f74e6ff70cfc8258b08f718c182c73ffd70ef12e2a0c2b3c6ea0a8"
     },
     {
       "file": "0003-load-session-bodies-on-demand.patch",
-      "sha256": "406e45f4fc9938ab946c366c884cddcc600701f876cafe1e7e8ea65c17db2c24"
+      "sha256": "2b3479c203c913ee0e788d6a4361440f234ca11b4ba1a8e290eebb3174d69bac"
     },
     {
       "file": "0004-preview-session-trees-without-history-bodies.patch",
-      "sha256": "468a01d8017663e01c8e0d519d1c10649344f51a69098693a3baed057578eb2c"
+      "sha256": "be12127a9d214fb9b2ea2519cb57475f17c8efa20619d4b111b7298fe004a45e"
     },
     {
       "file": "0005-preserve-hot-bodies-during-history-scans.patch",
-      "sha256": "c0e57818af4d8ec456d3a81ca5b3eca40880389ef1942dd3ab5ae70b0a82ffd2"
+      "sha256": "d466f631dfc945cdd065a3023a2e69ab00ec79e8df51acce1f6b772b42f36544"
     },
     {
       "file": "0006-preserve-oauth-login-continuity.patch",
-      "sha256": "b0e4eaa5b0d7f01abab24153a40e5b864cef51e64cb8cce70f0a561e0e0c8d09"
+      "sha256": "5fbdd8c5e23f0ed611eca78641605d65c2ab51dfc7a13bb50a8fc0d9f17a1f06"
+    },
+    {
+      "file": "0007-separate-message-display-headers.patch",
+      "sha256": "71b1a5c69803759fb3adb0c82ebe5d25d15f28773a9bdd9a16ccffbac0012914"
     }
   ],
-  "patchSet": "afe4cf96912e7de8f7fcf988a05fe93b6447ec436d307563171f830a353387a6",
+  "patchSet": "ab3e0a3fc48d109d79af257ffb10cd27e43bb0e1edf4596c42798723bbab2a30",
   "archive": {
-    "file": "pi-1.5.0.tgz",
-    "sha256": "abac9b3ebd3f99b60263f77b4f182fe5a57882f1773ffd5da2655431965cd3ba",
-    "bytes": 5760051,
-    "unpackedBytes": 25588774
+    "file": "pi-1.5.1.tgz",
+    "sha256": "77a0a5723ab0651b2eb6c9bcdd397f09211a928a8409980f62fd1eb386bf341f",
+    "bytes": 5932513,
+    "unpackedBytes": 26326840
   }
 }

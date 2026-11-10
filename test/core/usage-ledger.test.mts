@@ -53,6 +53,27 @@ test("one ledger owns confirmations, corrections, weighted totals and session re
   assert.equal(ledger.cacheRateLast(), 0, "cache writes count as misses, not unknown usage");
 });
 
+test("conversation totals exclude background warming and remain idempotent after rebuild", () => {
+  const ledger = new UsageLedger();
+  const assistant = { role: "assistant", provider: "fixture", responseId: "answer", timestamp: 1,
+    usage: { ...U(100, 10), cost: { total: 0.20 } } };
+  const entries = [
+    { type: "message", id: "answer-entry", message: assistant },
+    { type: "usage", id: "warm-entry", kind: "cache_warm", provider: "fixture", model: "fixture",
+      usage: { ...U(500, 1, 400), cost: { total: 0.05 } } },
+  ];
+  ledger.rebuild(entries);
+  ledger.confirm("fixture:answer", assistant.usage);
+  assert.equal(ledger.confirmedCount, 1, "live confirmation and persisted answer share one request key");
+  assert.equal(ledger.totals().input, 100);
+  assert.equal(ledger.totals().costTotal, 0.20, "the selected conversation scope is not a full provider bill");
+  assert.equal(ledger.cacheRateLast(), 0, "background warming does not replace the latest conversation request");
+  ledger.rebuild(entries);
+  assert.equal(ledger.totals().costTotal, 0.20);
+  ledger.rebuild([{ type: "usage", id: "unknown", kind: "unknown", usage: U(10, 1) }]);
+  assert.equal(ledger.totals().costTotal, undefined, "absent conversation cost is unknown, not a real zero");
+});
+
 test("invalid fields are omitted while valid usage survives", () => {
   assert.deepEqual(sanitizeUsage({ input: NaN, output: 4, cacheRead: -1, cacheWrite: Infinity }), { output: 4 });
 });

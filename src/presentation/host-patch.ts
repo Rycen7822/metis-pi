@@ -1,26 +1,28 @@
-// Leases for host skill decorations. Metadata lives on the wrapper,
-// so fresh module copies share ownership without a process-wide registry.
-export type SkillPatchState = "patched" | "already" | "missing";
-export interface SkillPatch { readonly state: SkillPatchState; release(): void }
+// Leases for native presentation hooks. Wrapper metadata shares ownership
+// across fresh module copies without a process-wide registry.
+export type HostPatchState = "patched" | "already" | "missing";
+export interface HostPatch { readonly state: HostPatchState; release(): void }
 type HostMethod = (...args: never[]) => unknown;
+interface Owner { decorate: HostMethod }
 interface Installed {
   prototype: object;
   method: string;
   descriptor: PropertyDescriptor | undefined;
+  original: unknown;
   wrapper: HostMethod;
-  owners: number;
+  owners: Owner[];
 }
 const OWNER = Symbol.for("Rycen7822.metis-pi.skill-decoration");
-const missing = (): SkillPatch => ({ state: "missing", release() {} });
+const missing = (): HostPatch => ({ state: "missing", release() {} });
 
-function lease(entry: Installed, state: SkillPatchState): SkillPatch {
-  let live = true;
+function lease(entry: Installed, owner: Owner, state: HostPatchState): HostPatch {
   return {
     state,
     release() {
-      if (!live) return;
-      live = false;
-      if (--entry.owners > 0) return;
+      const index = entry.owners.indexOf(owner);
+      if (index < 0) return;
+      entry.owners.splice(index, 1);
+      if (entry.owners.length > 0) return;
       const current = Object.getOwnPropertyDescriptor(entry.prototype, entry.method);
       // Preserve later owners and descriptor changes. Even if they retained our
       // wrapper, its zero-owner path delegates without applying the decoration.
@@ -39,24 +41,30 @@ export function patchHostPrototype(
   component: unknown,
   method: string,
   wrap: (original: unknown) => HostMethod | undefined,
-): SkillPatch {
+): HostPatch {
   const prototype = (component as { prototype?: Record<string, unknown> } | undefined)?.prototype;
   if (!prototype || typeof prototype !== "object") return missing();
   const original = prototype[method];
   const existing = typeof original === "function"
     ? (original as unknown as Record<symbol, unknown>)[OWNER] as Installed | undefined : undefined;
-  if (existing?.prototype === prototype && existing.method === method && existing.owners > 0) {
-    existing.owners++;
-    return lease(existing, "already");
+  if (existing?.prototype === prototype && existing.method === method && existing.owners.length > 0) {
+    const decorate = wrap(existing.original);
+    if (!decorate) return missing();
+    const owner = { decorate };
+    existing.owners.push(owner);
+    return lease(existing, owner, "already");
   }
   const descriptor = Object.getOwnPropertyDescriptor(prototype, method);
   if (descriptor ? !("value" in descriptor) || !descriptor.writable : !Object.isExtensible(prototype)) return missing();
   const decorate = wrap(original);
   if (!decorate) return missing();
+  const owner = { decorate };
   const entry: Installed = {
-    prototype, method, descriptor, owners: 1,
+    prototype, method, descriptor, original, owners: [owner],
     wrapper: function (this: unknown, ...args: never[]) {
-      if (entry.owners > 0) return decorate.apply(this, args);
+      // Only a live lease supplies context; release reveals the preceding owner.
+      const current = entry.owners.at(-1);
+      if (current) return current.decorate.apply(this, args);
       return typeof original === "function" ? original.apply(this, args) : undefined;
     },
   };
@@ -64,5 +72,5 @@ export function patchHostPrototype(
   if (!Reflect.defineProperty(prototype, method, descriptor
     ? { ...descriptor, value: entry.wrapper }
     : { value: entry.wrapper, writable: true, configurable: true, enumerable: true })) return missing();
-  return lease(entry, "patched");
+  return lease(entry, owner, "patched");
 }

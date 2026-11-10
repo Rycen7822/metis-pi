@@ -1,5 +1,5 @@
 diff --git a/scripts/build-coding-agent-bundle.mjs b/scripts/build-coding-agent-bundle.mjs
-index d2f622d..7b74258 100644
+index d2f622d6b..7b7425837 100644
 --- a/scripts/build-coding-agent-bundle.mjs
 +++ b/scripts/build-coding-agent-bundle.mjs
 @@ -1,6 +1,6 @@

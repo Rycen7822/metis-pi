@@ -24,6 +24,13 @@ test("collected host tokens and a throttled stream rebuild exact fallback proven
     ["CJK bare URL", "See https://example.com/path，后面", "See https://example.com/path，后面", 12],
     ["nested quotes without border space", "> ".repeat(8) + "word", "word", 1],
     ["bracket table", "Intro\n\n\\[\nx^2\n\n| A |\n| --- |\n| 1 |\n\nAfter", undefined, 40],
+    ["mixed HTML", "<div><!-- SECRET -->visible</div>", "<div>visible</div>", 12],
+    ["unclosed HTML comment", "<div>visible<!-- SECRET", "<div>visible", 40],
+    ["comment-only block", "<!-- SECRET -->", "", 40],
+    ["comments between paragraphs", "before\n\n<!-- SECRET -->\n\nafter", "before\n\nafter", 40],
+    ["nested quote comments", "> before\n>\n> <!-- SECRET -->\n>\n> after", ["before", "after"], 20],
+    ["nested list comments", "- before\n\n  <!-- SECRET -->\n\n- after", ["before", "after"], 20],
+    ["inline code literal", "Use `<!-- LITERAL -->`", "Use <!-- LITERAL -->", 40],
   ];
   // Warm native rows before the process-owned wrappers exist. Dropping the
   // optional WeakRef simulates collected tokens without nondeterministic GC.
@@ -38,7 +45,11 @@ test("collected host tokens and a throttled stream rebuild exact fallback proven
     const copied = select(copyFrame(component, width));
     assert.equal(component.cachedTokens, undefined, `${name}: host reused rows; mirror had to lex`);
     assert.equal(sys.diagnostics().mirrors.markdownDegraded, 0, `${name}: ${sys.diagnostics().mirrors.lastDegradedReason}`);
-    if (expected !== undefined) { assert.equal(copied.text, expected, name); assert.equal(copied.nativeRows, 0, name); }
+    if (Array.isArray(expected)) {
+      for (const text of expected) assert.ok(copied.text.includes(text), name);
+      assert.doesNotMatch(copied.text, /SECRET/, name);
+      assert.equal(copied.nativeRows, 0, name);
+    } else if (expected !== undefined) { assert.equal(copied.text, expected, name); assert.equal(copied.nativeRows, 0, name); }
     else {
       assert.match(copied.text, /Intro/); assert.match(copied.text, /After/);
       assert.match(copied.text, /│ A │/); assert.match(copied.text, /│ 1 │/);
@@ -59,6 +70,25 @@ test("collected host tokens and a throttled stream rebuild exact fallback proven
   assert.equal(rebuilt.text, "新的中文。后面还有中文");
   assert.equal(rebuilt.nativeRows, 0);
   assert.equal(sys.diagnostics().mirrors.markdownDegraded, 0);
+});
+
+test("native cached HTML tokens copy visible content without revealing comments", t => {
+  const sys = installCopyPrototypes(t);
+  for (const [source, expected] of [
+    ["<div><!-- SECRET -->visible</div>", "<div>visible</div>"],
+    ["before\n\n<!-- SECRET -->\n\nafter", "before\n\nafter"],
+    ["Use `<!-- LITERAL -->`", "Use <!-- LITERAL -->"],
+  ]) {
+    const component = new Tui.Markdown(source, 0, 0, theme);
+    const frame = copyFrame(component, 20);
+    const cached = component.cachedTokens?.deref();
+    assert.ok(cached, "a strong local ref keeps the real native token path available");
+    const copied = select(frame);
+    assert.equal(copied.text, expected);
+    assert.equal(copied.nativeRows, 0);
+    assert.doesNotMatch(copied.text, /SECRET/);
+    assert.equal(sys.diagnostics().mirrors.markdownDegraded, 0);
+  }
 });
 
 test("real Markdown copies prose, formatted blocks and hard breaks without mirror degradation", (t) => {

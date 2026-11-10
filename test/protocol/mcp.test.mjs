@@ -228,6 +228,51 @@ test("MCP refresh keeps the native document or registered client identity", asyn
   });
 });
 
+test("background MCP refresh preserves a pending login verifier on authorization failures", async t => {
+  for (const failure of ["network", "server_error", "invalid_grant", "invalid_client"]) await t.test(failure, async t => {
+    const dir = mkdtempSync(join(tmpdir(), "metis-mcp-pending-login-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const serverUrl = "https://fixture.invalid/mcp", issuer = "https://auth.fixture.invalid";
+    const entry = { name: "fixture", scope: "global", source: "fixture", config: {
+      url: serverUrl, oauth: { clientRegistration: "dcr" },
+    } };
+    const credentials = new McpCredentials(dir, entry);
+    const verifier = "synthetic-pending-browser-login-verifier";
+    const metadata = { issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
+      registration_endpoint: issuer + "/register", response_types_supported: ["code"],
+      token_endpoint_auth_methods_supported: ["none"] };
+    const state = { serverUrl, codeVerifier: verifier,
+      clientInformation: { client_id: "synthetic-client", redirect_uris: ["http://127.0.0.1/callback"] },
+      tokens: { access_token: "synthetic-old", refresh_token: "synthetic-refresh", token_type: "Bearer" },
+      discovery: { authorizationServerUrl: issuer, authorizationServerMetadata: metadata } };
+    writeFileSync(credentials.path, JSON.stringify({ [credentials.key]: state }));
+    let refreshes = 0, registrations = 0;
+    const auth = createAuth(entry, credentials);
+    await assert.rejects(auth.onUnauthorized({ token: "synthetic-old", response: new Response(null, { status: 401 }),
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url === issuer + "/token") {
+          refreshes++;
+          assert.equal(new URLSearchParams(String(init.body)).get("grant_type"), "refresh_token");
+          if (failure === "network") throw new TypeError("synthetic network failure");
+          return Response.json({ error: failure }, { status: failure === "server_error" ? 500 : 400 });
+        }
+        if (url === issuer + "/register") {
+          registrations++;
+          return Response.json({ client_id: "synthetic-replacement", redirect_uris: ["http://127.0.0.1/callback"] });
+        }
+        if (url.includes(".well-known/oauth-protected-resource"))
+          return Response.json({ resource: serverUrl, authorization_servers: [issuer] });
+        if (url.includes(".well-known/")) return Response.json(metadata);
+        throw new Error(`Unexpected fixture request: ${url}`);
+      } }));
+    await auth.settled();
+    assert.equal(refreshes, 1, "the failed refresh must actually be attempted");
+    assert.equal(registrations, 0, "background refresh must not initiate replacement client registration");
+    assert.equal((await credentials.load()).codeVerifier, verifier, "pending browser callback keeps its original PKCE verifier");
+  });
+});
+
 test("MCP client registration config rejects unsupported identities before auth", () => {
   const valid = oauth => validateMcpServerConfig("fixture", { url: "https://fixture.invalid/mcp", oauth });
   for (const clientRegistration of ["auto", "dcr", "cimd"]) assert.equal(typeof valid({ clientRegistration }), "object");

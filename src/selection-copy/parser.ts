@@ -1,4 +1,4 @@
-// Fallback lexer aligned with Pi 1.5.0: marked 18.0.11 +
+// Fallback lexer aligned with Pi 1.5.1: marked 18.0.11 +
 // marked-cjk-friendly 0.1.2 emStrong, strict strikethrough and latex extensions.
 // Narrow adaptation of pi-tui src/components/markdown.ts (MIT). Keep native
 // tokens authoritative; fallback rows are checked against the actual render so
@@ -114,6 +114,34 @@ interface LatexBlockToken {
   raw: string;
   text: string;
   pending?: boolean;
+}
+
+// An unclosed comment runs to the end of an HTML block, as in CommonMark, so streamed comments stay hidden.
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?(?:-->|$)/g;
+
+export function stripHtmlComments(html: string): string {
+  return html.replace(HTML_COMMENT_REGEX, "");
+}
+
+/** Remove block HTML tokens that hold only comments, so they render no line. A
+ * removed comment between two blank lines, or at the start or end, also drops a
+ * blank line, so it leaves no extra gap. Mirrors pi-tui's own token filtering. */
+function removeHtmlCommentBlocks(tokens: MarkdownToken[]): void {
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const token = tokens[i]!;
+    if (token.type === "list") {
+      for (const item of token.items ?? []) removeHtmlCommentBlocks(item.tokens ?? []);
+    } else if (token.type === "blockquote") {
+      removeHtmlCommentBlocks(token.tokens ?? []);
+    } else if (token.type === "html" && stripHtmlComments(token.raw ?? "").trim() === "") {
+      tokens.splice(i, 1);
+      if (tokens[i]?.type === "space" && (i === 0 || tokens[i - 1]?.type === "space")) {
+        tokens.splice(i, 1);
+      } else if (i === tokens.length && tokens[i - 1]?.type === "space") {
+        tokens.splice(--i, 1);
+      }
+    }
+  }
 }
 
 const TABLE_DELIMITER_ROW_REGEX = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
@@ -233,6 +261,7 @@ export function createCopyLexer(): CopyLexer {
     lexer(text: string): MarkdownToken[] {
       const tokens = parser.lexer(text) as unknown as MarkdownToken[];
       trimPartialClosingFences(tokens);
+      removeHtmlCommentBlocks(tokens);
       return tokens;
     },
   };

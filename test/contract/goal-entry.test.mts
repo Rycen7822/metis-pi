@@ -83,7 +83,8 @@ function popupHost(h: ReturnType<typeof makeHost>) {
   tui.setLayoutRoot(container(composer));
   tui.setFocus(composer);
   h.ctx.mode = "tui";
-  const host = { ui: tui, editor: { getText: () => composer.getValue() }, keybindings: new KeybindingsManager(TUI_KEYBINDINGS) };
+  const host = { ui: tui, editor: { getText: () => composer.getValue() },
+    keybindings: new KeybindingsManager(TUI_KEYBINDINGS), extensionOverlays: new Map() };
   // Use the SDK's real overlay completion/disposal path, not a second UI lifecycle.
   const show = (InteractiveMode.prototype as any).showExtensionCustom.bind(host);
   let popup: Component | undefined;
@@ -414,7 +415,8 @@ test("goal validates action-specific fields without mutating state on invalid re
   const definition = h.tools.get("goal")!;
   const invalidArguments: Record<string, string>[] = [{}, { action: "pause" }, { action: "update", status: "paused" }];
   for (const arguments_ of invalidArguments) {
-    assert.throws(() => validateToolArguments(definition, { type: "toolCall", id: "invalid", name: "goal", arguments: arguments_ }), /Validation failed/);
+    assert.throws(() => validateToolArguments(definition,
+      { type: "toolCall", id: "invalid", name: "goal", arguments: arguments_ }), /Validation failed/);
   }
   assert.equal(h.entries.length, 0, "invalid requests and reads do not persist changes");
   assert.equal((await h.tool("get")).details.goal, null);

@@ -1,5 +1,5 @@
 diff --git a/packages/ai/src/auth/resolve.ts b/packages/ai/src/auth/resolve.ts
-index dfeb030..2b1dd2a 100644
+index dfeb0300e..2b1dd2afa 100644
 --- a/packages/ai/src/auth/resolve.ts
 +++ b/packages/ai/src/auth/resolve.ts
 @@ -16,6 +16,36 @@ import type {
@@ -64,7 +64,7 @@ index dfeb030..2b1dd2a 100644
  		throw new ModelsError("oauth", `OAuth auth derivation failed for ${providerId}`, { cause: error });
  	}
 diff --git a/packages/ai/src/auth/types.ts b/packages/ai/src/auth/types.ts
-index 86a9268..14644fe 100644
+index 86a926809..14644fe1f 100644
 --- a/packages/ai/src/auth/types.ts
 +++ b/packages/ai/src/auth/types.ts
 @@ -31,6 +31,8 @@ export interface OAuthCredentials {
@@ -87,7 +87,7 @@ index 86a9268..14644fe 100644
  	env?: ProviderEnv;
  	/** Human-readable label for status UI: "ANTHROPIC_API_KEY", "OAuth", "~/.aws/credentials". */
 diff --git a/packages/ai/src/models.ts b/packages/ai/src/models.ts
-index 3d26dcb..c64576e 100644
+index 03b9a647c..99189b05e 100644
 --- a/packages/ai/src/models.ts
 +++ b/packages/ai/src/models.ts
 @@ -6,6 +6,7 @@ import {
@@ -98,7 +98,7 @@ index 3d26dcb..c64576e 100644
  } from "./auth/resolve.ts";
  import type {
  	AuthCheck,
-@@ -787,7 +788,8 @@ class ModelsImpl implements MutableModels {
+@@ -815,7 +816,8 @@ class ModelsImpl implements MutableModels {
  			throw new ModelsError("auth", `${provider.name} does not support ${type} login`);
  		}
  		const loginOperation: Promise<Credential> = method.login({ ...interaction, signal }, options);
@@ -110,7 +110,7 @@ index 3d26dcb..c64576e 100644
  		const started = new Promise<void>((resolve) => {
 diff --git a/packages/ai/test/oauth-continuity.test.ts b/packages/ai/test/oauth-continuity.test.ts
 new file mode 100644
-index 0000000..15c0615
+index 000000000..15c061586
 --- /dev/null
 +++ b/packages/ai/test/oauth-continuity.test.ts
 @@ -0,0 +1,123 @@
@@ -237,8 +237,22 @@ index 0000000..15c0615
 +		expect(await h.credentials.read("openai")).toEqual(before);
 +	});
 +});
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index d8a486f13..ad510e794 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -122,8 +122,8 @@ import type { ModelRuntime } from "./model-runtime.ts";
+ import { NestedToolCallRunner } from "./nested-tool-calls.ts";
+ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
+ import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+-import { exportSessionToJsonl } from "./session-export.ts";
+ import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
++import { exportSessionToJsonl } from "./session-export.ts";
+ import {
+ 	type BranchSummaryEntry,
+ 	type CompactionEntry,
 diff --git a/packages/coding-agent/src/core/model-registry.ts b/packages/coding-agent/src/core/model-registry.ts
-index ffd3175..ebdcfd9 100644
+index ffd317564..ebdcfd941 100644
 --- a/packages/coding-agent/src/core/model-registry.ts
 +++ b/packages/coding-agent/src/core/model-registry.ts
 @@ -37,6 +37,8 @@ export type ResolvedRequestAuth =
@@ -260,10 +274,10 @@ index ffd3175..ebdcfd9 100644
  		} catch (error) {
  			const cause = error instanceof Error ? error.cause : undefined;
 diff --git a/packages/coding-agent/test/model-registry.test.ts b/packages/coding-agent/test/model-registry.test.ts
-index 67142f7..ad61a51 100644
+index 13586226f..1fe1cc0e2 100644
 --- a/packages/coding-agent/test/model-registry.test.ts
 +++ b/packages/coding-agent/test/model-registry.test.ts
-@@ -1255,6 +1255,7 @@ describe("ModelRegistry", () => {
+@@ -1292,6 +1292,7 @@ describe("ModelRegistry", () => {
  			expect(auth).toEqual({
  				ok: true,
  				apiKey: undefined,
@@ -271,7 +285,7 @@ index 67142f7..ad61a51 100644
  				headers: {
  					"cf-aig-authorization": "Bearer stored-cf-token",
  					Authorization: null,
-@@ -2053,6 +2054,7 @@ describe("ModelRegistry", () => {
+@@ -2090,6 +2091,7 @@ describe("ModelRegistry", () => {
  				const auth1 = await registry.getApiKeyAndHeaders(model!);
  				expect(auth1).toEqual({
  					ok: true,
@@ -279,7 +293,7 @@ index 67142f7..ad61a51 100644
  					apiKey: "token-1",
  					headers: { Authorization: "Bearer token-1" },
  				});
-@@ -2062,6 +2064,7 @@ describe("ModelRegistry", () => {
+@@ -2099,6 +2101,7 @@ describe("ModelRegistry", () => {
  				const auth2 = await registry.getApiKeyAndHeaders(model!);
  				expect(auth2).toEqual({
  					ok: true,
@@ -287,7 +301,7 @@ index 67142f7..ad61a51 100644
  					apiKey: "token-2",
  					headers: { Authorization: "Bearer token-2" },
  				});
-@@ -2085,6 +2088,7 @@ describe("ModelRegistry", () => {
+@@ -2122,6 +2125,7 @@ describe("ModelRegistry", () => {
  
  				expect(auth).toEqual({
  					ok: true,

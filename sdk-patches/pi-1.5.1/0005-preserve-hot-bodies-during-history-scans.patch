@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
-index 2fad08e..2ebe080 100644
+index 2fad08e78..2ebe080bb 100644
 --- a/packages/coding-agent/src/core/session-entry-store.ts
 +++ b/packages/coding-agent/src/core/session-entry-store.ts
 @@ -127,6 +127,12 @@ export class SessionEntryStore {
@@ -43,7 +43,7 @@ index 2fad08e..2ebe080 100644
  	}
  
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index f87cd8e..f0aa11f 100644
+index 4278deaf3..af1f28e14 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -9,7 +9,6 @@ import {
@@ -75,7 +75,7 @@ index f87cd8e..f0aa11f 100644
  	getEntryMetadata(id: string): SessionEntryMetadata | undefined {
  		return this.store.getMetadata(id);
 diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
-index 7925c2a..3974e5a 100644
+index 7925c2af9..3974e5a55 100644
 --- a/packages/coding-agent/test/session-manager/file-operations.test.ts
 +++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
 @@ -74,6 +74,60 @@ describe("loadEntriesFromFile", () => {

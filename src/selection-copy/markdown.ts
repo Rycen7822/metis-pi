@@ -24,6 +24,7 @@ import {
 import { stripAnsi, wrapWithProvenance } from "./wrap.ts";
 import type { AdapterHostFns } from "./serialize.ts";
 import type { CopyLexer, MarkdownToken } from "./parser.ts";
+import { stripHtmlComments } from "./parser.ts";
 
 export interface MarkdownInstance {
   text: string;
@@ -228,8 +229,10 @@ function renderTokenMirror(
       return lines;
     }
     case "html": {
+      // Native hides HTML comments and comment-only blocks are filtered from the
+      // token stream; mirror the visible text so the row check still matches.
       if (typeof token.raw === "string") {
-        return [contentLine(applyDefaultStyle(instance, token.raw.trim()))];
+        return [contentLine(applyDefaultStyle(instance, stripHtmlComments(token.raw).trim()))];
       }
       return [];
     }

@@ -10,7 +10,7 @@ if (!sourceArgument || !dependenciesArgument) {
 const source = resolve(sourceArgument);
 const dependencies = resolve(dependenciesArgument);
 const target = resolve(source, "node_modules");
-const version = "1.5.0";
+const version = "1.5.1";
 const manifest = async (directory) => JSON.parse(await readFile(resolve(directory, "package.json"), "utf8"));
 if ((await manifest(resolve(source, "packages/coding-agent"))).version !== version) {
   throw new Error(`This preparation recipe requires Pi ${version} source.`);
@@ -22,11 +22,13 @@ for (const name of ["pi-ai", "pi-tui", "pi-coding-agent", "pi-schema"]) {
 }
 
 async function rejectLinks(directory) {
-  if ((await lstat(directory)).isSymbolicLink()) throw new Error(`Symlink not allowed: ${directory}`);
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) throw new Error(`Symlink not allowed in build dependencies: ${directory}/${entry.name}`);
-    if (entry.isDirectory()) await rejectLinks(resolve(directory, entry.name));
+  const metadata = await lstat(directory);
+  if (metadata.isSymbolicLink()) throw new Error(`Symlink not allowed: ${directory}`);
+  if (metadata.isFile()) {
+    if (metadata.nlink !== 1) throw new Error(`Hardlink not allowed: ${directory}`);
+    return;
   }
+  for (const entry of await readdir(directory)) await rejectLinks(resolve(directory, entry));
 }
 await rejectLinks(target);
 
@@ -59,7 +61,19 @@ for (const name of ["pi-ai", "pi-coding-agent"]) {
   await copyMissingPackages(nested, target);
 }
 
-// Untouched workspace dependencies reuse their same-version published artifacts, not fabricated source outputs.
+const rootManifest = await manifest(source);
+const agentManifest = await manifest(resolve(source, "packages/coding-agent"));
+for (const [name, expected] of [
+  ["typescript", rootManifest.devDependencies.typescript],
+  ["@biomejs/biome", rootManifest.devDependencies["@biomejs/biome"]],
+  ["vitest", agentManifest.devDependencies.vitest],
+]) {
+  if ((await manifest(resolve(target, name))).version !== expected) {
+    throw new Error(`Expected ${name}@${expected} from the source toolchain.`);
+  }
+}
+
+// Start from real same-version artifacts; ai/tui/coding-agent builds then replace their owned dist outputs.
 for (const entry of await readdir(resolve(source, "packages"), { withFileTypes: true })) {
   if (!entry.isDirectory() || ["tui", "coding-agent"].includes(entry.name)) continue;
   const workspace = resolve(source, "packages", entry.name);

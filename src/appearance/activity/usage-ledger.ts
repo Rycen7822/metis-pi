@@ -2,6 +2,7 @@
 //   context  — live ctx.getContextUsage() (host), shown as ctx NNk/WINDOW · pct%
 //   session  — THIS ledger: standard session entries' usage on the active
 //              session file (assistant messages + compaction/branch_summary).
+//              Excludes background usage/cache warming; this is not a billing ledger.
 //   interaction — UiMetrics, from message_end events of the current run.
 // Dedup keys: entry.id for persisted entries, `${provider}:${responseId}` for
 // live messages (responseIds can collide ACROSS providers — always namespace),

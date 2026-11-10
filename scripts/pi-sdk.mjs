@@ -4,10 +4,11 @@ import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "nod
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as tar from "tar";
-import { digest, readDistribution, sdkPackages, verifiedArchive } from "../src/pi-sdk/artifact.mjs";
+import { digest, readDistribution, sdkPackages, sdkVersion, sdkUpstreamCommit, sdkPatchCount,
+  verifiedArchive } from "../src/pi-sdk/artifact.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const patches = path.join(root, "sdk-patches", "pi-1.5.0");
+const patches = path.join(root, "sdk-patches", `pi-${sdkVersion}`);
 async function patchIdentity() {
   const entries = [];
   for (const name of (await readdir(patches)).filter(name => name.endsWith(".patch")).sort())
@@ -24,9 +25,9 @@ async function unpackedBytes(directory) {
   return bytes;
 }
 async function verifySource(sdk) {
-  const baseline = "f9a26365568127461c47a07a37dcb42c140a3ac5";
+  const baseline = sdkUpstreamCommit;
   const git = args => execFileSync("git", ["-C", sdk, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  assert.equal(git(["rev-parse", "HEAD"]).trim(), baseline, "SDK source must start at the pinned Pi v1.5.0 commit");
+  assert.equal(git(["rev-parse", "HEAD"]).trim(), baseline, `SDK source must start at the pinned Pi v${sdkVersion} commit`);
   await mkdir(path.join(root, ".work"), { recursive: true });
   const temporary = await mkdtemp(path.join(root, ".work/pi-sdk-source-"));
   try {
@@ -55,8 +56,8 @@ async function verifySource(sdk) {
 async function packageSDK(sdk) {
   if (process.platform === "win32") throw new Error("Build the Pi SDK with the documented Linux/WSL recipe");
   await verifySource(sdk);
-  const version = "1.5.0", identity = await patchIdentity();
-  assert.equal(identity.patches.length, 6);
+  const version = sdkVersion, identity = await patchIdentity();
+  assert.equal(identity.patches.length, sdkPatchCount);
   for (const name of sdkPackages)
     assert.equal(JSON.parse(await readFile(path.join(sdk, "packages", name, "package.json"), "utf8")).version, version);
   const build = (name, script) => execFileSync("npm", ["--prefix", `packages/${name}`, "run", script], { cwd: sdk, stdio: "inherit" });
@@ -72,12 +73,12 @@ async function packageSDK(sdk) {
     for (const name of sdkPackages)
       await cp(path.join(sdk, "packages", name, "dist"), path.join(staging, name, "dist"), { recursive: true });
     const bytes = await unpackedBytes(staging);
-    const file = "pi-1.5.0.tgz", temporary = path.join(staging, file);
+    const file = `pi-${version}.tgz`, temporary = path.join(staging, file);
     await tar.c({ cwd: staging, file: temporary, gzip: true, portable: true, noMtime: true }, sdkPackages.map(name => `${name}/dist`));
     const archive = await readFile(temporary);
     await writeFile(path.join(assets, file), archive);
     await writeFile(path.join(root, "src/pi-sdk/distribution.json"), JSON.stringify({ schemaVersion: 1, piVersion: version,
-      upstreamCommit: "f9a26365568127461c47a07a37dcb42c140a3ac5", ...identity,
+      upstreamCommit: sdkUpstreamCommit, ...identity,
       archive: { file, sha256: digest(archive), bytes: archive.length, unpackedBytes: bytes } }, null, 2) + "\n");
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
