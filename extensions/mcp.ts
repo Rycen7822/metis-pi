@@ -45,7 +45,7 @@ export default function mcp(pi: ExtensionAPI) {
       else if (!warnings.has(name)) {
         warnings.add(name);
         current.ui.notify(
-          `Metis MCP needs ${name}. Enable its built-in extension with pi config, then reload.`,
+          `Metis MCP needs ${name}. Enable its discovery extension, then reload.`,
           "warning",
         );
       }

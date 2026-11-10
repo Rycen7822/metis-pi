@@ -29,7 +29,7 @@ test("package exposes extensions, themes and portable skills with their referenc
   const files = new Set(packed.files.map(({ path }) => path));
   for (const name of [
     "config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp",
-    "ask-user-question", "btw", "pi-sdk",
+    "ask-user-question", "btw", "pi-sdk", "tool-search",
   ]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }

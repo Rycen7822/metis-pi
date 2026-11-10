@@ -15,6 +15,7 @@ Windows Python 通过 PATH 或 `py` 查找；shell 使用 Git for Windows。Git 
 
 Metis 通过 `postinstall` 安装完整 SDK 补丁；若 npm 12 的 `allowScripts` 或禁脚本策略拦住该钩子，
 首次加载 Metis 时的会话入口仍会补装并提示重启。不要把 `/reload` 当成 SDK 激活；不绕过包管理器的脚本授权策略。
+SDK 同时更新 ai/tui/codemode/coding-agent 和 codemode 文档；[统一发现](features/tool-discovery.md)由 Metis 插件提供，旧搜索全局按可调用网关能力收起。
 
 其他平台、在线服务、模型、图片协议、插件组合，都要在目标环境实测。
 

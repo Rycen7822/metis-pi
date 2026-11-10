@@ -5,6 +5,13 @@ export const OWNED_EXECUTION_ENTRY = fileURLToPath(new URL("../../extensions/exe
 export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../../extensions/action-fusion.ts", import.meta.url));
 export const OWNED_NEURAL_SEARCH_ENTRY = fileURLToPath(new URL("../../extensions/neural-search.ts", import.meta.url));
 export const OWNED_SUBAGENTS_ENTRY = fileURLToPath(new URL("../../extensions/subagents.ts", import.meta.url));
+export const OWNED_TOOL_SEARCH_ENTRY = fileURLToPath(new URL("../../extensions/tool-search.ts", import.meta.url));
+
+/** Registered provenance only; a same-named third-party gateway is not a Metis capability. */
+export function isToolSearch(tool) {
+  return tool?.name === "tool_search"
+    && [OWNED_TOOL_SEARCH_ENTRY, "builtin:tool-search"].includes(tool.sourceInfo?.path);
+}
 
 /** Registration authority only; never derive this from serialized model messages. */
 export function toolPresentation(name, info) {

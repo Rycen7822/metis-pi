@@ -6,12 +6,19 @@ import { loadConfig } from "../src/appearance/config.ts";
 import { runtimePackage } from "../src/subagents/host/runtime-package.ts";
 import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/ui/rendering.ts";
 import { SubagentSession } from "../src/subagents/host/session.ts";
+import { OWNED_TOOL_SEARCH_ENTRY } from "../src/extension-paths.ts";
 
 const namespace = {
   name: "subagents",
   description: "Create, observe, message, answer and interrupt persistent Pi subagents in this parent session.",
 };
-const guidance = "Subagent tools are deferred in the subagents namespace. Use codemode: discover with describeNamespace('subagents') or searchTools(query, {namespace:'subagents', limit:1}), then call tools.subagents_<operation>(args). Use the subagent-delegation skill before spawning or assigning work. Check result.isError and preserve IDs, request_id, errors, questions and not_consumed inputs in output. Partial script success is not rolled back; do not blindly rerun mutations.";
+const searchGuidance = "Use tool_search with namespace=subagents, or action=describe and name=subagents_<operation>. " +
+  "In codemode use tools.tool_search(args), then tools.subagents_<operation>(args). Already loaded tools remain searchable. ";
+const lookupGuidance = "In codemode discover with describeNamespace('subagents') and describeTool(name), " +
+  "then call tools.subagents_<operation>(args). ";
+const guidance = "Use the subagent-delegation skill before spawning or assigning work. " +
+  "Check result.isError and preserve IDs, request_id, errors, questions and not_consumed inputs in output. " +
+  "Partial script success is not rolled back; do not blindly rerun mutations.";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || (process.platform !== "linux" && process.platform !== "win32")) return;
@@ -120,7 +127,11 @@ export default function subagents(pi: ExtensionAPI) {
           pi.registerTool({ ...definition, exposure: "hidden" });
     }
     owner?.update(ctx);
-    if (owner && hasTools() && codemodeReady(ctx)) event.systemPromptOptions.sections.metis_subagents = guidance;
+    if (owner && hasTools() && codemodeReady(ctx)) {
+      const unified = pi.getAllTools().some(tool => tool.name === "tool_search" && tool.sourceInfo.path === OWNED_TOOL_SEARCH_ENTRY);
+      event.systemPromptOptions.sections.metis_subagents = "Subagent tools are deferred in the subagents namespace. " +
+        (unified ? searchGuidance : lookupGuidance) + guidance;
+    }
   });
   pi.on("tool_result", (event) => owner?.result(event));
   pi.on("turn_end", (event, ctx) => owner?.boundary(event, ctx));

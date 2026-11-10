@@ -27,6 +27,7 @@
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 import { OWNED_NEURAL_SEARCH_ENTRY } from "../../extension-paths.ts";
+import { isToolSearch } from "../../presentation/tool-source.mjs";
 
 const BUILTIN_SOURCE_PREFIX = "builtin:";
 
@@ -65,7 +66,7 @@ export default async function (pi: ExtensionAPI) {
       Boolean(path?.split(/[\\/]/).includes("pi-subagents"));
     if (recursive) return { block: true, reason: "Managed children cannot create or control subagents" };
     if (access !== "read") return;
-    const safeBuiltin = tool && isBuiltin(tool) && ["read", "grep", "find", "ls", "codemode", "tool_search"].includes(tool.name);
+    const safeBuiltin = tool && isBuiltin(tool) && ["read", "grep", "find", "ls", "codemode"].includes(tool.name);
     const fffSearch = path && /[\\/]@ff-labs[\\/]pi-fff[\\/]src[\\/]index\.(?:ts|js)$/.test(path) &&
       ["ffgrep", "fffind", "fff-multi-grep", "grep", "find", "multi_grep"].includes(event.toolName);
     const action = event.toolName === "neural_search" ? event.input.action : undefined;
@@ -74,7 +75,7 @@ export default async function (pi: ExtensionAPI) {
       ["find", "grep", "multi_grep", "describe"].includes(action);
     const managedQuestion = event.toolName === "ask_parent" && path === "<inline:metis-subagent>";
     const readonlyMcp = tool?.namespace?.name.startsWith("mcp_") && tool.annotations?.readOnlyHint === true;
-    if (!safeBuiltin && !fffSearch && !ownedNeuralSearch && !managedQuestion && !readonlyMcp) return { block: true,
+    if (!safeBuiltin && !isToolSearch(tool) && !fffSearch && !ownedNeuralSearch && !managedQuestion && !readonlyMcp) return { block: true,
       reason: event.toolName === "mcp" ? "Read-only subagent: generic MCP gateway can invoke writes; use an individual MCP tool marked read-only" :
         "Read-only subagent: tool has no approved read capability" };
   });

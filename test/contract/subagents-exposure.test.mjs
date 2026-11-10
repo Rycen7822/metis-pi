@@ -83,7 +83,7 @@ test("discovery hint is one structured section, not an opaque full prompt overri
   const sections = first.systemPromptOptions.sections;
   assert.equal(sections.unrelated, "keep this section");
   assert.match(sections.metis_subagents, /codemode/);
-  assert.match(sections.metis_subagents, /describeNamespace|searchTools/);
+  assert.match(sections.metis_subagents, /describeNamespace/);
   assert.match(sections.metis_subagents, /isError/);
   assert.match(sections.metis_subagents, /not_consumed/);
   assert.equal(first.systemPrompt, "original prompt");

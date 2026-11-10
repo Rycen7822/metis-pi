@@ -1,13 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
+import { isToolSearch, OWNED_TOOL_SEARCH_ENTRY } from "../presentation/tool-source.mjs";
 import { ASK_USER_QUESTION_TOOL_NAME, registerAskUserQuestionTool } from "./ask-user-question.ts";
 import { type AskUserQuestionConfig, loadConfig } from "./config.ts";
 
 const ownerPath = fileURLToPath(new URL("../../extensions/ask-user-question.ts", import.meta.url));
 const guidance = "For a user decision, discover ask_user_question with codemode " +
 	"describeTool('ask_user_question'), then await tools.ask_user_question(args).";
-const searchGuidance = "For a user decision, discover ask_user_question with tool_search, " +
-	"then call it with the discovered parameters.";
+const nativeSearchGuidance = "For a user decision, use tool_search to load ask_user_question if not already active, " +
+	"then call it with the declared parameters.";
+const searchGuidance = "For a user decision, inspect ask_user_question with tool_search " +
+	"(action=describe, name=ask_user_question), even if already loaded, then call it with the current parameters. " +
+	"In codemode use tools.tool_search(args).";
 
 /** Deferred availability follows UI/config; discovery never auto-activates the questionnaire. */
 export function registerAskUserQuestionReconciler(pi: ExtensionAPI): void {
@@ -48,7 +52,7 @@ export function registerAskUserQuestionReconciler(pi: ExtensionAPI): void {
 		}
 		const discovery = pi.getAllTools().filter(tool =>
 			(tool.name === "codemode" && tool.sourceInfo.path === "builtin:codemode") ||
-			(tool.name === "tool_search" && tool.sourceInfo.path === "builtin:tool-search"));
+			isToolSearch(tool));
 		const active = pi.getActiveTools();
 		if (start && !discovery.some(tool => active.includes(tool.name))) {
 			const gateway = discovery.find(tool => tool.name === "codemode") ??
@@ -56,10 +60,10 @@ export function registerAskUserQuestionReconciler(pi: ExtensionAPI): void {
 			if (gateway) pi.setActiveTools([...active, gateway.name]);
 		}
 		const ready = discovery.find(tool => pi.getActiveTools().includes(tool.name));
-		diagnose(ctx, ready ? undefined : "Metis questions need native codemode or tool_search for discovery.");
+		diagnose(ctx, ready ? undefined : "Metis questions need codemode or tool_search for discovery.");
 		if (!ready) return false;
-		return discovery.some(tool => tool.name === "codemode" && pi.getActiveTools().includes(tool.name))
-			? guidance : searchGuidance;
+		const search = discovery.find(tool => isToolSearch(tool) && pi.getActiveTools().includes(tool.name));
+		return search?.sourceInfo.path === OWNED_TOOL_SEARCH_ENTRY ? searchGuidance : search ? nativeSearchGuidance : guidance;
 	};
 	pi.on("session_start", (_event, ctx) => {
 		fault = undefined;

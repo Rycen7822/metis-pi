@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { TaskQueue } from "./task-queue.mjs";
 import { configureNetwork } from "./network.mjs";
 import { createProtocolOutput, projectSdkEvent } from "./protocol-output.mjs";
-import { toolPresentation } from "../../presentation/tool-source.mjs";
+import { isToolSearch, toolPresentation } from "../../presentation/tool-source.mjs";
 
 // Only this writer owns the protocol pipe. Extension console/terminal output is
 // diagnostic data, even when it contains JSON or lacks a trailing newline.
@@ -208,7 +208,7 @@ const services = await sdk.createAgentSessionServices({
             bindManagedActions();
             const discovery = pi.getAllTools().filter(tool =>
               tool.name === "codemode" && tool.sourceInfo.path === "builtin:codemode" ||
-              tool.name === "tool_search" && tool.sourceInfo.path === "builtin:tool-search");
+              isToolSearch(tool));
             pi.setActiveTools([...new Set([...pi.getActiveTools(), ...discovery.map(tool => tool.name)])]);
           });
           pi.registerTool({

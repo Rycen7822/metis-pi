@@ -6,7 +6,8 @@ Metis 维护的本地路径、内容与语义搜索，检索在本机执行，�
 
 ## 一个入口，按需加载
 
-`neural_search` 是 deferred 聚合工具。通过 Pi `tool_search` 或 codemode 发现，再用 `describe` 读取所需操作参数；索引在首次查询时才启动。managed 子代理的可用工具仍由 profile 决定。
+`neural_search` 是 deferred 聚合工具。通过[统一 `tool_search`](tool-discovery.md) 发现或重新搜索，codemode 内使用 `tools.tool_search(args)`；
+顶层参数可再次精确描述，动作细参仍用工具自己的 `describe` 读取。索引在首次查询时才启动，managed 子代理的权限仍由 profile 决定。
 
 ```js
 neural_search({ action: "describe", target: "find" })
