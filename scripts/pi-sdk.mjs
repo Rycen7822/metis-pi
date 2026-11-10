@@ -4,7 +4,7 @@ import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "nod
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as tar from "tar";
-import { digest, readDistribution, sdkPackages, sdkVersion, sdkUpstreamCommit, sdkPatchCount,
+import { digest, readDistribution, sdkPackages, sdkFiles, sdkVersion, sdkUpstreamCommit, sdkPatchCount,
   verifiedArchive } from "../src/pi-sdk/artifact.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -65,6 +65,9 @@ async function packageSDK(sdk) {
   await cp(path.join(sdk, "packages/ai/dist"), path.join(sdk, "node_modules/@earendil-works/pi-ai/dist"), { recursive: true });
   build("tui", "build");
   await cp(path.join(sdk, "packages/tui/dist"), path.join(sdk, "node_modules/@earendil-works/pi-tui/dist"), { recursive: true });
+  build("codemode", "build");
+  await cp(path.join(sdk, "packages/codemode/dist"), path.join(sdk, "node_modules/@earendil-works/pi-codemode/dist"),
+    { recursive: true });
   build("coding-agent", "build");
   const assets = path.join(root, "assets/pi-sdk");
   await mkdir(assets, { recursive: true });
@@ -72,9 +75,14 @@ async function packageSDK(sdk) {
   try {
     for (const name of sdkPackages)
       await cp(path.join(sdk, "packages", name, "dist"), path.join(staging, name, "dist"), { recursive: true });
+    for (const file of sdkFiles) {
+      await mkdir(path.dirname(path.join(staging, file)), { recursive: true });
+      await cp(path.join(sdk, "packages", file), path.join(staging, file));
+    }
     const bytes = await unpackedBytes(staging);
     const file = `pi-${version}.tgz`, temporary = path.join(staging, file);
-    await tar.c({ cwd: staging, file: temporary, gzip: true, portable: true, noMtime: true }, sdkPackages.map(name => `${name}/dist`));
+    await tar.c({ cwd: staging, file: temporary, gzip: true, portable: true, noMtime: true },
+      [...sdkPackages.map(name => `${name}/dist`), ...sdkFiles]);
     const archive = await readFile(temporary);
     await writeFile(path.join(assets, file), archive);
     await writeFile(path.join(root, "src/pi-sdk/distribution.json"), JSON.stringify({ schemaVersion: 1, piVersion: version,

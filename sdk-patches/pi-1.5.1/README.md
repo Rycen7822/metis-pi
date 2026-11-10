@@ -15,6 +15,7 @@
 | `0005` | 一次性扫描复用缓存命中，但不准入冷正文，避免挤出交互热正文。 |
 | `0006` | 原生认证层区分登录归属与正常 token 刷新；重新登录、登出及外部凭据替换不继承归属。 |
 | `0007` | 摘要通过 `getDisplayHeader(message)` 返回标题/副行，技能通过 `getDisplayName(skillBlock)` 返回显示名；两状态共用原生渲染，正文和 transformer 不受装饰影响。 |
+| `0008` | 脚本可调用 `tool_search` 时收起 `searchTools()`；模型说明和错误提示同步，无网关时保留原生发现。 |
 
 按编号顺序应用；`0002` 已由上游覆盖，编号留空。
 保留 1.5.1 的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
@@ -27,7 +28,7 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
 - 历史格式、迁移、context edit、图片、持久化失败回滚和原生取消合同不变。
 - OAuth 登录标识仅表达本机凭据存储中的 provider 级连续性。
   账户、路由、headers 与持久检查点范围仍由调用方验证；普通 API key 不获得 OAuth 豁免。
-- ai/tui/coding-agent 的完整 dist、CLI bundle、资源必须作为一组交付；不局部替换已安装包。
+- ai/tui/codemode/coding-agent 的完整 dist、CLI bundle 和 codemode 文档必须作为一组交付；不局部替换已安装包。
   构建和测试工作区使用实体副本，不用软链接或硬链接拼装。
 
 ## 隔离重建
@@ -68,7 +69,8 @@ npm --prefix "$METIS" run verify:pi-sdk
 避免副本破坏相对引用或制造第二个模块实例；类型也由同一源码导出，不添加假声明或放宽检查。
 
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
-`build:pi-sdk` 核对官方 SHA，干净重放七补丁并逐路径比对源码，再构建三个 SDK 包；
+`build:pi-sdk` 核对官方 SHA，干净重放八补丁并逐路径比对源码，再构建四个 SDK 包；
+归档包含 `coding-agent/docs/codemode.md`，使运行时指向的文档同步更新；独立沙箱和 bundled worker 均使用补丁后的规则。
 输出 `assets/pi-sdk/pi-1.5.1.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
 若 check 格式化改写源码，先同步补丁，再重新构建；不能沿用旧归档改名充当新版本。
 

@@ -1,0 +1,199 @@
+diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
+index e046e02..bf9ef10 100644
+--- a/packages/coding-agent/src/extensions/codemode/tool.ts
++++ b/packages/coding-agent/src/extensions/codemode/tool.ts
+@@ -125,12 +125,15 @@ const DESCRIPTION_INTRO = `Run JavaScript that calls other tools. The input is r
+ - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\``;
+ 
+ /** One line per global. The details live in {@link CODEMODE_DOCS_PATH}. */
+-function describeGlobals(models: boolean): string {
++function describeGlobals(models: boolean, toolSearch: boolean): string {
++	const search = toolSearch
++		? "`await tools.tool_search({ ...args })`"
++		: "`await searchTools(query, { limit?, namespace? })`";
+ 	const lines = [
+ 		"Globals:",
+ 		"- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script. With several text items, each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block. `image()` also saves the image to a temp file and the result names its path.",
+ 		"- `store(key, value)` and `load(key)` keep JSON values across codemode calls.",
+-		"- `ALL_TOOLS`, `await searchTools(query, { limit?, namespace? })`, `await describeTool(name)`, `await describeNamespace(name)`: find unlisted tools, such as MCP tools.",
++		`- \`ALL_TOOLS\`, ${search}, \`await describeTool(name)\`, \`await describeNamespace(name)\`: find unlisted tools, such as MCP tools.`,
+ 	];
+ 	if (models) {
+ 		lines.push(`- \`models\`: classifiers and image generation. Read ${CODEMODE_DOCS_PATH} first.`);
+@@ -165,6 +168,11 @@ export function getCodemodeCallableTools(tools: readonly AgentTool<any>[]): Agen
+ 	return tools.filter((tool) => tool.name !== CODEMODE_TOOL_NAME);
+ }
+ 
++/** Inspect actual callable bindings, not registered or model-only tools. */
++export function hasCodemodeToolSearch(tools: readonly AgentTool<any>[]): boolean {
++	return tools.some((tool) => tool.name === "tool_search");
++}
++
+ export interface CodemodeDescriptionOptions {
+ 	/** Declare the `models` namespace; only for tools created with model access. */
+ 	models?: boolean;
+@@ -179,6 +187,8 @@ export interface CodemodeDescriptionOptions {
+ 	 * out, like deferred tools. Unset lists every tool that is not deferred.
+ 	 */
+ 	inlineBudget?: number;
++	/** Gateway availability from the full callable set, even when it is omitted from this catalog. */
++	toolSearch?: boolean;
+ }
+ 
+ /** `### \`id\` (\`raw name\`)` followed by the tool's description and declaration. */
+@@ -251,7 +261,10 @@ export function createCodemodeDescription(
+ 	);
+ 	const shown = selectCatalog(ordered, options.inlineBudget);
+ 
+-	const sections = [DESCRIPTION_INTRO, describeGlobals(options.models === true)];
++	const sections = [
++		DESCRIPTION_INTRO,
++		describeGlobals(options.models === true, options.toolSearch ?? hasCodemodeToolSearch(tools)),
++	];
+ 	if (declarations.length === 0) return sections.join("\n\n");
+ 
+ 	const toolSections = ["Nested tools:"];
+@@ -388,6 +401,7 @@ function prepareCodemodeLoadout(loadout: ToolLoadout, options: CodemodeToolOptio
+ 	const guidelines = new Map(listed.map((tool) => [tool.name, loadout.getPromptGuidelines(tool.name)] as const));
+ 	descriptions[CODEMODE_TOOL_NAME] = createCodemodeDescription(listed, {
+ 		models: options.models === true,
++		toolSearch: hasCodemodeToolSearch(callable),
+ 		namespaces,
+ 		guidelines,
+ 		deferred: new Set(
+@@ -453,7 +467,10 @@ export function createCodemodeTool(
+ 	const definition = createCodemodeToolDefinition(options);
+ 	const tool = wrapToolDefinition(definition);
+ 	Object.assign(tool, {
+-		description: createCodemodeDescription(tools, { models: options.models === true }),
++		description: createCodemodeDescription(tools, {
++			models: options.models === true,
++			toolSearch: hasCodemodeToolSearch(getCodemodeCallableTools(tools)),
++		}),
+ 		promptSnippet: definition.promptSnippet,
+ 		promptGuidelines: definition.promptGuidelines,
+ 	});
+diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
+index 2dc8804..fa3e495 100644
+--- a/packages/coding-agent/src/extensions/codemode/execute.ts
++++ b/packages/coding-agent/src/extensions/codemode/execute.ts
+@@ -41,6 +41,7 @@ import {
+ 	type CodemodeToolInput,
+ 	type CodemodeToolOptions,
+ 	getCodemodeCallableTools,
++	hasCodemodeToolSearch,
+ 	toCodemodeDeclaration,
+ } from "./tool.ts";
+ 
+@@ -517,6 +518,8 @@ export async function executeCodemode(
+ 	publish();
+ 
+ 	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
++	// A callable tool_search replaces searchTools(), so scripts get one way to find tools.
++	const toolSearch = hasCodemodeToolSearch(callable);
+ 	// ALL_TOOLS entries carry the declaration.
+ 	const guidelines = options.getToolGuidelines?.();
+ 	const samples = new Map(
+@@ -584,7 +587,7 @@ export async function executeCodemode(
+ 		sandbox = new CodemodeSandbox({
+ 			tools: sandboxTools,
+ 			globals: [
+-				...createDiscoveryGlobals(callable, samples, options),
++				...createDiscoveryGlobals(callable, samples, options, toolSearch),
+ 				...(options.models && ctx
+ 					? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
+ 					: []),
+@@ -664,16 +667,18 @@ function isNamespaceName(namespace: ToolNamespace, query: string): boolean {
+ 
+ /**
+  * `searchTools()`, `describeTool()`, and `describeNamespace()`: ranked search and lookup over the
+- * script's nested tools and their namespaces.
++ * script's nested tools and their namespaces. A callable tool_search replaces only the ranked
++ * search global; lookup helpers and standalone/no-gateway behavior stay unchanged.
+  */
+ function createDiscoveryGlobals(
+ 	tools: readonly AgentTool<any>[],
+ 	samples: ReadonlyMap<string, string>,
+ 	options: CodemodeToolOptions,
++	toolSearch: boolean,
+ ): CodemodeTool[] {
+ 	const ranker = new Bm25Ranker();
+ 	const entry = (name: string) => ({ name: toCodemodeIdentifier(name), description: samples.get(name) ?? "" });
+-	return [
++	const globals: CodemodeTool[] = [
+ 		{
+ 			name: "searchTools",
+ 			spread: true,
+@@ -732,6 +737,7 @@ function createDiscoveryGlobals(
+ 			},
+ 		},
+ 	];
++	return toolSearch ? globals.filter((global) => global.name !== "searchTools") : globals;
+ }
+ 
+ /**
+diff --git a/packages/coding-agent/docs/codemode.md b/packages/coding-agent/docs/codemode.md
+index 6dd76cb..7651297 100644
+--- a/packages/coding-agent/docs/codemode.md
++++ b/packages/coding-agent/docs/codemode.md
+@@ -29,7 +29,8 @@ The result starts with `Script completed` or `Script failed`, the wall time, and
+ | `exit()` | End the script successfully. |
+ | `store(key, value)` / `load(key)` | Keep small JSON values across `codemode` calls. See [Store values](#store-values). |
+ | `ALL_TOOLS` | Every callable tool as `{ name, description }`, including tools the description does not list. |
+-| `searchTools(query, { limit?, namespace? })` | Rank callable tools by relevance (BM25, default limit 8). Resolves to `{ name, description }[]`. |
++| `tools.tool_search(args)` | Use the registered discovery gateway when callable; its schema defines search and parameter lookup. |
++| `searchTools(query, { limit?, namespace? })` | Fallback only without a callable `tool_search`: rank tools by relevance (BM25, default limit 8). |
+ | `describeTool(name)` | Resolves to a tool's description and TypeScript declaration, or `undefined`. |
+ | `describeNamespace(name)` | Resolves to `{ name, description?, instructions?, tools }` for a namespace such as an MCP server, or `undefined`. |
+ | `models` | List and run non-LLM models. See [Models](#models). |
+@@ -47,7 +48,9 @@ What a call resolves to depends on the tool:
+ 
+ A call that fails, is blocked, or gets invalid arguments rejects with an `Error` that carries the tool's error text. Use `Promise.allSettled()` to keep the results of the calls that succeed.
+ 
+-The `codemode` description lists tools with their TypeScript declarations, grouped by namespace (for example one MCP server). Tools with `deferred` exposure, which includes MCP tools with the default `codemode` exposure, are not listed, so the description stays the same while MCP servers connect. Listed declarations share a budget of 3000 estimated tokens (`codemode.inlineBudget` in [settings](settings.md#tools)). Scripts find the other tools with `searchTools()`, `describeTool()`, `describeNamespace()`, or by filtering `ALL_TOOLS`.
++The `codemode` description lists tools with their TypeScript declarations, grouped by namespace (for example one MCP server). Tools with `deferred` exposure, which includes MCP tools with the default `codemode` exposure, are not listed, so the description stays the same while MCP servers connect. Listed declarations share a budget of 3000 estimated tokens (`codemode.inlineBudget` in [settings](settings.md#tools)). Scripts use `tools.tool_search()` when that gateway is callable; the competing `searchTools()` global is then absent.
++Without a callable gateway, `searchTools()` remains available. `describeTool()`, `describeNamespace()`, and `ALL_TOOLS` stay available in both cases.
++Bindings are fixed at script start: a newly registered tool is callable in the next script, not hot-inserted into a running script.
+ 
+ While `codemode` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools stay declared, and their descriptions say how to call them from scripts. With `only` they are hidden from the model and listed in the `codemode` description instead, so the model calls them through scripts. Tool declarations in the `codemode` description, `describeTool()`, and `ALL_TOOLS` carry the tools' prompt guidelines, since the system prompt rules only cover declared tools.
+ 
+diff --git a/packages/codemode/src/runtime/prelude-source.ts b/packages/codemode/src/runtime/prelude-source.ts
+index 5cacde4..6cc9e64 100644
+--- a/packages/codemode/src/runtime/prelude-source.ts
++++ b/packages/codemode/src/runtime/prelude-source.ts
+@@ -247,15 +247,15 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
+ 			},
+ 		});
+ 	}
+-	const toolsProxy = guard(
+-		tools,
+-		"tools",
+-		allTools.map((tool) => tool.name),
+-		"ALL_TOOLS lists every tool; searchTools(query) finds tools by topic.",
+-	);
++	const globalDefinitions = parse(globalsJson);
++	let discoveryHint = "ALL_TOOLS lists every tool.";
++	if ("tool_search" in tools) discoveryHint = "Use tools.tool_search(...) to discover tools; ALL_TOOLS lists this script's tools.";
++	else if (globalDefinitions.some(({ name }) => name === "searchTools"))
++		discoveryHint = "ALL_TOOLS lists every tool; searchTools(query) finds tools by topic.";
++	const toolsProxy = guard(tools, "tools", allTools.map((tool) => tool.name), discoveryHint);
+ 
+ 	const namespaces = new Map();
+-	for (const { name, spread } of parse(globalsJson)) {
++	for (const { name, spread } of globalDefinitions) {
+ 		const fn = caller("global", name, spread);
+ 		const dot = name.indexOf(".");
+ 		if (dot === -1) {
+diff --git a/packages/codemode/test/sandbox.test.ts b/packages/codemode/test/sandbox.test.ts
+index d85c1e5..58a24f6 100644
+--- a/packages/codemode/test/sandbox.test.ts
++++ b/packages/codemode/test/sandbox.test.ts
+@@ -400,7 +400,7 @@ describe.each(Object.keys(BACKENDS))("%s backend", (name) => {
+ 				return result.ok ? result.value : result.error.message;
+ 			};
+ 			expect(await attempt("tools.Echo")).toBe(
+-				'tools.Echo does not exist. Did you mean tools.echo? ALL_TOOLS lists every tool; searchTools(query) finds tools by topic. Check for a member with "Echo" in tools.',
++				'tools.Echo does not exist. Did you mean tools.echo? ALL_TOOLS lists every tool. Check for a member with "Echo" in tools.',
+ 			);
+ 			expect(await attempt("tools.websearch")).toContain("Did you mean tools.web_search?");
+ 			expect(await attempt("tools.nothing")).toContain("Available: echo, web_search.");

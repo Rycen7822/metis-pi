@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import * as tar from "tar";
-import { digest, sdkPackages } from "../../src/pi-sdk/artifact.mjs";
+import { digest, sdkPackages, sdkFiles, sdkPatchCount } from "../../src/pi-sdk/artifact.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const run = promisify(execFile);
@@ -44,15 +44,20 @@ async function fixture(t, { version = "1.5.1", cliVersion = "1.5.1" } = {}) {
       await writeFile(path.join(staging, name, "dist/owner.txt"), label);
     }
     await writeFile(path.join(staging, "coding-agent/dist/bundle/cli.js"), `console.log(${JSON.stringify(cliVersion)});\n`);
-    let unpackedBytes = 0;
+    for (const file of sdkFiles) {
+      await mkdir(path.dirname(path.join(staging, file)), { recursive: true });
+      await writeFile(path.join(staging, file), label);
+    }
+    let unpackedBytes = sdkFiles.length * Buffer.byteLength(label);
     for (const name of sdkPackages) unpackedBytes += Buffer.byteLength(label);
     unpackedBytes += Buffer.byteLength(`console.log(${JSON.stringify(cliVersion)});\n`);
     const archive = path.join(pkg, "assets/pi-sdk/pi-1.5.1.tgz");
     await mkdir(path.dirname(archive), { recursive: true });
-    await tar.c({ file: archive, cwd: staging, gzip: true, portable: true }, sdkPackages.map(name => `${name}/dist`));
+    await tar.c({ file: archive, cwd: staging, gzip: true, portable: true },
+      [...sdkPackages.map(name => `${name}/dist`), ...sdkFiles]);
     const bytes = await readFile(archive);
     const manifest = { schemaVersion: 1, piVersion: "1.5.1", upstreamCommit: "dd30101cfc5b0609411dd80b6f93adbc14db14cf",
-      patchSet: digest(label), patches: Array.from({ length: 7 }, (_, index) => ({ file: `${index}.patch`, sha256: "0".repeat(64) })),
+      patchSet: digest(label), patches: Array.from({ length: sdkPatchCount }, (_, index) => ({ file: `${index}.patch`, sha256: "0".repeat(64) })),
       archive: { file: "pi-1.5.1.tgz", sha256: digest(bytes), bytes: bytes.length, unpackedBytes } };
     await writeFile(path.join(pkg, "src/pi-sdk/distribution.json"), JSON.stringify(manifest));
     return { archive, manifest };
@@ -72,9 +77,11 @@ test("normal SDK install activates all packages together and retains source and 
   const installed = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: h.sdkDir(h.source, "coding-agent") });
   assert.equal(installed.status, "installed");
   assert.equal(installed.restartRequired, true);
-  assert.equal(installed.patches, 7);
+  assert.equal(installed.patches, sdkPatchCount);
   const active = await h.active(), directory = path.join(h.managedRoot, "releases", active);
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(directory, name), "dist/owner.txt"), "utf8"), "new-sdk");
+  for (const file of sdkFiles)
+    assert.equal(await readFile(path.join(directory, "node_modules/@earendil-works", `pi-${file}`), "utf8"), "new-sdk");
   assert.equal(JSON.parse(await readFile(path.join(directory, "metis-sdk.json"), "utf8")).previousRelease, "1.5.1");
   if (process.platform !== "win32") assert.equal((await run(path.join(directory, "node_modules/.bin/pi"), ["--version"])).stdout.trim(), "1.5.1");
   const again = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: installed.packageDir });

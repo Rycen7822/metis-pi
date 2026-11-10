@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 
 export const sdkVersion = "1.5.1";
 export const sdkUpstreamCommit = "dd30101cfc5b0609411dd80b6f93adbc14db14cf";
-export const sdkPatchCount = 7;
-export const sdkPackages = ["ai", "tui", "coding-agent"];
+export const sdkPatchCount = 8;
+export const sdkPackages = ["ai", "tui", "codemode", "coding-agent"];
+export const sdkFiles = ["coding-agent/docs/codemode.md"];
 export const digest = value => createHash("sha256").update(value).digest("hex");
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 

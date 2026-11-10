@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
 import * as tar from "tar";
-import { readDistribution, sdkPackages, verifiedArchive } from "./artifact.mjs";
+import { readDistribution, sdkPackages, sdkFiles, verifiedArchive } from "./artifact.mjs";
 
 const run = promisify(execFile);
 const packageDir = (release, name) => path.join(release, "node_modules", "@earendil-works", `pi-${name}`);
@@ -44,7 +44,9 @@ async function unpack(archive, destination, budget) {
   await tar.x({ file: archive, cwd: destination, strict: true, filter(name, entry) {
     if (problem) return false;
     const normalized = name.replace(/\/$/, "");
-    const valid = /^(ai|tui|coding-agent)\/dist(?:\/|$)/.test(normalized)
+    const allowed = sdkPackages.some(pkg => normalized === `${pkg}/dist` || normalized.startsWith(`${pkg}/dist/`))
+      || sdkFiles.includes(normalized);
+    const valid = allowed
       && !normalized.split("/").some(part => ["", ".", ".."].includes(part) || /[\\:*?"<>|]/.test(part)
         || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part));
     const portableName = normalized.toLowerCase();
@@ -62,6 +64,10 @@ async function unpack(archive, destination, budget) {
   for (const pkg of sdkPackages) {
     const stat = await lstat(path.join(destination, pkg, "dist"));
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Missing SDK distribution: ${pkg}`);
+  }
+  for (const file of sdkFiles) {
+    const stat = await lstat(path.join(destination, file));
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Missing SDK resource: ${file}`);
   }
 }
 
@@ -149,6 +155,12 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
         const target = path.join(packageDir(candidate, pkg), "dist");
         await rm(target, { recursive: true, force: true });
         await cp(path.join(payload, pkg, "dist"), target, { recursive: true });
+      }
+      for (const file of sdkFiles) {
+        const [pkg, ...parts] = file.split("/");
+        const target = path.join(packageDir(candidate, pkg), ...parts);
+        await mkdir(path.dirname(target), { recursive: true });
+        await cp(path.join(payload, file), target);
       }
       const cli = path.join(packageDir(candidate, "coding-agent"), "dist", "bundle", "cli.js");
       const result = await run(process.execPath, [cli, "--version"], { timeout: 30_000, windowsHide: true });

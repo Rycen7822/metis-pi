@@ -30,13 +30,17 @@
     {
       "file": "0007-separate-message-display-headers.patch",
       "sha256": "71b1a5c69803759fb3adb0c82ebe5d25d15f28773a9bdd9a16ccffbac0012914"
+    },
+    {
+      "file": "0008-prefer-callable-tool-discovery.patch",
+      "sha256": "0d3c4d42b3b241010555af55c3a8295c37e13e2824b4ff0530e6c776fd994381"
     }
   ],
-  "patchSet": "ab3e0a3fc48d109d79af257ffb10cd27e43bb0e1edf4596c42798723bbab2a30",
+  "patchSet": "5906b511b06b6e0d2ed63f0db70161ee38bd9b544c5206b49bde703c5ec8be21",
   "archive": {
     "file": "pi-1.5.1.tgz",
-    "sha256": "77a0a5723ab0651b2eb6c9bcdd397f09211a928a8409980f62fd1eb386bf341f",
-    "bytes": 5932513,
-    "unpackedBytes": 26326840
+    "sha256": "b198299c52e12b16731607978ddc6e2406ea2f198e6ca71c1e7fddbb94e1596c",
+    "bytes": 6022229,
+    "unpackedBytes": 26705303
   }
 }
