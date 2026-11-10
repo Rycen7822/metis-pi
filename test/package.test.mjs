@@ -36,7 +36,8 @@ test("package exposes extensions, themes and portable skills with their referenc
   for (const path of [
     "CHANGELOG.md", "metis-pi.toml", "metis-pi-config.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "skills/ast-grep/SKILL.md", "skills/ast-grep/references/rule_reference.md",
-    "skills/commit/SKILL.md", "skills/github/SKILL.md", "skills/uv/SKILL.md", "src/btw/runtime.ts",
+    "skills/commit/SKILL.md", "skills/github/SKILL.md", "skills/uv/SKILL.md",
+    "skills/subagent-delegation/SKILL.md", "src/subagents/skills/README.md", "src/btw/runtime.ts",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/exec/win32-x64/exec_bridge.exe", "assets/native-tools/win32-x64-manifest.json",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
@@ -84,6 +85,6 @@ test("package exposes extensions, themes and portable skills with their referenc
   // The copy-provenance lexer must see the same token stream as the host.
   assert.equal(pkg.dependencies.marked, load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked);
   assert.equal(pkg.dependencies["marked-cjk-friendly"], load("node_modules/@earendil-works/pi-tui/package.json").dependencies["marked-cjk-friendly"]);
-  assert.deepEqual(pkg.pi.skills, ["./skills"]);
+  assert.deepEqual(pkg.pi.skills, ["./skills", "!skills/subagent-delegation/SKILL.md"]);
   assert.equal(pkg.pi.prompts, undefined);
 });

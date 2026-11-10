@@ -102,7 +102,7 @@ export default function subagents(pi: ExtensionAPI) {
   });
   pi.on("resources_discover", () => {
     if (owner && !conflict() && hasTools()) {
-      return { skillPaths: [fileURLToPath(new URL("../src/subagents/skills/subagent-delegation/SKILL.md", import.meta.url))] };
+      return { skillPaths: [fileURLToPath(new URL("../skills/subagent-delegation/SKILL.md", import.meta.url))] };
     }
   });
   pi.on("session_shutdown", async () => {

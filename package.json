@@ -16,7 +16,8 @@
       "./themes/metis-pi.json"
     ],
     "skills": [
-      "./skills"
+      "./skills",
+      "!skills/subagent-delegation/SKILL.md"
     ]
   },
   "scripts": {

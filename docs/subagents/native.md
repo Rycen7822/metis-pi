@@ -14,7 +14,11 @@ See the [parameter guide](../../metis-pi-config.md) and [lifecycle](lifecycle.md
 
 ## Delegation skill
 
-The enabled parent module exposes `subagent-delegation` through Pi resource discovery. Read it before assigning work: lightweight models generally benefit from explicit sequencing, while capable autonomous models can receive outcome-led tasks. Adjust to the task and observed behavior without changing permissions or model selection.
+The enabled parent module exposes [`subagent-delegation`](../../skills/subagent-delegation/SKILL.md) through Pi resource discovery.
+Its only source is `skills/subagent-delegation/SKILL.md`; the package excludes it from unconditional skill scanning.
+
+Read it before assigning work: lightweight models generally benefit from explicit sequencing,
+while capable autonomous models can receive outcome-led tasks. Adjust to the task and observed behavior without changing permissions or model selection.
 
 `enabled` controls tools, module guidance and skill exposure after reload. Disabling does not terminate running work or erase instructions already in the conversation.
 

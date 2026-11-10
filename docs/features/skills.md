@@ -2,7 +2,7 @@
 
 ## 随包 skills
 
-`skills/<name>/SKILL.md` 及各自 `references/` 经 `pi.skills: ["./skills"]` 发布，发现、来源、优先级和启用规则由 Pi 管理。
+所有 skill 正文及各自 `references/` 统一放在 `skills/<name>/`。通用技能经 `pi.skills` 扫描，发现、来源和优先级由 Pi 管理。
 
 | Skill | 用途与依赖 |
 | --- | --- |
@@ -10,6 +10,9 @@
 | `commit` | Git 提交指导，需要 Git。 |
 | `github` | GitHub issue、PR、CI 操作指导，需要 `gh` 和对应认证。 |
 | `uv` | 用 uv 管 Python 依赖和脚本执行，需要 `uv`。 |
+| `subagent-delegation` | 子代理委派与验收指导；仅在父模块启用且无提供者冲突时暴露。 |
+
+`subagent-delegation` 由 `extensions/subagents.ts` 的资源发现回调提供；包清单将它排除于公共扫描，避免重复加载或绕过模块开关。
 
 外部 CLI 需各自安装，`/skill:<name>` 展开。`commit`、`github`、`uv` 来自 mitsuhiko/agent-stuff，归属与 Apache-2.0 许可见根目录 NOTICE。同名 skill 只保留一个来源，以免重复加载。
 

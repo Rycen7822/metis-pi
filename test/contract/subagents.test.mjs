@@ -484,7 +484,7 @@ test(
     });
     await loaded.session.bindExtensions({ onError: (error) => errors.push(error), uiContext, mode: "tui" });
     const delegation = loader.getSkills().skills.find(skill => skill.name === "subagent-delegation");
-    assert.equal(delegation?.filePath, join(root, "src/subagents/skills/subagent-delegation/SKILL.md"));
+    assert.equal(delegation?.filePath, join(root, "skills/subagent-delegation/SKILL.md"));
     assert.deepEqual(loader.getSkills().diagnostics, []);
     assert.match(loaded.session.systemPrompt, /subagent-delegation/);
     assert.ok(!loaded.session.getAllTools().some(tool => /^pi_(?:spawn_agent|wait_agent|list_agents|inspect_agent|agent_result|answer_agent|send_message|followup_task|interrupt_agent)$/.test(tool.name)), "old public tool aliases are not registered");
