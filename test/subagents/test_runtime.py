@@ -453,22 +453,51 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         terminal = [json.loads(e["payload"]) for e in self.events(a["agent_id"], "run_terminal")]
         self.assertEqual([e["state"] for e in terminal], ["completed", "completed"])
 
+    def handshake(self, name):
+        """Keep fake completion behind a test-owned barrier, not a timer."""
+        base = self.root / name
+        return (
+            f"hold={base}",
+            Path(str(base) + ".ready"),
+            Path(str(base) + ".release"),
+        )
+
     async def test_late_boundary_after_interrupt_does_not_revive_the_run(self):
-        s = await self.spawn("settle=0.3|late")
-        await self.until(lambda: self.events(s["agent_id"], "agent_end"))
+        option, ready, _ = self.handshake("old-boundary")
+        s = await self.spawn(f"{option}|late")
+        # Neither worker may finish while the test is arranging the race.
+        await self.until(lambda: ready.exists() and self.events(s["agent_id"], "agent_end"))
+        old = self.rt.store.run(self.scope, s["run_id"])
+        self.assertEqual((old["state"], old["ended"]), ("running", None))
         old_worker = self.rt.workers[s["agent_id"]]
         await self.mutation("interrupt", s["agent_id"])
-        n = await self.mutation("respawn", s["agent_id"], message="delay=0.3|second")
+        option, ready, release = self.handshake("replacement-boundary")
+        n = await self.mutation("respawn", s["agent_id"], message=f"{option}|second")
+        await self.until(ready.exists)
         # A killed worker cannot emit more events. Inject an already buffered old
         # completion while the replacement runs to verify the generation guard.
         self.rt.on_event(old_worker, {"type": "managed_task_end", "runId": s["run_id"]})
         await self.rt.settle(old_worker, s["run_id"])
         self.assertEqual(self.rt.store.run(self.scope, n["run_id"])["state"], "running")
+        release.touch()
         self.assertFalse((await self.wait(n["run_id"]))["timed_out"])
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "interrupted")
         self.assertEqual((await self.result(n["run_id"]))["text"], "Completed: second")
         terminal = [json.loads(e["payload"]) for e in self.events(s["agent_id"], "run_terminal")]
         self.assertEqual([e["state"] for e in terminal], ["interrupted", "completed"])
+
+    async def test_natural_completion_before_interrupt_is_not_rewritten(self):
+        # The other legal order: Pi's post-run work finishes before the parent
+        # interrupts, so an interrupt of the now-idle worker must not turn a
+        # completed run into an interrupted one.
+        s = await self.spawn("late")
+        self.assertFalse((await self.wait(s["run_id"]))["timed_out"])
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "completed")
+        await self.mutation("interrupt", s["agent_id"])
+        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "completed")
+        self.assertEqual((await self.result(s["run_id"]))["text"], "Completed: late")
+        terminal = [json.loads(e["payload"]) for e in self.events(s["agent_id"], "run_terminal")]
+        self.assertEqual([e["state"] for e in terminal], ["completed"])
 
     async def test_old_reader_failure_cannot_release_replacement_writer(self):
         # Hold the control lock with an unanswered steer; queue replacement

@@ -138,6 +138,7 @@ TASK_OPTS = {
     "after_tool",
     "gate",
     "limit",
+    "hold",
 }
 
 
@@ -161,6 +162,16 @@ async def held_prompt(r):
     await asyncio.sleep(a.hold_prompt_ms / 1000)
     response(r)
     current = asyncio.create_task(run(r["message"], r["runId"]))
+
+
+async def handshake(opt):
+    """Hold managed completion until the test releases or aborts this worker."""
+    if not opt:
+        return
+    ready, release = Path(opt + '.ready'), Path(opt + '.release')
+    ready.touch()
+    while not release.exists():
+        await asyncio.sleep(0.01)
 
 
 async def run(raw_task, rid):
@@ -312,6 +323,7 @@ async def run(raw_task, rid):
     emit({"type": "agent_end", "messages": []})
     # SDK work may continue after a low-level run ends; only the final managed
     # completion belongs to the daemon task.
+    await handshake(opts.get("hold"))
     if settle:
         await asyncio.sleep(settle)
     for turn in range(1, resume + 1):
