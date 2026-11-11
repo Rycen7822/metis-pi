@@ -1,0 +1,204 @@
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 2765ed7..14d5bb7 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -399,6 +399,7 @@ export {
+ 	withFileMutationQueue,
+ } from "./core/tools/index.ts";
+ export { formatReadLineRange } from "./core/tools/render-utils.ts";
++export { withBuiltInRenderers } from "./core/tools/renderers/index.ts";
+ export {
+ 	hasTrustRequiringProjectResources,
+ 	type ProjectTrustDecision,
+@@ -440,6 +441,11 @@ export {
+ 	runPrintMode,
+ 	runRpcMode,
+ } from "./modes/index.ts";
++export {
++	type ChatViewport,
++	type ChatViewportOptions,
++	createChatViewport,
++} from "./modes/interactive/chat-viewport.ts";
+ // UI components for extensions
+ export {
+ 	ArminComponent,
+@@ -482,6 +488,7 @@ export {
+ } from "./modes/interactive/components/index.ts";
+ // Theme utilities for custom tools and extensions
+ export {
++	getEditorTheme,
+ 	getLanguageFromPath,
+ 	getMarkdownTheme,
+ 	getSelectListTheme,
+@@ -495,6 +502,7 @@ export {
+ 	type ThemeStyle,
+ 	type ThemeToken,
+ } from "./modes/interactive/theme/theme.ts";
++export { createInteractiveTui, type InteractiveTuiOptions } from "./modes/interactive/tui-renderer.ts";
+ // Clipboard utilities
+ export { copyToClipboard } from "./utils/clipboard.ts";
+ export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
+diff --git a/packages/tui/src/tui-alt-screen.ts b/packages/tui/src/tui-alt-screen.ts
+index 85f69ac..6ce20fb 100644
+--- a/packages/tui/src/tui-alt-screen.ts
++++ b/packages/tui/src/tui-alt-screen.ts
+@@ -167,6 +167,8 @@ interface SearchHighlightRange {
+ }
+ 
+ export interface TuiAltScreenOptions {
++	/** A parent owns terminal capabilities; scope unsupported image fallback to this renderer's frames. */
++	embedded?: boolean;
+ 	/**
+ 	 * Logical lines moved for each mouse-wheel event (default: 1). `"auto"` accelerates fast wheel
+ 	 * spins on terminals that send one event per notch. Alt+wheel moves five times as far.
+@@ -271,6 +273,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 		this.flashes = new AltScreenFlashContainer(() => this.requestRender());
+ 		this.wheelScroll = new WheelScrollAccelerator(options.wheelScrollLines ?? 1);
+ 		this.mouseEnabled = options.mouse ?? true;
++		this.embedded = options.embedded ?? false;
+ 		this.searchMatchStyle = options.searchMatchStyle ?? ((text) => `\x1b[4m${text}\x1b[24m`);
+ 		this.searchCurrentMatchStyle = options.searchCurrentMatchStyle ?? ((text) => `\x1b[1;7m${text}\x1b[22;27m`);
+ 		this.searchNavigationButtonStyle = options.searchNavigationButtonStyle ?? ((text) => text);
+@@ -290,6 +293,38 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 		return this.getPrimaryScrollView().isFollowingEnd;
+ 	}
+ 
++	private readonly embedded: boolean;
++	private embeddedFrameSink?: (lines: string[]) => void;
++
++	/** Render the same composed viewport into a parent surface, preserving its cursor marker. */
++	renderEmbeddedFrame(): string[] {
++		let frame: string[] = [];
++		this.embeddedFrameSink = (lines) => {
++			frame = lines.slice();
++		};
++		try {
++			this.renderNow();
++			return frame;
++		} finally {
++			this.embeddedFrameSink = undefined;
++		}
++	}
++
++	/** Forward parent-local mouse input; wheel deltas have already been accelerated by the parent. */
++	handleEmbeddedMouse(event: TuiMouseEvent): void {
++		if (event.type === "click") return; // This renderer synthesizes clicks from the forwarded gesture.
++		if (event.type === "wheel") {
++			this.dispatchWheel(event);
++			return;
++		}
++		let button = { left: 0, middle: 1, right: 2, none: 3 }[event.button];
++		if (event.type === "move" || event.type === "drag") button |= 32;
++		if (event.shift) button |= 4;
++		if (event.alt) button |= 8;
++		if (event.ctrl) button |= 16;
++		this.handleMouseEvent({ button, x: event.x, y: event.y, release: event.type === "release" });
++	}
++
+ 	setWheelScrollLines(lines: WheelScrollLines): void {
+ 		this.wheelScroll.setLines(lines);
+ 	}
+@@ -352,9 +387,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 		this.flashes.dispose();
+ 		this.altScreenActive = true;
+ 		const capabilities = getCapabilities();
+-		this.imageProtocol = capabilities.images;
++		this.imageProtocol = this.embedded && capabilities.images === "iterm2" ? null : capabilities.images;
+ 		this.uploadedKittyImages.clear();
+-		if (capabilities.images === "iterm2") {
++		if (!this.embedded && capabilities.images === "iterm2") {
+ 			this.savedCapabilities = capabilities;
+ 			setCapabilities({ ...capabilities, images: null });
+ 			this.invalidate();
+@@ -404,7 +439,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 	protected override afterTerminalStop(options: TuiStopOptions): void {
+ 		if (!this.altScreenActive) return;
+ 		this.altScreenActive = false;
+-		if (options.preserveScreen) {
++		if (options.preserveScreen || this.embedded) {
+ 			this.terminal.write(`${BEGIN_SYNCHRONIZED_OUTPUT}${EXIT_ALT_SCREEN}\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`);
+ 		} else {
+ 			const width = Math.max(1, this.terminal.columns);
+@@ -723,13 +758,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 			const wheelDelta =
+ 				wheelEvent.direction * ((wheelEvent.button & 8) !== 0 ? lines * ALT_WHEEL_SCROLL_MULTIPLIER : lines);
+ 			const event = this.createMouseEvent("wheel", wheelEvent.button, wheelEvent.x, wheelEvent.y, { wheelDelta });
+-			const overlay = this.dispatchMouseToOverlay(event);
+-			const result = overlay.result ?? (overlay.hit ? undefined : this.dispatchMouseToLayout(event));
+-			if (result) {
+-				if (this.applyMouseDispatchResult(event, result)) this.requestRender();
+-				return { consume: true };
+-			}
+-			this.routeWheel(wheelEvent, wheelDelta);
++			this.dispatchWheel(event);
+ 			return { consume: true };
+ 		}
+ 		const mouseEvent = this.parseSgrMouseEvent(data);
+@@ -1004,7 +1033,17 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 		return undefined;
+ 	}
+ 
+-	private routeWheel(event: WheelEvent, delta: number): void {
++	private dispatchWheel(event: TuiMouseEvent): void {
++		const overlay = this.dispatchMouseToOverlay(event);
++		const result = overlay.result ?? (overlay.hit ? undefined : this.dispatchMouseToLayout(event));
++		if (result) {
++			if (this.applyMouseDispatchResult(event, result)) this.requestRender();
++			return;
++		}
++		this.routeWheel(event, event.wheelDelta ?? 0);
++	}
++
++	private routeWheel(event: Pick<WheelEvent, "x" | "y">, delta: number): void {
+ 		let remaining = delta;
+ 		const seen = new Set<ScrollView>();
+ 		for (const scrollView of this.currentLayout ? getScrollViewsAt(this.currentLayout, event.x, event.y) : []) {
+@@ -1691,6 +1730,20 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 	}
+ 
+ 	protected override doRender(): void {
++		const capabilities = getCapabilities();
++		if (!this.embedded || capabilities.images !== "iterm2") {
++			this.drawFrame();
++			return;
++		}
++		setCapabilities({ ...capabilities, images: null });
++		try {
++			this.drawFrame();
++		} finally {
++			setCapabilities(capabilities);
++		}
++	}
++
++	private drawFrame(): void {
+ 		if (this.stopped || !this.altScreenActive) return;
+ 		const width = Math.max(1, this.terminal.columns);
+ 		const height = Math.max(1, this.terminal.rows);
+@@ -1708,6 +1761,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 		screen = this.applySelection(screen, nextLayout);
+ 		screen = this.compositeFlashes(screen, width, height);
+ 
++		this.embeddedFrameSink?.(screen);
+ 		const cursorPos = this.extractCursorPosition(screen, height);
+ 		screen = this.applyLineResets(screen).map((line) => {
+ 			if (isImageLine(line) || visibleWidth(line) <= width) return line;
+diff --git a/packages/coding-agent/src/modes/interactive/tui-renderer.ts b/packages/coding-agent/src/modes/interactive/tui-renderer.ts
+index 6487c1c..64cf5de 100644
+--- a/packages/coding-agent/src/modes/interactive/tui-renderer.ts
++++ b/packages/coding-agent/src/modes/interactive/tui-renderer.ts
+@@ -10,6 +10,7 @@ export interface InteractiveTuiOptions {
+ 	readonly showHardwareCursor: boolean;
+ 	readonly logDirectory: string;
+ 	readonly terminal?: Terminal;
++	readonly embedded?: boolean;
+ 	readonly onRightClickPaste?: () => void;
+ 	readonly fullscreenCopyOnSelect?: boolean;
+ 	readonly fullscreenWheelScrollLines?: WheelScrollLines;
+@@ -24,6 +25,7 @@ export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScr
+ 	if (options.tuiMode === "fullscreen") {
+ 		const styleSearchMatch = (text: string) => theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
+ 		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, {
++			embedded: options.embedded,
+ 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
+ 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
+ 			searchNavigationButtonStyle: (text, hovered) => (hovered ? theme.underline(text) : text),

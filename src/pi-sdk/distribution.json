@@ -34,13 +34,17 @@
     {
       "file": "0008-prefer-callable-tool-discovery.patch",
       "sha256": "0d3c4d42b3b241010555af55c3a8295c37e13e2824b4ff0530e6c776fd994381"
+    },
+    {
+      "file": "0009-share-embedded-transcript-primitives.patch",
+      "sha256": "40cc9116cc31c1a32a858054ec06a2fe8bb5f848a5ec9c149578497edb0f7406"
     }
   ],
-  "patchSet": "5906b511b06b6e0d2ed63f0db70161ee38bd9b544c5206b49bde703c5ec8be21",
+  "patchSet": "c280cfb99ecf9fb7bfc28dae4e1da147ef5b715fcc016e57fe584d4540e9f0af",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "9773a0f6b6b9a0a816a25d557accd12e38302a974189756be5b7ad465ef18c1c",
-    "bytes": 6011928,
-    "unpackedBytes": 26654502
+    "sha256": "4f93f718b481dc4bb18c388cb6219cd2c9328a377035221079e850351d0e465e",
+    "bytes": 6013081,
+    "unpackedBytes": 26663763
   }
 }
