@@ -1,0 +1,255 @@
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index 2ebe080..849dd98 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -1,3 +1,5 @@
++import { type FileHandle, open } from "node:fs/promises";
++import { setImmediate } from "node:timers/promises";
+ import { appendFileSync, closeSync, openSync, readSync, statSync, writeFileSync } from "fs";
+ import { type SessionEntryMetadata, toSessionEntryMetadata } from "./session-entry-metadata.ts";
+ import { type SessionEntryLocation, scanSessionFile } from "./session-file-reader.ts";
+@@ -19,6 +21,13 @@ interface StoredSessionEntry {
+ 
+ type StoredRecord = StoredSessionEntry | { kind: "header"; header: SessionHeader };
+ 
++/** Internal invalidation: a rewrite can replace locations while an async reader yields. */
++export class SessionEntryStoreChangedError extends Error {
++	constructor() {
++		super("Session entry store changed during projection");
++	}
++}
++
+ /** Owns record locations and bounded decoded bodies; returned entries remain ordinary, complete objects. */
+ export class SessionEntryStore {
+ 	private records: StoredRecord[] = [];
+@@ -27,6 +36,7 @@ export class SessionEntryStore {
+ 	private cache = new Map<StoredSessionEntry, { entry: SessionEntry; bytes: number }>();
+ 	private cachedBytes = 0;
+ 	private entryReadBuffer?: Buffer;
++	private rewriteEpoch = 0;
+ 
+ 	constructor(entries: FileEntry[] = [], path?: string) {
+ 		this.path = path;
+@@ -122,6 +132,98 @@ export class SessionEntryStore {
+ 		});
+ 	}
+ 
++	/** Choose one bounded path-tail window before reading, so repeated full projections do not evict their own hot bodies. */
++	private projectionWindow(metadata: readonly SessionEntryMetadata[], path: readonly SessionEntryMetadata[]) {
++		const selected = new Set(metadata.map((entry) => entry.id));
++		const admitted = new Set<StoredSessionEntry>();
++		let remaining = MAX_CACHED_SESSION_ENTRY_BYTES;
++		for (let i = path.length - 1; i >= 0 && selected.size; i--) {
++			if (!selected.delete(path[i].id)) continue;
++			const record = this.byId.get(path[i].id);
++			if (!record) throw new Error(`Session entry not found: ${path[i].id}`);
++			const bytes = record.body ? 0 : (record.location?.length ?? 0);
++			if (bytes > MAX_CACHED_SESSION_ENTRY_BYTES) continue;
++			if (bytes > remaining) break;
++			admitted.add(record);
++			remaining -= bytes;
++		}
++		return admitted;
++	}
++
++	readProjectionEntries(
++		metadata: readonly SessionEntryMetadata[],
++		path: readonly SessionEntryMetadata[],
++	): SessionEntry[] {
++		if (
++			metadata.every((entry) => {
++				const record = this.byId.get(entry.id);
++				return record && (record.body || this.cache.has(record));
++			})
++		)
++			return this.readEntries(metadata);
++		const admitted = this.projectionWindow(metadata, path);
++		return metadata.map((entry) => {
++			const record = this.byId.get(entry.id);
++			if (!record) throw new Error(`Session entry not found: ${entry.id}`);
++			return this.read(record, admitted.has(record) ? "retain" : "transient");
++		});
++	}
++
++	/** Full bodies, one owned descriptor/buffer, and cooperative work slices, including cache-only reads. */
++	async readProjectionEntriesAsync(
++		metadata: readonly SessionEntryMetadata[],
++		path: readonly SessionEntryMetadata[],
++		signal?: AbortSignal,
++	): Promise<SessionEntry[]> {
++		const epoch = this.rewriteEpoch;
++		const assertCurrent = () => {
++			signal?.throwIfAborted();
++			if (epoch !== this.rewriteEpoch) throw new SessionEntryStoreChangedError();
++		};
++		assertCurrent();
++		const admitted = this.projectionWindow(metadata, path);
++		const entries: SessionEntry[] = [];
++		let file: FileHandle | undefined, buffer: Buffer | undefined;
++		let sliceStarted = performance.now();
++		try {
++			for (const reference of metadata) {
++				assertCurrent();
++				const record = this.byId.get(reference.id);
++				if (!record) throw new Error(`Session entry not found: ${reference.id}`);
++				const cached = this.cachedEntry(record);
++				if (cached) entries.push(cached);
++				else {
++					if (!this.path || !record.location) throw new Error(`Session entry has no body: ${record.metadata.id}`);
++					const { offset, length } = record.location;
++					file ??= await open(this.path, "r");
++					assertCurrent();
++					let bytes: Buffer;
++					if (length <= MAX_REUSED_ENTRY_READ_BYTES) {
++						buffer ??= Buffer.allocUnsafe(MAX_REUSED_ENTRY_READ_BYTES);
++						bytes = buffer;
++					} else bytes = Buffer.allocUnsafe(length);
++					let read = 0;
++					while (read < length) {
++						const { bytesRead } = await file.read(bytes, read, length - read, offset + read);
++						assertCurrent();
++						if (bytesRead === 0) throw new Error(`Session entry was truncated: ${record.metadata.id}`);
++						read += bytesRead;
++					}
++					entries.push(this.decode(record, bytes, length, admitted.has(record) ? "retain" : "transient"));
++				}
++				if (performance.now() - sliceStarted >= 8) {
++					await setImmediate(undefined, { signal });
++					assertCurrent();
++					sliceStarted = performance.now();
++				}
++			}
++		} finally {
++			await file?.close();
++		}
++		assertCurrent();
++		return entries;
++	}
++
+ 	getEntry(id: string): SessionEntry | undefined {
+ 		const record = this.byId.get(id);
+ 		return record ? this.read(record) : undefined;
+@@ -161,14 +263,18 @@ export class SessionEntryStore {
+ 		}
+ 	}
+ 
+-	private read(record: StoredSessionEntry, cacheMiss: "retain" | "transient" = "retain"): SessionEntry {
++	private cachedEntry(record: StoredSessionEntry): SessionEntry | undefined {
+ 		if (record.body) return record.body;
+ 		const cached = this.cache.get(record);
+-		if (cached) {
+-			this.cache.delete(record);
+-			this.cache.set(record, cached);
+-			return cached.entry;
+-		}
++		if (!cached) return undefined;
++		this.cache.delete(record);
++		this.cache.set(record, cached);
++		return cached.entry;
++	}
++
++	private read(record: StoredSessionEntry, cacheMiss: "retain" | "transient" = "retain"): SessionEntry {
++		const cached = this.cachedEntry(record);
++		if (cached) return cached;
+ 		if (!this.path || !record.location) throw new Error(`Session entry has no body: ${record.metadata.id}`);
+ 		const { offset, length } = record.location;
+ 		let bytes: Buffer;
+@@ -189,6 +295,15 @@ export class SessionEntryStore {
+ 		} finally {
+ 			closeSync(fd);
+ 		}
++		return this.decode(record, bytes, length, cacheMiss);
++	}
++
++	private decode(
++		record: StoredSessionEntry,
++		bytes: Buffer,
++		length: number,
++		cacheMiss: "retain" | "transient",
++	): SessionEntry {
+ 		const entry = JSON.parse(bytes.toString("utf8", 0, length)) as SessionEntry;
+ 		const expectedType = record.metadata.type === "unknown" ? record.metadata.sourceType : record.metadata.type;
+ 		if (!entry || entry.id !== record.metadata.id || entry.type !== expectedType) {
+@@ -217,6 +332,7 @@ export class SessionEntryStore {
+ 
+ 	/** Rewrites explicitly materialize before truncation, so old offsets cannot refer into an overwritten source. */
+ 	writeToFile(path: string, flag: "w" | "wx"): void {
++		this.rewriteEpoch++;
+ 		const files = this.records.map((record) =>
+ 			record.kind === "header"
+ 				? { kind: "header" as const, entry: record.header }
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index af1f28e..50e0898 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -34,7 +34,7 @@ import {
+ 	createCustomMessage,
+ } from "./messages.ts";
+ import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
+-import { SessionEntryStore } from "./session-entry-store.ts";
++import { SessionEntryStore, SessionEntryStoreChangedError } from "./session-entry-store.ts";
+ import { parseSessionEntryLine, scanSessionFile } from "./session-file-reader.ts";
+ import type { SessionTreeMessagePreview } from "./session-tree-preview.ts";
+ 
+@@ -84,6 +84,7 @@ export type ReadonlySessionManager = Pick<
+ 	| "getBranch"
+ 	| "buildContextEntries"
+ 	| "buildSessionProjection"
++	| "buildSessionProjectionAsync"
+ 	| "getHeader"
+ 	| "getEntries"
+ 	| "getTree"
+@@ -1283,7 +1284,8 @@ export class SessionManager {
+ 	 * Use buildSessionContext() to get the resolved messages for the LLM.
+ 	 */
+ 	getBranch(fromId?: string): SessionEntry[] {
+-		return this.store.readEntries(this.getBranchMetadata(fromId));
++		const path = this.getBranchMetadata(fromId);
++		return this.store.readProjectionEntries(path, path);
+ 	}
+ 
+ 	/**
+@@ -1291,7 +1293,8 @@ export class SessionManager {
+ 	 * Uses tree traversal from current leaf.
+ 	 */
+ 	buildContextEntries(): SessionEntry[] {
+-		return this.store.readEntries(this.getContextEntriesMetadata());
++		const path = this.getBranchMetadata();
++		return this.store.readProjectionEntries(selectContextEntries(path), path);
+ 	}
+ 
+ 	/**
+@@ -1300,7 +1303,32 @@ export class SessionManager {
+ 	 */
+ 	buildSessionProjection(): SessionProjection {
+ 		const path = this.getBranchMetadata();
+-		return projectContextEntries(this.store.readEntries(selectContextEntries(path)), getSessionContextSettings(path));
++		return projectContextEntries(
++			this.store.readProjectionEntries(selectContextEntries(path), path),
++			getSessionContextSettings(path),
++		);
++	}
++
++	/** Cooperative body loading with the same projection rules; callers still revalidate source content after awaits. */
++	async buildSessionProjectionAsync(options: { signal?: AbortSignal } = {}): Promise<SessionProjection> {
++		const { signal } = options;
++		signal?.throwIfAborted();
++		const store = this.store;
++		const leaf = this.leafId;
++		const path = this.getBranchMetadata();
++		try {
++			const entries = await store.readProjectionEntriesAsync(selectContextEntries(path), path, signal);
++			signal?.throwIfAborted();
++			if (store !== this.store || leaf !== this.leafId) return this.buildSessionProjection();
++			return projectContextEntries(entries, getSessionContextSettings(path));
++		} catch (error) {
++			signal?.throwIfAborted();
++			// A concurrent rewrite/reload must not publish a torn set of locations.
++			// Complete against the current source synchronously rather than introducing a new failure mode.
++			if (store !== this.store || leaf !== this.leafId || error instanceof SessionEntryStoreChangedError)
++				return this.buildSessionProjection();
++			throw error;
++		}
+ 	}
+ 
+ 	buildSessionContext(): SessionContext {

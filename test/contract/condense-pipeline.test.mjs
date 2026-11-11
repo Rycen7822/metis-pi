@@ -258,11 +258,18 @@ test("no-op completions skip history while real spills retain capacity accountin
   assert.equal(f.calls.length, 0);
 });
 
+function observeProjectionReads(t, manager, onRead) {
+  for (const name of ["buildSessionProjection", "buildSessionProjectionAsync"]) {
+    if (typeof manager[name] !== "function") continue;
+    const project = manager[name].bind(manager);
+    t.mock.method(manager, name, (...args) => { onRead(); return project(...args); });
+  }
+}
+
 test("TUI context gives pending UI work a turn before reading its projection", async t => {
   const f = await fixture(t, { mode: "tui" });
   const steps = [];
-  const project = f.sm.buildSessionProjection.bind(f.sm);
-  t.mock.method(f.sm, "buildSessionProjection", (...args) => { steps.push("projected"); return project(...args); });
+  observeProjectionReads(t, f.sm, () => steps.push("projected"));
   const pending = f.emit("context", { messages: [{ role: "user", content: "Next", timestamp: 2 }] });
   queueMicrotask(() => steps.push("ui checkpoint"));
   await pending;
@@ -272,9 +279,8 @@ test("TUI context gives pending UI work a turn before reading its projection", a
 
 test("TUI boundary maintenance is deferred, coalesced and remains awaitable", async t => {
   const f = await fixture(t, { mode: "tui" });
-  const project = f.sm.buildSessionProjection.bind(f.sm);
   let reads = 0;
-  t.mock.method(f.sm, "buildSessionProjection", (...args) => { reads++; return project(...args); });
+  observeProjectionReads(t, f.sm, () => reads++);
   await f.emit("turn_end", { toolResults: [] });
   await f.emit("agent_settled", { aborted: false });
   assert.equal(reads, 0, "boundary callbacks must not run heavy maintenance inline");
@@ -291,14 +297,12 @@ test("foreground TUI projection preempts older queued maintenance", async t => {
   const queued = {};
   f.events.emit("metis:condense-maintenance", queued);
   assert.ok(queued.pending instanceof Promise);
-  const project = f.sm.buildSessionProjection.bind(f.sm);
   let readWhileMaintenancePending = false, reads = 0;
-  t.mock.method(f.sm, "buildSessionProjection", (...args) => {
+  observeProjectionReads(t, f.sm, () => {
     reads++;
     const status = {};
     f.events.emit("metis:condense-maintenance", status);
     readWhileMaintenancePending ||= Boolean(status.pending);
-    return project(...args);
   });
   const messages = [{ role: "user", content: "Next", timestamp: 2 }];
   const result = await f.emit("context", { messages });
@@ -338,8 +342,7 @@ for (const boundary of ["session_tree", "session_start"])
 test("shutdown cancels TUI maintenance before its deferred source read", async t => {
   const f = await fixture(t, { mode: "tui" });
   let reads = 0;
-  const project = f.sm.buildSessionProjection.bind(f.sm);
-  t.mock.method(f.sm, "buildSessionProjection", (...args) => { reads++; return project(...args); });
+  observeProjectionReads(t, f.sm, () => reads++);
   await f.emit("agent_settled", { aborted: false });
   const status = {};
   f.events.emit("metis:condense-maintenance", status);
@@ -1749,7 +1752,9 @@ test("manual capture errors report retained pending work and the unchanged work 
 });
 
 test("trivial aggregate sizes are retention totals, not a comparison against one batch gate", async t => {
-  const f = await fixture(t, { mode: "tui", showPruneStatusLine: true, quietOversizedSkips: false, pruneOn: "on-demand", batchingMode: "agent-turn" });
+  const f = await fixture(t, {
+    mode: "tui", showPruneStatusLine: true, quietOversizedSkips: false, pruneOn: "on-demand", batchingMode: "agent-turn",
+  });
   f.add("x".repeat(3200), "unknown-command", "small-one");
   f.add("y".repeat(3300), "unknown-command", "small-two");
   await f.commands.get("pruner").handler("now", f.ctx);

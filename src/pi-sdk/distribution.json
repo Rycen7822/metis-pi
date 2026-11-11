@@ -38,13 +38,17 @@
     {
       "file": "0009-share-embedded-transcript-primitives.patch",
       "sha256": "40cc9116cc31c1a32a858054ec06a2fe8bb5f848a5ec9c149578497edb0f7406"
+    },
+    {
+      "file": "0010-stream-session-projections.patch",
+      "sha256": "f13a49e35f274887a9683e9f2cf6d2d185fc73bfc179531acb5081388bb6edb9"
     }
   ],
-  "patchSet": "c280cfb99ecf9fb7bfc28dae4e1da147ef5b715fcc016e57fe584d4540e9f0af",
+  "patchSet": "b0bea2d53bf176584ce1c373ed63458348cf13209fdc19be37de92625c26fb79",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "4f93f718b481dc4bb18c388cb6219cd2c9328a377035221079e850351d0e465e",
-    "bytes": 6013081,
-    "unpackedBytes": 26663763
+    "sha256": "555c09268a28994f3193ed5b273721aaf61354345ad6470db10acbc79eb18378",
+    "bytes": 6015673,
+    "unpackedBytes": 26686356
   }
 }

@@ -72,6 +72,17 @@ import {
 } from "../collaboration.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
+type NativeProjection = ReturnType<ExtensionContext["sessionManager"]["buildSessionProjection"]>;
+
+/** Load cooperatively where supported; publication guards below remain synchronous and content-based. */
+async function readProjection(ctx: ExtensionContext, signal = ctx.signal): Promise<NativeProjection> {
+  const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
+    buildSessionProjectionAsync?: (options: { signal?: AbortSignal }) => Promise<NativeProjection>;
+  };
+  signal?.throwIfAborted();
+  return ctx.mode === "tui" && typeof manager.buildSessionProjectionAsync === "function"
+    ? manager.buildSessionProjectionAsync({ signal }) : manager.buildSessionProjection();
+}
 
 class CondenseContextChangedError extends Error {
   constructor(reason: string) {
@@ -309,6 +320,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const queuedSummaryKeys = new Set<string>();
   const capturePendingBatches = (ctx: any, opts?: { rethrow?: boolean }): CapturedBatch[] => {
     let batches: CapturedBatch[] = [];
+    let projection: NativeProjection | undefined;
     try {
       indexer.syncSummaryEntries(ctx);
       const references = branchEntryReferences(ctx.sessionManager);
@@ -316,10 +328,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let turnIndex = 0;
       for (const entry of references)
         if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
-      const branch = occ.enabled()
-        ? ctx.sessionManager
-            .buildSessionProjection()
-            .entries.flatMap((entry: any) =>
+      projection = occ.enabled() ? ctx.sessionManager.buildSessionProjection() : undefined;
+      const branch = projection
+        ? projection.entries.flatMap((entry: any) =>
               entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
             )
         : readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "message" || entry.type === "custom_message",
@@ -337,14 +348,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // Archive-only records in a dropped chain are recoverable, not pending
     // model work. Also leave non-text results intact rather than summarizing
     // only their text and accidentally discarding attachments.
-    const visible = projectContext(
-      ctx.sessionManager.buildSessionProjection().messages,
-      ctx.model?.api,
-      ctx,
-      undefined,
-      true,
-    ).messages;
-    const edited = readSourceEdits(ctx).changedToolIds;
+    const source = readSourceEdits(ctx, projection);
+    const visible = projectContext(source.projection.messages, ctx.model?.api, { ctx, source, probe: true }).messages;
+    const edited = source.changedToolIds;
     const visibleKeys = new Set(
       visible
         .filter(
@@ -386,8 +392,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const raw = ctx.sessionManager.buildSessionProjection().messages;
       const source = projectionFingerprint(raw), config = policyFingerprint(currentConfig.value);
       const views = currentChainViews(raw, ctx);
-      const render = (body: string) => projectContext(raw, ctx.model?.api, ctx,
-        views.concat({ ...entry, rangeSummaryText: extraBody ? `${body}\n\n${extraBody}` : body }), true, entry.startUserTimestamp)
+      const render = (body: string) => projectContext(
+        raw,
+        ctx.model?.api,
+        { ctx, chainViews: views.concat({ ...entry, rangeSummaryText: extraBody ? `${body}\n\n${extraBody}` : body }),
+          probe: true, chainFloor: entry.startUserTimestamp },
+      )
         .messages.find((message: any) => message.metisDerived?.blockId === entry.blockId);
       const original = render(text), empty = render("");
       if (!original || !empty) return null;
@@ -471,9 +481,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (!resolveRange(entry, raw)) return false; // A preview final is not a persistence receipt.
         const source = projectionFingerprint(raw);
         const config = policyFingerprint(currentConfig.value);
-        const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
+        const before = projectContext(raw, ctx.model?.api, { ctx, probe: true }).messages;
         const views = currentChainViews(raw, ctx).concat(entry);
-        const after = projectContext(raw, ctx.model?.api, ctx, views, true, entry.startUserTimestamp).messages;
+        const after = projectContext(raw, ctx.model?.api,
+          { ctx, chainViews: views, probe: true, chainFloor: entry.startUserTimestamp }).messages;
         const counts = await tokenEstimator.compare(before, after, signal);
         assertCurrent(version); signal?.throwIfAborted();
         if (!counts && automatic) lastMaintenanceSource = undefined;
@@ -524,15 +535,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const prepareReplacement = async (
     batch: CapturedBatch,
     ctx: any,
-    appendEntry: (type: string, data?: unknown) => void,
-    signal: AbortSignal,
-    onDeferred: (reason: DeferredReason) => void,
+    { appendEntry, signal, onDeferred, snapshotSource }: {
+      appendEntry: (type: string, data?: unknown) => void;
+      signal: AbortSignal;
+      onDeferred: (reason: DeferredReason) => void;
+      snapshotSource: ReturnType<typeof createSourceSnapshotter>;
+    },
   ) => {
     const unavailable = (reason: DeferredReason) => {
       onDeferred(reason);
       return null;
     };
-    const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
+    // Cached measurements may resolve in microtasks. Give input/timers a real
+    // opportunity between candidates, before starting another source read.
+    if (ctx.mode === "tui") await setImmediate(undefined, { signal });
+    const source = snapshotSource((await readProjection(ctx, signal)).messages);
     const existing = batch.toolCalls.map((call) => {
       const key = occKey(call.toolCallId, call.resultTimestamp),
         record = indexer.getRecord(key);
@@ -553,15 +570,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       ? existing
       : await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager) });
     signal.throwIfAborted();
-    if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages))
+    const projection = await readProjection(ctx, signal);
+    if (source !== snapshotSource(projection.messages))
       throw new CondenseContextChangedError("summary source changed during archive");
-    const visible = projectContext(
-      ctx.sessionManager.buildSessionProjection().messages,
-      ctx.model?.api,
-      ctx,
-      undefined,
-      true,
-    ).messages;
+    const visible = projectContext(projection.messages, ctx.model?.api,
+      { ctx, source: readSourceEdits(ctx, projection), probe: true }).messages;
     const replacements = new Map(
       batch.toolCalls.map((call, i) => [
         occKey(call.toolCallId, call.resultTimestamp),
@@ -714,10 +727,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       // Use pre-captured batches if provided (avoids double-capture when the
       // caller previewed the queue before opening the progress overlay).
+      // Keep capture before any new UI/IO wait: queued input must invalidate
+      // this attempt, not silently become a new baseline for the old batch.
       batches = options.preparedBatches ?? options.previewedBatches ?? capturePendingBatches(ctx);
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
-        const before = projectContext(base.messages, ctx.model?.api, ctx).messages;
+        const before = projectContext(base.messages, ctx.model?.api, { ctx, source: readSourceEdits(ctx, base) }).messages;
         const argumentProtection = effectiveProtection();
         // These checks and the combined projection are synchronous. Never
         // retain this cache across archive awaits or a mutable source snapshot.
@@ -737,11 +752,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             candidates.map(({ batch }) => batch),
             { indexer, ...archiveOptions(ctx.sessionManager), appendEntry: appendEntry! },
           );
-          const current = projectContext(
-            ctx.sessionManager.buildSessionProjection().messages,
-            ctx.model?.api,
-            ctx,
-          ).messages;
+          const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, { ctx }).messages;
           if (
             currentConfig.value.enabled &&
             JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection) &&
@@ -860,13 +871,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
                 appendEntry: appendEntry!,
                 ...archiveOptions(ctx.sessionManager),
               });
-              const visible = projectContext(
-                ctx.sessionManager.buildSessionProjection().messages,
-                ctx.model?.api,
-                ctx,
-                undefined,
-                true,
-              ).messages;
+              const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages,
+                ctx.model?.api, { ctx, probe: true }).messages;
               const message = visible.find(
                 (message: any) =>
                   message.role === "toolResult" && occKey(message.toolCallId, message.timestamp) === key,
@@ -1010,7 +1016,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             record.result = "deferred"; continue;
           }
           const deterministic = kind === "packed";
-          record.plan = await prepareReplacement(record.batch, ctx, appendEntry!, signal, reason => { record.deferredReason = reason; });
+          record.plan = await prepareReplacement(record.batch, ctx, {
+            appendEntry: appendEntry!, signal, snapshotSource,
+            onDeferred: reason => { record.deferredReason = reason; },
+          });
           checkSource();
           if (!record.plan) { record.result = "deferred"; continue; }
           if (deterministic) {
@@ -1104,13 +1113,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
         const archivedBatch = batch;
         const plan = record.plan!;
-        const visible = projectContext(
-          ctx.sessionManager.buildSessionProjection().messages,
-          ctx.model?.api,
-          ctx,
-          undefined,
-          true,
-        ).messages;
+        const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages,
+          ctx.model?.api, { ctx, probe: true }).messages;
         const current = visible.filter(
           (message: any) =>
             message.role === "toolResult" && plan.replacements.has(occKey(message.toolCallId, message.timestamp)),
@@ -1702,8 +1706,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     queuedSummaryKeys.clear();
   });
 
-  const projectContext = (input: any[], api?: string, ctx?: ExtensionContext,
-    chainViews?: SingleChainCompressionEntry[], probe = false, chainFloor?: number) => {
+  type ProjectionOptions = {
+    ctx?: ExtensionContext;
+    source?: ReturnType<typeof readSourceEdits>;
+    chainViews?: SingleChainCompressionEntry[];
+    probe?: boolean;
+    chainFloor?: number;
+  };
+
+  const projectContext = (input: any[], api?: string, options: ProjectionOptions = {}) => {
+    const { ctx, chainViews, probe = false, chainFloor } = options;
     let messages = input;
     let changed = false;
 
@@ -1722,8 +1734,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
     // A context edit changes effective evidence, not the immutable archive. Keep
     // edited sources visible and remove stale summaries of the same source group.
-    const edits = ctx && readSourceEdits(ctx);
-    const editedToolIds = edits?.editedToolIds ?? new Set<string>();
+    const edits = options.source ?? (ctx && readSourceEdits(ctx));
+    const editedToolIds = new Set(edits?.editedToolIds);
     if (edits) {
       const { projection, editedSummaries } = edits;
       // One summary may cover multiple occurrences; preserve the whole group.
@@ -1768,7 +1780,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       probe ? undefined : diagnostics,
       occ.enabled() ? undefined : { state: supersedeState, isProtected: protectionPredicate },
       editedToolIds,
-      chainViews ?? currentChainViews(input, ctx),
+      chainViews ?? currentChainViews(input, ctx, edits),
       false,
     );
     if (result.pruned) {
@@ -1823,8 +1835,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     ? normalizeSummaryToolCallRefs(message.details).map(ref => bareToolCallId(ref.toolCallId)) : [];
 
   // A transient read view, never a writer's authorization across awaits.
-  function readSourceEdits(ctx: ExtensionContext) {
-    const projection = ctx.sessionManager.buildSessionProjection();
+  function readSourceEdits(ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection()) {
     const changedToolIds = new Set<string>(), editedToolIds = new Set<string>(), editedSummaries = new Set<string>();
     for (const { sourceEntry: source, messages } of projection.entries) {
       const summary = source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY;
@@ -1879,10 +1890,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         .some(ref => own.has(occKey(ref.toolCallId, ref.resultTimestamp))));
   }
 
-  function currentChainViews(messages: any[], ctx?: ExtensionContext): SingleChainCompressionEntry[] {
+  function currentChainViews(messages: any[], ctx?: ExtensionContext,
+    source?: ReturnType<typeof readSourceEdits>): SingleChainCompressionEntry[] {
     const entries = indexer.getChainEntries();
     if (entries.length === 0) return [];
-    const raw = ctx?.sessionManager.buildSessionProjection().messages ?? messages;
+    source ??= ctx && readSourceEdits(ctx);
+    const raw = source?.projection.messages ?? messages;
     const chains = detectChains(raw, protectionPredicate);
     const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
     const singles: SingleChainCompressionEntry[] = entries
@@ -1899,10 +1912,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       });
     const shared = entries.filter(isSharedChain);
     if (!ctx || shared.length === 0) return singles;
-    const before = projectContext(messages, ctx.model?.api, ctx, singles, true).messages;
-    // This entire validation is synchronous. Share one source read across its
-    // members, never across an await or a later projection call.
-    const analysis = { chains, grace, source: readSourceEdits(ctx) };
+    const before = projectContext(messages, ctx.model?.api, { ctx, source, chainViews: singles, probe: true }).messages;
+    // This synchronous tree owns one source view. Awaiting writers must obtain
+    // a fresh view before checking whether their result can be published.
+    const analysis = { chains, grace, source };
     return singles.concat(
       shared.flatMap((entry) => {
         const views = sharedCandidates(entry, raw, ctx, analysis);
@@ -1968,7 +1981,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         } while (maintenanceNext?.version === version);
       }
       indexer.syncSummaryEntries(ctx);
-      let raw = manager.buildSessionProjection().messages;
+      let sourceView = readSourceEdits(ctx, await readProjection(ctx, signal));
+      assertValid();
+      let raw = sourceView.projection.messages;
+      const analysis = {
+        chains: detectChains(raw, protectionPredicate),
+        grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns),
+        source: sourceView,
+      };
       // Revalidate published shapes after edits, recovery or reload, without rewriting their records.
       const singles = indexer
         .getChainEntries()
@@ -1980,17 +2000,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let singleBaseline: any[] | undefined;
       for (const entry of indexer.getChainEntries().filter(isSharedChain)) {
         assertValid();
-        const views = sharedCandidates(entry, raw, ctx);
-        const before = singleBaseline ??= projectContext(raw, ctx.model?.api, ctx, singles, true).messages;
+        const views = sharedCandidates(entry, raw, ctx, analysis);
+        const before = singleBaseline ??= projectContext(raw, ctx.model?.api,
+          { ctx, source: sourceView, chainViews: singles, probe: true }).messages;
         const shape = sharedShape(before, views);
         if (sharedApprovals.get(entry.blockId) === shape) continue;
         sharedApprovals.delete(entry.blockId);
         if (!views.length) continue;
         const source = projectionFingerprint(raw);
-        const after = projectContext(raw, ctx.model?.api, ctx, singles.concat(views), true).messages;
+        const after = projectContext(raw, ctx.model?.api,
+          { ctx, source: sourceView, chainViews: singles.concat(views), probe: true }).messages;
         const counts = await tokenEstimator.compare(before, after, signal);
         assertValid();
-        if (source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
+        const current = manager.buildSessionProjection();
+        if (source !== projectionFingerprint(current.messages)) return;
+        sourceView = readSourceEdits(ctx, current);
+        analysis.source = sourceView;
         if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0) sharedApprovals.set(entry.blockId, shape);
       }
       // The automatic switch controls new work, not already committed evidence.
@@ -1998,7 +2023,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         stagedChains.clear(); lastMaintenanceSource = undefined;
         return;
       }
-      raw = manager.buildSessionProjection().messages;
+      raw = sourceView.projection.messages;
       const source = projectionFingerprint(raw);
       const chains = detectChains(raw, protectionPredicate);
       const window = currentConfig.value.chainCompression.rollingWindow;
@@ -2009,7 +2034,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           .flatMap(chainMembers)
           .map((member) => member.startUserTimestamp),
       );
-      const edited = readSourceEdits(ctx).changedToolIds;
+      const edited = sourceView.changedToolIds;
       const eligible = selectEligible(chains, window, known, grace).filter(
         (chain) =>
           chain.finalAssistantTimestamp !== deferredFinal && !chain.middleToolCallIds.some((id) => edited.has(id)),
@@ -2034,15 +2059,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           singleSummaryCurrent(stage.entry, ctx) &&
           stage.source === projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))
         ) {
-          const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
-          const after = projectContext(
-            raw,
-            ctx.model?.api,
-            ctx,
-            currentChainViews(raw, ctx).concat(stage.entry),
-            true,
-            stage.entry.startUserTimestamp,
-          ).messages;
+          const before = projectContext(raw, ctx.model?.api, { ctx, source: sourceView, probe: true }).messages;
+          const after = projectContext(raw, ctx.model?.api, {
+            ctx, source: sourceView, chainViews: currentChainViews(raw, ctx, sourceView).concat(stage.entry),
+            probe: true, chainFloor: stage.entry.startUserTimestamp,
+          }).messages;
           const counts = await tokenEstimator.compare(before, after, signal);
           assertValid();
           if (!counts) {
@@ -2067,36 +2088,36 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         await compressChains(ctx, window, appendEntry, undefined, signal, true, true);
         return;
       }
-      const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
+      const before = projectContext(raw, ctx.model?.api, { ctx, source: sourceView, probe: true }).messages;
       const backlogChars = eligible.reduce((sum, chain) => {
         const range = resolveRange(chain, before);
         return sum + (range ? JSON.stringify(before.slice(range.startIndex + 1, range.endIndex)).length : 0);
       }, 0);
       if (backlogChars < currentConfig.value.minBatchChars) return;
-      const anchors = manager.buildSessionProjection().entries;
+      const anchors = sourceView.projection.entries;
       const entry = await prepareSharedChain(eligible, 0, { indexer, blockRefs, messages: raw,
         now: Date.now, appendEntry, diagnostics,
         backfill: { ...archiveOptions(manager), assertValid } },
         (role, timestamp) => anchorId(ctx, role, timestamp, anchors), grace, signal);
       assertValid();
-      if (!entry || source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
+      if (!entry) return;
+      const preparedSource = manager.buildSessionProjection();
+      if (source !== projectionFingerprint(preparedSource.messages)) return;
+      sourceView = readSourceEdits(ctx, preparedSource);
       const views = chainMembers(entry);
-      const current = currentChainViews(raw, ctx);
+      const current = currentChainViews(raw, ctx, sourceView);
       const floor = earliestChainStart(views);
-      const after = projectContext(raw, ctx.model?.api, ctx, current.concat(views), true, floor).messages;
+      const after = projectContext(raw, ctx.model?.api,
+        { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages;
       const counts = await tokenEstimator.compare(before, after, signal);
       assertValid();
       if (!counts) {
         lastMaintenanceSource = undefined;
         return;
       }
-      if (
-        !counts ||
-        counts.piBefore <= counts.piAfter ||
-        counts.proxyDelta <= 0 ||
-        source !== projectionFingerprint(manager.buildSessionProjection().messages)
-      )
-        return;
+      if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0) return;
+      const measuredSource = manager.buildSessionProjection();
+      if (source !== projectionFingerprint(measuredSource.messages)) return;
       if (
         indexer
           .getChainEntries()
@@ -2106,7 +2127,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return;
       appendEntry(CUSTOM_TYPE_CHAIN, entry);
       indexer.registerChain(entry);
-      const plain = projectContext(raw, ctx.model?.api, ctx, singles, true, floor).messages;
+      const plain = projectContext(raw, ctx.model?.api,
+        { ctx, source: readSourceEdits(ctx, measuredSource), chainViews: singles, probe: true, chainFloor: floor }).messages;
       sharedApprovals.set(entry.blockId, sharedShape(plain, views));
       lowerFloor(supersede, floor);
       statsAccum.addChainsCompressed(views.length);
@@ -2138,8 +2160,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (isCondenseMaintenanceRequest(data)) data.pending = maintenanceTask;
   });
 
-  const withDurableSummaries = (messages: any[], ctx: ExtensionContext, api?: string, prefixOnly = false) => {
-    const durable = projectContext(ctx.sessionManager.buildSessionProjection().messages, api, ctx, undefined, true).messages
+  const withDurableSummaries = (messages: any[], ctx: ExtensionContext, api?: string, prefixOnly = false,
+    source = readSourceEdits(ctx)) => {
+    const durable = projectContext(source.projection.messages, api, { ctx, source, probe: true }).messages
       .filter((message: any) => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY);
     if (durable.length === 0) return messages;
     const identities = new Set(messages
@@ -2177,9 +2200,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (request.sessionId !== activeSessionId) return;
     if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
     if (projectionContext) indexer.syncSummaryEntries(projectionContext);
+    const source = projectionContext && readSourceEdits(projectionContext);
     const messages = request.includeSummaries && projectionContext
-      ? withDurableSummaries(request.messages, projectionContext, request.api, true) : request.messages;
-    request.messages = projectContext(messages, request.api, projectionContext).messages;
+      ? withDurableSummaries(request.messages, projectionContext, request.api, true, source) : request.messages;
+    request.messages = projectContext(messages, request.api, { ctx: projectionContext, source }).messages;
   });
   pi.on("context", async (event, ctx) => {
     if (ctx.mode === "tui" && currentConfig.value.enabled) {
@@ -2211,8 +2235,20 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     indexer.syncSummaryEntries(ctx);
     // Session delivery can append evidence after Pi took this request snapshot.
     // Carry only currently effective summaries; never resurrect a dropped chain.
-    const messages = withDurableSummaries(event.messages, ctx, ctx.model?.api);
-    const result = projectContext(messages, ctx.model?.api, ctx);
+    const version = lifecycle;
+    const signal = ctx.signal;
+    let projection: NativeProjection;
+    try {
+      projection = await readProjection(ctx, signal);
+    } catch (error) {
+      if (signal?.aborted) return;
+      throw error;
+    }
+    assertCurrent(version);
+    if (signal?.aborted) return;
+    const source = readSourceEdits(ctx, projection);
+    const messages = withDurableSummaries(event.messages, ctx, ctx.model?.api, false, source);
+    const result = projectContext(messages, ctx.model?.api, { ctx, source });
     if (messages !== event.messages) result.changed = true;
     occ.observeRequest(result.messages);
     const measured = result.measure?.();

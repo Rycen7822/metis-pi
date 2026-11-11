@@ -11,7 +11,7 @@ export interface TokenComparison {
   proxyAfter?: number;
 }
 type Job = {
-  id: number; before: any[]; after: any[]; fingerprint: string;
+  id: number; before: any[]; after: any[]; fingerprint: string; cacheKey: string;
   piBefore: number; piAfter: number; absolute: boolean;
   signal?: AbortSignal; abort: () => void;
   resolve: (result: TokenComparison | null) => void;
@@ -26,6 +26,9 @@ export function projectionFingerprint(messages: any[]): string {
 
 // Keep brief pauses warm, but release the encoder after one minute without tokenization work.
 const WORKER_IDLE_TIMEOUT_MS = 60_000;
+// A flush alternates batch, stub and summary-overhead counts across concurrent candidates.
+const MAX_CACHED_COMPARISONS = 64;
+type ProxyCounts = Pick<TokenComparison, "proxyDelta" | "proxyBefore" | "proxyAfter">;
 
 /** One lazy encoder; FIFO keeps concurrent summary validations from displacing each other. */
 export class TokenEstimator {
@@ -35,13 +38,14 @@ export class TokenEstimator {
   private active?: Job;
   private pending: Job[] = [];
   private nextId = 0;
-  private cache?: TokenComparison;
+  private cache = new Map<string, ProxyCounts>();
 
   compare(before: any[], after: any[], signal?: AbortSignal, absolute = false): Promise<TokenComparison | null> {
     if (signal?.aborted) return Promise.resolve(null);
     const fingerprint = `${absolute}:` + projectionFingerprint(before) + ":" + projectionFingerprint(after);
-    if (this.cache?.fingerprint === fingerprint) return Promise.resolve(this.cache);
-    let snapshot: [any[], any[]];
+    const piBefore = before.reduce((n, m) => n + estimateTokens(m), 0);
+    const piAfter = after.reduce((n, m) => n + estimateTokens(m), 0);
+    let snapshot: [any[], any[]], cacheKey: string;
     try {
       // Count only model-facing fields. In particular, custom.details/display
       // and tool execution metadata are not evidence sent to the model.
@@ -50,14 +54,22 @@ export class TokenEstimator {
           content: message.content, isError: message.isError }
         : { role: message.role, content: message.content });
       const normalized: [any[], any[]] = [normalize(before), normalize(after)];
+      // Source authorization still uses the complete fingerprint above. Only encoder
+      // results ignore fields the worker never counts, such as render timestamps.
+      cacheKey = `${absolute}:` + projectionFingerprint(normalized[0]) + ":" + projectionFingerprint(normalized[1]);
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        this.cache.delete(cacheKey);
+        this.cache.set(cacheKey, cached);
+        return Promise.resolve({ fingerprint, piBefore, piAfter, ...cached });
+      }
       // postMessage snapshots synchronous dispatch; deferred jobs need their request-time contents now.
       snapshot = this.active || this.retiring ? structuredClone(normalized) : normalized;
     }
     catch { return Promise.resolve(null); }
     return new Promise(resolve => {
-      const job: Job = { id: ++this.nextId, before: snapshot[0], after: snapshot[1], fingerprint, signal, resolve,
-        piBefore: before.reduce((n, m) => n + estimateTokens(m), 0),
-        piAfter: after.reduce((n, m) => n + estimateTokens(m), 0), absolute,
+      const job: Job = { id: ++this.nextId, before: snapshot[0], after: snapshot[1], fingerprint, cacheKey, signal, resolve,
+        piBefore, piAfter, absolute,
         abort: () => this.clear() };
       signal?.addEventListener("abort", job.abort, { once: true });
       if (this.active || this.retiring) this.pending.push(job);
@@ -90,7 +102,14 @@ export class TokenEstimator {
           const measured: TokenComparison = { fingerprint: current.fingerprint,
             piBefore: current.piBefore, piAfter: current.piAfter,
             proxyDelta: result.delta, proxyBefore: result.before, proxyAfter: result.after };
-          this.cache = measured;
+          this.cache.delete(current.cacheKey);
+          this.cache.set(current.cacheKey, {
+            proxyDelta: measured.proxyDelta, proxyBefore: measured.proxyBefore, proxyAfter: measured.proxyAfter,
+          });
+          if (this.cache.size > MAX_CACHED_COMPARISONS) {
+            const oldest = this.cache.keys().next().value;
+            if (oldest !== undefined) this.cache.delete(oldest);
+          }
           this.active = undefined;
           this.finish(current, measured);
           const next = this.pending.shift();
@@ -140,7 +159,7 @@ export class TokenEstimator {
 
   clear() {
     this.cancelIdleTimer();
-    this.cache = undefined;
+    this.cache.clear();
     if (this.active) this.finish(this.active, null);
     for (const job of this.pending) this.finish(job, null);
     this.active = undefined;
