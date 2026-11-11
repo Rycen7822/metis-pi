@@ -160,7 +160,8 @@ export function createToolSearchDefinition(tools: SessionTools): ToolDefinition<
       const label = input.action === "describe" ? `describe ${input.name ?? ""}` : `search ${input.query ?? ""}`;
       const scope = input.namespace ? ` namespace=${input.namespace}` : "";
       const limit = input.limit === undefined ? "" : ` limit=${input.limit}`;
-      return new Text(theme.fg("toolTitle", safeText(`${TOOL_SEARCH_NAME} ${label}${scope}${limit}`.trim())), 0, 0);
+      const content = safeText(`${label}${scope}${limit}`.trim());
+      return new Text(`${theme.fg("toolTitle", TOOL_SEARCH_NAME)} ${theme.fg("text", content)}`, 0, 0);
     },
     renderResult(result, options, theme) {
       const details = result.details;
