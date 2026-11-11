@@ -1,3 +1,5 @@
+import type { Palette } from "./contracts.ts";
+
 /** Strip untrusted terminal controls before adding presentation-owned ANSI. */
 export function safeText(text: string): string {
   return text
@@ -6,4 +8,9 @@ export function safeText(text: string): string {
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\x1b[@-_]/g, "")
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
+}
+
+/** Shared result gutter: first output row owns the branch; later rows align under its body. */
+export function toolOutputGutter(lines: readonly string[], theme: Pick<Palette, "fg">, color = "toolOutput"): string {
+  return lines.map((line, i) => `${theme.fg("dim", i === 0 ? "  └ " : "    ")}${theme.fg(color, line)}`).join("\n");
 }

@@ -14,7 +14,7 @@ import {
 } from "./explore.ts";
 import { summarizeShellCommand } from "../execution/shell/summary.ts";
 import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
-import { safeText } from "./terminal-text.ts";
+import { safeText, toolOutputGutter as gutter } from "./terminal-text.ts";
 import type {
   Palette, ViewContext, ViewOptions, TextFactory, Highlight, Renderers,
   DiffFactory, Component, TextComponent, DiffLayoutOps, ExplorationPlan, WritePreviewInput, ShellFactories,
@@ -62,9 +62,6 @@ function preview(lines: string[], limit: number, expanded: boolean, hint: string
   const shortenedLines = selected.map(shortened);
   if (shortenedLines.some((line) => line.endsWith("[line shortened in preview]"))) shortenedLines.push(`(${hint} for the complete text)`);
   return shortenedLines;
-}
-function gutter(lines: readonly string[], theme: Palette, color = "toolOutput"): string {
-  return lines.map((line, i) => `${theme.fg("dim", i === 0 ? "  └ " : "    ")}${theme.fg(color, line)}`).join("\n");
 }
 function highlight(text: string, language: string, theme: Palette, paint?: Highlight): string {
   try {

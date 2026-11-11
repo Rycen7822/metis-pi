@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { safeText } from "../presentation/terminal-text.ts";
+import { safeText, toolOutputGutter } from "../presentation/terminal-text.ts";
 import {
   DEFAULT_TOOL_SEARCH_LIMIT, TOOL_SEARCH_NAME, describeToolText, isCallable, isLoadable, isVisible,
   rankTools, scriptName,
@@ -156,18 +156,19 @@ export function createToolSearchDefinition(tools: SessionTools): ToolDefinition<
       const result = search(tools, input.query.trim(), limit, input.namespace?.trim() || undefined);
       return toolResult(result);
     },
-    renderCall(input, theme) {
+    renderCall(input, theme, context) {
       const label = input.action === "describe" ? `describe ${input.name ?? ""}` : `search ${input.query ?? ""}`;
       const scope = input.namespace ? ` namespace=${input.namespace}` : "";
       const limit = input.limit === undefined ? "" : ` limit=${input.limit}`;
       const content = safeText(`${label}${scope}${limit}`.trim());
-      return new Text(`${theme.fg("toolTitle", TOOL_SEARCH_NAME)} ${theme.fg("text", content)}`, 0, 0);
+      const bullet = theme.fg(context.isError ? "error" : context.isPartial === false ? "success" : "dim", "•");
+      return new Text(`${bullet} ${theme.fg("toolTitle", TOOL_SEARCH_NAME)} ${theme.fg("text", content)}`, 0, 0);
     },
     renderResult(result, options, theme) {
       const details = result.details;
       if (!details || !Array.isArray(details.matches) || !Array.isArray(details.activated)) {
-        const message = result.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
-        return new Text(theme.fg("toolOutput", safeText(message)), 0, 0);
+        const message = safeText(result.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n"));
+        return new Text(message ? toolOutputGutter(message.split("\n"), theme) : "", 0, 0);
       }
       const lines = [renderSummary(details)];
       if (options.expanded && details.matches.length > 0)
@@ -175,8 +176,8 @@ export function createToolSearchDefinition(tools: SessionTools): ToolDefinition<
           `${item.namespace ? ` [${item.namespace}]` : ""}${item.active ? " (active)" : ""}${item.callable ? "" : " (not callable)"}`));
       if (options.expanded && details.action === "describe" && details.matches[0]?.parameters)
         lines.push(JSON.stringify(details.matches[0].parameters, null, 2));
-      return new Text(theme.fg(options.expanded || details.matches.length === 0 ? "toolOutput" : "muted",
-        safeText(lines.join("\n"))), 0, 0);
+      const color = options.expanded || details.matches.length === 0 ? "toolOutput" : "muted";
+      return new Text(toolOutputGutter(safeText(lines.join("\n")).split("\n"), theme, color), 0, 0);
     },
   };
 }
