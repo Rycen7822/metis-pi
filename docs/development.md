@@ -16,6 +16,7 @@ npm run prepare:subagents
 | `npm run check` / `check:test` | 项目 / 测试 TS 类型；增量缓存 `.work/tsc/`。 |
 | `npm test` / `test:fast` | Node + Ask Vitest / core 规则和渲染。 |
 | `npm run test:host` / `test:protocol` | 宿主和包内容 / 请求、回放、压缩、历史编辑。 |
+| `npm run test:formal` | [Condense TLA+ 核心模型](../test/formal/README.md)；独立命令，需 Java/TLC。 |
 | `npm run test:io` / `test:resource` | 文件和 Git/归档 / 进程、锁、timer、缓存、传输。 |
 | `npm run test:lsp` / `test:ask-user-question` / `test:chrome` | LSP / 问卷 / 界面、布局、复制。 |
 | `npm run build:plugins` / `test:plugins` | Web bundle、MCP CLI / Web 共置测试。 |
@@ -26,6 +27,7 @@ npm run prepare:subagents
 | `node scripts/copy-perf.mjs` | 渲染和提取成本；剪贴板行为另用 PTY 验收。 |
 
 先运行最近的已有检查；跨模块改动跑 verify，终端改动加 PTY。纯文档改动核对事实、链接和交付即可。
+TLA+ 模型不替代实现测试，也不向默认验证或插件安装引入 Java 依赖。
 
 ## 检查与 CI
 

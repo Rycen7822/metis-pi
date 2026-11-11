@@ -1,0 +1,113 @@
+// Constants use JS literals; { operator } means a TLC operator override rather than a string.
+const operator = name => ({ operator: name });
+export default [
+  {
+    module: 'PressureGrid',
+    constants: { CapBeforePercent: false, ClampGrowth: false },
+    invariants: ['TypeOK', 'LevelBoundary', 'DeltaBoundary', 'NoUnknownPaid', 'NativeStrict'],
+    cases: [
+      { name: '675-profiles' },
+      { name: 'cap-before-percent', constants: { CapBeforePercent: true }, expect: { invariant: 'LevelBoundary' } },
+      { name: 'saturated-growth', constants: { ClampGrowth: true }, expect: { invariant: 'DeltaBoundary' } },
+    ],
+  },
+  {
+    module: 'PublicationTxn',
+    constants: { MaxChanges: 2, EarlyCapture: true, AtomicCommit: true, GuardMode: 'full',
+      ArchiveComplete: true, HasGain: true, BudgetAllows: true },
+    invariants: ['TypeOK', 'NoStalePublish', 'NoRebase', 'NoLossOnDeferral', 'NoUnsafeReplacement', 'NoFalseReject'],
+    cases: [
+      { name: 'freshness' },
+      { name: 'no-gain', constants: { HasGain: false } },
+      { name: 'no-budget', constants: { BudgetAllows: false } },
+      { name: 'archive-failure', constants: { ArchiveComplete: false } },
+      { name: 'late-capture', constants: { EarlyCapture: false }, invariants: ['TypeOK', 'NoRebase'],
+        expect: { invariant: 'NoRebase' } },
+      { name: 'await-after-guard', constants: { AtomicCommit: false }, expect: { invariant: 'NoStalePublish' } },
+      ...['head', 'without-policy', 'without-life'].map(GuardMode => ({
+        name: GuardMode, constants: { GuardMode }, invariants: ['TypeOK', 'NoStalePublish'],
+        expect: { invariant: 'NoStalePublish' },
+      })),
+      { name: 'publication-reachable', invariants: ['TypeOK', 'NeverPublishes'], expect: { invariant: 'NeverPublishes' } },
+    ],
+  },
+  {
+    module: 'AsyncReaders',
+    constants: { ReaderCount: 2, Records: 1, MaxChanges: 1, GuardEpoch: true, PostClose: true,
+      GuardManager: true, OwnBuffers: true, CloseHandles: true, CheckAbort: true, AllowFault: false },
+    invariants: ['TypeOK', 'NoTornResult', 'NoWrongSelection', 'NoSpuriousIntegrity', 'NoLeak',
+      'CancelledNoSuccess', 'CloseEpochRespected', 'NoMaskedFault'],
+    properties: ['EventuallyFinishes'],
+    cases: [
+      { name: 'concurrent-readers' },
+      { name: 'io-failure', constants: { ReaderCount: 1, AllowFault: true } },
+      { name: 'shared-buffer', constants: { Records: 2, MaxChanges: 0, OwnBuffers: false },
+        invariants: ['TypeOK', 'NoSpuriousIntegrity'], properties: [], expect: { invariant: 'NoSpuriousIntegrity' } },
+      ...[
+        ['no-epoch', { GuardEpoch: false }, 'NoTornResult'],
+        ['no-manager-check', { GuardManager: false }, 'NoWrongSelection'],
+        ['no-close-check', { PostClose: false }, 'CloseEpochRespected'],
+        ['no-close', { CloseHandles: false }, 'NoLeak'],
+        ['no-abort', { CheckAbort: false }, 'CancelledNoSuccess'],
+      ].map(([name, constants, invariant]) => ({
+        name, constants: { ReaderCount: 1, Records: 2, ...constants },
+        invariants: ['TypeOK', invariant], properties: [], expect: { invariant },
+      })),
+      { name: 'no-fairness', spec: 'UnfairSpec', constants: { ReaderCount: 1, MaxChanges: 0 },
+        expect: { temporal: 'EventuallyFinishes' } },
+    ],
+  },
+  {
+    module: 'WindowAdmission',
+    constants: { Shape: 'mixed', Capacity: 3, Passes: 3, Policy: 'window', Interleave: false, DropCold: false },
+    invariants: ['TypeOK', 'Bounded', 'NoDropOrReorder', 'HotWindowSurvives', 'WarmMissesArePrefix'],
+    cases: [
+      { name: 'hot-tail' },
+      ...['oversized', 'pinned', 'compaction'].map(Shape => ({ name: Shape, constants: { Shape } })),
+      { name: 'branch-interleave', constants: { Shape: 'compaction', Interleave: true } },
+      { name: 'retain-all', constants: { Policy: 'retain-all' }, invariants: ['TypeOK', 'NeverEvictHot'],
+        expect: { invariant: 'NeverEvictHot' } },
+      { name: 'drop-cold', constants: { DropCold: true }, expect: { invariant: 'NoDropOrReorder' } },
+    ],
+  },
+  {
+    module: 'EncoderMemo',
+    constants: { Steps: operator('Repeat'), Capacity: 2, SnapshotQueued: true, IncludeMode: true, IncludeAfter: true,
+      FreshFields: true, FreshBudget: true, Evict: true, MutateQueued: false, ExpectedJobs: 2 },
+    invariants: ['TypeOK', 'Bounded', 'CorrectCounts', 'FreshSourceFields', 'FreshBudgetDecision',
+      'QueueSnapshotSound', 'EncodingReuse'],
+    cases: [
+      { name: 'queued-alternation', constants: { MutateQueued: true } },
+      { name: 'absolute-mode', constants: { Steps: operator('Modes') } },
+      { name: 'after-input', constants: { Steps: operator('After') } },
+      { name: 'budget-change', constants: { Steps: operator('BudgetChange'), ExpectedJobs: 1 } },
+      { name: 'eviction', constants: { Steps: operator('Eviction'), ExpectedJobs: 4 } },
+      { name: 'no-snapshot', constants: { SnapshotQueued: false, MutateQueued: true },
+        expect: { invariant: 'CorrectCounts' } },
+      { name: 'no-mode', constants: { Steps: operator('Modes'), IncludeMode: false }, expect: { invariant: 'CorrectCounts' } },
+      { name: 'no-after', constants: { Steps: operator('After'), IncludeAfter: false }, expect: { invariant: 'CorrectCounts' } },
+      { name: 'old-source-fields', constants: { FreshFields: false }, expect: { invariant: 'FreshSourceFields' } },
+      { name: 'old-budget', constants: { Steps: operator('BudgetChange'), FreshBudget: false },
+        expect: { invariant: 'FreshBudgetDecision' } },
+      { name: 'unbounded', constants: { Steps: operator('Eviction'), Evict: false }, expect: { invariant: 'Bounded' } },
+    ],
+  },
+  {
+    module: 'OccScheduler',
+    constants: { Steps: operator('WindowScenario'), Window: 1000000, Reserve: 16384,
+      InitialPhase: 'normal', InitialAtWork: 0, InitialAtChars: 0, InitialExhausted: false,
+      IgnoreNear: false, PhysicalDenominator: false },
+    invariants: ['TypeOK', 'ExpectedTransitions'],
+    cases: [
+      ...Array.from({ length: 8 }, (_, i) => ({
+        name: `window-${300 + i * 100}k`, constants: { Window: 300000 + i * 100000 },
+      })),
+      { name: 'hold', constants: { Steps: operator('HoldBoth'), InitialPhase: 'hold', InitialAtWork: 4, InitialAtChars: 100000 } },
+      ...['ExpireReenter', 'FloorHorizon', 'EarlyWaiting', 'NativeDisabled'].map(name => ({
+        name, constants: { Steps: operator(name) },
+      })),
+      { name: 'physical-denominator', constants: { PhysicalDenominator: true }, expect: { invariant: 'ExpectedTransitions' } },
+      { name: 'no-near-retreat', constants: { IgnoreNear: true }, expect: { invariant: 'ExpectedTransitions' } },
+    ],
+  },
+];

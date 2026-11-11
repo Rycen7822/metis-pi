@@ -22,6 +22,7 @@
   },
   "scripts": {
     "test": "node scripts/test.mjs all",
+    "test:formal": "node test/formal/run.mjs",
     "test:fast": "node scripts/test.mjs core",
     "test:host": "node scripts/test.mjs host",
     "test:lsp": "node scripts/test.mjs lsp",
