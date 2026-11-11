@@ -76,6 +76,20 @@ export interface TranscriptEvent {
 
 export type MessageBlock = { type: string; text?: string; thinking?: string };
 
+/** Normalize native messages once at the main/side presentation event boundary. */
+export function toTranscriptMessage(message: unknown): TranscriptEvent["message"] {
+  if (!message || typeof message !== "object") return undefined;
+  const record = message as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : undefined;
+  if (!role) return undefined;
+  return {
+    role,
+    content: normalizeMessageBlocks(record.content),
+    stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
+    provider: record.provider, responseId: record.responseId, timestamp: record.timestamp,
+  };
+}
+
 /** Canonical read-only content-block mapping, shared by the event boundary
  * (extension.ts toStateMessage) and the render adapter (transcript-adapter.ts):
  * one policy so a new block field cannot be added at one site only. Tolerates

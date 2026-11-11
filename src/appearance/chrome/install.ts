@@ -64,6 +64,9 @@ export interface ChromeLifecycle {
   /** Mutable install state (diagnostics reads it; events write `tui`). */
   readonly state: ChromeState;
   install(available: UiAvailable, generation: number): Promise<void>;
+  embeddedEditor(): Promise<((tui: unknown, theme: unknown, keybindings: unknown) => {
+    component: import("./editor.ts").CodexEditorRowHost; dispose(): void;
+  }) | undefined>;
   /** Drop late installs from a previous session (preload in flight). */
   invalidate(): void;
   /** Release our selected editor and reset the chrome slots installed this session. */
@@ -135,6 +138,14 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
   // Start the preload immediately so session_start rarely waits.
   void preloadChrome();
 
+  const editorFactory = (mods: ChromeMods, cursor: ReturnType<typeof createHardwareCursor>) => mods.makeCodexEditorFactory({
+    host: deps.editorHost as never,
+    paddingX: 2, embedWorkingStatus: true,
+    surface: config.composer.surface ? deps.surface : undefined,
+    promptPrefix: config.composer.promptPrefix, placeholder: "Ask anything...",
+    selectionCopy: deps.selectionCopyHook(), skillTrigger: true, hardwareCursor: cursor.acquire,
+  });
+
   const setWidgetVisible = (visible: boolean): void => {
     const ui = uiOf();
     if (typeof ui.setWidget !== "function") return;
@@ -163,19 +174,7 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
     if (available.setEditorComponent && !ui.getEditorComponent?.() && deps.editorHost?.CustomEditor) {
       try {
         const surface = config.composer.surface ? deps.surface : undefined;
-        const factory = mods.makeCodexEditorFactory({
-          host: deps.editorHost as never,
-          paddingX: 2,
-          embedWorkingStatus: true,
-          surface,
-          promptPrefix: config.composer.promptPrefix,
-          placeholder: "Ask anything...",
-          selectionCopy: deps.selectionCopyHook(),
-          // The host auto-triggers "/" only at line start; without this the
-          // second skill trigger (`/skill:a /`) never queries the provider.
-          skillTrigger: true,
-          hardwareCursor: hardwareCursor.acquire,
-        });
+        const factory = editorFactory(mods, hardwareCursor);
         state.editorFactory = factory;
         state.surfaceApplied = surface !== undefined;
         state.prefixApplied = surface !== undefined && config.composer.promptPrefix;
@@ -306,6 +305,19 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
   return {
     state,
     install,
+    async embeddedEditor() {
+      const mods = await preloadChrome();
+      if (!mods || !deps.editorHost?.CustomEditor) return;
+      return (tui, theme, keybindings) => {
+        const cursor = createHardwareCursor();
+        try {
+          return { component: editorFactory(mods, cursor)(tui, theme, keybindings), dispose: cursor.release };
+        } catch (error) {
+          cursor.release();
+          throw error;
+        }
+      };
+    },
     invalidate: () => { state.generation += 1; },
     restore,
     setWidgetVisible,

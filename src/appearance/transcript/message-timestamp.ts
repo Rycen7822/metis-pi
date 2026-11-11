@@ -12,6 +12,18 @@ export function formatBeijingTime(timestamp: unknown): string | undefined {
   return beijingTime.format(timestamp);
 }
 
+export function userTimestampComponent(timestamp: unknown, outputPad: () => number) {
+  const label = formatBeijingTime(timestamp);
+  if (!label) return;
+  return {
+    render(width: number): string[] {
+      const padding = Math.min(Math.max(0, Math.floor(outputPad())), Math.max(0, width));
+      return [resolveThemePainter(undefined)("dim", clipLine(" ".repeat(padding) + label, width))];
+    },
+    invalidate() {},
+  };
+}
+
 const OWNER = Symbol.for("Rycen7822.metis-pi.user-timestamps");
 
 /** Pi's user component receives only text. Decorate its creation path instead,
@@ -33,16 +45,10 @@ export function installUserTimestamps(prototype: object, enabled: () => boolean)
     if (!active || !enabled() || !chat || count === undefined || chat.children.length <= count) return;
     const message = args[0] as { role?: unknown; timestamp?: unknown } | undefined;
     if (message?.role !== "user") return;
-    const label = formatBeijingTime(message.timestamp);
-    if (!label) return;
+    const timestamp = userTimestampComponent(message.timestamp, () => this.outputPad ?? 1);
+    if (!timestamp) return;
     try {
-      chat.addChild({
-        render: (width: number): string[] => {
-          const padding = Math.min(Math.max(0, Math.floor(this.outputPad ?? 1)), Math.max(0, width));
-          return [resolveThemePainter(undefined)("dim", clipLine(" ".repeat(padding) + label, width))];
-        },
-        invalidate() {},
-      });
+      chat.addChild(timestamp);
     } catch { /* A display decoration must not prevent message delivery. */ }
   };
   try {

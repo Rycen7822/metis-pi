@@ -22,9 +22,13 @@
 // External owner awareness: an external wrapper (e.g. pi-zentui thinkingSteps)
 // may already own assistant thinking display; when detected the rail stays
 // passive while the separator stays active.
+// Side components bind their own transcript state without another prototype layer.
 
 import { asRecord } from "../../presentation/tool-names.ts";
-import { TranscriptState, normalizeMessageBlocks, semanticRuns, type SemanticRun, type MessageViewKey } from "./state.ts";
+import {
+  TranscriptState, normalizeMessageBlocks, semanticRuns,
+  type SemanticRun, type MessageViewKey,
+} from "./state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "../../presentation/thinking-view.ts";
 
 const THOUGHT_LABEL = Symbol.for("Rycen7822.metis-pi.thought-label.v1");
@@ -116,6 +120,35 @@ export interface TranscriptAdapterInput {
   enabled(): boolean;
   /** Repaint after a coalesced streaming preview; gestures/finals stay immediate. */
   requestRender?(): void;
+}
+
+/** Per-component display override of the one installed decoration layer. */
+export interface AssistantTranscriptScope {
+  state: TranscriptState;
+  requestRender: () => void;
+}
+
+const SCOPES_SYMBOL = Symbol.for("Rycen7822.metis-pi.assistant-scopes.v1");
+
+/** Realm-shared so separately loaded copies of this module agree on the map. */
+function componentScopes(): WeakMap<object, AssistantTranscriptScope> {
+  const realm = globalThis as typeof globalThis & { [SCOPES_SYMBOL]?: WeakMap<object, AssistantTranscriptScope> };
+  return (realm[SCOPES_SYMBOL] ??= new WeakMap());
+}
+
+/** Bind only mounted side components; unbinding never removes a newer owner. */
+export function bindAssistantTranscriptScope(component: object, scope: AssistantTranscriptScope): () => void {
+  const scopes = componentScopes();
+  scopes.set(component, scope);
+  return () => {
+    if (scopes.get(component) === scope) scopes.delete(component);
+  };
+}
+
+/** Keep style and policy shared, but isolate side identities, clocks and repaint. */
+function scopedInput(input: TranscriptAdapterInput, component: object): TranscriptAdapterInput {
+  const scope = componentScopes().get(component);
+  return scope ? { ...input, state: scope.state, requestRender: scope.requestRender } : input;
 }
 
 const RAIL_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-rail");
@@ -220,20 +253,22 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     preview.timer = undefined;
     pending.delete(preview);
   };
+  // The resolved binding for THIS component; helpers below only ever see it.
   const wrapper = function (this: unknown, ...args: unknown[]): void {
     const target = typeof this === "object" && this !== null ? this : undefined;
+    const scoped = target ? scopedInput(input, target) : input;
     const preview = target ? previews.get(target) : undefined;
     let canPreview = false;
-    try { canPreview = active && input.requestRender !== undefined && input.enabled(); }
+    try { canPreview = active && scoped.requestRender !== undefined && scoped.enabled(); }
     catch { /* Optional cadence must not prevent the native rebuild. */ }
     // SDK deltas are fresh shallow copies; event-anchored keys identify the
     // logical response. Without that evidence, keep the native update immediate.
     const messageKey = canPreview && target && typeof args[0] === "object" && args[0] !== null
-      ? input.state.identityOf(args[0]) : undefined;
+      ? scoped.state.identityOf(args[0]) : undefined;
     if (canPreview && target) {
       const content = asRecord(args[0]).content;
       let policy: ThinkingPolicy | undefined;
-      try { policy = input.thinkingPolicy?.(); }
+      try { policy = scoped.thinkingPolicy?.(); }
       catch { /* Keep the ordinary immediate host/presentation fallback. */ }
       // Only a mounted peek bound to persistent run state can coalesce.
       // Manual rebuilds, mixed/foreign content and completion stay immediate.
@@ -248,18 +283,20 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
         Reflect.set(target, "isStreaming", true);
         if (!preview.timer) {
           const queued = preview;
+          const queuedScope = componentScopes().get(target);
           queued.timer = setTimeout(() => {
             const latest = queued.args;
             releasePreview(queued);
             try {
-              // A queued old partial must never replace a newer native owner.
-              if (!latest || !active || !input.enabled() || asRecord(target).lastMessage !== latest[0]) return;
+              // A removed/rebound side scope must not flush into the main state.
+              if (componentScopes().get(target) !== queuedScope) return;
+              if (!latest || !active || !scoped.enabled() || asRecord(target).lastMessage !== latest[0]) return;
               // Visit the current wrapper chain once, bypassing this queue
               // explicitly rather than encoding flush state in a timestamp.
               queued.flushing = true;
               const refresh = asRecord(target).updateContent;
               if (typeof refresh === "function") refresh.apply(target, latest);
-              input.requestRender?.();
+              scoped.requestRender?.();
             } catch { /* An optional presentation callback must not escape a timer. */ }
             finally { queued.flushing = false; }
           }, delay);
@@ -279,23 +316,23 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       current.messageKey = messageKey;
       previews.set(target, current);
     }
-    if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
+    if (!active || !scoped.enabled() || typeof this !== "object" || this === null) return;
     let view: AssistantView | undefined;
-    try { view = readAssistantView(input, this); } catch { return; }
+    try { view = readAssistantView(scoped, this); } catch { return; }
     if (!view) return;
     try {
       // A visibility transition needs the host to REBUILD so the run renders
       // under its new hidden state. Call the CAPTURED original (never
       // this.updateContent — no wrapper recursion), at most ONE extra rebuild,
       // only when the override map actually changed.
-      if (input.thinkingPolicy && applyThinkingPolicy(input, view, appliedPhases, autoApplied)) {
+      if (scoped.thinkingPolicy && applyThinkingPolicy(scoped, view, appliedPhases, autoApplied)) {
         original.apply(this, args);
       }
     } catch {
       // A policy failure must not break the original message display.
     }
     try {
-      const readyPeek = coordinateSubtree(input, view, getSpacerProto(), rebuild);
+      const readyPeek = coordinateSubtree(scoped, view, getSpacerProto(), rebuild);
       const preview = previews.get(this);
       if (preview) preview.readyPeek = readyPeek;
     } catch {

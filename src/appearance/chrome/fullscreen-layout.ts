@@ -5,6 +5,8 @@ import { createHistoryWindowSystem, type HistoryWindowHost, type HistoryWindowTu
 export const FULLSCREEN_MARGIN_OWNER = Symbol.for("Rycen7822.metis-pi.fullscreen-margin");
 
 interface TuiLike extends HistoryWindowTui {
+  terminal?: unknown;
+  requestRender?(force?: boolean): void;
   mode?: unknown;
   layoutRoot?: unknown;
   setLayoutRoot?: (component: unknown) => void;
@@ -25,6 +27,7 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
   const marginReady = options.margin > 0 && typeof host.HStack === "function" && typeof host.Spacer === "function";
   const historyReady = typeof host.Container === "function" && typeof host.ScrollView === "function";
   let reason = "not installed";
+  const embedded = new Set<() => void>();
   let lease: { proto: object; descriptor?: PropertyDescriptor; wrapper: Setter; tui: TuiLike; committedRoot?: unknown } | undefined;
 
   const wrapRoot = (root: unknown): object => {
@@ -50,6 +53,7 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
   };
 
   function dispose(): void {
+    for (const release of embedded) release();
     const previous = lease;
     lease = undefined; // Captured hooks become inert BEFORE any teardown calls.
     reason = "not installed";
@@ -92,6 +96,10 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
           // reactivate an older hook captured by a third-party wrapper.
           const current = lease;
           if (current?.wrapper !== wrapper || this.mode !== "fullscreen") return original.call(this, component);
+          // Facades may bind another receiver; only the captured terminal owns this main layout.
+          if (this !== current.tui && current.tui.terminal && this.terminal !== current.tui.terminal) {
+            return original.call(this, component);
+          }
           current.tui = this; // The host can expose a Proxy facade during capture.
           const root = innerRoot(component) ?? component;
           history.mount(this, root);
@@ -103,6 +111,7 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
         catch { reason = "setLayoutRoot is not writable"; return false; }
         lease = { proto, descriptor, wrapper, tui: target };
       }
+      lease.tui = target;
       const root = target.layoutRoot;
       if (root && root === lease.committedRoot) {
         // Already committed: remount directly on the captured renderer. A later
@@ -116,6 +125,31 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
       } else history.mount(target, undefined);
       reason = "installed";
       return true;
+    },
+    attachTui(tui: unknown, root: unknown): (() => void) | undefined {
+      if (!tui || typeof tui !== "object" || (!marginReady && !historyReady)) return;
+      const target = tui as TuiLike;
+      if (target.mode !== "fullscreen" || typeof target.setLayoutRoot !== "function") return;
+      const previous = target.layoutRoot;
+      const localHistory = createHistoryWindowSystem(host);
+      const render = target.requestRender;
+      const descriptor = Object.getOwnPropertyDescriptor(target, "requestRender");
+      const repaint = (force?: boolean) => { localHistory.invalidateStreaming(); render?.call(target, force); };
+      if (render) Object.defineProperty(target, "requestRender", { value: repaint, writable: true, configurable: true });
+      localHistory.mount(target, root);
+      target.setLayoutRoot(marginReady && root ? wrapRoot(root) : root);
+      const mounted = target.layoutRoot;
+      const release = () => {
+        embedded.delete(release);
+        localHistory.dispose();
+        if (target.requestRender === repaint) {
+          if (descriptor) Object.defineProperty(target, "requestRender", descriptor);
+          else Reflect.deleteProperty(target, "requestRender");
+        }
+        if (target.layoutRoot === mounted) target.setLayoutRoot?.(previous);
+      };
+      embedded.add(release);
+      return release;
     },
     dispose,
     invalidateStreaming: history.invalidateStreaming,

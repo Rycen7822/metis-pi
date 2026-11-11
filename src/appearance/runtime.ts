@@ -1,16 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./tool-host-adapter.ts";
-import { OWNED_NEURAL_SEARCH_ENTRY } from "../extension-paths.ts";
-import { CodemodeViewStore, makeCodemodeRenderers } from "./transcript/codemode-view.ts";
+import { makeCodemodeRenderers } from "./transcript/codemode-view.ts";
 import { highlightBashScript } from "../presentation/bash-lexer.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript/adapter.ts";
-import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript/state.ts";
-import { makeRenderers } from "../presentation/renderers.ts";
+import { createTranscriptSurface } from "./transcript/surface.ts";
+import { provideEmbeddedTranscripts } from "./transcript/embedded.ts";
+import { makeRenderers, type RendererSession } from "../presentation/renderers.ts";
 import type { TextFactory, Highlight, DiffFactory, DiffLayoutOps, Component, ShellFactories, WritePreviewInput } from "../presentation/contracts.ts";
-import { isExplorationTool } from "../presentation/tool-names.ts";
-import { WriteDiffTracker } from "./transcript/write-tracker.ts";
-import type { WriteDiff } from "../file-changes/diff.ts";
-import { resolveNativeMutationPath } from "../file-changes/path.ts";
 import { detectColorLevel, type ColorLevel } from "../presentation/palette.ts";
 import { UiMetrics } from "./activity/ui-metrics.ts";
 import { formatDuration } from "../presentation/segments.ts";
@@ -69,33 +65,6 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   fullscreenHost?: FullscreenLayoutHost;
 }
 
-const MAX_WRITE_CHANGES = 64;
-
-/** Extract image-block count from a tool result WITHOUT copying payloads. */
-function countImageBlocks(result: unknown): number {
-  try {
-    const content = (result as Record<string, unknown> | null)?.content;
-    if (!Array.isArray(content)) return 0;
-    return content.filter((block) => (block as Record<string, unknown>)?.type === "image").length;
-  } catch {
-    return 0;
-  }
-}
-
-function toStateMessage(message: unknown): TranscriptEvent["message"] {
-  if (!message || typeof message !== "object") return undefined;
-  const record = message as Record<string, unknown>;
-  const role = typeof record.role === "string" ? record.role : undefined;
-  if (!role) return undefined;
-  const content = normalizeMessageBlocks(record.content);
-  return {
-    role,
-    content,
-    stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
-    provider: record.provider, responseId: record.responseId, timestamp: record.timestamp,
-  };
-}
-
 export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): Promise<void> } {
   // Capture the current session's install, including disabled/failed/cancelled
   // installs. Observers need not infer completion from a particular UI slot.
@@ -105,16 +74,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   let handle: AdapterHandle | undefined;
   let decorations: DecorationHandle | undefined;
   let userTimestamps: ReturnType<typeof installUserTimestamps>;
+  let stopEmbeddedTranscripts: (() => void) | undefined;
   let replyEndedAt: number | undefined;
   const replyTimes = new WeakMap<object, number>();
-  const transcript = new TranscriptState();
-  const tracker = new WriteDiffTracker();
-  const codemodeViews = new CodemodeViewStore();
-  const session = {
-    colorLevel: bindings.colorLevel ?? detectColorLevel(),
-    writeChanges: new Map<string, WriteDiff>(),
-    transcript,
-  };
+  const surface = createTranscriptSurface(bindings.colorLevel ?? detectColorLevel(), sourceInfoFor);
+  const { transcript, codemodeViews, session } = surface;
 
   const hostData = new HostData();
   const ledger = new UsageLedger();
@@ -276,6 +240,23 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // chrome.install captures below.
     const available = hostData.available;
     enabled = (hostData.isTui || hostData.hasUI) && config.enabled !== false;
+    stopEmbeddedTranscripts?.();
+    const events = (bindings.api as Partial<Pick<ExtensionAPI, "events">> | undefined)?.events;
+    stopEmbeddedTranscripts = events && provideEmbeddedTranscripts(events, async sourceInfo => {
+      const generation = chrome.state.generation;
+      const createEditor = await chrome.embeddedEditor();
+      if (!enabled || generation !== chrome.state.generation) return;
+      const embedded = createTranscriptSurface(session.colorLevel, sourceInfo);
+      return {
+        surface: embedded, renderers: renderersFor(embedded.session), createEditor,
+        attachTui: (tui, root) => {
+          const releaseLayout = fullscreenLayout?.attachTui(tui, root);
+          const releaseCopy = selectionCopy?.attachTui(tui);
+          return () => { releaseCopy?.(); releaseLayout?.(); };
+        },
+        copyKey: selectionCopy?.editorHook()?.tryConsume,
+      };
+    });
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && enabled;
@@ -300,16 +281,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       });
     }
     if (!enabled || handle?.installed) return;
-    const renderers = makeRenderers(
-      bindings.makeText,
-      bindings.expandHint,
-      bindings.highlight,
-      bindings.makeDiff,
-      bindings.makeShell,
-      bindings.makeWriteCall,
-      session,
-      bindings.layoutOps,
-    );
+    const renderers = renderersFor(session);
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(),
       enabled: () => enabled,
@@ -402,6 +374,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     hasSurfaceBinding: bindings.surface !== undefined,
   });
 
+  function renderersFor(view: RendererSession) {
+    return makeRenderers(
+      bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff,
+      bindings.makeShell, bindings.makeWriteCall, view, bindings.layoutOps,
+    );
+  }
+
   function sourceInfoFor(toolName: string): unknown {
     try {
       const entry = pi.getAllTools().find((tool) =>
@@ -486,62 +465,34 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
 
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled) return;
-    const info = sourceInfoFor(event.toolName);
-    const source = info as { source?: string; path?: string } | undefined;
-    codemodeViews.start(event, event.toolName === "codemode" && source?.source === "builtin" && source.path === "builtin:codemode");
-    tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveNativeMutationPath(ctx.cwd, path));
-    if (!event.parentToolCallId) transcript.apply({
-      type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName,
-      exploration: event.toolName === "neural_search"
-        ? typeof source?.source === "string" && source.path === OWNED_NEURAL_SEARCH_ENTRY && isExplorationTool(event.toolName, event.args)
-        : undefined,
-    });
+    surface.observe(event, ctx.cwd);
     if (chromeEnabled) metrics.toolStart(event.toolCallId, event.toolName);
     if (chromeEnabled && event.toolName === "write") metrics.writeStreaming();
   });
-  pi.on("tool_execution_end", (event) => {
+  pi.on("tool_execution_end", (event, ctx) => {
     if (!enabled) return;
     // A tool error is a DIAGNOSTIC count only — it never sets the verdict.
     if (event.isError === true && chromeEnabled) outcome.toolError();
-    // End outcomes have passed result hooks; never cache pre-redaction partials.
-    codemodeViews.finish(event);
-    const info = sourceInfoFor(event.toolName);
-    const change = tracker.trackEnd(event.toolCallId, event.toolName, info, event.isError);
-    if (change) {
-      session.writeChanges.set(event.toolCallId, change);
-      if (session.writeChanges.size > MAX_WRITE_CHANGES) {
-        const oldest = session.writeChanges.keys().next().value;
-        if (oldest !== undefined) session.writeChanges.delete(oldest);
-      }
-    }
-    if (!event.parentToolCallId)
-      transcript.apply({
-        type: "tool_execution_end",
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        isError: event.isError === true,
-        imageCount: countImageBlocks(event.result),
-      });
+    surface.observe(event, ctx.cwd);
     if (chromeEnabled) metrics.toolEnd(event.toolCallId);
   });
 
   // Keep the original message object as the state machine's identity anchor.
-  pi.on("message_start", (event) => {
+  pi.on("message_start", (event, ctx) => {
     hostData.bump();
     if (!enabled) return;
     const message = event.message as object | undefined;
-    transcript.apply({ type: "message_start", message: toStateMessage(message) }, message);
+    surface.observe(event, ctx.cwd);
     if (!chromeEnabled) return;
     if (isUserMessage(message)) metrics.uiPromptEnd();
     const role = (message as Record<string, unknown> | undefined)?.role;
     if (typeof role === "string") outcome.messageStart(role);
   });
-  pi.on("message_update", (event) => {
+  pi.on("message_update", (event, ctx) => {
     hostData.bumpDisplay();
     if (!enabled) return;
     const message = event.message as object | undefined;
-    const stateMessage = toStateMessage(message);
-    transcript.apply({ type: "message_update", message: stateMessage }, message);
+    const stateMessage = surface.observe(event, ctx.cwd);
     if (!chromeEnabled) return;
     // Phase feed for the Working line: the CURRENT streaming event decides
     // the phase — never the accumulated content. An old thinking block must
@@ -602,13 +553,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       }
     }
   });
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     hostData.bump();
     if (!enabled) return;
-    codemodeViews.recordMessage(event.message);
     const message = event.message as object | undefined;
-    const stateMessage = toStateMessage(message);
-    transcript.apply({ type: "message_end", message: stateMessage }, message);
+    const stateMessage = surface.observe(event, ctx.cwd);
     if (!chromeEnabled) return;
     metrics.thinkingEnd();
     if (message && stateMessage?.role === "assistant" && stateMessage.stopReason && stateMessage.stopReason !== "toolUse") {
@@ -645,6 +594,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     decorations = undefined;
     userTimestamps?.dispose();
     userTimestamps = undefined;
+    stopEmbeddedTranscripts?.();
+    stopEmbeddedTranscripts = undefined;
     fullscreenLayout?.dispose();
     selectionCopy?.dispose();
     glyphPresentation?.dispose();
@@ -652,9 +603,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // public footer/header/widget slots installed during this session.
     chrome.restore();
     gitChanges.dispose();
-    session.writeChanges.clear();
-    codemodeViews.clear();
-    transcript.resetSession();
+    surface.reset();
     metrics.reset();
     outcome.reset();
     outputSpeed.reset();

@@ -52,6 +52,7 @@ export interface SelectionCopyHost {
 export interface SelectionCopySystem {
   wrapPrototypes(): { installed: boolean; details: string };
   installOnTui(tui: unknown): boolean;
+  attachTui(tui: unknown): (() => void) | undefined;
   dispose(): void;
   /** Editor input hook: consume Ctrl+C when a selection exists. */
   editorHook(): { tryConsume: (data: string, editor: unknown) => boolean } | undefined;
@@ -95,6 +96,7 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
   let installBlocker = "not attempted (no live TUI captured)";
   let installedTui: AltScreenLike | undefined;
   let releaseSerializer: (() => void) | undefined;
+  const embeddedSerializers = new Set<() => void>();
   const copyState = { inFlight: false, queued: 0 };
   const clipboard = createSelectionClipboard();
 
@@ -159,7 +161,20 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
       return serializerInstalled;
     },
 
+    attachTui(tui: unknown) {
+      if (!hostFns || !tui || typeof tui !== "object") return;
+      const release = installSerializer(tui as AltScreenLike, { fns: hostFns, telemetry });
+      if (!release) return;
+      const dispose = () => {
+        embeddedSerializers.delete(dispose);
+        release();
+      };
+      embeddedSerializers.add(dispose);
+      return dispose;
+    },
+
     dispose(): void {
+      for (const dispose of embeddedSerializers) dispose();
       copyState.queued = 0;
       clipboard.dispose();
       releaseSerializer?.();
