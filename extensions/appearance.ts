@@ -2,26 +2,17 @@ import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "../src/appearance/runtime.ts";
-import { createDiffComponent, createDiffPainter, createShellFactories } from "../src/presentation/components/tool-components.ts";
+import { createNativeToolBindings } from "../src/appearance/transcript/native-bindings.ts";
 import { registerCompactionPresentation } from "../src/appearance/chrome/compaction-presentation.ts";
-import { wrapPlainOutput, type LayoutOps } from "../src/presentation/shell.ts";
-import type { Palette } from "../src/presentation/contracts.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/presentation/palette.ts";
 import { makeSurfaceOps } from "../src/appearance/chrome/surface.ts";
 import { loadConfig } from "../src/appearance/config.ts";
 import { readOptionalConfigFile } from "../src/configuration/store.ts";
 import { thoughtSummaryText } from "../src/presentation/thinking-summary.ts";
 import {
-  CodexSeparatorComponent, CodexWriteCallComponent, ThinkingRailComponent,
+  CodexSeparatorComponent, ThinkingRailComponent,
   ThinkingPeekComponent, ThinkingClickableComponent, ThinkingHeaderComponent,
 } from "../src/presentation/components/transcript-components.ts";
-
-function layoutOps(): LayoutOps {
-  return {
-    wrap: (text: string, columns: number) => wrapPlainOutput(text, columns, Tui.wrapTextWithAnsi),
-    visibleWidth: Tui.visibleWidth,
-  };
-}
 
 /**
  * The terminal's color capability cannot change mid-session, so resolve it once
@@ -47,12 +38,6 @@ function appearanceVersion(): string {
 export default function codexAppearance(pi: AppearanceAPI): void {
   const prototype = Pi.ToolExecutionComponent.prototype;
   const colorLevel = colorLevelOnce();
-  const highlight = (text: string, language: string): string => Pi.highlightCode(text, language).join("\n");
-  const diffPainter = createDiffPainter(highlight);
-  // Do not capture factory input/context: lastComponent would chain old bodies.
-  const paintDiff = (theme: Palette) => (text: string, language: string) => diffPainter.paint(text, language, theme);
-  pi.on("session_start", () => { diffPainter.clear(); });
-  pi.on("session_shutdown", () => { diffPainter.clear(); });
   // Resolve host Tui capabilities here; the surface painters use one color context.
   const surface = makeSurfaceOps(
     colorLevel,
@@ -63,7 +48,9 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   const getAgentDir = Pi.getAgentDir;
   const readFile = readOptionalConfigFile;
   const bootConfig = loadConfig(getAgentDir(), readFile).config;
-  const bootWritePreview = bootConfig.writePreview;
+  const { clear, ...rendering } = createNativeToolBindings(bootConfig, colorLevel);
+  pi.on("session_start", clear);
+  pi.on("session_shutdown", clear);
   registerCompactionPresentation(pi, {
     component: Pi.CompactionSummaryMessageComponent,
     enabled: bootConfig.enabled,
@@ -73,17 +60,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     getAgentDir,
     readFile,
     prototype,
-    makeText: (text) => new Tui.Text(text, 0, 0),
-    makeDiff: (input) => createDiffComponent({
-      rows: input.rows, filePath: input.filePath, expanded: input.options.expanded === true,
-      paint: paintDiff(input.theme),
-      colorLevel,
-    }, layoutOps()),
-    makeShell: createShellFactories(layoutOps()),
-    expandHint: () => Pi.keyHint("app.tools.expand", "to expand"),
-    highlight,
-    colorLevel,
-    layoutOps: layoutOps(),
+    ...rendering,
     assistantPrototype: Pi.AssistantMessageComponent.prototype,
     interactivePrototype: Pi.InteractiveMode.prototype,
     makeSeparator: () => new CodexSeparatorComponent(colorLevel),
@@ -114,12 +91,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       return new Tui.Text(colorLevel.kind === "none" ? text : input.paint?.(text) ?? text, input.paddingX, 0);
     },
     isCollapsedLabel: (node) => node instanceof Tui.Text,
-    makeWriteCall: (input) => {
-      // Read ONCE at boot from the same path activate() uses: a per-write-call
-      // reload could disagree with the startup config.
-      const maxRows = bootWritePreview.enabled ? bootWritePreview.rows : 0;
-      return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
-    },
     editorHost: { CustomEditor: Pi.CustomEditor },
     fullscreenHost: {
       HStack: Tui.HStack,

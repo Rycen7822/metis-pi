@@ -1,8 +1,20 @@
 import { getAgentDir, type SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, ScrollView, VStack, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { embeddedHost, type EmbeddedTui } from "./embedded-host.ts";
 import { EmbeddedTerminal } from "./embedded-terminal.ts";
 import type { EmbeddedPresentation } from "./embedded.ts";
+
+/** Native layout primitives, without reserving an editor dock in readonly views. */
+export function createEmbeddedViewport(options: { document: Component; footer: Component; editor?: Component }) {
+  if (options.editor) return embeddedHost().createChatViewport({
+    ...options, editor: options.editor, pendingMessages: new Container(), status: new Container(),
+  });
+  const transcript = new ScrollView(options.document, { follow: "end", primary: true, overscroll: "chain", scrollbar: "auto" });
+  return { transcript, root: new VStack([
+    { component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+    { component: options.footer, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+  ]) };
+}
 
 /** One native input/render/selection owner per popup, never a second physical terminal. */
 export class EmbeddedView {

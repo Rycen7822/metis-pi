@@ -41,7 +41,11 @@ Accepted input is not necessarily consumed input; normal completion is not accep
 
 Click an active agent in fullscreen for its live, read-only transcript. `/subagents` also lists retained agents with their worker and latest task states; selecting an inactive agent opens its saved transcript, reads the available pages and stops polling. Tabs, scrollbar, wheel and navigation keys affect viewing only, not result acknowledgement.
 
-The viewer shares its embedded TUI, native message/tool components and presentation leases with BTW. Each agent retains its own scroll, expansion and thinking state; tab changes clear text selection. Up to eight views are cached, each bounded to 256 display entries and 512 KiB. Eviction releases detached message plans. The viewer never creates a worker session or an editor just to display history.
+The viewer shares BTW’s embedded TUI, native message components, viewport composition and presentation leases.
+Tool drawing factories and source-based selection policy are shared with the main UI; readonly inspection only adapts registration facts.
+Native auto scrollbars appear on interaction without reserving a body column. Each agent retains independent scroll, expansion,
+thinking and selection state; tab changes clear selection. Up to eight views are cached, each bounded to 256 display entries and 512 KiB.
+Eviction releases detached message plans. Displaying history never creates a worker session or an empty editor.
 
 Reopening a bound parent session restores saved results without starting a model turn or replaying tasks. Unconfirmed deliveries show a warning and status indicator. Use `/subagents` to inspect saved sessions; to deliver a retained result to the parent conversation, use `subagents_wait_agent` or `subagents_agent_result` with explicit run IDs. Native parent receipts confirm delivery.
 

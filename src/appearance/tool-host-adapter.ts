@@ -1,10 +1,10 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createCodemodeObserver } from "./codemode-observer.ts";
-import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "../presentation/tool-names.ts";
+import { asRecord, TOOL_NAMES, type ToolName } from "../presentation/tool-names.ts";
 import type { Component, Palette, Renderers, ViewContext, ViewOptions } from "../presentation/contracts.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "../selection-copy/model.ts";
 import { toolPresentation } from "../presentation/tool-source.mjs";
-import { fusionRenderers } from "./transcript/fusion-view.ts";
+import { selectToolPresentation, type OwnedCommandStyle } from "./transcript/tool-presentation.ts";
 import type { NestedRendererLookup } from "./transcript/codemode-view.ts";
 
 // Compact presentation for Pi’s native ToolExecutionComponent, with observation-only codemode helper metadata.
@@ -20,16 +20,13 @@ const CONTEXTS_KEY = Symbol.for("metis-pi.native-renderer-contexts.v1");
 const shared = globalThis as unknown as Record<symbol, unknown>;
 const LOOKUP_CONTEXTS = (shared[CONTEXTS_KEY] ??= new WeakMap<object, WeakRef<object>>()) as WeakMap<object, WeakRef<object>>;
 type RegisteredRenderers = { name: string; call: unknown; result: unknown; shell: unknown };
-export interface AdapterOptions {
+export interface AdapterOptions extends OwnedCommandStyle {
   getTools(): readonly unknown[];
   enabled(): boolean;
   renderers: Record<ToolName, Renderers>;
   makeCodemode?: (resolve: NestedRendererLookup) => Renderers;
   /** Native InteractiveMode lookup: prove resolved renderers still belong to the registered tool. */
   definitionPrototype?: object;
-  /** Paint only command text; the owned tool retains grouping and execution state. */
-  highlightOwnedCommand?: (lines: readonly string[]) => string[];
-  renderOwnedCommand?: (command: string, state: "running" | "done", expanded: boolean, theme: Palette, context: ViewContext) => Component;
 }
 export interface AdapterHandle {
   readonly installed: boolean;
@@ -232,61 +229,8 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const kind = toolPresentation(name, info.sourceInfo);
-    if ((name === "edit" || name === "write") && kind === "fusion") {
-      return fusionRenderers(options.renderers[name], options.renderers.bash, () => current.result);
-    }
-    if (kind === "execution" && options.highlightOwnedCommand) {
-      const call = definition.renderCall;
-      const result = definition.renderResult;
-      if (typeof call !== "function" || typeof result !== "function") return;
-      return {
-        renderCall: (args, theme, context) =>
-          call(
-            args,
-            {
-              fg: (role: string, text: string) => theme.fg(role, text),
-              bold: (text: string) => theme.bold(text),
-              highlightCommandLines: options.highlightOwnedCommand,
-              renderCommandCall: options.renderOwnedCommand
-                ? (command: string, state: "running" | "done", expanded: boolean) =>
-                    options.renderOwnedCommand!(command, state, expanded, theme, context)
-                : undefined,
-            },
-            context,
-          ),
-        renderResult: (value, options, theme, context) => result(value, options, theme, context),
-      };
-    }
-    if (name === "codemode" && kind === "builtin" && codemode)
-      return {
-        renderCall: codemode.renderCall,
-        // Native render callbacks omit the persisted nested-call argument ledger.
-        renderResult: (value, opts, theme, ctx) =>
-          codemode.renderResult(
-            { ...asRecord(value), nestedCalls: asRecord(current.result).nestedCalls },
-            opts,
-            theme,
-            ctx,
-          ),
-      };
-    if (name === "neural_search") {
-      if (kind !== "neural") return;
-      const call = definition.renderCall;
-      const result = definition.renderResult;
-      if (typeof call !== "function" || typeof result !== "function") return;
-      const search = options.renderers.neural_search;
-      return {
-        renderCall: (args, theme, ctx) => isExplorationTool(name, args)
-          ? search.renderCall(args, theme, ctx) : call(args, theme, ctx),
-        renderResult: (value, opts, theme, ctx) => isExplorationTool(name, ctx.args)
-          ? search.renderResult(value, opts, theme, ctx) : result(value, opts, theme, ctx),
-      };
-    }
-    if (!TOOL_NAMES.includes(name as ToolName)) return;
-    if (kind !== "builtin" && kind !== "fff") return;
-    // Approved self-shell tools use the same compact renderer as text tools;
-    // other provider origins and independent overlays have backed off above.
-    return options.renderers[name as ToolName];
+    return selectToolPresentation({ name, kind, native: definition, result: () => current.result },
+      { ...options, codemode: name === "codemode" && kind === "builtin" ? codemode : undefined });
   }
   // Give the rebuild resolver its own scope: it must not close over the initial
   // selection (fusion renderers can themselves reference the full old receipt).

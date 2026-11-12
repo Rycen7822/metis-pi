@@ -10,7 +10,7 @@ import type { TranscriptSurface } from "../appearance/transcript/surface.ts";
 import { ConversationDocument } from "../appearance/transcript/document.ts";
 import { TOOL_NAMES } from "../presentation/tool-names.ts";
 import { embeddedHost } from "../appearance/transcript/embedded-host.ts";
-import { EmbeddedView } from "../appearance/transcript/embedded-view.ts";
+import { createEmbeddedViewport, EmbeddedView } from "../appearance/transcript/embedded-view.ts";
 import type { BtwAccess } from "./access.ts";
 
 export interface BtwSessionView {
@@ -79,10 +79,7 @@ export class BtwOverlay implements Component, Focusable {
     this.editor.onAction("app.tools.expand", () => { this.transcript?.toggleExpanded(); this.tui.requestRender(); });
     this.editor.onAction("app.thinking.toggle", () => { this.transcript?.toggleThinking(); this.tui.requestRender(); });
     if (!styled) this.editor.onExtensionShortcut = data => this.sessionView?.presentation?.copyKey?.(data, this.editor) ?? false;
-    const viewport = this.host.createChatViewport({
-      document: this.document, pendingMessages: new Container(), status: new Container(),
-      editor: this.editor, footer: this.footer,
-    });
+    const viewport = createEmbeddedViewport({ document: this.document, editor: this.editor, footer: this.footer });
     const header = new MouseRegion({
       render: width => { this.renderHeader(width); return this.header.render(width); },
       invalidate: () => this.header.invalidate(),
@@ -122,6 +119,8 @@ export class BtwOverlay implements Component, Focusable {
       this.transcript = new ConversationDocument(this.document, {
         ui: this.tui, settings: view.session.settingsManager, state: view.surface.transcript,
         cwd: view.session.sessionManager.getCwd(), timestamps: view.presentation !== undefined,
+        markdownTransformers: view.session.extensionRunner?.getMarkdownTransformers(),
+        getMessageRenderer: type => view.session.extensionRunner?.getMessageRenderer(type),
         resolveTool: name => {
           const native = this.host.withBuiltInRenderers(name, view.session.getToolDefinition(name));
           const known = TOOL_NAMES.find(tool => tool === name), renderer = known && view.presentation?.renderers[known];

@@ -1,7 +1,7 @@
 import type { SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
-  ScrollView,
+  type ScrollView,
   getCapabilities,
   truncateToWidth,
   visibleWidth,
@@ -14,7 +14,7 @@ import {
 import type { AppearanceConfig } from "../../appearance/config.ts";
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
 import { activeAgents } from "./widget.ts";
-import { EmbeddedView } from "../../appearance/transcript/embedded-view.ts";
+import { createEmbeddedViewport, EmbeddedView } from "../../appearance/transcript/embedded-view.ts";
 import type { EmbeddedPresentation } from "../../appearance/transcript/embedded.ts";
 import type { ToolPresentation } from "../../presentation/tool-source.mjs";
 import {
@@ -65,17 +65,10 @@ interface AgentView {
   truncated: boolean;
   error: string;
   viewport: ScrollView;
+  root: Component;
 }
 interface HeaderTarget { x: number; y: number; width: number; activate: () => void }
 const MAX_CACHED_VIEWS = 8;
-
-/** Archived history keeps its scrollbar visible; native layout and input still own all scroll geometry. */
-class HistoryViewport extends ScrollView {
-  override updateLayout(height: number, viewport: number, requestRender: () => void): void {
-    super.updateLayout(height, viewport, requestRender);
-    this.setScrollbar(height > viewport ? "always" : "hidden");
-  }
-}
 
 function disposeView(view: AgentView) {
   view.content.dispose(); view.viewport.setScrollbar("hidden"); view.snapshot = undefined;
@@ -147,11 +140,11 @@ export class SubagentViewer implements Component {
     if (view) this.views.delete(id);
     else {
       const content = new ViewerContent(this.embedded.tui, this.options.appearance, this.options.settings);
-      view = { content,
-        viewport: new HistoryViewport(content.document, { follow: "end", primary: true,
-          scrollbarThumbStyle: text => this.options.theme.fg("accent", text) }),
-        file: "", cursor: 0, truncated: false, error: "",
-      };
+      const viewport = createEmbeddedViewport({
+        document: content.document,
+        footer: { render: width => [truncateToWidth(this.footer(), width, "…")], invalidate() {} },
+      });
+      view = { content, root: viewport.root, viewport: viewport.transcript, file: "", cursor: 0, truncated: false, error: "" };
     }
     this.views.set(id, view);
     if (this.views.size > MAX_CACHED_VIEWS) {
@@ -344,6 +337,13 @@ export class SubagentViewer implements Component {
     return hasRail ? `${this.rail}${title} ` : title;
   }
 
+  private footer(): string {
+    const tools = this.options.keys.getKeys("app.tools.expand").join("/");
+    const thinking = this.options.keys.getKeys("app.thinking.toggle").join("/");
+    return this.options.theme.fg("muted",
+      `Click tools/thoughts · ${tools} tools · ${thinking} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`);
+  }
+
   render(width: number): string[] {
     this.targets = []; this.renderedHeight = 0;
     if (width <= 0 || !this.syncAgents()) {
@@ -360,13 +360,9 @@ export class SubagentViewer implements Component {
     this.bodyTop = 1 + status.length; this.bodyPadding = width < 5 ? 0 : 2;
     this.innerWidth = width < 5 ? width : width - 3;
     this.pageSize = Math.max(1, height - this.bodyTop - 1);
-    this.embedded.setRoot(view.viewport, this.options.presentation);
-    const body = this.embedded.render(this.innerWidth, this.pageSize);
-    const toolsKey = this.options.keys.getKeys("app.tools.expand").join("/");
-    const thoughtsKey = this.options.keys.getKeys("app.thinking.toggle").join("/");
-    const footer = this.options.theme.fg("muted",
-      `Click tools/thoughts · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`);
-    const rows = [this.renderHeader(width), ...[...status, ...body, footer].map(line => {
+    this.embedded.setRoot(view.root, this.options.presentation);
+    const body = this.embedded.render(this.innerWidth, this.pageSize + 1);
+    const rows = [this.renderHeader(width), ...[...status, ...body].map(line => {
       const text = line.replace(/\n/g, " ");
       if (width < 5) return truncateToWidth(text, width, "…");
       return `${this.rail} ${truncateToWidth(text, this.innerWidth, "…")} `;

@@ -45,6 +45,7 @@ export class ViewerContent {
   setToolRenderers(sources: Readonly<Record<string, ToolPresentation>>) { this.sources = sources; }
 
   append(message: ViewerMessage, cwd: string): void {
+    if (message.role === "custom" && message.display === false) return;
     const blocks = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
     if (message.role === "toolResult") {
       this.conversation.append(message, cwd);
@@ -69,7 +70,7 @@ export class ViewerContent {
       stopReason: message.stopReason ?? (message.errorMessage ? "error" : undefined) };
     if (message.role === "assistant") this.transcript.registerFinalizedMessage(display, false);
     this.conversation.append(message.role === "user" || message.role === "assistant" ? display
-      : { ...display, role: "custom", customType: message.customType ?? message.role, display: true }, cwd);
+      : { ...display, role: "custom", customType: message.customType ?? message.role, display: message.display !== false }, cwd);
   }
 
   refresh(): void { this.conversation.refreshTools(); }

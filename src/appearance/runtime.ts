@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./tool-host-adapter.ts";
 import { makeCodemodeRenderers } from "./transcript/codemode-view.ts";
-import { highlightBashScript } from "../presentation/bash-lexer.ts";
+import { createOwnedCommandStyle } from "./transcript/tool-presentation.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript/adapter.ts";
 import { createTranscriptSurface } from "./transcript/surface.ts";
 import { provideEmbeddedTranscripts, type EmbeddedSource } from "./transcript/embedded.ts";
@@ -300,21 +300,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
           expandHint: bindings.expandHint,
           resolve,
         }),
-      highlightOwnedCommand: (lines) => highlightBashScript(lines, session.colorLevel),
-      renderOwnedCommand: bindings.makeShell?.makeShellCall
-        ? (command, state, expanded, theme, context) =>
-            bindings.makeShell!.makeShellCall!({
-              name: "bash",
-              args: { command },
-              options: { expanded },
-              theme,
-              context,
-              bullet: theme.fg("dim", "•"),
-              title: state === "running" ? "Running" : "Ran",
-              expandHint: bindings.expandHint(),
-              colorLevel: session.colorLevel,
-            })
-        : undefined,
+      ...createOwnedCommandStyle(bindings, session.colorLevel),
     });
     if (!handle.installed)
       ctx.ui.notify(`metis-pi: ${handle.reason}. Compact transcript was not installed.`, "warning");

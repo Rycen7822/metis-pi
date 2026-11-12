@@ -26,7 +26,7 @@ export interface TranscriptMessage {
 
 function messageText(message: Pick<TranscriptMessage, "content">): string {
   return typeof message.content === "string" ? message.content
-    : message.content.filter(block => block.type === "text").map(block => block.text ?? "").join("\n");
+    : message.content.filter(block => block.type === "text").map(block => block.text ?? "").join("");
 }
 
 interface Entry {
@@ -50,6 +50,8 @@ interface DocumentOptions {
   cwd: string;
   resolveTool(name: string, result: () => TranscriptMessage | undefined): Core.ToolRenderers | undefined;
   timestamps?: boolean;
+  markdownTransformers?: readonly Core.MarkdownTransformer[];
+  getMessageRenderer?: (customType: string) => Core.MessageRenderer | undefined;
   showImages?: boolean;
   assistant?: Pick<AssistantTranscriptScope, "enabled" | "thinkingPolicy">;
   limits?: { entries: number; bytes: number };
@@ -107,22 +109,40 @@ export class ConversationDocument {
   }
 
   append(message: TranscriptMessage | AgentMessage, cwd = this.options.cwd): void {
-    if (!("content" in message)) return;
+    if (!("content" in message)) {
+      const box = new Container(), pad = this.options.settings.getOutputPad();
+      let row: Core.BashExecutionComponent | Core.CompactionSummaryMessageComponent | Core.BranchSummaryMessageComponent;
+      if (message.role === "bashExecution") {
+        const bash = new Core.BashExecutionComponent(message.command, this.options.ui, message.excludeFromContext, pad);
+        if (message.output) bash.appendOutput(message.output);
+        // Like the native CLI, this display consumes only the truncation flag, not a rebuilt output receipt.
+        const truncation = (message.truncated ? { truncated: true } : undefined) as Parameters<Core.BashExecutionComponent["setComplete"]>[2];
+        bash.setComplete(message.exitCode, message.cancelled, truncation, message.fullOutputPath);
+        row = bash;
+      } else if (message.role === "compactionSummary" || message.role === "branchSummary") {
+        box.addChild(new Spacer(1));
+        const markdown = [this.markdownTheme, pad, this.options.markdownTransformers] as const;
+        row = message.role === "compactionSummary" ? new Core.CompactionSummaryMessageComponent(message, ...markdown)
+          : new Core.BranchSummaryMessageComponent(message, ...markdown);
+      } else return;
+      row.setExpanded(this.expanded); box.addChild(row);
+      this.add({ component: box, bytes: this.size(message) }); this.trim();
+      return;
+    }
     if (message.role === "user") {
       const text = messageText(message);
       if (!text) return;
       const box = new Container(), pad = this.options.settings.getOutputPad();
       if (this.entries.length) box.addChild(new Spacer(1));
       const skill = Core.parseSkillBlock(text);
+      const prompt = skill ? skill.userMessage : text;
       if (skill) {
-        const row = new Core.SkillInvocationMessageComponent(skill, this.markdownTheme, pad);
+        const row = new Core.SkillInvocationMessageComponent(skill, this.markdownTheme, pad, this.options.markdownTransformers);
         row.setExpanded(this.expanded);
         box.addChild(row);
-        if (skill.userMessage) {
-          box.addChild(new Spacer(1));
-          box.addChild(new Core.UserMessageComponent(skill.userMessage, this.markdownTheme, pad));
-        }
-      } else box.addChild(new Core.UserMessageComponent(text, this.markdownTheme, pad));
+        if (prompt) box.addChild(new Spacer(1));
+      }
+      if (prompt) box.addChild(new Core.UserMessageComponent(prompt, this.markdownTheme, pad, this.options.markdownTransformers));
       const timestamp = this.options.timestamps && message.timestamp !== undefined
         ? userTimestampComponent(message.timestamp, () => pad) : undefined;
       if (timestamp) box.addChild(timestamp);
@@ -133,10 +153,11 @@ export class ConversationDocument {
       const entry = this.tools.get(message.toolCallId ?? "") ?? this.tool(message.toolName ?? "tool", message.toolCallId ?? "", {}, cwd);
       this.updateResult(entry, message);
     } else if (message.role === "custom" && message.display !== false) {
-      const content = messageText(message);
-      const row = new Core.CustomMessageComponent({ role: "custom", customType: message.customType ?? "message",
-        content, display: true, timestamp: message.timestamp ?? 0, details: message.details,
-      }, undefined, this.markdownTheme, this.options.settings.getOutputPad());
+      const custom = { ...message, role: "custom" as const, customType: message.customType ?? "message",
+        display: true, timestamp: message.timestamp ?? 0 };
+      const row = new Core.CustomMessageComponent(custom as ConstructorParameters<typeof Core.CustomMessageComponent>[0],
+        this.options.getMessageRenderer?.(custom.customType), this.markdownTheme,
+        this.options.settings.getOutputPad(), this.options.markdownTransformers);
       row.setExpanded(this.expanded);
       this.add({ component: row, bytes: this.size(message) });
     }
@@ -156,7 +177,7 @@ export class ConversationDocument {
 
   private addAssistant(message: TranscriptMessage, streaming: boolean, cwd: string): Core.AssistantMessageComponent {
     const row = new Core.AssistantMessageComponent(
-      undefined, this.hideThinking, this.markdownTheme, "Thinking...", this.options.settings.getOutputPad(),
+      undefined, this.hideThinking, this.markdownTheme, "Thinking...", this.options.settings.getOutputPad(), this.options.markdownTransformers,
     );
     const unbind = bindAssistantTranscriptScope(row, {
       ...this.options.assistant, state: this.options.state, requestRender: () => this.options.ui.requestRender(),
@@ -255,7 +276,9 @@ export class ConversationDocument {
         component.setExpanded(this.expanded);
       if (component instanceof Container)
         for (const child of component.children)
-          if (child instanceof Core.SkillInvocationMessageComponent) child.setExpanded(this.expanded);
+          if (child instanceof Core.SkillInvocationMessageComponent || child instanceof Core.BashExecutionComponent
+            || child instanceof Core.CompactionSummaryMessageComponent || child instanceof Core.BranchSummaryMessageComponent)
+            child.setExpanded(this.expanded);
     }
   }
 

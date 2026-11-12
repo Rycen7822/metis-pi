@@ -360,13 +360,15 @@ test("conversation tools retain subagent summaries for current and pre-rename tr
   assert.doesNotMatch(rendered.join("\n"), /subagents_custom_tool/, "unknown tools retain their original display name");
 });
 
-test("conversation scrollbar tracks keys, wheel, pointer capture and resize without taking body columns", async t => {
+test("native auto scrollbar tracks keys, wheel, pointer capture and resize without taking body columns", async t => {
   const tui = { terminal: { rows: 80 }, requestRender() {} };
   const { viewer, rows, mouse, clickText } = popup(t, { tui, messages: {
     reader: [textMessage(Array.from({ length: 100 }, (_, i) => `ROW_${i}`).join("\n\n"))],
   } });
   await nextTurn();
   const thumb = () => rows().flatMap((row, index) => /([┃█])$/.test(row.trimEnd()) ? [index] : []);
+  rows(); // Establish native geometry before exercising the same transient scrollbar policy as the main UI.
+  viewer.handleInput("\u001b[H"); viewer.handleInput("\u001b[F");
   const initial = thumb();
   assert.ok(initial.length > 0, "overflow has a visible right-edge scrollbar");
   assert.equal(initial.at(-1), rows().length - 2, "the initial follow-tail thumb reaches the body bottom");
@@ -767,6 +769,8 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
   const overlay = tui.showOverlay(viewer, { anchor: "center", width: "90%", maxHeight: "70%" });
   t.after(() => overlay.hide());
   await nextTurn();
+  tui.doRender();
+  viewer.handleInput("\u001b[H"); viewer.handleInput("\u001b[F");
   tui.doRender();
   // These are screen coordinates: the real overlay is offset from the terminal origin.
   const headerTarget = label => {
