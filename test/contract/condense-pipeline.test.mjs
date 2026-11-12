@@ -1293,6 +1293,40 @@ test("parallel summaries commit in order within a three-record window and reject
     });
 });
 
+test("dedup staging rejects an earlier source mutation while archiving a later occurrence", async t => {
+  const f = await fixture(t, { mode: "tui" });
+  const body = "DURABLE evidence ".repeat(1000);
+  f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: "known", toolName: "bash",
+    args: { command: "opaque" }, resultText: body, isError: false, turnIndex: 0, timestamp: 3, resultTimestamp: 3 }] });
+  await f.emit("session_start");
+  const first = f.add(body, "opaque", "duplicate-first");
+  f.add(body, "opaque", "duplicate-second");
+  const append = f.sm.appendCustomEntry.bind(f.sm);
+  let mutated = false;
+  t.mock.method(f.sm, "appendCustomEntry", (type, data) => {
+    const id = append(type, data);
+    if (type === "context-prune-index" && data.backfilled
+      && data.toolCalls.some(call => call.toolCallId === "duplicate-second")) {
+      const leaf = f.sm.getLeafId();
+      const entry = f.sm.getBranch().find(entry => entry.message?.toolCallId === first.id);
+      entry.message.content[0].text = "Corrected while duplicate staging was pending";
+      assert.equal(f.sm.getLeafId(), leaf, "body mutation cannot be detected by a leaf-only guard");
+      mutated = true;
+    }
+    return id;
+  });
+  await f.finish();
+  assert.equal(mutated, true);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data.reason, "stale-context");
+  assert.ok(!f.sm.getBranch().some(entry => entry.customType === "context-prune-frontier"));
+  const request = { sessionId: f.sm.getSessionId(), messages: f.sm.buildSessionProjection().messages };
+  f.events.emit(METIS_EVENTS.condenseProject, request);
+  assert.equal(request.messages.find(message => message.toolCallId === first.id).content[0].text,
+    "Corrected while duplicate staging was pending");
+  assert.equal(request.messages.find(message => message.toolCallId === "duplicate-second").content[0].text, body);
+});
+
 test("TUI flush yields to queued input and rechecks source freshness before publishing", async t => {
   const f = await fixture(t);
   f.ctx.mode = "tui";

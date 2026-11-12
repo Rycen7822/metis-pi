@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { captureBatch } from "../../src/condense/batch-capture.ts";
-import { blobPathFor, spillOversizedBatch } from "../../src/condense/spill.ts";
+import { archiveBatches, blobPathFor, spillOversizedBatch } from "../../src/condense/spill.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { ExecOutputArchive } from "../../src/execution/exec/output-archive.ts";
 
@@ -70,6 +70,45 @@ test("spill paths preserve distinct occurrence bodies after reload and keep exis
   assert.ok(duplicate.has("duplicate"));
   assert.equal(baselines, 2);
   assert.equal((await run({ toolCallIds: ["duplicate@4"] })).details.results[0].text, originals[0][1]);
+});
+
+test("archive retries reuse occurrence refs, append only changed records and restore missing spill evidence", async t => {
+  const dir = temporaryDirectory(t, "condense-archive-retry-");
+  const sm = SessionManager.create(dir, dir), f = queryFixture([], sm);
+  const calls = [record("small", "small body", 3), record("large", "large body ".repeat(100), 4)];
+  const batch = toolCalls => ({ turnIndex: 1, timestamp: 2, assistantText: "", toolCalls: structuredClone(toolCalls) });
+  const options = { indexer: f.indexer, sessionDir: dir, sessionId: sm.getSessionId(), spillThreshold: 100,
+    spillPreviewBytes: 30, appendEntry: (type, data) => sm.appendCustomEntry(type, data) };
+  const entries = () => sm.getEntries().filter(entry => entry.type === "custom"
+    && entry.customType === "context-prune-index" && entry.data.toolCalls.length > 0);
+  const first = await archiveBatches([batch(calls)], options);
+  for (let i = 0; i < 3; i++) assert.deepEqual(await archiveBatches([batch(calls)], options), first);
+  assert.equal(entries().length, 1, "unchanged retries do not journal another archive");
+  const extra = record("small", "different execution", 5);
+  const mixed = await archiveBatches([batch([calls[1], extra, calls[0]])], options);
+  assert.deepEqual([mixed[0], mixed[2]], [first[1], first[0]], "mixed batches keep input order and existing refs");
+  assert.equal(entries().length, 2);
+  assert.deepEqual(entries()[1].data.toolCalls.map(call => `${call.toolCallId}@${call.resultTimestamp}`), ["small@5"]);
+  assert.notEqual(mixed[1].shortId, first[0].shortId, "reused bare IDs do not merge independent occurrences");
+  f.indexer.reconstructFromSession(f.ctx);
+  assert.deepEqual(await archiveBatches([batch(calls)], options), first, "durable refs also survive reconstruction");
+  assert.equal(entries().length, 2);
+  const spill = f.indexer.getRecord("large@4").spillPath;
+  rmSync(spill);
+  assert.deepEqual(await archiveBatches([batch([calls[1]])], options), [first[1]], "missing evidence is repaired without renumbering");
+  assert.equal(readFileSync(spill, "utf8"), calls[1].resultText);
+  assert.equal(entries().length, 3);
+  f.indexer.reconstructFromSession(f.ctx);
+  for (const [ref, call] of [[first[0], calls[0]], [first[1], calls[1]], [mixed[1], extra]]) {
+    const result = (await f.run({ toolCallIds: [ref.shortId] })).details.results[0];
+    assert.equal(result.text, call.resultText);
+    assert.equal(result.complete, true);
+  }
+  const published = record("published", "previously indexed evidence", 6);
+  f.indexer.addBatch(batch([published]), options.appendEntry);
+  assert.equal(f.indexer.isSummarized("published@6"), true);
+  await archiveBatches([batch([published])], options);
+  assert.equal(f.indexer.isSummarized("published@6"), true, "adding a ref never downgrades existing pruning authorization");
 });
 
 test("spill recall reaches the tail; archive loss cannot masquerade as a complete preview", async (t) => {

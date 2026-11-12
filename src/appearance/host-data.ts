@@ -42,6 +42,7 @@ export interface HostContextLike {
     getEntriesMetadata?: () => unknown[];
     getSessionId?: () => string;
     getLeafId?: () => string | null;
+    getEntryMetadata?: (id: string) => unknown;
   };
   ui?: Record<string, unknown>;
 }
@@ -54,6 +55,25 @@ const UI_SURFACE_METHODS = [
 /** Host-owned signatures; only the method names are maintained here. */
 export type UiSurface = Pick<ExtensionUIContext, typeof UI_SURFACE_METHODS[number] | "theme">;
 export type UiAvailable = Partial<Record<typeof UI_SURFACE_METHODS[number], boolean>>;
+
+/** Prove an incremental tail is native storage only; incomplete/old hosts retain the normal refresh path. */
+function onlyJournalAppends(manager: HostContextLike["sessionManager"], leaf: string | null | undefined,
+  previous: string | null | undefined): boolean {
+  if (!manager?.getEntryMetadata || previous === undefined) return false;
+  try {
+    // Bound work performed from render, including malformed/cyclic metadata.
+    for (let hops = 0; hops < 128; hops++) {
+      if (leaf === previous) return true;
+      if (!leaf) return false;
+      const value = manager.getEntryMetadata(leaf);
+      if (!value || typeof value !== "object") return false;
+      const entry = value as Record<string, unknown>;
+      if (entry.id !== leaf || entry.type !== "custom" || !(entry.parentId === null || typeof entry.parentId === "string")) return false;
+      leaf = entry.parentId;
+    }
+  } catch { /* Optional metadata cannot establish reuse; fall back to the native estimator. */ }
+  return false;
+}
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -185,9 +205,13 @@ export class HostData {
       // revisions can reuse it until a context-impacting event or live branch/
       // model change. The leaf check also covers entries appended AFTER our handler
       // (message_end, context edits and other extensions' custom entries).
-      if (cached && cached.read === read && cached.sessionId === sessionId && cached.leafId === leafId
+      if (cached && cached.read === read && cached.sessionId === sessionId
         && cached.model?.id === model?.id && cached.model?.provider === model?.provider
-        && cached.model?.contextWindow === model?.contextWindow) return cached.value;
+        && cached.model?.contextWindow === model?.contextWindow
+        && (cached.leafId === leafId || onlyJournalAppends(manager, leafId, cached.leafId))) {
+        cached.leafId = leafId;
+        return cached.value;
+      }
       const value = toContextUsageSnapshot(read.call(this.#ctx));
       this.#contextUsage = { model, sessionId, leafId, read, value };
       return value;

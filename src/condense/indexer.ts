@@ -23,7 +23,7 @@ import {
 import { captureUnindexedBatchesFromSession, readMessageBranch } from "./batch-capture.ts";
 import { hashToolResult } from "./content-hash.ts";
 import { occKey, parseOccKey } from "./occurrence-key.ts";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { applySpill, blobDirFor, blobPathFor } from "./spill.ts";
 
 export class ToolCallIndexer {
@@ -480,6 +480,31 @@ export class ToolCallIndexer {
     }
   }
 
+  private sameArchive(existing: ToolCallRecord, incoming: ToolCallRecord): boolean {
+    return !existing.metadataUnavailable && !incoming.metadataUnavailable
+      && existing.archiveComplete !== false && incoming.archiveComplete !== false
+      && (["toolName", "isError", "parentToolCallId", "nestedProtected",
+        "resultPrefix", "archiveSource", "archiveAppendOnly"] as const)
+        .every(field => existing[field] === incoming[field])
+      && JSON.stringify(existing.args) === JSON.stringify(incoming.args)
+      && (existing.spillPath
+        ? (existing.contentHash ?? hashToolResult(existing.toolName, existing.resultText)) === incoming.contentHash
+        : existing.resultText === incoming.resultText);
+  }
+
+  private async archiveExists(record: ToolCallRecord, incoming: ToolCallRecord): Promise<boolean> {
+    if (!record.spillPath) return true;
+    try {
+      const info = await stat(record.spillPath);
+      const bytes = record.spillBytes ?? incoming.spillBytes ?? Buffer.byteLength(incoming.resultText, "utf8");
+      return info.isFile() && (record.archiveAppendOnly ? info.size >= bytes : info.size === bytes);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return false;
+      throw error;
+    }
+  }
+
   /**
    * Atomic recoverability backfill for an uncovered chain (spec
    * 2026-08-14-uncovered-chain-deterministic-backfill). Append-before-commit:
@@ -498,24 +523,37 @@ export class ToolCallIndexer {
       assertValid?: () => void;
     },
   ): Promise<SummaryToolCallRef[]> {
+    const refs: SummaryToolCallRef[] = [], changed: ToolCallRecord[] = [], changedRefs: SummaryToolCallRef[] = [];
     for (const r of records) {
       opts.assertValid?.();
-      if (r.resultText.length < opts.spillThreshold) continue;
-      const key = occKey(r.toolCallId, r.resultTimestamp);
-      const path = blobPathFor(opts.sessionDir, opts.sessionId, key);
-      await mkdir(blobDirFor(opts.sessionDir, opts.sessionId), { recursive: true });
-      opts.assertValid?.();
-      await writeFile(path, r.resultText, "utf-8"); // throw = abort backfill (fail-closed)
-      opts.assertValid?.();
-      applySpill(r, path, opts.spillPreviewBytes);
+      const key = occKey(r.toolCallId, r.resultTimestamp), existing = this.index.get(key);
+      const shortId = this.toolCallIdToAlias.get(key);
+      const matches = existing !== undefined && this.sameArchive(existing, r);
+      if (matches && shortId && await this.archiveExists(existing, r)) {
+        refs.push({ shortId, toolCallId: r.toolCallId, resultTimestamp: r.resultTimestamp });
+        continue;
+      }
+      if (r.resultText.length >= opts.spillThreshold) {
+        const path = blobPathFor(opts.sessionDir, opts.sessionId, key);
+        await mkdir(blobDirFor(opts.sessionDir, opts.sessionId), { recursive: true });
+        opts.assertValid?.();
+        await writeFile(path, r.resultText, "utf-8"); // throw = abort backfill (fail-closed)
+        opts.assertValid?.();
+        applySpill(r, path, opts.spillPreviewBytes);
+      }
+      if (!await this.archiveExists(r, r)) throw new Error("Execution archive unavailable");
+      if (matches && !existing.archiveOnly) r.archiveOnly = false;
+      const allocation = shortId ? undefined : buildShortToolCallRefs([r], this.nextShortAliasNumber);
+      if (allocation) this.nextShortAliasNumber = allocation.nextIndex; // failures may burn numbers, never reuse them
+      const ref = shortId ? { shortId, toolCallId: r.toolCallId, resultTimestamp: r.resultTimestamp } : allocation!.refs[0]!;
+      refs.push(ref); changedRefs.push(ref); changed.push(r);
     }
     opts.assertValid?.();
-    const calls = records.map((r) => ({ toolCallId: r.toolCallId, resultTimestamp: r.resultTimestamp }));
-    const { refs, nextIndex } = buildShortToolCallRefs(calls, this.nextShortAliasNumber);
-    this.nextShortAliasNumber = nextIndex; // burned numbers on failure are acceptable (monotonic, opaque)
-    opts.appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: records, backfilled: true, refs } satisfies IndexEntryData);
-    for (const r of records) this.indexRecord(r);
-    this.registerSummaryRefs(refs);
+    if (changed.length) {
+      opts.appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: changed, backfilled: true, refs: changedRefs } satisfies IndexEntryData);
+      for (const r of changed) this.indexRecord(r);
+      this.registerSummaryRefs(changedRefs);
+    }
     return refs;
   }
 }

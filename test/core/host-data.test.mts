@@ -4,9 +4,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { HostData, toContextUsageSnapshot } from "../../src/appearance/host-data.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 test("invalid context counters cannot produce a display snapshot", () => {
   assert.equal(toContextUsageSnapshot({ tokens: Number.NaN, contextWindow: 0, percent: 200 }), undefined);
+});
+
+test("journal-only tails reuse usage without hiding native context changes or branch switches", () => {
+  const sm = SessionManager.inMemory("/tmp/host-usage-journal"), data = new HostData();
+  const origin = sm.appendMessage({ role: "user", content: "original", timestamp: 1 });
+  let reads = 0;
+  const ctx = { model: { id: "test", contextWindow: 1_000_000 }, sessionManager: sm,
+    getContextUsage: () => ({ tokens: ++reads, contextWindow: 1_000_000, percent: reads }) };
+  data.bind(ctx);
+  const original = data.getContextUsage();
+  for (let i = 0; i < 31; i++) {
+    sm.appendCustomEntry("context-prune-index", { backfilled: true, toolCalls: [] });
+    data.bumpDisplay();
+    assert.equal(data.getContextUsage(), original, "storage journals do not alter native model context");
+  }
+  assert.equal(reads, 1);
+  sm.appendCustomMessageEntry("summary", "model-visible despite display=false", false);
+  assert.equal(data.getContextUsage()?.tokens, 2);
+  sm.appendContextEdit(origin, { content: "changed source" });
+  assert.equal(data.getContextUsage()?.tokens, 3);
+  sm.appendMessage({ role: "user", content: "new message", timestamp: 2 });
+  assert.equal(data.getContextUsage()?.tokens, 4);
+  sm.branch(origin);
+  assert.equal(data.getContextUsage()?.tokens, 5, "a different branch cannot inherit the descendant cache");
 });
 
 test("one bound context retains its receiver across revisions, rebinding, compaction and read failure", () => {
