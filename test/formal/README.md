@@ -25,6 +25,8 @@ TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal -- AsyncReaders P
 |PressureGrid|300K至1M每100K一档，675组profile；level/headroom、未饱和delta、native严格容量线|`src/condense/budget.ts`；Pi原生compaction|
 |OccScheduler|60/52/72%、请求内耗尽/重入、work/hold、near接管与复用次数取整|`src/condense/occ.ts`|
 |PublicationTxn|等待前捕获；来源正文/策略/生命周期完整校验与发布原子边界；无收益延期|`src/condense/runtime.ts`|
+|RetryLifecycle|恢复/修复后的稳定ref、无重复归档；候选级负向准入缓存、手动及生成后拒绝重试|`src/condense/indexer.ts`、`runtime.ts`|
+|DeferredGuards|无收益重试不按批次重复复核完整来源；前沿不越过缺口，实际发布仍原子校验|`src/condense/runtime.ts`|
 |AsyncReaders|双reader独占buffer、rewrite/store/leaf失效、取消、I/O失败与fd关闭|SDK补丁0010的store/manager|
 |WindowAdmission|按选中分支路径尾窗口准入；LRU有界、不丢记录/顺序、热窗口不被全扫逐出|SDK补丁0010|
 |EncoderMemo|排队快照、mode/after缓存键、仅复用计数、元数据/预算重新判断、有界LRU|`src/condense/token-estimator.ts`|
@@ -42,6 +44,10 @@ TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避
 - OCC的ready是瞬时布尔值，不是持久phase；取整后的剩余复用次数须至少11，不能用大于10的未取整值代替。
 - Reader活性依赖弱公平调度、有限干扰和close成功；同步回退抽象为原子快照。缓存大小按小单位缩放，pinned不计入LRU。
 - Encoder用确定性符号计数函数，不验证tokenizer；记录中的source/metadata是用于比较的ghost字段，不要求运行时缓存这些字段。
+- RetryLifecycle区分候选/策略事实与无关tail/journal变化；只缓存请求前结构性拒绝，不缓存生成后失败。
+  三轮内的符号集合不验证实际64项缓存淘汰；归档修复发生在发布前，不涵盖外部删除已发布证据。
+- DeferredGuards只计算完整来源复核次数，不是毫秒或整个flush的I/O上界；允许共享准备视图和真正推进前沿的校验。
+  按序结果抽象不代替真实三请求并发测试；冷恢复、JSON处理、模型窗口与全部压缩交错仍须实现侧验证。
 - 发布校验与写入被建模为同一同步动作；原生存储/文件系统所有错误、任意长历史和所有调度顺序不在有限边界内。
 - 未收录人为时间单位的UI成本模型、重复纯公式模型、数百份临时cfg、TS探针、JAR及运行产物。
   本套件不提供真实终端帧延迟、Windows、多模态provider或无限规模证明。

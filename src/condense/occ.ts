@@ -579,7 +579,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       requestTokens = config.value.enabled ? estimatedTokens(messages) : undefined;
       localTokensSaved = 0;
     },
-    measure(ctx: ExtensionContext) { return config.value.enabled ? estimatedTokens(visible(ctx).messages) : 0; },
+    measure(ctx: ExtensionContext, messages?: any[]) {
+      return config.value.enabled ? estimatedTokens(messages ?? visible(ctx).messages) : 0;
+    },
     rewrite(ctx: ExtensionContext, before = 0) {
       if (config.value.enabled) localTokensSaved += Math.max(0, before - estimatedTokens(visible(ctx).messages));
       rewrite(ctx);

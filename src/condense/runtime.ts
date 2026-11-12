@@ -217,14 +217,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Cleared on every non-concurrent flushPending invocation.
   let rearmedPending = false;
 
-  const computeMetricsSnapshot = (ctx: any): ContextMetricsSnapshot | undefined => {
+  const computeMetricsSnapshot = (ctx: any, rawBranch?: ReturnType<typeof readMessageBranch>): ContextMetricsSnapshot | undefined => {
     try {
       // Includes persisted custom_message entries (e.g. this extension's own
       // summary messages) alongside plain "message" entries: both are retained
       // LLM context, so both belong in the largest-chain-share denominator.
       // Shared projection (src/batch-capture.ts projectBranchMessages) so this
       // matches the chain-detection feed sites exactly.
-      const entries = readMessageBranch(ctx.sessionManager);
+      const entries = rawBranch ?? readMessageBranch(ctx.sessionManager);
       const branch = projectBranchMessages(entries);
       const sources = new WeakMap<object, object>();
       for (let i = 0; i < branch.length; i++) sources.set(branch[i], sourceEntryReference(ctx.sessionManager, entries[i]));
@@ -324,9 +324,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const queuedSummaryKeys = new Set<string>();
   // Cache only pre-request admission failures; rejected generated output must still retry/fallback.
   const budgetAdmissions = new Set<string>();
-  const capturePendingBatches = (ctx: any, opts?: { rethrow?: boolean }): CapturedBatch[] => {
+  const capturePendingBatches = (ctx: any, opts?: {
+    rethrow?: boolean; rawBranch?: ReturnType<typeof readMessageBranch>; projection?: NativeProjection; visible?: any[];
+  }): CapturedBatch[] => {
     let batches: CapturedBatch[] = [];
-    let projection: NativeProjection | undefined;
+    let projection = opts?.projection;
     try {
       indexer.syncSummaryEntries(ctx);
       const references = branchEntryReferences(ctx.sessionManager);
@@ -334,12 +336,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let turnIndex = 0;
       for (const entry of references)
         if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
-      projection = occ.enabled() ? ctx.sessionManager.buildSessionProjection() : undefined;
-      const branch = projection
+      const projectedCapture = occ.enabled();
+      projection ??= projectedCapture ? ctx.sessionManager.buildSessionProjection() : undefined;
+      const branch = projectedCapture && projection
         ? projection.entries.flatMap((entry: any) =>
               entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
             )
-        : readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "message" || entry.type === "custom_message",
+        : opts?.rawBranch ?? readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "message" || entry.type === "custom_message",
           { cacheAdmission: "bypass" });
       batches = captureUnindexedBatchesFromSession(
         branch,
@@ -355,7 +358,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // model work. Also leave non-text results intact rather than summarizing
     // only their text and accidentally discarding attachments.
     const source = readSourceEdits(ctx, projection);
-    const visible = projectContext(source.projection.messages, ctx.model?.api, { ctx, source, probe: true }).messages;
+    const visible = opts?.visible ?? projectContext(source.projection.messages, ctx.model?.api, { ctx, source, probe: true }).messages;
     const edited = source.changedToolIds;
     const visibleKeys = new Set(
       visible
@@ -627,7 +630,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
     const yieldToUi = ctx.mode === "tui";
     let sliceStartedAt = performance.now();
-    const beforeRewrite = occ.measure(ctx);
+    let beforeRewrite = yieldToUi ? 0 : occ.measure(ctx);
 
     // Clear on every non-concurrent invocation, regardless of outcome — the
     // rearm is a one-shot nudge for the very next eligible gate check.
@@ -636,7 +639,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // Pre-flush pressure snapshot — recorded once at flush entry so the
     // observability entry reflects what triggered this attempt, not what's
     // left after it ran.
-    const entryMetrics: ContextMetricsSnapshot = computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT;
+    let entryMetrics: ContextMetricsSnapshot = yieldToUi ? EMPTY_METRICS_SNAPSHOT
+      : computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT;
     const delivery = options.delivery ?? "runtime";
 
     // One-entry-per-attempt tracking, emitted once from the outer `finally`
@@ -718,11 +722,39 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
       } else appendEntry = (type, data) => { assertCurrent(version); pi.appendEntry(type, data); };
 
-      // Use pre-captured batches if provided (avoids double-capture when the
-      // caller previewed the queue before opening the progress overlay).
-      // Keep capture before any new UI/IO wait: queued input must invalidate
-      // this attempt, not silently become a new baseline for the old batch.
-      batches = options.preparedBatches ?? options.previewedBatches ?? capturePendingBatches(ctx);
+      const snapshotSource = createSourceSnapshotter();
+      let preparedProjection: NativeProjection | undefined, preparedSource: string | undefined;
+      let rawBranch: ReturnType<typeof readMessageBranch> | undefined, preparedVisible: any[] | undefined;
+      if (yieldToUi) {
+        indexer.syncSummaryEntries(ctx);
+        // Freeze the model source before yielding through raw-history preparation.
+        preparedProjection = await readProjection(ctx, signal);
+        preparedSource = snapshotSource(preparedProjection.messages);
+        const leaf = ctx.sessionManager.getLeafId();
+        const cooperate = async () => {
+          await setImmediate(undefined, { signal });
+          assertCurrent(version); signal.throwIfAborted();
+          if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("source changed during preparation");
+          sliceStartedAt = performance.now();
+        };
+        rawBranch = [];
+        for (const entry of readHistoryEntries(ctx.sessionManager, "branch",
+          entry => entry.type === "message" || entry.type === "custom_message", { cacheAdmission: "bypass" })) {
+          rawBranch.push(entry);
+          if (performance.now() - sliceStartedAt >= 8) await cooperate();
+        }
+        entryMetrics = computeMetricsSnapshot(ctx, rawBranch) ?? EMPTY_METRICS_SNAPSHOT;
+        await cooperate();
+        preparedVisible = projectContext(preparedProjection.messages, ctx.model?.api,
+          { ctx, source: readSourceEdits(ctx, preparedProjection) }).messages;
+        beforeRewrite = occ.measure(ctx, preparedVisible);
+      }
+      // Previewed work retains its original candidate; neither preparation waits nor queued input
+      // may silently become a new model-source baseline for that candidate.
+      batches = options.preparedBatches ?? options.previewedBatches ?? capturePendingBatches(ctx,
+        { rawBranch, projection: preparedProjection, visible: preparedVisible });
+      // Do not retain older, non-projected history while waiting for providers.
+      rawBranch = undefined; preparedVisible = undefined;
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
         const before = projectContext(base.messages, ctx.model?.api, { ctx, source: readSourceEdits(ctx, base) }).messages;
@@ -847,7 +879,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         deduped: [] as import("./types.ts").CapturedToolCall[],
         dedupedRawChars: 0,
       }));
-      const snapshotSource = createSourceSnapshotter();
       let dedupProjection: NativeProjection | undefined, dedupSource: string | undefined;
       let dedupVisible: Map<string, NativeProjection["messages"][number]> | undefined;
       if (dedupEnabled) {
@@ -860,8 +891,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             let beneficial = false;
             if (originalId && originalId !== key) {
               if (!dedupProjection) {
-                dedupProjection = await readProjection(ctx, signal);
-                dedupSource = snapshotSource(dedupProjection.messages);
+                dedupProjection = preparedProjection ?? await readProjection(ctx, signal);
+                dedupSource = preparedSource ?? snapshotSource(dedupProjection.messages);
                 const visible = projectContext(dedupProjection.messages, ctx.model?.api,
                   { ctx, source: readSourceEdits(ctx, dedupProjection), probe: true }).messages;
                 dedupVisible = new Map(visible.filter((message: any) => message.role === "toolResult")
@@ -902,7 +933,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           batches[record.index] = record.batch;
         }
       }
-      if (dedupProjection) {
+      if (pendingAliases.length) {
         // All aliases were staged against one source. Archive-only journals do not authorize hiding.
         dedupProjection = await readProjection(ctx, signal);
         assertCurrent(version); signal.throwIfAborted();
@@ -971,7 +1002,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         };
         // A later successful chunk must not leap past an earlier deferred one.
         record.frontierAdvanced = !frontierBlocked;
-        if (record.frontierAdvanced) { appendEntry!(CUSTOM_TYPE_FRONTIER, snapshot); frontier.advance(snapshot); }
+        if (record.frontierAdvanced) {
+          // Replacements already checked their source in this synchronous commit.
+          // A bookkeeping-only result needs that guard only if it advances durable progress.
+          if (record.result === "trivial" || record.result === "deduped") checkSource();
+          appendEntry!(CUSTOM_TYPE_FRONTIER, snapshot);
+          frontier.advance(snapshot);
+        }
         record.completed = true;
         processedBatches.push(record);
         processedCount = processedBatches.length;
@@ -995,8 +1032,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Only a wholly deferred pass can omit source snapshots. Derive this
       // from the same admission policy used by scheduling below.
       const mayPublish = records.some(record => workKind(record) !== "deferred");
-      let sourceProjection = mayPublish ? dedupProjection ?? await readProjection(ctx, signal) : undefined;
-      let expectedSource = sourceProjection ? snapshotSource(sourceProjection.messages) : undefined;
+      let sourceProjection = mayPublish ? dedupProjection ?? preparedProjection ?? await readProjection(ctx, signal) : undefined;
+      // A rejected alias still captured a source before its archive await; never adopt later in-place edits.
+      let expectedSource = sourceProjection ? preparedSource ?? dedupSource ?? snapshotSource(sourceProjection.messages) : undefined;
       let planningView: NativeProjection["messages"] | undefined;
       const visibleForPlanning = () => {
         if (!sourceProjection) throw new CondenseContextChangedError("planning source unavailable");
@@ -1006,19 +1044,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let nextRequest = 0, failedRequest = Infinity;
       const controller = fallbackController;
       const config = currentConfig.value;
+      const checkActive = () => { assertCurrent(version); signal.throwIfAborted(); };
       const checkSource = (projection?: NativeProjection) => {
-        assertCurrent(version);
-        if (signal.aborted) throw new Error("summarize: aborted");
+        checkActive();
         if (expectedSource !== undefined && snapshotSource((projection ?? ctx.sessionManager.buildSessionProjection()).messages) !== expectedSource) {
           throw new CondenseContextChangedError("summary source changed");
         }
       };
-      const checkPreparedSource = async () =>
-        checkSource(expectedSource === undefined ? undefined : await readProjection(ctx, signal));
       const schedule = async (index: number) => {
         // Keep at most three uncommitted records in flight, even if later calls
         // finish first. No further work starts after an observed failure.
         while (nextRequest < Math.min(index + 3, records.length, failedRequest)) {
+          checkActive();
           const i = nextRequest++, record = records[i]!;
           const kind = workKind(record);
           if (kind === "deduped" || kind === "trivial") { record.result = kind; continue; }
@@ -1032,7 +1069,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             admission: deterministic ? "packed" : trigger === "manual" ? "manual" : "automatic",
             onDeferred: reason => { record.deferredReason = reason; },
           });
-          await checkPreparedSource();
+          checkActive();
           if (!record.plan) { record.result = "deferred"; continue; }
           if (deterministic) {
             record.result = await record.plan.accepts(record.prepared.packedText, true)
@@ -1040,6 +1077,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             continue;
           }
           if (record.plan.budget.limit < record.plan.budget.target) { record.deferredReason = "budget"; record.result = "deferred"; continue; }
+          // Rejected plans cannot publish. Read fresh source only before real provider work.
+          checkSource(await readProjection(ctx, signal));
           options.onProgress?.(i, records.length, record.batch, "start");
           const requestSignal = AbortSignal.any([signal, record.abort.signal]);
           record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
@@ -1067,11 +1106,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           await setImmediate(undefined, { signal });
           sliceStartedAt = performance.now();
         }
-        await checkPreparedSource();
+        checkActive();
         await schedule(i);
         if (record.job) updatePruneStatus(ctx, `Summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
         await record.job;
-        await checkPreparedSource();
+        checkActive();
         if (record.error) throw record.error;
         const result = record.result;
         if (result === "deferred") {
@@ -1092,9 +1131,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const batch = record.batch;
         const dedupCount = record.deduped.length;
         const dedupRawChars = record.dedupedRawChars;
-        // Frontier commits, like replacements below, retain an atomic synchronous content guard.
-        if (result === "deduped" || result === "trivial") checkSource();
-
         // Fully-deduped batches: every tool call matched an existing
         // indexed record. The alias entries are already persisted; we just
         // need to advance the frontier past this turn and count the
@@ -1151,7 +1187,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           if (firstChanged < 0 && original !== replacement) firstChanged = index;
         }
         const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || !await plan.accepts(result.summaryText, result.deterministic);
-        checkSource();
+        checkActive();
         if (shouldSkipOversized) {
           if (replaced !== archivedBatch.toolCalls.length) record.deferredReason = "replacement";
           deferRecord(record);
@@ -1164,6 +1200,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         totalToolCallCount += batch.toolCalls.length + dedupCount;
         totalDedupedCount += dedupCount;
 
+        // Keep source validation and replacement publication in one synchronous transaction.
+        checkSource();
         try {
           {
             // Write one hidden summary message per turn and index its tool calls.

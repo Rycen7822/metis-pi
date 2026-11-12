@@ -1293,6 +1293,44 @@ test("parallel summaries commit in order within a three-record window and reject
     });
 });
 
+test("unchanged budget gaps retain evidence without scaling whole-context reads with the pending queue", async t => {
+  const reads = [];
+  for (const count of [2, 12]) await t.test(`${count} deferred/trivial pairs`, async t => {
+    const f = await fixture(t, { mode: "tui", batchingMode: "turn" });
+    for (let i = 0; i < count; i++) {
+      f.add("x".repeat(6000), "opaque", `budget-${i}`);
+      f.add(`retained tail ${i}`, "opaque", `small-${i}`);
+    }
+    let projections = 0;
+    for (const method of ["buildSessionProjection", "buildSessionProjectionAsync"]) {
+      const original = f.sm[method];
+      t.mock.method(f.sm, method, function (...args) {
+        projections++;
+        return original.apply(this, args);
+      });
+    }
+    await f.finish(false);
+    const original = f.sm.buildSessionProjection().messages;
+    const samples = [];
+    for (let retry = 0; retry < 2; retry++) {
+      projections = 0;
+      const result = await f.emit("context", { messages: original });
+      samples.push(projections);
+      assert.deepEqual(result?.messages ?? original, original, "no-gain retries cannot hide or change evidence");
+      const metric = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data;
+      assert.equal(metric.capturedBatches, count * 2);
+      assert.equal(metric.processedBatches, count);
+      assert.deepEqual(metric.deferredReasons, { budget: count });
+    }
+    assert.equal(f.calls.length, 0, "unprofitable work cannot request a provider");
+    assert.ok(!f.sm.getBranch().some(entry => entry.customType === "context-prune-frontier"
+      || entry.customType === "context-prune-summary"), "later trivial batches cannot cross the budget gap");
+    reads.push(Math.max(...samples));
+  });
+  assert.ok(reads[1] <= reads[0] + 2,
+    `unchanged no-gain work must share its source view, not re-read it per batch: ${reads}`);
+});
+
 test("dedup staging rejects an earlier source mutation while archiving a later occurrence", async t => {
   const f = await fixture(t, { mode: "tui" });
   const body = "DURABLE evidence ".repeat(1000);
@@ -1325,6 +1363,36 @@ test("dedup staging rejects an earlier source mutation while archiving a later o
   assert.equal(request.messages.find(message => message.toolCallId === first.id).content[0].text,
     "Corrected while duplicate staging was pending");
   assert.equal(request.messages.find(message => message.toolCallId === "duplicate-second").content[0].text, body);
+});
+
+test("a non-beneficial duplicate cannot rebase the source of a later summary", async t => {
+  const f = await fixture(t);
+  f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: "known-small", toolName: "bash",
+    args: { command: "opaque" }, resultText: "ok", isError: false, turnIndex: 0, timestamp: 3, resultTimestamp: 3 }] });
+  await f.emit("session_start");
+  f.add("ok", "opaque", "non-beneficial");
+  const source = f.add("界".repeat(6000), "opaque", "later-semantic");
+  const corrected = "Corrected semantic evidence ".repeat(2000);
+  const append = f.sm.appendCustomEntry.bind(f.sm);
+  let mutated = false;
+  t.mock.method(f.sm, "appendCustomEntry", (type, data) => {
+    const id = append(type, data);
+    if (!mutated && type === "context-prune-index" && data.backfilled
+      && data.toolCalls.some(call => call.toolCallId === "non-beneficial")) {
+      const leaf = f.sm.getLeafId();
+      f.sm.getBranch().find(entry => entry.message?.toolCallId === source.id).message.content[0].text = corrected;
+      assert.equal(f.sm.getLeafId(), leaf);
+      mutated = true;
+    }
+    return id;
+  });
+  await f.finish(false);
+  assert.equal(mutated, true);
+  assert.equal(f.calls.length, 0, "the old candidate cannot request a summary against a rebased source");
+  assert.ok(!f.sm.getBranch().some(entry => entry.customType === "context-prune-frontier"
+    || entry.customType === "context-prune-summary"));
+  assert.equal(f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data.reason, "stale-context");
+  assert.equal(f.sm.buildSessionProjection().messages.find(message => message.toolCallId === source.id).content[0].text, corrected);
 });
 
 test("TUI flush yields to queued input and rechecks source freshness before publishing", async t => {
