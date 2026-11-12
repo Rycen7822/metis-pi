@@ -126,6 +126,8 @@ export interface TranscriptAdapterInput {
 export interface AssistantTranscriptScope {
   state: TranscriptState;
   requestRender: () => void;
+  enabled?: () => boolean;
+  thinkingPolicy?: () => ThinkingPolicy;
 }
 
 const SCOPES_SYMBOL = Symbol.for("Rycen7822.metis-pi.assistant-scopes.v1");
@@ -148,7 +150,10 @@ export function bindAssistantTranscriptScope(component: object, scope: Assistant
 /** Keep style and policy shared, but isolate side identities, clocks and repaint. */
 function scopedInput(input: TranscriptAdapterInput, component: object): TranscriptAdapterInput {
   const scope = componentScopes().get(component);
-  return scope ? { ...input, state: scope.state, requestRender: scope.requestRender } : input;
+  return scope ? { ...input, state: scope.state, requestRender: scope.requestRender,
+    ...(scope.enabled ? { enabled: scope.enabled } : {}),
+    ...(scope.thinkingPolicy ? { thinkingPolicy: scope.thinkingPolicy } : {}),
+  } : input;
 }
 
 const RAIL_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-rail");

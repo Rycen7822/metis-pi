@@ -1,6 +1,7 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
+  ScrollView,
   getCapabilities,
   truncateToWidth,
   visibleWidth,
@@ -10,9 +11,11 @@ import {
   type TUI,
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
-import { DEFAULT_CONFIG, type AppearanceConfig } from "../../appearance/config.ts";
+import type { AppearanceConfig } from "../../appearance/config.ts";
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
 import { activeAgents } from "./widget.ts";
+import { EmbeddedView } from "../../appearance/transcript/embedded-view.ts";
+import type { EmbeddedPresentation } from "../../appearance/transcript/embedded.ts";
 import type { ToolPresentation } from "../../presentation/tool-source.mjs";
 import {
   backgroundAnsi, CODEMODE_ORANGE, DARK_SURFACE_BG, FG_DEFAULT, foregroundAnsi, resolveColorContext,
@@ -40,25 +43,42 @@ export interface AgentInspection {
 }
 
 export interface ViewerAgent { id: string; name: string; state: string }
+interface ViewerOptions {
+  agentId: string;
+  theme: Theme;
+  tui: TUI;
+  keys: KeybindingsManager;
+  done(value: undefined): void;
+  abort: AbortController;
+  inspect(agentId: string, after: number, signal: AbortSignal): Promise<AgentInspection>;
+  appearance: AppearanceConfig;
+  agentSource(): ViewerAgent[];
+  live: boolean;
+  settings: SettingsManager;
+  presentation?: EmbeddedPresentation;
+}
 interface AgentView {
   content: ViewerContent;
-  snapshot?: AgentInspection;
+  snapshot?: Pick<AgentInspection, "agent" | "run">;
   file: string;
   cursor: number;
   truncated: boolean;
   error: string;
-  offset: number;
-  maxOffset: number;
-  renderedOffset: number;
-  cachedWidth: number;
-  lines: string[];
-  layout: Array<{ component: Component; y: number; height: number }>;
+  viewport: ScrollView;
 }
 interface HeaderTarget { x: number; y: number; width: number; activate: () => void }
 const MAX_CACHED_VIEWS = 8;
 
+/** Archived history keeps its scrollbar visible; native layout and input still own all scroll geometry. */
+class HistoryViewport extends ScrollView {
+  override updateLayout(height: number, viewport: number, requestRender: () => void): void {
+    super.updateLayout(height, viewport, requestRender);
+    this.setScrollbar(height > viewport ? "always" : "hidden");
+  }
+}
+
 function disposeView(view: AgentView) {
-  view.content.dispose(); view.lines = []; view.layout = []; view.snapshot = undefined;
+  view.content.dispose(); view.viewport.setScrollbar("hidden"); view.snapshot = undefined;
 }
 
 /** Read-only, bounded conversation view. Opening it never consumes attention or ACKs a result. */
@@ -74,44 +94,25 @@ export class SubagentViewer implements Component {
   private bodyPadding = 2;
   private innerWidth = 1;
   private renderedHeight = 0;
-  private scrollbar?: { top: number; height: number };
-  private scrollbarGrab?: number;
+  private readonly embedded: EmbeddedView;
   private targets: HeaderTarget[] = [];
   private tabStart = 0;
   private tabWidth = -1;
   private revealSelected = true;
   private readonly onAbort: () => void;
-  private readonly theme: Theme;
-  private readonly tui: TUI;
-  private readonly keys: KeybindingsManager;
-  private readonly done: (value: undefined) => void;
-  private readonly abort: AbortController;
-  private readonly inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>;
-  private readonly appearance: AppearanceConfig;
-  private readonly agentSource: () => ViewerAgent[];
-  private readonly live: boolean;
+  private readonly options: ViewerOptions;
   private readonly rail: string;
   private readonly background: string;
 
-  constructor(
-    agentId: string,
-    theme: Theme,
-    tui: TUI,
-    keys: KeybindingsManager,
-    done: (value: undefined) => void,
-    abort: AbortController,
-    inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>,
-    appearance: AppearanceConfig = DEFAULT_CONFIG,
-    agentSource: () => ViewerAgent[],
-    live = true,
-  ) {
-    this.agentId = agentId; this.theme = theme; this.tui = tui; this.keys = keys;
-    this.done = done; this.abort = abort; this.inspect = inspect;
-    this.appearance = appearance; this.agentSource = agentSource; this.live = live;
+  constructor(options: ViewerOptions) {
+    const { agentId, tui, abort, settings } = options;
+    this.options = { ...options };
+    this.agentId = agentId;
     const colorLevel = resolveColorContext({ terminalTrueColor: getCapabilities().trueColor });
     const orange = foregroundAnsi(CODEMODE_ORANGE, colorLevel);
     this.rail = orange ? `${orange}▏${FG_DEFAULT}` : "▏";
     this.background = backgroundAnsi(DARK_SURFACE_BG, colorLevel);
+    this.embedded = new EmbeddedView(tui, settings);
     this.cacheView(agentId);
     this.onAbort = () => this.close();
     abort.signal.addEventListener("abort", this.onAbort, { once: true });
@@ -121,8 +122,8 @@ export class SubagentViewer implements Component {
 
   private syncAgents(): boolean {
     if (this.disposed) return false;
-    const source = this.agentSource();
-    const visible = new Map((this.live ? activeAgents(source) : source).map(agent => [agent.id, agent]));
+    const source = this.options.agentSource();
+    const visible = new Map((this.options.live ? activeAgents(source) : source).map(agent => [agent.id, agent]));
     const changed = visible.size !== this.agents.size || [...visible.keys()].some(id => !this.agents.has(id));
     this.agents = visible;
     for (const [id, view] of this.views) {
@@ -131,7 +132,7 @@ export class SubagentViewer implements Component {
     if (!visible.size) { this.close(); return false; }
     if (changed) {
       this.targets = []; this.renderedHeight = 0; this.revealSelected = true;
-      this.tui.requestRender();
+      this.options.tui.requestRender();
     }
     if (!visible.has(this.agentId)) this.selectAgent(visible.keys().next().value!);
     return true;
@@ -145,15 +146,12 @@ export class SubagentViewer implements Component {
     let view = this.views.get(id);
     if (view) this.views.delete(id);
     else {
-      const state: AgentView = {
-        content: new ViewerContent(this.theme, this.tui, this.appearance, () => {
-          state.cachedWidth = -1;
-          if (!this.disposed && this.view === state) this.tui.requestRender();
-        }),
-        file: "", cursor: 0, truncated: false, error: "", offset: Infinity,
-        maxOffset: 0, renderedOffset: 0, cachedWidth: -1, lines: [], layout: [],
+      const content = new ViewerContent(this.embedded.tui, this.options.appearance, this.options.settings);
+      view = { content,
+        viewport: new HistoryViewport(content.document, { follow: "end", primary: true,
+          scrollbarThumbStyle: text => this.options.theme.fg("accent", text) }),
+        file: "", cursor: 0, truncated: false, error: "",
       };
-      view = state;
     }
     this.views.set(id, view);
     if (this.views.size > MAX_CACHED_VIEWS) {
@@ -172,8 +170,8 @@ export class SubagentViewer implements Component {
     this.cacheView(id);
     this.revealSelected = true;
     this.targets = []; this.renderedHeight = 0;
-    this.scrollbar = undefined; this.scrollbarGrab = undefined;
-    this.tui.requestRender();
+    this.embedded.clearInteraction();
+    this.options.tui.requestRender();
     void this.refresh(this.view, this.readAbort);
   }
 
@@ -188,27 +186,30 @@ export class SubagentViewer implements Component {
     if (!current() || !this.syncAgents() || !current()) return;
     let more = false;
     try {
-      const snapshot = await this.inspect(this.agentId, view.cursor, controller.signal);
+      const snapshot = await this.options.inspect(this.agentId, view.cursor, controller.signal);
       if (!current() || !this.syncAgents() || !current()) return;
       if (snapshot.reset || (view.file && view.file !== snapshot.session_file)) {
-        view.content.dispose(); view.offset = Infinity; view.truncated = false;
-        view.cursor = 0; view.file = snapshot.session_file; view.cachedWidth = -1; more = true; return;
+        view.content.dispose(); view.viewport.scrollToEnd(); view.truncated = false;
+        view.cursor = 0; view.file = snapshot.session_file; more = true; return;
       }
       view.file = snapshot.session_file;
-      view.snapshot = snapshot; view.cursor = snapshot.next_cursor; more = snapshot.has_more;
+      view.snapshot = { agent: snapshot.agent, run: snapshot.run };
+      view.cursor = snapshot.next_cursor; more = snapshot.has_more;
       if (snapshot.agent.name) this.agents.set(this.agentId, { ...this.agents.get(this.agentId)!, name: snapshot.agent.name });
       if (snapshot.history_pruned) view.truncated = true;
       view.content.setToolRenderers(snapshot.tool_renderers ?? {});
       for (const entry of snapshot.messages) view.content.append(entry.message, snapshot.agent.cwd ?? "");
+      view.content.refresh();
       view.truncated ||= view.content.truncated;
-      view.error = ""; view.cachedWidth = -1;
+      view.error = "";
+      this.embedded.tui.requestRender();
     } catch (error) {
       if (!current()) return;
       view.error = clean(String(error));
     } finally {
       if (current()) {
-        this.tui.requestRender();
-        if (more || this.live) this.timer = setTimeout(() => void this.refresh(view, controller), more ? 50 : 1000);
+        this.options.tui.requestRender();
+        if (more || this.options.live) this.timer = setTimeout(() => void this.refresh(view, controller), more ? 50 : 1000);
       }
     }
   }
@@ -216,98 +217,57 @@ export class SubagentViewer implements Component {
   private close() {
     if (this.disposed) return;
     this.dispose();
-    this.done(undefined);
+    this.options.done(undefined);
   }
 
   private scroll(delta: number) {
-    const view = this.view;
-    const offset = Number.isFinite(view.offset) ? view.offset : view.maxOffset;
-    view.offset = Math.max(0, Math.min(view.maxOffset, offset + delta));
-    if (view.offset === view.maxOffset) view.offset = Infinity;
-    this.tui.requestRender();
-  }
-
-  private scrollScrollbarTo(y: number, grab: number) {
-    if (!this.scrollbar || this.pageSize <= this.scrollbar.height) return;
-    const view = this.view;
-    const target = Math.round((y - this.bodyTop - grab) * view.maxOffset / (this.pageSize - this.scrollbar.height));
-    const current = Number.isFinite(view.offset) ? view.offset : view.maxOffset;
-    this.scroll(target - current);
+    this.view.viewport.scrollBy(delta);
+    this.options.tui.requestRender();
   }
 
   handleInput(data: string) {
     if (!this.syncAgents()) return;
-    if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q") this.close();
+    if (this.options.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q") this.close();
     else if (matchesKey(data, "left") || matchesKey(data, "shift+tab")) this.cycleAgent(-1);
     else if (matchesKey(data, "right") || matchesKey(data, "tab")) this.cycleAgent(1);
-    else if (this.keys.matches(data, "tui.select.up")) this.scroll(-1);
-    else if (this.keys.matches(data, "tui.select.down")) this.scroll(1);
+    else if (this.options.keys.matches(data, "tui.select.up")) this.scroll(-1);
+    else if (this.options.keys.matches(data, "tui.select.down")) this.scroll(1);
     else if (matchesKey(data, "pageUp")) this.scroll(-this.pageSize);
     else if (matchesKey(data, "pageDown")) this.scroll(this.pageSize);
-    else if (matchesKey(data, "home")) {
-      this.view.offset = 0;
-      this.tui.requestRender();
-    } else if (matchesKey(data, "end")) {
-      this.view.offset = Infinity;
-      this.tui.requestRender();
-    } else if (this.keys.matches(data, "app.tools.expand")) {
-      this.view.offset = this.view.renderedOffset;
-      this.view.content.toggleTools();
-      this.invalidate();
-      this.tui.requestRender();
-    } else if (this.keys.matches(data, "app.thinking.toggle")) {
-      this.view.offset = this.view.renderedOffset;
-      this.view.content.toggleThinking();
-      this.invalidate();
-      this.tui.requestRender();
-    }
+    else if (matchesKey(data, "home")) { this.view.viewport.scrollToStart(); this.options.tui.requestRender(); }
+    else if (matchesKey(data, "end")) { this.view.viewport.scrollToEnd(); this.options.tui.requestRender(); }
+    else if (this.options.keys.matches(data, "app.tools.expand") || this.options.keys.matches(data, "app.thinking.toggle")) {
+      this.view.viewport.scrollTo(this.view.viewport.scrollTop, { disableFollow: true });
+      if (this.options.keys.matches(data, "app.tools.expand")) this.view.content.toggleTools();
+      else this.view.content.toggleThinking();
+      this.invalidate(); this.options.tui.requestRender();
+    } else this.embedded.input(data);
   }
 
   handleMouse(event: TuiMouseEvent) {
     if (!this.syncAgents()) return;
-    if (event.type === "press") this.scrollbarGrab = undefined;
-    if (this.scrollbarGrab !== undefined) {
-      if (event.type === "release") { this.scrollbarGrab = undefined; return { handled: true }; }
-      if (event.type === "drag") {
-        this.scrollScrollbarTo(event.y, this.scrollbarGrab);
-        return { handled: true, render: true };
-      }
+    if (this.embedded.hasPointerCapture && (event.type === "drag" || event.type === "release")) {
+      this.forwardMouse(event);
+      return { handled: true };
     }
     if (event.y < 0 || event.y >= this.renderedHeight) return;
     const target = this.targets.find(target => event.y === target.y && event.x >= target.x && event.x < target.x + target.width);
     if (target && event.button === "left") {
-      if (event.type === "click") {
-        target.activate();
-        return { handled: true, requestRender: true };
-      }
+      if (event.type === "click") { target.activate(); return { handled: true, requestRender: true }; }
       if (event.type === "press" || event.type === "release") return { handled: true };
     }
-    const view = this.view;
-    const bodyY = event.y - this.bodyTop;
-    const thumb = this.scrollbar;
-    if (thumb && event.x === this.innerWidth + 2 && bodyY >= 0 && bodyY < this.pageSize &&
-        event.button === "left" && (event.type === "press" || event.type === "click")) {
-      const onThumb = bodyY >= thumb.top && bodyY < thumb.top + thumb.height;
-      const grab = onThumb ? bodyY - thumb.top : Math.floor(thumb.height / 2);
-      if (event.type === "press") this.scrollbarGrab = grab;
-      if (!onThumb) this.scrollScrollbarTo(event.y, grab);
-      return { handled: true, capture: event.type === "press" };
+    const inBody = event.y >= this.bodyTop && event.y < this.bodyTop + this.pageSize
+      && event.x >= this.bodyPadding && event.x < this.bodyPadding + this.innerWidth;
+    if (inBody || event.type === "wheel") {
+      this.forwardMouse(event);
+      return { handled: true, capture: event.type === "press", requestRender: true };
     }
-    if (bodyY >= 0 && bodyY < this.pageSize && event.x >= this.bodyPadding && event.x < this.bodyPadding + this.innerWidth) {
-      const y = bodyY + view.renderedOffset;
-      const item = view.layout.find(item => y >= item.y && y < item.y + item.height);
-      const previous = view.offset;
-      if (event.type === "click") view.offset = view.renderedOffset;
-      const result = item?.component.handleMouse?.({ ...event, x: event.x - this.bodyPadding,
-        y: y - item.y, width: this.innerWidth, height: item.height });
-      if (result?.handled || result?.render) {
-        if (event.type === "press" && result.render) view.offset = view.renderedOffset;
-        this.invalidate(); this.tui.requestRender();
-        return result.handled ? { handled: true, requestRender: true } : { render: true };
-      }
-      view.offset = previous;
-    }
-    if (event.type === "wheel") { this.scroll(event.wheelDelta ?? 0); return { handled: true, requestRender: true }; }
+  }
+
+  private forwardMouse(event: TuiMouseEvent): void {
+    this.embedded.handleMouse({ ...event, x: event.x - this.bodyPadding, y: event.y - this.bodyTop,
+      width: this.innerWidth, height: this.pageSize });
+    this.options.tui.requestRender();
   }
 
   private renderTabs(width: number, x: number, y: number): string {
@@ -337,7 +297,7 @@ export class SubagentViewer implements Component {
     // At very narrow widths prioritize the selected label; keyboard switching remains available.
     if (width < 11) {
       const label = truncateToWidth(labels[selected], width, "…");
-      return this.theme.fg("accent", label);
+      return this.options.theme.fg("accent", label);
     }
     this.tabStart = Math.min(this.tabStart, agents.length - 1);
     let page = layout(this.tabStart);
@@ -352,22 +312,22 @@ export class SubagentViewer implements Component {
       text += label; column += visibleWidth(label);
     };
     if (this.tabStart > 0) {
-      append(this.theme.fg("muted", "[<]"), () => {
+      append(this.options.theme.fg("muted", "[<]"), () => {
         // Variable-width labels make the preceding page a different size.
         let previous = this.tabStart - 1;
         while (previous > 0 && layout(previous - 1).end >= this.tabStart) previous--;
         this.tabStart = previous;
-        this.tui.requestRender();
+        this.options.tui.requestRender();
       });
       append(" ");
     }
     for (const [index, entry] of page.entries.entries()) {
       if (index) append("  ");
-      append(this.theme.fg(entry.id === this.agentId ? "accent" : "muted", entry.label), () => this.selectAgent(entry.id));
+      append(this.options.theme.fg(entry.id === this.agentId ? "accent" : "muted", entry.label), () => this.selectAgent(entry.id));
     }
     if (page.end < agents.length) {
       append(" ");
-      append(this.theme.fg("muted", "[>]"), () => { this.tabStart = page.end; this.tui.requestRender(); });
+      append(this.options.theme.fg("muted", "[>]"), () => { this.tabStart = page.end; this.options.tui.requestRender(); });
     }
     return text;
   }
@@ -378,61 +338,38 @@ export class SubagentViewer implements Component {
     const padding = area > 0 && hasRail ? 1 : 0;
     const tabsWidth = Math.max(0, area - padding - 1);
     const tabs = this.renderTabs(tabsWidth, hasRail ? 1 + padding : 0, 0);
-    const close = width >= 3 ? this.theme.fg("accent", "[X]") : truncateToWidth("[X]", width, "");
+    const close = width >= 3 ? this.options.theme.fg("accent", "[X]") : truncateToWidth("[X]", width, "");
     if (width >= 3) this.targets.push({ x: width - (hasRail ? 4 : 3), y: 0, width: 3, activate: () => this.close() });
     const title = `${" ".repeat(padding)}${tabs}${" ".repeat(Math.max(0, area - padding - visibleWidth(tabs)))}${close}`;
     return hasRail ? `${this.rail}${title} ` : title;
   }
 
   render(width: number): string[] {
-    this.targets = []; this.renderedHeight = 0; this.scrollbar = undefined;
-    if (width <= 0 || !this.syncAgents()) { this.scrollbarGrab = undefined; return []; }
-    const view = this.view;
-    const agent = view.snapshot?.agent, model = agent?.resolved_model;
-    // Reserve the rail, left padding, scrollbar and right padding when they fit.
+    this.targets = []; this.renderedHeight = 0;
+    if (width <= 0 || !this.syncAgents()) {
+      this.embedded.clearInteraction(); return [];
+    }
+    const view = this.view, agent = view.snapshot?.agent, model = agent?.resolved_model;
     const inner = width < 5 ? width : width - 4;
     const modelLabel = model ? `${model.provider}/${model.id}${agent?.thinking ? ` ${agent.thinking}` : ""}` : "";
     const metadata = clean([modelLabel, agent?.access, agent?.cwd].filter(Boolean).join(" · "));
-    const content = wrapTextWithAnsi(metadata, inner).map(line => this.theme.fg("muted", line));
+    const status = wrapTextWithAnsi(metadata, inner).map(line => this.options.theme.fg("muted", line));
     const notice = view.error || clean(view.snapshot?.run?.error ?? "") || (view.truncated ? "Some history omitted" : "");
-    if (notice) content.push(this.theme.fg(view.error || view.snapshot?.run?.error ? "error" : "dim", notice));
-    const bodyStart = content.length;
-    this.innerWidth = inner; this.bodyTop = 1 + bodyStart; this.bodyPadding = width < 5 ? 0 : 2;
-    const height = Math.max(1, Math.floor(this.tui.terminal.rows * 0.7));
-    // One header and one footer, with no enclosing top/bottom frame rows.
+    if (notice) status.push(this.options.theme.fg(view.error || view.snapshot?.run?.error ? "error" : "dim", notice));
+    const height = Math.max(1, Math.floor(this.options.tui.terminal.rows * 0.7));
+    this.bodyTop = 1 + status.length; this.bodyPadding = width < 5 ? 0 : 2;
+    this.innerWidth = width < 5 ? width : width - 3;
     this.pageSize = Math.max(1, height - this.bodyTop - 1);
-    if (inner !== view.cachedWidth) {
-      view.lines = []; view.layout = [];
-      for (const entry of view.content.entries) {
-        const lines = entry.component.render(inner);
-        view.layout.push({ component: entry.component, y: view.lines.length, height: lines.length });
-        view.lines.push(...lines, "");
-      }
-      if (!view.lines.length) view.lines.push("Waiting for completed messages…");
-      view.cachedWidth = inner;
-    }
-    view.maxOffset = Math.max(0, view.lines.length - this.pageSize);
-    const offset = Math.min(view.offset, view.maxOffset);
-    view.renderedOffset = offset;
-    if (width >= 5 && view.maxOffset > 0) {
-      const height = Math.max(Math.min(2, this.pageSize), Math.round(this.pageSize ** 2 / view.lines.length));
-      this.scrollbar = { height, top: Math.round((this.pageSize - height) * offset / view.maxOffset) };
-    } else this.scrollbarGrab = undefined;
-    const toolsKey = this.keys.getKeys("app.tools.expand").join("/");
-    const thoughtsKey = this.keys.getKeys("app.thinking.toggle").join("/");
-    const body = view.lines.slice(offset, offset + this.pageSize);
-    while (body.length < this.pageSize) body.push("");
-    content.push(...body,
-      this.theme.fg("muted", `Click tools/thoughts · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`),
-    );
-    const rows = [this.renderHeader(width), ...content.map((line, index) => {
+    this.embedded.setRoot(view.viewport, this.options.presentation);
+    const body = this.embedded.render(this.innerWidth, this.pageSize);
+    const toolsKey = this.options.keys.getKeys("app.tools.expand").join("/");
+    const thoughtsKey = this.options.keys.getKeys("app.thinking.toggle").join("/");
+    const footer = this.options.theme.fg("muted",
+      `Click tools/thoughts · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`);
+    const rows = [this.renderHeader(width), ...[...status, ...body, footer].map(line => {
       const text = line.replace(/\n/g, " ");
       if (width < 5) return truncateToWidth(text, width, "…");
-      const clipped = truncateToWidth(text, inner, "…");
-      const thumb = this.scrollbar, bodyY = index - bodyStart;
-      const indicator = thumb && bodyY >= thumb.top && bodyY < thumb.top + thumb.height
-        ? this.theme.fg("accent", "┃") : " ";
-      return `${this.rail} ${clipped}${" ".repeat(Math.max(0, inner - visibleWidth(clipped)))}${indicator} `;
+      return `${this.rail} ${truncateToWidth(text, this.innerWidth, "…")} `;
     })].slice(0, height);
     this.renderedHeight = rows.length;
     this.targets = this.targets.filter(target => target.y < rows.length);
@@ -441,9 +378,7 @@ export class SubagentViewer implements Component {
     ));
   }
 
-  invalidate() {
-    for (const view of this.views.values()) view.cachedWidth = -1;
-  }
+  invalidate() { this.embedded.tui.invalidate(); }
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
@@ -451,8 +386,8 @@ export class SubagentViewer implements Component {
     this.readAbort.abort();
     for (const view of this.views.values()) disposeView(view);
     this.views.clear(); this.agents.clear(); this.targets = []; this.renderedHeight = 0;
-    this.scrollbar = undefined; this.scrollbarGrab = undefined;
-    this.abort.signal.removeEventListener("abort", this.onAbort);
-    this.abort.abort();
+    this.embedded.dispose();
+    this.options.abort.signal.removeEventListener("abort", this.onAbort);
+    this.options.abort.abort();
   }
 }

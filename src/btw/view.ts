@@ -7,9 +7,10 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EmbeddedTranscript } from "../appearance/transcript/embedded.ts";
 import type { TranscriptSurface } from "../appearance/transcript/surface.ts";
-import { BtwTranscript } from "./transcript.ts";
-import { embeddedHost, type EmbeddedTui } from "./host.ts";
-import { EmbeddedTerminal } from "./terminal.ts";
+import { ConversationDocument } from "../appearance/transcript/document.ts";
+import { TOOL_NAMES } from "../presentation/tool-names.ts";
+import { embeddedHost } from "../appearance/transcript/embedded-host.ts";
+import { EmbeddedView } from "../appearance/transcript/embedded-view.ts";
 import type { BtwAccess } from "./access.ts";
 
 export interface BtwSessionView {
@@ -39,27 +40,19 @@ export class BtwOverlay implements Component, Focusable {
   private readonly document = new Container();
   private readonly header = new Text("", 0, 0);
   private readonly footer = new Text("", 0, 0);
-  private readonly terminal: EmbeddedTerminal;
-  private readonly tui: EmbeddedTui;
+  private readonly embedded: EmbeddedView;
   private readonly editor: Core.CustomEditor;
   private readonly root: VStack;
   private readonly releaseEditor?: () => void;
   private sessionView?: BtwSessionView;
-  private transcript?: BtwTranscript;
-  private releasePresentation?: () => void;
+  private transcript?: ConversationDocument;
   private active = false;
   private modeX = 0;
   private closeX = 0;
 
   constructor(private readonly options: BtwViewOptions) {
     const { tui: parent, theme, keybindings, settings } = options;
-    this.terminal = new EmbeddedTerminal(parent.terminal.kittyProtocolActive ?? false, () => parent.requestRender());
-    this.tui = this.host.createTui({
-      tuiMode: "fullscreen", embedded: true, terminal: this.terminal, logDirectory: Core.getAgentDir(),
-      showHardwareCursor: settings.getShowHardwareCursor(),
-      fullscreenCopyOnSelect: settings.getFullscreenCopyOnSelect(),
-      fullscreenWheelScrollLines: settings.getFullscreenWheelScrollLines(),
-    });
+    this.embedded = new EmbeddedView(parent, settings);
     const styled = options.presentation?.createEditor?.(this.tui, this.host.getEditorTheme(), keybindings);
     if (styled) {
       if (!(styled.component instanceof Core.CustomEditor)) {
@@ -105,10 +98,11 @@ export class BtwOverlay implements Component, Focusable {
       { component: header, basis: 1, shrink: 0 },
       { component: viewport.root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
     ]);
-    this.tui.setLayoutRoot(this.root);
+    this.embedded.setRoot(this.root);
     this.tui.setFocus(this.editor);
-    this.tui.start();
   }
+
+  private get tui() { return this.embedded.tui; }
 
   get focused(): boolean { return this.active; }
   set focused(value: boolean) {
@@ -120,15 +114,22 @@ export class BtwOverlay implements Component, Focusable {
   setSession(view: BtwSessionView | undefined): void {
     if (this.sessionView === view) return;
     this.transcript?.dispose();
-    this.releasePresentation?.();
     this.transcript = undefined;
-    this.releasePresentation = undefined;
     this.sessionView = view;
-    this.document.clear();
-    this.tui.resetTextSelection();
+    this.embedded.clearInteraction();
+    this.embedded.setRoot(this.root, view?.presentation);
     if (view) {
-      this.transcript = new BtwTranscript(this.document, view.session, view.surface, view.presentation, this.tui, view.messages, view.partial);
-      this.releasePresentation = view.presentation?.attachTui(this.tui, this.root);
+      this.transcript = new ConversationDocument(this.document, {
+        ui: this.tui, settings: view.session.settingsManager, state: view.surface.transcript,
+        cwd: view.session.sessionManager.getCwd(), timestamps: view.presentation !== undefined,
+        resolveTool: name => {
+          const native = this.host.withBuiltInRenderers(name, view.session.getToolDefinition(name));
+          const known = TOOL_NAMES.find(tool => tool === name), renderer = known && view.presentation?.renderers[known];
+          return renderer ? { ...native, ...renderer } : native;
+        },
+      });
+      for (const message of view.messages) this.transcript.append(message);
+      if (view.partial) this.transcript.handleEvent({ type: "message_start", message: view.partial });
     }
     this.tui.requestRender();
   }
@@ -141,11 +142,11 @@ export class BtwOverlay implements Component, Focusable {
 
   handleInput(data: string): void {
     if (matchesKey(data, "alt+p")) this.options.onToggleAccess();
-    else this.terminal.input(data);
+    else this.embedded.input(data);
   }
 
   handleMouse(event: TuiMouseEvent) {
-    this.tui.handleEmbeddedMouse(event);
+    this.embedded.handleMouse(event);
     return { handled: true, capture: event.type === "press" };
   }
 
@@ -165,17 +166,13 @@ export class BtwOverlay implements Component, Focusable {
     const hints = ["Alt+P read/write", Core.keyHint("app.tools.expand", "tools"),
       Core.keyHint("app.thinking.toggle", "thinking"), "Esc close"].join(" · ");
     this.footer.setText(this.options.theme.fg("dim", `${this.options.getStatus()} · ${hints}`));
-    this.terminal.resize(width, height);
-    return this.terminal.frame(() => this.tui.renderEmbeddedFrame());
+    return this.embedded.render(width, height);
   }
 
   dispose(): void {
-    this.tui.stop();
-    this.releasePresentation?.();
-    this.releasePresentation = undefined;
+    this.embedded.dispose();
     this.releaseEditor?.();
     this.transcript?.dispose();
     this.transcript = undefined;
-    this.document.clear();
   }
 }

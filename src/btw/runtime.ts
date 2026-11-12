@@ -14,7 +14,7 @@ import { createTranscriptSurface } from "../appearance/transcript/surface.ts";
 import { requestEmbeddedTranscript } from "../appearance/transcript/embedded.ts";
 import { btwTools, loadBtwAccessGuard, type BtwAccess } from "./access.ts";
 import { BtwOverlay, type BtwSessionView } from "./view.ts";
-import { embeddedHost } from "./host.ts";
+import { embeddedHost } from "../appearance/transcript/embedded-host.ts";
 
 const BTW_ENTRY_TYPE = "btw-thread-entry";
 const BTW_RESET_TYPE = "btw-thread-reset";

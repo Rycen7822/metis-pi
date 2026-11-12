@@ -4,7 +4,7 @@ import { makeCodemodeRenderers } from "./transcript/codemode-view.ts";
 import { highlightBashScript } from "../presentation/bash-lexer.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript/adapter.ts";
 import { createTranscriptSurface } from "./transcript/surface.ts";
-import { provideEmbeddedTranscripts } from "./transcript/embedded.ts";
+import { provideEmbeddedTranscripts, type EmbeddedSource } from "./transcript/embedded.ts";
 import { makeRenderers, type RendererSession } from "../presentation/renderers.ts";
 import type { TextFactory, Highlight, DiffFactory, DiffLayoutOps, Component, ShellFactories, WritePreviewInput } from "../presentation/contracts.ts";
 import { detectColorLevel, type ColorLevel } from "../presentation/palette.ts";
@@ -242,21 +242,24 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     enabled = (hostData.isTui || hostData.hasUI) && config.enabled !== false;
     stopEmbeddedTranscripts?.();
     const events = (bindings.api as Partial<Pick<ExtensionAPI, "events">> | undefined)?.events;
-    stopEmbeddedTranscripts = events && provideEmbeddedTranscripts(events, async sourceInfo => {
-      const generation = chrome.state.generation;
-      const createEditor = await chrome.embeddedEditor();
-      if (!enabled || generation !== chrome.state.generation) return;
-      const embedded = createTranscriptSurface(session.colorLevel, sourceInfo);
-      return {
-        surface: embedded, renderers: renderersFor(embedded.session), createEditor,
-        attachTui: (tui, root) => {
-          const releaseLayout = fullscreenLayout?.attachTui(tui, root);
-          const releaseCopy = selectionCopy?.attachTui(tui);
-          return () => { releaseCopy?.(); releaseLayout?.(); };
-        },
-        copyKey: selectionCopy?.editorHook()?.tryConsume,
-      };
-    });
+    const presentation: EmbeddedSource = {
+      attachTui(tui, root) {
+        const releaseLayout = fullscreenLayout?.attachTui(tui, root);
+        const releaseCopy = selectionCopy?.attachTui(tui);
+        return () => { releaseCopy?.(); releaseLayout?.(); };
+      },
+      async createTranscript(sourceInfo) {
+        const generation = chrome.state.generation;
+        const createEditor = await chrome.embeddedEditor();
+        if (!enabled || generation !== chrome.state.generation) return;
+        const embedded = createTranscriptSurface(session.colorLevel, sourceInfo);
+        return {
+          attachTui: presentation.attachTui, surface: embedded, renderers: renderersFor(embedded.session), createEditor,
+          copyKey: selectionCopy?.editorHook()?.tryConsume,
+        };
+      },
+    };
+    stopEmbeddedTranscripts = events && provideEmbeddedTranscripts(events, presentation);
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && enabled;

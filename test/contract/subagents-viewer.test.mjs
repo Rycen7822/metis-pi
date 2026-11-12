@@ -1,16 +1,43 @@
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
-import { initTheme } from "@earendil-works/pi-coding-agent";
-import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
+import { initTheme, AssistantMessageComponent, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth, Text, Container, Spacer } from "@earendil-works/pi-tui";
 import { SubagentViewer } from "../../src/subagents/ui/viewer.ts";
 import { execToolResult } from "../../src/execution/exec/results.ts";
 import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
 import { sgr, theme } from "../helpers.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
+import { installTranscriptDecorations } from "../../src/appearance/transcript/adapter.ts";
+import { TranscriptState } from "../../src/appearance/transcript/state.ts";
+import {
+  CodexSeparatorComponent, ThinkingRailComponent, ThinkingPeekComponent, ThinkingClickableComponent,
+} from "../../src/presentation/components/transcript-components.ts";
 
 initTheme("dark", false);
+
+// Exercise the same native assistant layer installed by appearance, not a second popup-only implementation.
+let decorations;
+before(() => {
+  const colorLevel = { kind: "none" };
+  decorations = installTranscriptDecorations({
+    state: new TranscriptState(), assistantPrototype: AssistantMessageComponent.prototype,
+    enabled: () => true, thinkingPolicy: () => DEFAULT_CONFIG.thinking,
+    makeSeparator: () => new CodexSeparatorComponent(colorLevel), makeSpacer: () => new Spacer(1),
+    makeRail: child => new ThinkingRailComponent(child, colorLevel),
+    makePeek: input => new ThinkingPeekComponent(input.inner, input.control, input.windowLines, s => s, input.onScroll),
+    makeClickable: input => {
+      const box = new Container();
+      if (input.before) box.addChild(input.before);
+      box.addChild(input.inner);
+      if (input.after) box.addChild(input.after);
+      return new ThinkingClickableComponent(box, input.control, input.fallback, input.apply);
+    },
+    makeThoughtSummary: input => new Text("Thought", input.paddingX, 0), isCollapsedLabel: node => node instanceof Text,
+  });
+});
+after(() => decorations?.dispose());
 
 const defaultAgents = ["reader", "writer", "tester"].map(name => ({ id: name, name, state: "running" }));
 const textMessage = text => ({ role: "assistant", content: [{ type: "text", text }] });
@@ -39,35 +66,39 @@ function popup(t, options = {}) {
       agent: { name, state: "running" },
     });
   });
-  const viewer = new SubagentViewer(
-    options.agentId ?? "reader", options.theme ?? theme, tui,
-    new KeybindingsManager({
+  const viewer = new SubagentViewer({
+    agentId: options.agentId ?? "reader", theme: options.theme ?? theme, tui,
+    keys: new KeybindingsManager({
       ...TUI_KEYBINDINGS,
       "app.tools.expand": { defaultKeys: "ctrl+o" },
       "app.thinking.toggle": { defaultKeys: "ctrl+t" },
     }),
-    value => closes.push(value), new AbortController(),
-    (agentId, after, signal) => {
+    done: value => closes.push(value), abort: new AbortController(),
+    inspect: (agentId, after, signal) => {
       calls.push({ agentId, after, signal });
       return inspect(agentId, after, signal);
     },
-    options.appearance, agents, options.live,
-  );
+    appearance: options.appearance ?? DEFAULT_CONFIG, agentSource: agents, live: options.live ?? true,
+    settings: SettingsManager.inMemory({ fullscreenCopyOnSelect: false }),
+  });
   t.after(() => viewer.dispose());
   const rows = (width = 90) => viewer.render(width).map(stripVTControlCharacters);
-  const mouse = (width, x, y, options = {}) => viewer.handleMouse({
-    type: "click", button: "left", x, y, screenX: x, screenY: y,
-    width, height: Math.floor(tui.terminal.rows * 0.7), ...options,
-  });
+  const mouse = (width, x, y, options = {}) => {
+    const event = { type: "click", button: "left", x, y, screenX: x, screenY: y,
+      width, height: Math.floor(tui.terminal.rows * 0.7), ...options };
+    if (event.type === "click") {
+      viewer.handleMouse({ ...event, type: "press" });
+      viewer.handleMouse({ ...event, type: "release" });
+    }
+    return viewer.handleMouse(event);
+  };
   const clickText = (label, width = 90, options = {}) => {
     const { header = false, ...event } = options;
     const rendered = rows(width);
     const y = header ? 0 : rendered.findIndex(row => row.includes(label));
     const index = rendered[y]?.indexOf(label) ?? -1;
     assert.ok(index >= 0, `visible mouse target ${label}`);
-    return mouse(width, visibleWidth(rendered[y].slice(0, index)), y, {
-      ...(event.button === "right" && process.platform !== "win32" ? { type: "press" } : {}), ...event,
-    });
+    return mouse(width, visibleWidth(rendered[y].slice(0, index)), y, event);
   };
   return { viewer, calls, closes, rows, mouse, clickText };
 }
@@ -159,18 +190,15 @@ test("conversation popup keeps native click folds through refresh and scrolling"
   let sent = false,
     refreshes = 0;
   const tui = { terminal: { rows: 80 }, requestRender() {} };
-  const viewer = new SubagentViewer(
-    "agent",
-    { fg: (_color, text) => text, bold: (text) => text },
-    tui,
-    new KeybindingsManager({
+  const viewer = new SubagentViewer({
+    agentId: "agent", theme: { fg: (_color, text) => text, bold: (text) => text }, tui,
+    keys: new KeybindingsManager({
       ...TUI_KEYBINDINGS,
       "app.tools.expand": { defaultKeys: "ctrl+o" },
       "app.thinking.toggle": { defaultKeys: "ctrl+t" },
     }),
-    () => {},
-    new AbortController(),
-    async () => {
+    done: () => {}, abort: new AbortController(),
+    inspect: async () => {
       refreshes++;
       const page = {
         agent: { name: "reader", state: "running" },
@@ -183,16 +211,18 @@ test("conversation popup keeps native click folds through refresh and scrolling"
       sent = true;
       return page;
     },
-    undefined,
-    () => [{ id: "agent", name: "reader", state: "running" }],
-  );
+    appearance: DEFAULT_CONFIG, live: true, settings: SettingsManager.inMemory({ fullscreenCopyOnSelect: false }),
+    agentSource: () => [{ id: "agent", name: "reader", state: "running" }],
+  });
   t.after(() => viewer.dispose());
   await delay(0);
   const rows = () => viewer.render(90).map(stripVTControlCharacters);
   const click = (label, button = "left") => {
     const y = rows().findIndex(row => row.includes(label)); assert.ok(y >= 0, label);
-    const type = button === "right" && process.platform !== "win32" ? "press" : "click";
-    return viewer.handleMouse({ type, button, x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 });
+    const event = { button, x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 };
+    viewer.handleMouse({ ...event, type: "press" });
+    viewer.handleMouse({ ...event, type: "release" });
+    return viewer.handleMouse({ ...event, type: "click" });
   };
   assert.ok(!rows().some(row => row.includes("OUTPUT_7")));
   assert.equal(rows().filter(row => row.includes("Explored")).length, 1, "read and owned neural search share one exploration header");
@@ -281,6 +311,20 @@ test("conversation preserves mutation evidence, follow-up commands and native ex
   });
 });
 
+test("archived custom evidence and result-only tools remain available through the shared native document", async t => {
+  const { rows, viewer } = popup(t, { messages: { reader: [
+    { role: "toolResult", toolCallId: "pruned-call", toolName: "read",
+      content: [{ type: "text", text: "RESULT_WITHOUT_CALL_ROW" }], isError: false },
+    { role: "custom", customType: "context-prune-summary", content: "ARCHIVED_CUSTOM_EVIDENCE", timestamp: 1, display: true },
+  ] } });
+  await nextTurn();
+  rows();
+  viewer.handleInput("\x0f");
+  const body = rows().join("\n");
+  assert.match(body, /RESULT_WITHOUT_CALL_ROW/);
+  assert.match(body, /ARCHIVED_CUSTOM_EVIDENCE/);
+});
+
 test("conversation respects registration and appearance opt-outs", async t => {
   const { rows } = popup(t, { inspect: async () => inspection("reader", [
     { role: "assistant", content: [{ type: "toolCall", id: "foreign", name: "write", arguments: { path: "note.md", content: "text" } }] },
@@ -322,13 +366,14 @@ test("conversation scrollbar tracks keys, wheel, pointer capture and resize with
     reader: [textMessage(Array.from({ length: 100 }, (_, i) => `ROW_${i}`).join("\n\n"))],
   } });
   await nextTurn();
-  const thumb = () => rows().flatMap((row, index) => row.trimEnd().endsWith("┃") ? [index] : []);
+  const thumb = () => rows().flatMap((row, index) => /([┃█])$/.test(row.trimEnd()) ? [index] : []);
   const initial = thumb();
   assert.ok(initial.length > 0, "overflow has a visible right-edge scrollbar");
   assert.equal(initial.at(-1), rows().length - 2, "the initial follow-tail thumb reaches the body bottom");
   viewer.handleInput("\u001b[H");
   const top = thumb()[0];
-  assert.equal(top, rows().findIndex(row => row.includes("assistant:")), "Home puts the thumb at the first body row");
+  assert.equal(top, 2, "Home puts the thumb below the fixed header and status");
+  assert.ok(rows().some(row => row.includes("ROW_0")), "the native leading spacer does not hide the first message");
   mouse(90, 3, top, { type: "wheel", button: "none", wheelDelta: 40 });
   assert.ok(thumb()[0] > top && thumb().at(-1) < initial.at(-1), "wheel updates the reading position");
   mouse(90, 88, rows().length - 2);
@@ -730,9 +775,9 @@ test("real Pi AltScreen overlay routes primary press/release to tab switching an
     assert.ok(row >= 0, `overlay header contains ${label}`);
     return { x: visibleWidth(lines[row].slice(0, lines[row].indexOf(label))) + 1, y: row + 1 };
   };
-  const lines = screenLines(tui), thumbRow = lines.findIndex(line => line.includes("┃"));
+  const lines = screenLines(tui), thumbRow = lines.findIndex(line => /[┃█]/.test(line));
   assert.ok(thumbRow >= 0, "the actual overlay paints its scrollbar");
-  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].indexOf("┃"))) + 1;
+  const barX = visibleWidth(lines[thumbRow].slice(0, lines[thumbRow].search(/[┃█]/))) + 1;
   const bodyY = headerTarget("[reader]").y + 4;
   tui.handleTerminalInput(sgr(0, barX, bodyY));
   tui.doRender();

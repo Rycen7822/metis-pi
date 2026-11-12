@@ -458,6 +458,16 @@ export class TranscriptState {
     }
   }
 
+  /** A bounded document can release a detached assistant plan without resetting its other rows. */
+  forgetMessage(source: object): void {
+    const key = this.identityByObject.get(source);
+    if (!key) return;
+    this.identityByObject.delete(source);
+    this.messagePlans.delete(key);
+    if (this.openMessageKey === key) this.openMessageKey = undefined;
+    for (const [id, observed] of this.observedResponses) if (observed === key) this.observedResponses.delete(id);
+  }
+
   /** Display plan for an exploration member row (or undefined if ungrouped). */
   explorationPlan(toolCallId: string): ExplorationPlan | undefined {
     const groupId = this.memberOf.get(toolCallId);

@@ -2,7 +2,7 @@ import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-
 import type { SessionEntryReference } from "./session-history.ts";
 
 export const METIS_EVENTS = {
-  btwTranscript: "metis-pi:btw-transcript",
+  embeddedTranscript: "metis-pi:embedded-transcript",
   executionStatus: "metis:execution-status",
   goalSnapshot: "metis:goal-snapshot",
   goalOpen: "metis:goal-open",

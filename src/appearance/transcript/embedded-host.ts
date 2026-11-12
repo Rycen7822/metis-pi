@@ -26,7 +26,7 @@ export function embeddedHost() {
   if (typeof createChatViewport !== "function" || typeof withBuiltInRenderers !== "function" || typeof getEditorTheme !== "function"
     || typeof createInteractiveTui !== "function"
     || ["renderEmbeddedFrame", "handleEmbeddedMouse"].some(name => typeof Reflect.get(Tui.TuiAltScreen.prototype, name) !== "function")) {
-    throw new Error("BTW requires the current Metis SDK patches for Pi 1.5.2. Finish updating Metis and fully restart Pi.");
+    throw new Error("Embedded views require the current Metis SDK patches for Pi 1.5.2. Finish updating Metis and fully restart Pi.");
   }
   return {
     createChatViewport, withBuiltInRenderers, getEditorTheme,

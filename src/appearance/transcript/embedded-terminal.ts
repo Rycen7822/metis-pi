@@ -8,7 +8,13 @@ export class EmbeddedTerminal implements Terminal {
   private onResize?: () => void;
   private painting = false;
 
-  constructor(readonly kittyProtocolActive: boolean, private readonly repaint: () => void) {}
+  readonly kittyProtocolActive: boolean;
+  private readonly repaint: () => void;
+
+  constructor(kittyProtocolActive: boolean, repaint: () => void) {
+    this.kittyProtocolActive = kittyProtocolActive;
+    this.repaint = repaint;
+  }
 
   start(onInput: (data: string) => void, onResize: () => void): void {
     this.onInput = onInput;

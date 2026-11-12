@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   hasTrustRequiringProjectResources,
   ProjectTrustStore,
+  SettingsManager,
   type AgentBeforeSettleEvent,
   type TurnEndEvent,
   type ExtensionAPI,
@@ -17,6 +18,7 @@ import type { RuntimePackage } from "./runtime-package.ts";
 import { SubagentViewer, type AgentInspection } from "../ui/viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
 import type { AppearanceConfig } from "../../appearance/config.ts";
+import { requestEmbeddedPresentation } from "../../appearance/transcript/embedded.ts";
 import { installSamplingMailbox } from "./sampling.ts";
 import { readHistoryEntries } from "../../session-history.ts";
 
@@ -198,25 +200,17 @@ export class SubagentSession {
     this.viewerAbort = abort;
     let viewer: SubagentViewer | undefined;
     try {
+      const presentation = requestEmbeddedPresentation(this.pi.events);
+      if (!this.valid() || abort.signal.aborted) return;
       await this.ctx.ui.custom<undefined>(
         (tui, theme, keys, done) =>
-          (viewer = new SubagentViewer(
-            agentId,
-            theme,
-            tui,
-            keys,
-            done,
-            abort,
-            async (id, after, signal) =>
-              (await this.client.call(
-                "pi_view",
-                { agent_id: id, after },
-                signal,
-              )) as unknown as AgentInspection,
-            this.readAppearance(),
-            () => saved ? [saved] : this.agents,
-            !saved,
-          )),
+          (viewer = new SubagentViewer({
+            agentId, theme, tui, keys, done, abort, presentation,
+            inspect: async (id, after, signal) =>
+              (await this.client.call("pi_view", { agent_id: id, after }, signal)) as unknown as AgentInspection,
+            appearance: this.readAppearance(), agentSource: () => saved ? [saved] : this.agents, live: !saved,
+            settings: SettingsManager.inMemory(this.pi.getSettings()),
+          })),
         { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } },
       );
     } catch (error) {
