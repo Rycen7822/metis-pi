@@ -143,6 +143,7 @@ async function fixture(
   };
   const pi = {
     events,
+    getSettings: () => JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")),
     getAllTools: () => [...tools.values()],
     on(name, fn) {
       hooks.set(name, [...(hooks.get(name) ?? []), fn]);
@@ -1101,6 +1102,7 @@ test("a local rewrite holds through two steps and only releases after real reuse
 
 test("capacity waiting imports temporary output archives without pruning their visible results", async t => {
   const f = await fixture(t, { occ: true, capacity: true });
+  f.ctx.getContextUsage = () => ({ tokens: 100001, contextWindow: 100000 });
   const temporary = join(f.dir, "temporary-native-output.log");
   writeFileSync(temporary, "ARCHIVED RAW OUTPUT");
   const call = f.add("VISIBLE RESULT TAIL", "unrecognized-command", "capacity-archive");
@@ -1109,10 +1111,18 @@ test("capacity waiting imports temporary output archives without pruning their v
   rmSync(temporary);
   const recovered = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [call.id] }, undefined, undefined, f.ctx);
   assert.equal(recovered.details.results[0].text, "ARCHIVED RAW OUTPUT");
+  await f.finish(false);
+  assert.equal(f.sm.getBranch().findLast(e => e.customType === "metis-occ-state").data.capacityWaiting, true);
   const messages = projectBranchMessages(f.sm.getBranch());
   const projected = (await f.emit("context", { messages }))?.messages ?? messages;
   assert.match(JSON.stringify(projected), /VISIBLE RESULT TAIL/);
-  await f.finish();
+  let reads = 0;
+  for (const name of ["buildSessionProjection", "buildSessionProjectionAsync"]) {
+    const native = f.sm[name].bind(f.sm);
+    t.mock.method(f.sm, name, (...args) => { reads++; return native(...args); });
+  }
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.equal(reads, 0, "no published shared view and no admitted new work require no maintenance source read");
   assert.equal(f.calls.length, 0);
 });
 
@@ -1654,6 +1664,36 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   assert.match(body, /member-1/);
   await f.emit("session_start");
   assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
+});
+
+test("capacity waiting restores published shared views without admitting new chains", async t => {
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", occ: true, capacity: true,
+    chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  addClosedChains(f);
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const blocks = () => f.sm.getBranchMetadata().filter(e => e.customType === "context-prune-chain");
+  assert.equal(blocks().length, 1);
+  f.ctx.getContextUsage = () => ({ tokens: 100001, contextWindow: 100000 });
+  await f.finish(false);
+  const waiting = () => f.sm.getBranch().findLast(e => e.customType === "metis-occ-state").data.capacityWaiting;
+  assert.equal(waiting(), true, "actual boundary usage must persist the capacity hold");
+  addClosedChains(f); // Fresh eligible work must remain deferred, not piggyback on local revalidation.
+  const project = () => {
+    const request = { sessionId: f.sm.getSessionId(), messages: f.sm.buildSessionProjection().messages,
+      api: f.ctx.model.api, maintenance: true };
+    f.events.emit(METIS_EVENTS.condenseProject, request);
+    return request.messages;
+  };
+  const before = project();
+  assert.equal(before.filter(m => m.metisDerived?.kind === "condense-chain").length, 1);
+  for (const boundary of ["session_start", "session_tree"]) {
+    await f.emit(boundary);
+    await f.emit("agent_settled"); await f.waitMaintenance();
+    assert.deepEqual(project(), before, "published rendering is independent of capacity admission");
+    assert.equal(waiting(), true, "restoring a published view must not erase a real capacity hold");
+    assert.equal(blocks().length, 1, "capacity still blocks new chain publication");
+  }
+  assert.equal(f.calls.length, 0, "existing shared validation does not request another model summary");
 });
 
 test("editing or omitting a summary restores its whole source group without changing the archive", async t => {

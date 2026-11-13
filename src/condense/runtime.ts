@@ -34,6 +34,7 @@ import type {
   FlushMetricsEntry,
   FlushTrigger,
   DeferredReason,
+  ChainCompressionEntry,
   SingleChainCompressionEntry,
   SharedChainCompressionEntry,
 } from "./types.ts";
@@ -174,7 +175,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   let recoveryTask: Promise<void> | undefined;
   const awaitRecovery = async () => { while (recoveryTask) await recoveryTask; };
   const tokenEstimator = new TokenEstimator();
-  const sharedApprovals = new Map<string, string>();
+  const sharedValidations = new Map<string, { shape: string; hasGain: boolean }>();
   let maintenanceAbort: AbortController | undefined;
   let maintenanceTask: Promise<void> | undefined;
   let maintenanceNext: { ctx: ExtensionContext; version: number } | undefined;
@@ -198,7 +199,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   });
   // Native/OCC preparation must wait for the current archive write before it owns I/O.
   pi.on("session_before_compact", async () => {
-    tokenEstimator.clear(); sharedApprovals.clear();
+    tokenEstimator.clear(); sharedValidations.clear();
     await stopMaintenance();
   });
   const occ = registerOcc(pi, indexer, currentConfig);
@@ -210,7 +211,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceNext = undefined;
     maintenanceAbort?.abort();
     tokenEstimator.clear();
-    sharedApprovals.clear();
+    sharedValidations.clear();
     stagedChains.clear();
     lastMaintenanceSource = undefined;
     activeFlushAbort?.abort();
@@ -1545,7 +1546,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const version = ++lifecycle;
     maintenanceAbort?.abort();
     tokenEstimator.clear();
-    sharedApprovals.clear();
+    sharedValidations.clear();
     stagedChains.clear();
     deferredFinal = undefined;
     lastMaintenanceSource = undefined;
@@ -1582,7 +1583,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const version = ++lifecycle;
     maintenanceAbort?.abort();
     tokenEstimator.clear();
-    sharedApprovals.clear();
+    sharedValidations.clear();
     stagedChains.clear();
     deferredFinal = undefined;
     lastMaintenanceSource = undefined;
@@ -1614,7 +1615,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // activating every pending supersession here costs no extra cache miss.
   pi.on("model_select", async (_event, ctx) => {
     previousFraction = null;
-    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear(); lastMaintenanceSource = undefined;
+    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); stagedChains.clear(); lastMaintenanceSource = undefined;
     supersede.floor = 0;
     void maintainChains(ctx);
   });
@@ -1905,24 +1906,30 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return matches.length === 1 ? matches[0]!.sourceEntry.id : undefined;
   }
 
-  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext, analysis: {
-    grace: ReturnType<typeof inGraceRecoveryToolCallIds>;
-    chains: ReturnType<typeof detectChains>;
-    source?: ReturnType<typeof readSourceEdits>;
-  } = {
-    grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns),
-    chains: detectChains(raw, protectionPredicate),
-  }): SingleChainCompressionEntry[] {
-    const { grace, chains } = analysis;
+  // Request-local only: index anchors before consulting old recovery records. Do
+  // not cache source validity by leaf; active members still need content checks.
+  function analyzeChains(raw: any[], source?: ReturnType<typeof readSourceEdits>) {
+    const byStart = new Map<number, ReturnType<typeof detectChains>>();
+    for (const chain of detectChains(raw, protectionPredicate)) {
+      const matches = byStart.get(chain.startUserTimestamp);
+      if (matches) matches.push(chain);
+      else byStart.set(chain.startUserTimestamp, [chain]);
+    }
+    return { byStart, grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns), source };
+  }
+
+  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext,
+    analysis: ReturnType<typeof analyzeChains>): SingleChainCompressionEntry[] {
+    const { grace, byStart } = analysis;
     const source = analysis.source ?? readSourceEdits(ctx);
     const edited = source.changedToolIds;
     const anchors = source.projection.entries;
     return chainMembers(entry).filter((view, i) => {
       const member = entry.members[i]!;
+      const chain = byStart.get(view.startUserTimestamp)?.[0];
+      if (!chain || view.droppedToolCallIds.some(id => edited.has(id)) || chainMatchesGrace(chain, grace)) return false;
       const range = resolveRange(view, raw);
-      const chain = chains.find(chain => chain.startUserTimestamp === view.startUserTimestamp);
-      if (!range || !chain || view.droppedToolCallIds.some(id => edited.has(id))
-        || chainMatchesGrace(chain, grace)) return false;
+      if (!range) return false;
       if (member.startEntryId !== anchorId(ctx, "start", member.startUserTimestamp, anchors)
         || member.finalEntryId !== anchorId(ctx, "final", member.finalAssistantTimestamp!, anchors)) return false;
       if (member.sourceFingerprint !== projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))) return false;
@@ -1993,36 +2000,36 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         .some(ref => own.has(occKey(ref.toolCallId, ref.resultTimestamp))));
   }
 
+  function singleCandidates(entries: ChainCompressionEntry[], analysis: ReturnType<typeof analyzeChains>,
+    ctx?: ExtensionContext): SingleChainCompressionEntry[] {
+    return entries.flatMap(entry => {
+      if (isSharedChain(entry)) return [];
+      const chain = analysis.byStart.get(entry.startUserTimestamp)
+        ?.find(chain => chain.finalAssistantTimestamp === entry.finalAssistantTimestamp);
+      if (!chain || chainMatchesGrace(chain, analysis.grace) || !singleSummaryCurrent(entry, ctx)) return [];
+      return [{ ...entry, protectedToolCallIds: chain.protectedToolCallIds }];
+    });
+  }
+
   function currentChainViews(messages: any[], ctx?: ExtensionContext,
     source?: ReturnType<typeof readSourceEdits>): SingleChainCompressionEntry[] {
     const entries = indexer.getChainEntries();
     if (entries.length === 0) return [];
     source ??= ctx && readSourceEdits(ctx);
     const raw = source?.projection.messages ?? messages;
-    const chains = detectChains(raw, protectionPredicate);
-    const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
-    const singles: SingleChainCompressionEntry[] = entries
-      .filter((entry) => !isSharedChain(entry))
-      .flatMap(chainMembers)
-      .flatMap((entry) => {
-        const chain = chains.find(
-          (chain) =>
-            chain.startUserTimestamp === entry.startUserTimestamp &&
-            chain.finalAssistantTimestamp === entry.finalAssistantTimestamp,
-        );
-        if (!chain || chainMatchesGrace(chain, grace) || !singleSummaryCurrent(entry, ctx)) return [];
-        return [{ ...entry, protectedToolCallIds: chain.protectedToolCallIds }];
-      });
+    const analysis = analyzeChains(raw, source);
+    const singles = singleCandidates(entries, analysis, ctx);
     const shared = entries.filter(isSharedChain);
     if (!ctx || shared.length === 0) return singles;
     const before = projectContext(messages, ctx.model?.api, { ctx, source, chainViews: singles, probe: true }).messages;
     // This synchronous tree owns one source view. Awaiting writers must obtain
     // a fresh view before checking whether their result can be published.
-    const analysis = { chains, grace, source };
     return singles.concat(
       shared.flatMap((entry) => {
+        const validation = sharedValidations.get(entry.blockId);
+        if (!validation?.hasGain) return [];
         const views = sharedCandidates(entry, raw, ctx, analysis);
-        return views.length && sharedApprovals.get(entry.blockId) === sharedShape(before, views) ? views : [];
+        return views.length && validation.shape === sharedShape(before, views) ? views : [];
       }),
     );
   }
@@ -2031,7 +2038,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!currentConfig.value.enabled) {
       maintenanceAbort?.abort();
       tokenEstimator.clear();
-      sharedApprovals.clear();
+      sharedValidations.clear();
       stagedChains.clear();
       lastMaintenanceSource = undefined;
       maintenanceNext = undefined;
@@ -2047,10 +2054,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       isFlushing ||
       isArchiving ||
       isCompactingChains ||
-      occ.isRunning() ||
-      occ.isCapacityWaiting()
+      occ.isRunning()
     )
       return Promise.resolve();
+    // With no published shared view to restore, capacity waiting needs no source read at all.
+    if (occ.isCapacityWaiting() && !indexer.getChainEntries().some(isSharedChain)) return Promise.resolve();
     const version = lifecycle;
     const controller = new AbortController();
     maintenanceAbort = controller;
@@ -2067,10 +2075,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         isArchiving ||
         isCompactingChains ||
         occ.isRunning() ||
-        occ.isCapacityWaiting() ||
         config !== policyFingerprint(currentConfig.value)
       )
         throw new Error("Chain maintenance invalidated");
+    };
+    const assertNewWork = () => {
+      assertValid();
+      if (occ.isCapacityWaiting()) throw new Error("Chain maintenance waiting for capacity");
     };
     maintenanceTask = (async () => {
       if (ctx.mode === "tui") {
@@ -2093,30 +2104,24 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const cooperate = async () => { await setImmediate(undefined, { signal }); assertValid(); };
       assertValid();
       let raw = sourceView.projection.messages;
-      const analysis = {
-        chains: detectChains(raw, protectionPredicate),
-        grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns),
-        source: sourceView,
-      };
+      const analysis = analyzeChains(raw, sourceView);
       // Revalidate published shapes after edits, recovery or reload, without rewriting their records.
-      const singles = indexer
-        .getChainEntries()
-        .filter((entry) => !isSharedChain(entry))
-        .flatMap(chainMembers);
+      const entries = indexer.getChainEntries();
+      const singles = singleCandidates(entries, analysis, ctx);
       // Every shared entry compares against the same single-chain projection.
       // Keep this baseline local to this pass; source checks after awaits still
       // reject any changed session before an approval can be published.
       let singleBaseline: any[] | undefined;
-      for (const entry of indexer.getChainEntries().filter(isSharedChain)) {
+      for (const entry of entries.filter(isSharedChain)) {
         assertValid();
         const views = sharedCandidates(entry, raw, ctx, analysis);
-        if (!views.length) { sharedApprovals.delete(entry.blockId); continue; }
+        if (!views.length) { sharedValidations.delete(entry.blockId); continue; }
         const before = singleBaseline ??= projectContext(raw, ctx.model?.api,
           { ctx, source: sourceView, chainViews: singles, probe: true }).messages;
         if (ctx.mode === "tui" && frozenSource) await cooperate();
         const shape = sharedShape(before, views);
-        if (sharedApprovals.get(entry.blockId) === shape) continue;
-        sharedApprovals.delete(entry.blockId);
+        if (sharedValidations.get(entry.blockId)?.shape === shape) continue;
+        sharedValidations.delete(entry.blockId);
         const source = frozenSource ?? captureSharedSource(raw);
         if (ctx.mode === "tui") await cooperate();
         const after = projectContext(raw, ctx.model?.api,
@@ -2124,14 +2129,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (ctx.mode === "tui") await cooperate();
         const counts = await tokenEstimator.compare(before, after, signal);
         assertValid();
-        const current = manager.buildSessionProjection();
-        if (source !== captureSharedSource(current.messages)) return;
-        sourceView = readSourceEdits(ctx, current);
-        analysis.source = sourceView;
-        if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0) sharedApprovals.set(entry.blockId, shape);
+        if (!counts) continue; // A failed measurement is retryable, not a negative verdict.
+        const hasGain = counts.piBefore > counts.piAfter && counts.proxyDelta > 0;
+        if (hasGain) {
+          const current = manager.buildSessionProjection();
+          if (source !== captureSharedSource(current.messages)) return;
+          sourceView = readSourceEdits(ctx, current);
+          analysis.source = sourceView;
+        }
+        sharedValidations.set(entry.blockId, { shape, hasGain });
       }
-      // The automatic switch controls new work, not already committed evidence.
-      if (!currentConfig.value.chainCompression.enabled) {
+      // Capacity admission and the automatic switch govern new work only;
+      // existing views above still obey source, lifecycle and Native ownership.
+      if (occ.isCapacityWaiting() || !currentConfig.value.chainCompression.enabled) {
         stagedChains.clear(); lastMaintenanceSource = undefined;
         return;
       }
@@ -2156,7 +2166,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (attempt === lastMaintenanceSource) return;
       lastMaintenanceSource = attempt;
       const appendEntry = (type: string, data: unknown) => {
-        assertValid();
+        assertNewWork();
         pi.appendEntry(type, data);
         if (!hasCustomEntryData(manager, type, data))
           throw new Error("Chain archive was not persisted on the current branch");
@@ -2178,7 +2188,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             probe: true, chainFloor: stage.entry.startUserTimestamp,
           }).messages;
           const counts = await tokenEstimator.compare(before, after, signal);
-          assertValid();
+          assertNewWork();
           if (!counts) {
             lastMaintenanceSource = undefined;
             return;
@@ -2210,9 +2220,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const anchors = sourceView.projection.entries;
       const entry = await prepareSharedChain(eligible, 0, { indexer, blockRefs, messages: raw,
         now: Date.now, appendEntry, diagnostics,
-        backfill: { ...archiveOptions(manager), assertValid } },
+        backfill: { ...archiveOptions(manager), assertValid: assertNewWork } },
         (role, timestamp) => anchorId(ctx, role, timestamp, anchors), grace, signal);
-      assertValid();
+      assertNewWork();
       if (!entry) return;
       const preparedSource = manager.buildSessionProjection();
       if (source !== projectionFingerprint(preparedSource.messages)) return;
@@ -2223,7 +2233,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const after = projectContext(raw, ctx.model?.api,
         { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages;
       const counts = await tokenEstimator.compare(before, after, signal);
-      assertValid();
+      assertNewWork();
       if (!counts) {
         lastMaintenanceSource = undefined;
         return;
@@ -2242,7 +2252,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       indexer.registerChain(entry);
       const plain = projectContext(raw, ctx.model?.api,
         { ctx, source: readSourceEdits(ctx, measuredSource), chainViews: singles, probe: true, chainFloor: floor }).messages;
-      sharedApprovals.set(entry.blockId, sharedShape(plain, views));
+      sharedValidations.set(entry.blockId, { shape: sharedShape(plain, views), hasGain: true });
       lowerFloor(supersede, floor);
       statsAccum.addChainsCompressed(views.length);
       occ.rewrite(ctx, counts.piBefore);
@@ -2428,7 +2438,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     shutdown(ctx: ExtensionContext) {
       lifecycle++;
       jsonSizes.clear();
-      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear();
+      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); stagedChains.clear();
       activeFlushAbort?.abort();
       clearBoot();
       resetNested();

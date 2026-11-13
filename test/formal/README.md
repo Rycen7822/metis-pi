@@ -30,6 +30,10 @@ TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal -- AsyncReaders P
 |AsyncReaders|双reader独占buffer、rewrite/store/leaf失效、取消、I/O失败与fd关闭|SDK补丁0010的store/manager|
 |WindowAdmission|按选中分支路径尾窗口准入；LRU有界、不丢记录/顺序、热窗口不被全扫逐出|SDK补丁0010|
 |EncoderMemo|排队快照、mode/after缓存键、仅复用计数、元数据/预算重新判断、有界LRU|`src/condense/token-estimator.ts`|
+|LayeredCycles|多代参数/工具/shared层的24种顺序；派生形状、源/保护/owned摘要变更及Native截半成员|`runtime.ts`、`argument-history.ts`、`pruner.ts`|
+|RecoveryCycles|重复ID仍有自己的参数/ref；多代持久化失败/恢复；Native退休旧缺口而不删回读记录|`indexer.ts`、`runtime.ts`、`frontier.ts`|
+|RenderAdmission|容量等待不能阻止重验已发布视图，也不能放开新的压缩工作|`runtime.ts`、`occ.ts`|
+|SharedRetryWork|无收益候选重用结论、不做发布级复核；历史成员先按当前锚点筛选；有收益仍须最终源校验|`runtime.ts`|
 
 TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避免维护大量重复配置。
 预期反例包括故意移除保护、错误期待和成功路径可达性见证；须同时命中退出码与指定不变量。
@@ -48,6 +52,13 @@ TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避
   三轮内的符号集合不验证实际64项缓存淘汰；归档修复发生在发布前，不涵盖外部删除已发布证据。
 - DeferredGuards只计算完整来源复核次数，不是毫秒或整个flush的I/O上界；允许共享准备视图和真正推进前沿的校验。
   按序结果抽象不代替真实三请求并发测试；冷恢复、JSON处理、模型窗口与全部压缩交错仍须实现侧验证。
+- LayeredCycles最多6代、每代两个逻辑成员，假定归档成功；四层顺序是状态探索，不声称实际pipeline执行所有排列。
+  source/summary是版本ghost字段，gain为符号profile，不验证tokenizer或自然语言摘要事实。
+- RecoveryCycles独立探索archive/summary/frontier失败与4个崩溃边界；目录不是隐藏授权，退出活动窗口的缺口不永久阻塞前沿。
+  `obsolete-gap-need-not-block`的反例拒绝错误期待，不是已知产品缺陷，也不覆盖外部删除已发布归档。
+- RenderAdmission从有效的持久共享视图开始，区分容量线两侧和重算行为；Native运行/源变化的互斥由其他模型保护。
+  SharedRetryWork只刻画同一候选的负向memo、最终检查次数及来源行比较，不证明跨候选失效；允许遍历历史元数据，
+  不能解读为恒定CPU/内存或UI帧延迟。活动来源与策略变化仍须实现侧回归验证。
 - 发布校验与写入被建模为同一同步动作；原生存储/文件系统所有错误、任意长历史和所有调度顺序不在有限边界内。
 - 未收录人为时间单位的UI成本模型、重复纯公式模型、数百份临时cfg、TS探针、JAR及运行产物。
   本套件不提供真实终端帧延迟、Windows、多模态provider或无限规模证明。

@@ -1,5 +1,9 @@
 // Constants use JS literals; { operator } means a TLC operator override rather than a string.
 const operator = name => ({ operator: name });
+const permutations = items => items.length
+  ? items.flatMap((item, i) => permutations(items.filter((_, j) => i !== j)).map(tail => [item, ...tail])) : [[]];
+// LayeredCycles uses decimal operation digits: args=1, tool=2, chain=3, native=4.
+const layerOrders = permutations([1, 2, 3, 4]).map(order => Number(order.join("")));
 export default [
   {
     module: 'PressureGrid',
@@ -156,6 +160,86 @@ export default [
       })),
       { name: 'physical-denominator', constants: { PhysicalDenominator: true }, expect: { invariant: 'ExpectedTransitions' } },
       { name: 'no-near-retreat', constants: { IgnoreNear: true }, expect: { invariant: 'ExpectedTransitions' } },
+    ],
+  },
+  {
+    module: 'LayeredCycles',
+    constants: { Cycles: 3, Order: 1234, KeepCycles: 2, EventKind: 'none', EventRound: 2,
+      GainProfile: 'always', ShapeMode: 'full', GuardArgs: true, GuardTools: true, GuardOwned: true,
+      RelocateProtected: true, StableRefs: true },
+    invariants: ['TypeOK', 'NoStaleArgs', 'NoStaleTools', 'NoUnjustifiedChain', 'ProtectedEvidenceVisible',
+      'RecoveryComplete', 'StableHistoricalRefs', 'FullCycleWitness'],
+    cases: [
+      ...layerOrders.map(Order => ({ name: `order-${Order}`, constants: { Order } })),
+      ...['source', 'protection', 'summary', 'restore'].map(EventKind => ({
+        name: `six-cycles-${EventKind}`, constants: { Cycles: 6, EventKind },
+      })),
+      { name: 'argument-layer-removes-gain', constants: { Cycles: 6, Order: 3124, GainProfile: 'arg-loss' } },
+      { name: 'native-removes-member-gain', constants: { Cycles: 6, KeepCycles: 1, GainProfile: 'partial-loss' } },
+      ...[
+        ['unguarded-arguments', { GuardArgs: false, EventKind: 'source' }, 'NoStaleArgs'],
+        ['unguarded-tools', { GuardTools: false, EventKind: 'source' }, 'NoStaleTools'],
+        ['shape-ignores-arguments', { ShapeMode: 'without-args', GainProfile: 'arg-loss', Order: 3124 }, 'NoUnjustifiedChain'],
+        ['shape-ignores-window', { ShapeMode: 'without-window', GainProfile: 'partial-loss', KeepCycles: 1 }, 'NoUnjustifiedChain'],
+        ['unowned-summary', { GuardOwned: false, EventKind: 'summary' }, 'NoUnjustifiedChain'],
+        ['lost-protected-output', { RelocateProtected: false, EventKind: 'protection' }, 'ProtectedEvidenceVisible'],
+        ['reissued-ref', { StableRefs: false }, 'StableHistoricalRefs'],
+      ].map(([name, constants, invariant]) => ({ name, constants, invariants: ['TypeOK', invariant], expect: { invariant } })),
+    ],
+  },
+  {
+    module: 'RecoveryCycles',
+    constants: { Cycles: 6, KeepRounds: 1, DeferredAt: 2, CrashRound: 2, CrashStep: 2, FailKind: 'none',
+      ArchiveFirst: true, RestoreFromArchive: false, OwnAliasMetadata: true, StableRefs: true,
+      DropRecovery: false, GuardFrontier: true },
+    invariants: ['TypeOK', 'NoArchiveAuthority', 'RecoveryBeforeHiding', 'HistoricalRecoverySurvives',
+      'StableOccurrenceRefs', 'OwnExecutionArguments', 'NoVisibleGapLeap'],
+    cases: [
+      ...[1, 2, 3, 4].flatMap(CrashStep => ['none', 'payload', 'summary', 'frontier'].map(FailKind => ({
+        name: `crash-${CrashStep}-${FailKind}`, constants: { CrashStep, FailKind },
+      }))),
+      { name: 'longer-native-window', constants: { KeepRounds: 2 } },
+      ...[
+        ['archive-as-authority', { RestoreFromArchive: true }, 'NoArchiveAuthority'],
+        ['hide-before-archive', { ArchiveFirst: false, FailKind: 'payload', DeferredAt: 0 }, 'RecoveryBeforeHiding'],
+        ['alias-copies-arguments', { OwnAliasMetadata: false }, 'OwnExecutionArguments'],
+        ['reissued-ref', { StableRefs: false }, 'StableOccurrenceRefs'],
+        ['native-deletes-recovery', { DropRecovery: true }, 'HistoricalRecoverySurvives'],
+        ['frontier-crosses-live-gap', { GuardFrontier: false }, 'NoVisibleGapLeap'],
+        ['obsolete-gap-need-not-block', {}, 'AllHistoricalGapsBlockForever'],
+      ].map(([name, constants, invariant]) => ({ name, constants, invariants: ['TypeOK', invariant], expect: { invariant } })),
+    ],
+  },
+  {
+    module: 'RenderAdmission',
+    constants: { GatePublished: false, GateNewWork: true, RecheckOnRestore: false, ReportedTokens: 1000000, NativeLimit: 983616 },
+    invariants: ['PublishedViewPreserved', 'NoNewWorkWhileHeld'],
+    cases: [
+      { name: 'actual-capacity-hold' },
+      { name: 'obsolete-capacity-hold', constants: { ReportedTokens: 300000 } },
+      { name: 'recomputed-below-native', constants: { RecheckOnRestore: true, ReportedTokens: 983616 } },
+      { name: 'recomputed-above-native', constants: { RecheckOnRestore: true, ReportedTokens: 983617 } },
+      { name: 'old-coupled-gate', constants: { GatePublished: true }, expect: { invariant: 'PublishedViewPreserved' } },
+      { name: 'recompute-does-not-fix-coupling', constants: { GatePublished: true, RecheckOnRestore: true },
+        expect: { invariant: 'PublishedViewPreserved' } },
+      { name: 'unrestricted-new-work', constants: { GateNewWork: false }, expect: { invariant: 'NoNewWorkWhileHeld' } },
+    ],
+  },
+  {
+    module: 'SharedRetryWork',
+    constants: { Cycles: 6, GuardRejected: false, GuardPublish: true, IndexActiveBlocks: true, CacheVerdict: true,
+      HasGain: false, MutateDuringCount: false },
+    invariants: ['NoFullGuardForRejectedView', 'WarmSourceWorkBound', 'NoDuplicateCountWork', 'NoStaleApproval'],
+    cases: [
+      { name: 'unchanged-no-gain' },
+      { name: 'profitable-approval', constants: { HasGain: true } },
+      { name: 'changed-profitable-source', constants: { HasGain: true, MutateDuringCount: true } },
+      ...[
+        ['old-no-gain-guard', { GuardRejected: true }, 'NoFullGuardForRejectedView'],
+        ['old-history-times-window', { IndexActiveBlocks: false }, 'WarmSourceWorkBound'],
+        ['uncached-negative-verdict', { CacheVerdict: false }, 'NoDuplicateCountWork'],
+        ['unguarded-approval', { GuardPublish: false, HasGain: true, MutateDuringCount: true }, 'NoStaleApproval'],
+      ].map(([name, constants, invariant]) => ({ name, constants, invariants: [invariant], expect: { invariant } })),
     ],
   },
 ];
