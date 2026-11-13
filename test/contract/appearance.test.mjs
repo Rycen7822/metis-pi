@@ -7,7 +7,9 @@ import { theme, toolInfo } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import * as Tui from "@earendil-works/pi-tui";
-import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, UserMessageComponent } from "@earendil-works/pi-coding-agent";
+import {
+  AssistantMessageComponent, createEventBus, CustomEditor, initTheme, SessionManager, UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import {
   ThinkingRailComponent, ThinkingClickableComponent, ThinkingHeaderComponent, ThinkingPeekComponent,
@@ -77,8 +79,12 @@ function activateHarness(t, bindingsExtra = {}) {
   const Host = isolatedToolHost();
   const original = Object.getOwnPropertyDescriptors(Host.prototype);
   const handlers = new Map();
+  let currentCtx;
   const pi = new Proxy({
-    on: (event, handler) => handlers.set(event, handler),
+    on: (event, handler) => handlers.set(event, (payload = {}, ctx) => {
+      if (event === "session_start") currentCtx = ctx;
+      return handler({ type: event, ...payload }, ctx ?? currentCtx);
+    }),
     getAllTools: () => [toolInfo("read")],
   }, { get(target, key) {
     if (!(key in target)) throw new Error(`Forbidden appearance API: ${String(key)}`);
@@ -338,11 +344,13 @@ test("nested tool activity does not leak image notices into top-level exploratio
 });
 
 test("one footer keeps ordered host metadata fresh across frames, events and session replacement", async (t) => {
-  const goalOpens = [];
+  const goalOpens = [], eventBus = createEventBus();
   let reads = 0;
   let leaf = "first";
   let usage = { tokens: 172_000, contextWindow: 1_000_000, percent: 17.2 };
-  const { handlers, slots, footer: makeFooter, ctx } = await session(t, { api: { events: { emit: name => goalOpens.push(name) } } }, {
+  const { handlers, slots, footer: makeFooter, ctx } = await session(t, { api: { events: {
+    ...eventBus, emit(name, data) { goalOpens.push(name); eventBus.emit(name, data); },
+  } } }, {
     model: { id: "test-model", provider: "openai-codex", contextWindow: 1_000_000 }, thinkingLevel: "high",
     sessionManager: { getEntries: historyEntries, getSessionId: () => "footer-session", getLeafId: () => leaf },
     getContextUsage() { reads += 1; return usage; },
