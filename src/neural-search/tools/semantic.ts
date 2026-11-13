@@ -105,9 +105,10 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
           structuredContent: { ...details, results, diagnostics: wire.stderr || null } };
       } finally { clearTimeout(timer); }
     },
-    renderCall(args, theme) {
-      return new CollapsedText(theme.fg("toolTitle", theme.bold("Semantic")) + " " + theme.fg("accent", safeText(args.query ?? ""))
-        + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`)), "", theme.fg("muted", "..."));
+    renderCall(args, theme, context) {
+      const bullet = theme.fg(context.isError ? "error" : context.isPartial === false ? "success" : "dim", "•");
+      return new CollapsedText(`${bullet} ${theme.fg("toolTitle", theme.bold("Semantic"))} `
+        + theme.fg("text", safeText(`${args.query ?? ""} in ${args.path ?? "."}`)), "", theme.fg("muted", "..."));
     },
     renderResult: renderTextResult,
   };
