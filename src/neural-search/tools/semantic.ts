@@ -94,7 +94,9 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
         const notice = next
           ? `\n[Output truncated at ${OUTPUT_BYTES} bytes; only complete ranked-prefix records retained. `
             + `Next result: ${safeText(next.path)}:${next.start}-${next.end}. Read that source or narrow the scope.]` : "";
-        const body = results.map(chunk => `${safeText(chunk.path)}:${chunk.start}-${chunk.end}\n${safeText(chunk.content)}`).join("\n\n");
+        // Full-record JSON sizing above also covers these compact text headers.
+        const body = results.map(chunk =>
+          `--- ${safeText(chunk.path)}:${chunk.start}-${chunk.end} ---\n${safeText(chunk.content)}`).join("\n\n");
         const diagnostics = wire.stderr ? `\n[CLI diagnostics: ${safeText(wire.stderr)}]` : "";
         const text = (body || (chunks.length ? "No complete result fits the display budget." : "No semantic results.")) + notice + diagnostics;
         const details = { root: stat.isFile() ? path.dirname(root) : root, scope: root,

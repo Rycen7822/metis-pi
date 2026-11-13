@@ -37,6 +37,8 @@ neural_search({ action: "semantic", params: { query: "缓存容量不足时继�
 
 `limit` 默认 5、最多 100，仅限制排序后的返回数量，无分页游标。返回保留完整记录的排名前缀，超过 50,000 字节展示预算时标记 `outputTruncated` 并提供省略位置；JSON 传输超过 16MiB 时明确报错。分数、文件和行范围由 CLI 提供并原样透传。`scope` 是所选文件/目录，`root` 是返回路径的目录基准，单文件搜索时为其父目录。`limitReached` 表示返回数已达上限，剩余结果数量未知。
 
+Agent 文本用 `--- path:start-end ---` 标记各片段，保留原文缩进，不逐行添加行号；codemode 的 `results[]` 保留原有字段与原始 `content`。
+
 请求（含排队/初始化）默认超时 1800 秒，`timeoutSeconds` 为 1–3600。取消、超时、会话或 cwd 变更会终止自有 CLI 客户端组并确认清理，服务只取消对应请求，其他客户端和共享服务继续运行。失败保持原有错误语义并说明原因；缓存缺失但完整计算正常时输出明确诊断。
 
 Linux x64 / glibc 2.39+ 下，首次安装 Metis 和后续 `pi update --extensions` 通过安装生命周期自动准备预编译运行数据，无需额外安装命令、Python 模型转换或本机编译。local 包或被跳过的安装脚本由首次 semantic 调用自动补齐，受请求取消和超时约束。
