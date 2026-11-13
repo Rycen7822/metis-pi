@@ -9,6 +9,13 @@ export interface TokenComparison {
   proxyBefore?: number;
   proxyAfter?: number;
 }
+/** Shared leading message objects establish a conservative unchanged-prefix estimate without reserializing history. */
+export function unchangedPrefixTokens(before: any[], after: any[]): number {
+  let tokens = 0;
+  for (let i = 0; i < Math.min(before.length, after.length) && before[i] === after[i]; i++) tokens += estimateTokens(before[i]);
+  return tokens;
+}
+
 type Job = {
   id: number; before: string[]; after: string[]; cacheKey: string;
   piBefore: number; piAfter: number; absolute: boolean;

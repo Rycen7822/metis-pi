@@ -210,7 +210,7 @@ function dedupByContentHashDescription(config: ContextPruneConfig): string {
 
 function chainCompressionEnabledDescription(config: ContextPruneConfig): string {
   return (
-    "Range-compress closed chains beyond the rolling window (K=" +
+    "Batch old closed chains outside the combined working set (task references=" +
     `${config.chainCompression.rollingWindow}` +
     "). Drops middle assistant turns + tool results, injects a synthetic summary. " +
     "Currently " +
@@ -220,7 +220,8 @@ function chainCompressionEnabledDescription(config: ContextPruneConfig): string 
 }
 
 function chainWindowDescription(config: ContextPruneConfig): string {
-  return `Keep the K most-recently-closed chains raw; compress older ones. Currently ${config.chainCompression.rollingWindow}.`;
+  return "Recent closed-task references within the raw-tail budget, combined with work/token protection. " +
+    `Currently ${config.chainCompression.rollingWindow}.`;
 }
 
 function stripThinkingDescription(config: ContextPruneConfig): string {
@@ -387,7 +388,7 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
   {
     id: "chainCompressionRollingWindow",
     path: "chainCompression.rollingWindow",
-    label: "Chain window (K)",
+    label: "Task references (K)",
     min: 0,
     options: ROLLING_WINDOW_PRESETS,
     description: chainWindowDescription,

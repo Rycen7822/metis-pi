@@ -12,7 +12,7 @@ import { summaryBudget, shouldBudgetFlush } from "../../src/condense/budget.ts";
 import { toolResultStub } from "../../src/condense/pruner.ts";
 import { projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
-import { loadConfig, encodePruneConfig } from "../../src/condense/config.ts";
+import { loadConfig, encodePruneConfig, DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { parseMetisConfig } from "../../src/configuration/store.ts";
 import { stringify } from "smol-toml";
 import { disableNetwork } from "../helpers/native-provider.mjs";
@@ -98,7 +98,9 @@ async function fixture(
   writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: encodePruneConfig({
     enabled: true, opportunisticCompaction: occ, showPruneStatusLine, minBatchChars: 5000, pruneOn, batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
-    chainCompression, purgeErrors: { enabled: false }, ...configOverrides,
+    // Persistence/render tests opt out of scheduling thresholds; default-policy cases pass DEFAULT_CONFIG explicitly.
+    chainCompression: { minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 1, minGainFraction: 0, ...chainCompression },
+    purgeErrors: { enabled: false }, ...configOverrides,
   }) }));
   // Spill files use the session directory; inMemory() leaves it empty.
   const sm = SessionManager.create(dir, dir);
@@ -106,7 +108,7 @@ async function fixture(
   const pendingFinishes = new Set();
   const api = "condense-local-proof";
   const model = { id: "summary", name: "summary", api, provider: "local", baseUrl: "http://invalid", reasoning: false,
-    input: ["text"], contextWindow: 100000, maxTokens: 10000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    input: ["text"], contextWindow: 100000, maxTokens: 10000, cost: { input: 1, output: 0, cacheRead: 1, cacheWrite: 0 } };
   const releases = [];
   const stream = (_model, context, options) => {
     calls.push(context);
@@ -195,7 +197,7 @@ async function fixture(
   let clock = 10;
   function add(body, command = "npm run build", id = `call-${clock}`, thinking) {
     const assistant = {
-      role: "assistant",
+      role: "assistant", api, provider: model.provider, model: model.id,
       content: [
         ...(thinking ? [{ type: "thinking", thinking }] : []),
         { type: "toolCall", id, name: "bash", arguments: { command } },
@@ -468,6 +470,56 @@ test("packing precedes the 5000-char gate and keeps settled history stable with 
     1,
   );
   assert.equal(f.sm.getBranch().filter((e) => e.customType === "context-prune-chain").length, 0);
+});
+
+test("default chain policy releases old evidence but retains a long active multi-read task", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", chainCompression: DEFAULT_CONFIG.chainCompression });
+  f.ctx.model.contextWindow = 1000000;
+  const evidence = Array.from({ length: 6000 }, (_, i) => `evidence-${i}: inspected source and established fact ${i * 17}`).join("\n");
+  const old = f.add(evidence, "inspect-old", "old-default");
+  await f.finish();
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0,
+    "finishing one task does not immediately age its fresh evidence out of the default working set");
+  f.sm.appendMessage({ role: "user", content: "Investigate before making the next decision", timestamp: f.nextTimestamp() });
+  const active = [];
+  for (let i = 0; i < 4; i++) active.push(f.add(evidence.slice(0, 75000), "inspect-current", `active-${i}`));
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const blocks = f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
+  assert.equal(blocks.length, 1, "a large old block outside the reference budget can publish even with rollingWindow=3");
+  const original = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: original }))?.messages ?? original;
+  assert.equal(projected.some(m => m.toolCallId === old.id), false);
+  for (const call of active) assert.deepEqual(projected.find(m => m.toolCallId === call.id), call.result,
+    "active investigation results remain intact, not just their references");
+  assert.equal(f.calls.length, 0, "mechanical maintenance does not add summary calls");
+  const notices = f.notices.length;
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
+  assert.equal(f.notices.length, notices, "unchanged boundaries cannot trigger a second rewrite");
+});
+
+test("automatic chain cost allowance comes only from matching main request receipts", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", chainCompression: { enabled: true, rollingWindow: 0 } });
+  Object.assign(f.ctx.model, { contextWindow: 1000000, cost: { input: 10, output: 0, cacheRead: 1, cacheWrite: 0 } });
+  addClosedChains(f);
+  f.sm.appendMessage({ role: "user", content: "Keep these original requirements. ".repeat(2500), timestamp: f.nextTimestamp() });
+  const blocks = () => f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.equal(blocks().length, 0, "positive volume alone cannot authorize an expensive prefix rewrite");
+  const receipt = provider => ({ role: "assistant", api: f.ctx.model.api, provider, model: f.ctx.model.id,
+    content: [{ type: "text", text: "Main request complete" }], stopReason: "stop", timestamp: f.nextTimestamp(),
+    usage: { ...usage, cacheRead: 200000, cost: { ...usage.cost, cacheRead: 0.2 } } });
+  await f.emit("message_end", { message: receipt("different-provider") });
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.equal(blocks().length, 0, "an unrelated provider receipt cannot earn allowance");
+  for (let i = 0; i < 30; i++) {
+    const message = receipt(f.ctx.model.provider);
+    await f.emit("message_end", { message }); f.sm.appendMessage(message);
+  }
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.equal(blocks().length, 1, "a material old group can use previously observed rewrite allowance");
+  assert.equal(blocks()[0].data.kind, "shared-v1");
+  assert.equal(f.calls.length, 0);
 });
 
 test("automatic chain compression follows its switch and retains three recent tasks with exact recovery", async (t) => {
@@ -1713,6 +1765,10 @@ test("Native window changes validate surviving members without publishing newly 
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
   for (let generation = 0; generation < 2; generation++) {
     addClosedChains(f);
+    const messages = f.sm.buildSessionProjection().messages;
+    const message = messages.findLast(m => m.role === "assistant" && m.stopReason === "toolUse");
+    const result = messages.findLast(m => m.role === "toolResult");
+    await f.emit("turn_end", { message, toolResults: [result], turnIndex: generation });
     await f.emit("agent_settled"); await f.waitMaintenance();
   }
   const blocks = () => f.sm.getBranch().filter(e => e.customType === "context-prune-chain");

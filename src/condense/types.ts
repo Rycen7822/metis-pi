@@ -371,8 +371,16 @@ export type ChainCompressionEntry = SingleChainCompressionEntry | SharedChainCom
 
 export interface ChainCompressionConfig {
   enabled: boolean;
-  /** Number of most-recently-closed chains to keep raw (not compressed). Default 3. */
+  /** Recent closed-task references within minRecentTokens' raw-span budget, alongside work/tail protection. Default 3. */
   rollingWindow: number;
+  /** Minimum useful tool rounds and effective raw-tail tokens to retain; their union is protected. */
+  minWorkTurns: number;
+  minRecentTokens: number;
+  /** Automatic batch must satisfy both absolute and fractional net token savings. */
+  minGainTokens: number;
+  minGainFraction: number;
+  /** Fraction of observed cache-read spending available for estimated extra rewrite cost; 0 means immediate payback. */
+  maxCostOverhead: number;
   /** Strip thinking blocks from the kept final text-only assistant. Default true. */
   stripFinalAssistantThinking: boolean;
   /**

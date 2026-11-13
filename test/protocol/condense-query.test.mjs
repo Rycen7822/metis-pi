@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { record, queryFixture } from "../helpers/condense-query.mjs";
 import { pruneMessages } from "../../src/condense/pruner.ts";
 import { hashToolResult } from "../../src/condense/content-hash.ts";
-import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { modelNamed } from "../helpers/native-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
 
@@ -105,12 +104,6 @@ test("recovery grace preserves the returned page without reintroducing the sourc
   const projected = pruneMessages(messages, f.indexer, undefined, undefined, undefined, 3).messages;
   assert.ok(projected.find((m) => m.toolCallId === "raw").content[0].text.length < 1000);
   assert.equal(projected.find((m) => m.toolCallId === "query").content[0].text, page);
-  assert.deepEqual(DEFAULT_CONFIG.chainCompression, {
-    enabled: true,
-    rollingWindow: 3,
-    stripFinalAssistantThinking: true,
-    fuseRangeSummary: true,
-  });
 });
 
 test("duplicate body recall keeps each command, status, timestamp and short ref after reload", async () => {

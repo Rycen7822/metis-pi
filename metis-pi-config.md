@@ -196,7 +196,32 @@ exclude = []
 
 ### `[contextPrune.chainCompression]`
 
-`enabled=true` 开启旧闭合任务链整理；`rollingWindow=3` 保留最近 3 条，0 表示跳过最近链；`stripFinalAssistantThinking=true` 去除保留最终回复的 thinking；`fuseRangeSummary=true` 允许 **手动 now / compact** 额外付费融合，自动维护只用现成材料。融合失败/预算不足复用机械拼接，frontier 两侧各自独立。
+`enabled=true` 开启旧闭合任务链整理。自动维护按旧到新成批发布，只用现成摘要/归档事实，不额外请求模型。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `rollingWindow` | `3` | 综合工作集中的近期闭合任务参考数，≥0；参考原文累计受`minRecentTokens`预算限制，不无条件锁定N条链。 |
+| `minWorkTurns` | `4` | 至少保留最近有效工具工作轮次，≥0；失败、轮询、回读不让资料变旧。 |
+| `minRecentTokens` | `65536` | 至少保留有效投影的近期原文尾部，与工作轮次取并集；≥0。 |
+| `minGainTokens` | `8192` | 自动批次最低净释放量，正安全整数。 |
+| `minGainFraction` | `0.1` | 净释放量还须达到有效上下文的此比例，[0,1]。 |
+| `maxCostOverhead` | `0.1` | 用已观测cache-read支出的此比例支付估算额外重建成本，[0,1]；0只允许即时回本。 |
+| `stripFinalAssistantThinking` | `true` | 去掉已压链最终回复的thinking，保留正文。 |
+| `fuseRangeSummary` | `true` | 允许手动now/compact额外付费融合；失败/预算不足保留机械拼接。 |
+
+活跃任务链、保护输出和回读宽限继续保留；工作集跨整链边界时会多保留，不把工具轮次结束当任务结束。
+链数、工作轮次与原文尾部在同一个工作集内计算；任意`rollingWindow`值都使用批量/增量/经济策略，无需改成0启用。
+闭合任务参考从新到旧计入，按原始链正文估算；放不下最新一条就停止扩展，不能跳过它去额外保护更老的任务。
+64k是近期原文的最低保护量，也是闭合任务参考的软预算，不是整个工作集上限；活跃链/工作轮次/显式保护仍可保留更多。
+`rollingWindow=0`只关闭链数参考；显式`minRecentTokens=0`同时取消原文最低量与链参考的token限额，其他保护照常。
+旧配置中的3等数值直接参加新综合规则，不再维持一套自动硬锁链数策略；手动now沿用原链数窗口，compact仍整理全部合格闭合链。
+成功发布后须新增至少`max(minGainTokens, 上次净收益/4)`有效工作tokens才允许下一普通批次。
+当前模型价格与usage均可信才积累费用额度，发布后清零；模型/配置/分支/Native边界重置，不预支未来请求。
+价格未知或零价登记视为未知，不赚额度；按输入/缓存读10:1的保守参考仅允许即时回本。
+这些是本地估算约束，不保证真实账单增加不超过10%；provider缓存/计数/路由差异仍以实际费用为准。
+近Pi有效容量时可跳过普通批量/费用/间隔门，但不跳过工作集或归档保护；已经超线仍由Native接管。
+显式手动now/compact和已有single/shared视图重验不受新自动调度门限制；frontier两侧独立。
+此策略只管chain，不改变per-batch、spill、OCC或Native的各自规则。
 
 ### `[contextPrune.purgeErrors]`
 

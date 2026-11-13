@@ -151,6 +151,10 @@ function normalizeFallbackModels(value: unknown): string[] {
     .map(entry => entry.trim()).filter(entry => /^[^/\s]+\/\S+$/.test(entry)))] : [];
 }
 const strings = (value: unknown, fallback: string[]) => Array.isArray(value) && value.every(item => typeof item === "string") ? value : [...fallback];
+const safeInteger = (value: unknown, fallback: number, minimum = 0): number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= minimum ? value : fallback;
+const boundedFraction = (value: unknown, fallback: number): number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
   const merged = { ...structuredClone(DEFAULT_CONFIG), ...existing }, defaults = DEFAULT_CONFIG;
   const chain = existing.chainCompression, purge = existing.purgeErrors;
@@ -197,6 +201,11 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
     chainCompression: {
       enabled: loadScalar("chainCompression.enabled", chain?.enabled),
       rollingWindow: loadScalar("chainCompression.rollingWindow", chain?.rollingWindow),
+      minWorkTurns: safeInteger(chain?.minWorkTurns, defaults.chainCompression.minWorkTurns),
+      minRecentTokens: safeInteger(chain?.minRecentTokens, defaults.chainCompression.minRecentTokens),
+      minGainTokens: safeInteger(chain?.minGainTokens, defaults.chainCompression.minGainTokens, 1),
+      minGainFraction: boundedFraction(chain?.minGainFraction, defaults.chainCompression.minGainFraction),
+      maxCostOverhead: boundedFraction(chain?.maxCostOverhead, defaults.chainCompression.maxCostOverhead),
       stripFinalAssistantThinking: loadScalar("chainCompression.stripFinalAssistantThinking", chain?.stripFinalAssistantThinking),
       fuseRangeSummary: loadScalar("chainCompression.fuseRangeSummary", chain?.fuseRangeSummary),
     },

@@ -24,7 +24,7 @@ TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal -- AsyncReaders P
 |---|---|---|
 |PressureGrid|300K至1M每100K一档，675组profile；level/headroom、未饱和delta、native严格容量线|`src/condense/budget.ts`；Pi原生compaction|
 |OccScheduler|60/52/72%、请求内耗尽/重入、work/hold、near接管与复用次数取整|`src/condense/occ.ts`|
-|ChainEconomics|重复微小整理的输入成本；缓存读价计收益、分组/后段/共同冷放行、容量救急与Native交接|`runtime.ts`的chain发布门（参考策略，尚未接入产品）|
+|ChainEconomics|微小整理费用反例；即时回本对照、已付缓存读预算与消费、增量滞回、容量救急/交接|`chain-scheduler.ts`、`runtime.ts`|
 |ColdBoundary|冷许可绑定请求与来源；计划/取消、上次低命中、准备后变热不能冒充当前已冷|chain经济准入的参考约束；`runtime.ts`|
 |PublicationTxn|等待前捕获；来源正文/策略/生命周期完整校验与发布原子边界；无收益延期|`src/condense/runtime.ts`|
 |RetryLifecycle|恢复/修复后的稳定ref、无重复归档；候选级负向准入缓存、手动及生成后拒绝重试|`src/condense/indexer.ts`、`runtime.ts`|
@@ -54,8 +54,11 @@ TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避
 - PressureGrid的threshold=0只刻画helper失效输入，不代表TOML的关闭值。配置关闭使用false；用量未知不授权自动付费。
   maxBudget是软门槛，不保证压缩后总上下文低于它；provider用量、proxy tokens和底账字节不能互相替代。
 - OCC的ready是瞬时布尔值，不是持久phase；取整后的剩余复用次数须至少11，不能用大于10的未取整值代替。
-- ChainEconomics是待实现的经济准入参考，不代表产品已修复。`funded`不预支未来请求收益；`gain-only`保留体积下降却更贵的反例。
-  两组从相同热缓存开始、支付相同新增工作，按符号token与固定读/冷价逐请求记账；普通路径每个前缀费用不增也覆盖提前结束。
+- ChainEconomics的`funded`保留即时回本参考，`gain-only`保留体积下降却更贵的反例；产品使用批次/增量/已付缓存读预算准入。
+  `episodes`只消费已发生缓存读支出，发布后清零；故意保留余额会击穿NoDoubleSpend。普通路径每个前缀检查费用容忍上界，涵盖提前结束。
+  大旧链在同一场景检查成本/额度安全与弱公平下最终放行，不能靠始终拒绝压缩来通过。
+  两组从相同热缓存开始、支付相同新增工作，按符号token与固定读/冷价记账；不验证实际工作分类、价格可信度和投影估算误差。
+  模型minGain与fraction通过整数参数缩放；产品另取Pi/proxy较小收益，只用共享消息对象前缀作保守估计，不声明provider精确账单。
   真正容量救急及原对照超出容量后不承诺费用不增；Native交接不建模其账单。1M输入配置用1.5M抽象容量隔离经济问题。
   不验证provider分词、写缓存费用、过期/路由或真实延迟；不把低cache百分比直接等同账单上涨。
 - ColdBoundary刻画一次实际共同前缀失效，不是所有Native完成都必冷。请求/来源代次是ghost身份，不要求新增持久版本框架。

@@ -4,15 +4,15 @@ import type { ChainRange, ChainCompressionEntry, SingleChainCompressionEntry, To
 import type { BlockRefIssuer } from "./block-refs.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";
 import { bareToolCallId, occKey, parseOccKey, resultTimestampOf } from "./occurrence-key.ts";
-import { resolveRange } from "./chain-range-prune.ts";
+import { createRangeResolver, resolveRange } from "./chain-range-prune.ts";
 import { projectionFingerprint } from "./token-estimator.ts";
 import { setImmediate } from "node:timers/promises";
 import type { SharedChainCompressionEntry, SharedChainMember } from "./types.ts";
 import { extractToolResultText } from "./batch-capture.ts";
 
 /** Text archives cannot replace incomplete replies or recover tool attachments. */
-export function findCompressibleRange(chain: ChainRange, messages: any[]) {
-  const range = resolveRange(chain, messages);
+export function findCompressibleRange(chain: ChainRange, messages: any[], resolve = createRangeResolver(messages)) {
+  const range = resolve(chain);
   if (!range || ["error", "aborted", "length"].includes(messages[range.endIndex]?.stopReason)) return null;
   const open = new Set<string>();
   for (const message of messages.slice(range.startIndex + 1, range.endIndex)) {
@@ -49,12 +49,16 @@ export function chainMatchesGrace(chain: ChainRange, inGraceToolCallIds: Set<str
   return false;
 }
 
+/** Closed, uncompressed tool chains in source order; policy-specific working-set protection is applied by the caller. */
+export function closedChainCandidates(chains: ChainRange[], alreadyCompressed: Set<number>): ChainRange[] {
+  return chains.filter(chain => chain.finalAssistantTimestamp !== null
+    && !alreadyCompressed.has(chain.startUserTimestamp) && chain.middleToolCallIds.length > 0);
+}
+
 /**
- * Pure eligibility filter: given all detected chains, return the subset
- * that should be compressed — closed, not already compressed, and older
- * than the rolling window.
- *
- * Extracted for unit testing without needing a real indexer or appendEntry.
+ * Fixed-count selection for manual callers or already-selected groups.
+ * Automatic composite retention belongs to chain-scheduler; both paths share
+ * the same closed/uncompressed candidate predicate.
  *
  * @param chains Must be in chronological order (oldest first), as emitted by
  *   chain-detector. Ordering is not validated here; out-of-order input silently
@@ -70,12 +74,7 @@ export function selectEligible(
   alreadyCompressed: Set<number>,
   inGraceToolCallIds: Set<string> = new Set(),
 ): ChainRange[] {
-  const candidates = chains.filter(
-    (c) =>
-      c.finalAssistantTimestamp !== null &&
-      !alreadyCompressed.has(c.startUserTimestamp) &&
-      c.middleToolCallIds.length > 0,
-  );
+  const candidates = closedChainCandidates(chains, alreadyCompressed);
   const toCompress = candidates.slice(0, Math.max(0, candidates.length - rollingWindow));
   return toCompress.filter((c) => !chainMatchesGrace(c, inGraceToolCallIds));
 }
@@ -379,10 +378,11 @@ export async function prepareSharedChain(
   const compressed = new Set(deps.indexer.getChainEntries().flatMap(chainMembers).map(member => member.startUserTimestamp));
   const eligible = selectEligible(chains, rollingWindow, compressed, inGrace);
   const members: SharedChainMember[] = [];
+  const resolve = createRangeResolver(deps.messages);
   let bodyText = "";
   for (const chain of eligible) {
     await setImmediate(); signal.throwIfAborted();
-    const range = findCompressibleRange(chain, deps.messages);
+    const range = findCompressibleRange(chain, deps.messages, resolve);
     if (!range || chain.finalAssistantTimestamp === null) continue;
     const startEntryId = anchorId("start", chain.startUserTimestamp);
     const finalEntryId = anchorId("final", chain.finalAssistantTimestamp);

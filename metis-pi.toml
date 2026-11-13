@@ -254,8 +254,17 @@ compactionSummaryMaxTokens = 0
 # 旧闭合任务链整理；自动维护不发起二次付费融合。
 [contextPrune.chainCompression]
 enabled = true
-# 保留最近几条任务链；0 不保留最近链。
+# 综合保护中的近期闭合任务参考数；受下方原文预算限制，不无条件锁住N条巨大旧链。
+# 0只关闭链数参考，任何值均使用完整工作集/批量/经济策略。
 rollingWindow = 3
+# 同时保留最近有效工具工作轮次与近期原文尾部；均允许0，活跃任务始终不作普通chain压缩。
+minWorkTurns = 4
+minRecentTokens = 65536
+# 自动批次须同时达到绝对与相对净收益；不按总上下文300k水位触发。
+minGainTokens = 8192
+minGainFraction = 0.1
+# 允许已观测cache-read费用的此比例用于额外重建；0仅即时回本，不是真实账单保证。
+maxCostOverhead = 0.1
 stripFinalAssistantThinking = true
 # 仅允许手动 now / compact 额外融合；失败或预算不足时保留机械拼接。
 fuseRangeSummary = true
