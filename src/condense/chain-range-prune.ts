@@ -67,8 +67,10 @@ export function buildSyntheticChainMessage(
   };
 }
 
+type RangeEntry = Pick<SingleChainCompressionEntry, "startUserTimestamp" | "finalAssistantTimestamp">;
+
 /**
- * Resolves a persisted chain entry to a positional index range.
+ * Builds a source-local resolver for persisted chain index ranges.
  *
  * Role-gated and unique-match-or-nothing: exactly one start anchor (user
  * message or eligible non-pruner custom, isChainAnchorCustom) at
@@ -77,28 +79,27 @@ export function buildSyntheticChainMessage(
  * is the whole point: an id-set or timestamp-window fallback is what deleted
  * live turns (doc/specs/2026-08-12-toolcall-id-collisions.md).
  */
-export function resolveRange(
-  entry: Pick<SingleChainCompressionEntry, "startUserTimestamp" | "finalAssistantTimestamp">,
-  messages: any[],
-): { startIndex: number; endIndex: number } | null {
-  if (entry.finalAssistantTimestamp === null) return null;
-  let startIndex = -1;
-  let startMatches = 0;
-  let endIndex = -1;
-  let endMatches = 0;
+// One synchronous source view only. Positions are not authority across an await
+// or evidence of unchanged content; duplicates remain ambiguous, even at one leaf.
+export function createRangeResolver(messages: any[]) {
+  const starts = new Map<number, number>(), finals = new Map<number, number>();
   for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if ((msg.role === "user" || isChainAnchorCustom(msg)) && msg.timestamp === entry.startUserTimestamp) {
-      startMatches++;
-      if (startIndex < 0) startIndex = i;
-    } else if (msg.role === "assistant" && msg.timestamp === entry.finalAssistantTimestamp) {
-      endMatches++;
-      if (endIndex < 0) endIndex = i;
-    }
+    const message = messages[i];
+    if (Number.isNaN(message.timestamp)) continue; // Preserve strict timestamp equality.
+    const anchors = message.role === "user" || isChainAnchorCustom(message) ? starts
+      : message.role === "assistant" ? finals : undefined;
+    if (anchors) anchors.set(message.timestamp, anchors.has(message.timestamp) ? -1 : i);
   }
-  if (startMatches !== 1 || endMatches !== 1) return null;
-  if (!(startIndex < endIndex)) return null;
-  return { startIndex, endIndex };
+  return (entry: RangeEntry): { startIndex: number; endIndex: number } | null => {
+    if (entry.finalAssistantTimestamp === null) return null;
+    const startIndex = starts.get(entry.startUserTimestamp), endIndex = finals.get(entry.finalAssistantTimestamp);
+    return startIndex !== undefined && endIndex !== undefined && startIndex >= 0 && startIndex < endIndex
+      ? { startIndex, endIndex } : null;
+  };
+}
+
+export function resolveRange(entry: RangeEntry, messages: any[]) {
+  return entry.finalAssistantTimestamp === null ? null : createRangeResolver(messages)(entry);
 }
 
 export function applyChainCompressions(
@@ -120,8 +121,9 @@ export function applyChainCompressions(
   }
 
   const resolved: { entry: SingleChainCompressionEntry; startIndex: number; endIndex: number }[] = [];
+  const resolve = createRangeResolver(messages);
   for (const entry of chainEntries) {
-    const range = resolveRange(entry, messages);
+    const range = resolve(entry);
     if (!range) {
       diagnostics?.report(
         "unresolved-range",
@@ -161,13 +163,19 @@ export function applyChainCompressions(
 
   const dropIndices = new Set<number>();
   const stripAtIndex = new Set<number>();
-  const insertAfterIndex = new Map<number, { synthetic: any; blockId: string }>();
+  const insertAfterIndex = new Map<number, ReturnType<typeof buildSyntheticChainMessage>>();
   const droppedBareIds = new Set<string>();
   const droppedOccKeys = new Set<string>();
   const protectedByBlock = new Map<string, { tool: string; text: string }[]>();
   const groups = new Map<string, { entry: SingleChainCompressionEntry; startIndex: number; bodies: string[] }>();
 
   for (const { entry, startIndex, endIndex } of accepted) {
+    // An existing body proves only its original coverage. Never hide additional
+    // members when reapplying a shared ID to an already-derived input.
+    if (existingSyntheticBlockIds.has(entry.blockId)) {
+      if (stripFinalThinking) stripAtIndex.add(endIndex);
+      continue;
+    }
     const protectedIds = new Set(entry.protectedToolCallIds ?? []);
     const actual = new Set<string>();
     for (let i = startIndex + 1; i < endIndex; i++) {
@@ -208,15 +216,12 @@ export function applyChainCompressions(
     } else groups.set(entry.blockId, { entry: { ...entry }, startIndex, bodies: [summaryTextForChain(entry)] });
   }
   for (const [blockId, group] of groups) {
-    insertAfterIndex.set(group.startIndex, {
-      synthetic: buildSyntheticChainMessage(
-        group.entry,
-        group.bodies.join("\n\n"),
-        blockSummaryLookup,
-        protectedByBlock.get(blockId) ?? [],
-      ),
-      blockId,
-    });
+    insertAfterIndex.set(group.startIndex, buildSyntheticChainMessage(
+      group.entry,
+      group.bodies.join("\n\n"),
+      blockSummaryLookup,
+      protectedByBlock.get(blockId) ?? [],
+    ));
   }
 
   // 4. emit. Drops are role-restricted: user-role messages (including the
@@ -236,8 +241,8 @@ export function applyChainCompressions(
     if (msg.role === "assistant" && stripAtIndex.has(i)) out.push(withoutThinkingBlocks(msg));
     else out.push(msg);
 
-    const info = insertAfterIndex.get(i);
-    if (info && !existingSyntheticBlockIds.has(info.blockId)) out.push(info.synthetic);
+    const synthetic = insertAfterIndex.get(i);
+    if (synthetic) out.push(synthetic);
   }
   return out;
 }

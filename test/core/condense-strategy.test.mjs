@@ -71,6 +71,21 @@ test("a user's literal compressed-chain quote cannot suppress the program summar
   assert.deepEqual(applyChainCompressions(projected, [chain], () => "ACTUAL_CHAIN_SUMMARY", false), projected);
 });
 
+test("reapplying a shared identity cannot hide additional members without representing their evidence", () => {
+  const raw = [...chainMessages(), { role: "user", timestamp: 10, content: "next" },
+    call("tool-b", 11, "next-source", "read"), result("tool-b", 12, false), final(13)];
+  const first = { ...chain, rangeSummaryText: "FIRST_BODY" };
+  const second = { ...chain, startUserTimestamp: 10, finalAssistantTimestamp: 13,
+    droppedToolCallIds: ["tool-b"], droppedOccurrenceKeys: ["tool-b@12"], rangeSummaryText: "SECOND_BODY" };
+  const project = (messages, views) => applyChainCompressions(messages, views, view => view.rangeSummaryText, false);
+  const partial = project(raw, [first]);
+  const expanded = project(partial, [first, second]);
+  assert.ok(expanded.some(m => m.toolCallId === "tool-b")
+    || expanded.some(m => m.metisDerived?.blockId === first.blockId && JSON.stringify(m).includes("SECOND_BODY")));
+  const full = project(raw, [first, second]);
+  assert.deepEqual(project(full, [first, second]), full);
+});
+
 test("program-derived identity keeps chain projection idempotent independently of text layout", () => {
   const synthetic = buildSyntheticChainMessage(chain, "Existing program summary");
   synthetic.content = [{ type: "text", text: "The same retained summary in a different layout" }];
@@ -78,6 +93,23 @@ test("program-derived identity keeps chain projection idempotent independently o
   const projected = applyChainCompressions(messages, [chain], () => "SHOULD_NOT_BE_INSERTED", false);
   assert.deepEqual(projected, messages);
   assert.equal(projected.filter(message => message.metisDerived?.blockId === "b1").length, 1);
+});
+
+test("range lookup preserves role-specific uniqueness and rejects newly ambiguous anchors", () => {
+  for (const duplicate of [
+    { role: "user", timestamp: 1, content: "duplicate" },
+    { role: "custom", customType: "independent-anchor", timestamp: 1, content: "duplicate" },
+    final(4),
+  ]) {
+    const messages = [...chainMessages(), duplicate];
+    assert.equal(applyChainCompressions(messages, [chain], () => "summary", false), messages);
+  }
+  const summary = { role: "custom", customType: "context-prune-summary", timestamp: 1, content: "unrelated" };
+  const messages = [...chainMessages(), summary, { ...result("other", 1, false) }];
+  assert.ok(applyChainCompressions(messages, [chain], () => "summary", false).some(m => m.metisDerived));
+  // A new synchronous view must see mutation at the same timestamp/leaf.
+  messages.push({ role: "user", timestamp: 1, content: "new ambiguity" });
+  assert.equal(applyChainCompressions(messages, [chain], () => "summary", false), messages);
 });
 
 test("chain detection distinguishes real user quotes from program-derived messages", () => {

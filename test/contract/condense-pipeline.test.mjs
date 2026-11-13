@@ -1046,11 +1046,14 @@ test("historical oversized frontiers retain their boundary without becoming live
 });
 
 test("failed tree recovery cannot expose the old archive but raw source recall remains available", async t => {
-  const f = await fixture(t, { mode: "tui" });
+  const f = await fixture(t, { mode: "tui", chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
   const root = f.sm.getLeafId();
   f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: "old-branch", toolName: "read",
     args: { path: "old" }, resultText: "OLD_BRANCH", turnIndex: 0, timestamp: 3, resultTimestamp: 3 }] });
+  addClosedChains(f);
+  await f.emit("agent_settled"); await f.waitMaintenance();
   await f.emit("session_start");
+  await f.commands.get("pruner").handler("thinking low", f.ctx); // Invalidate old published views before the failed restore.
   f.sm.branch(root);
   const source = f.sm.appendMessage({ role: "user", content: "NEW_BRANCH", timestamp: 4 });
   const broken = f.sm.appendCustomEntry("context-prune-index", { toolCalls: [] });
@@ -1060,6 +1063,8 @@ test("failed tree recovery cannot expose the old archive but raw source recall r
     return getEntry(id);
   });
   await assert.rejects(f.emit("session_tree"), /recovery read failed/);
+  assert.equal(await f.emit("context", { messages: f.sm.buildSessionProjection().messages }), undefined,
+    "a failed owner must not spin a foreground request trying to validate old shared entries");
   const tool = f.tools.get("context_tree_query");
   await assert.rejects(tool.execute("old", { toolCallIds: ["old-branch"] }, undefined, undefined, f.ctx), /recovery is not ready/);
   const raw = await tool.execute("raw", { sourceEntryIds: [source] }, undefined, undefined, f.ctx);
@@ -1664,6 +1669,68 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   assert.match(body, /member-1/);
   await f.emit("session_start");
   assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
+});
+
+test("Native completion, cancellation and failure preserve published views before the next request", async t => {
+  for (const occ of [false, true]) for (const outcome of ["completed", "cancelled", "failed"]) {
+    await t.test(`${occ ? "OCC" : "Native"} ${outcome}`, async t => {
+      const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", occ, capacity: occ,
+        chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+      f.sm.appendCustomMessageEntry("legacy-prefix", "Legacy context", false);
+      addClosedChains(f);
+      await f.emit("agent_settled"); await f.waitMaintenance();
+      const first = f.sm.getBranch().find(e => e.type === "message" && e.message.role === "user");
+      const project = async () => {
+        const messages = f.sm.buildSessionProjection().messages;
+        return (await f.emit("context", { messages }))?.messages ?? messages;
+      };
+      const before = await project();
+      assert.equal(before.filter(m => m.metisDerived?.kind === "condense-chain").length, 1);
+      const controller = new AbortController();
+      await f.emit("session_before_compact", { signal: controller.signal, reason: "manual", willRetry: false,
+        branchEntries: f.sm.getBranch(), preparation: { firstKeptEntryId: first.id, tokensBefore: 90000 } });
+      const owner = { sessionId: f.sm.getSessionId(), messages: f.sm.buildSessionProjection().messages, maintenance: true };
+      f.events.emit(METIS_EVENTS.condenseProject, owner);
+      assert.equal(owner.busy, undefined, "Native may read the existing view while it owns compaction");
+      assert.deepEqual(owner.messages, before);
+      if (outcome === "completed") {
+        const id = f.sm.appendCompaction("Legacy prefix summarized", first.id, 90000);
+        await f.emit("session_compact", { compactionEntry: f.sm.getEntry(id), reason: "manual", willRetry: false });
+      } else if (outcome === "cancelled") controller.abort();
+      else await f.emit("session_compact_failed", { reason: "manual", aborted: false, error: "offline failure" });
+      const after = await project();
+      assert.equal(after.filter(m => m.metisDerived?.kind === "condense-chain").length, 1,
+        "published views must be ready for the first request, not only a later settlement");
+      if (outcome !== "completed") assert.deepEqual(after, before, "unchanged sources retain identical views");
+      assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
+      assert.equal(f.calls.length, 0, "revalidation must not call a summary model");
+    });
+  }
+});
+
+test("Native window changes validate surviving members without publishing newly eligible chains", async t => {
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand",
+    chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  for (let generation = 0; generation < 2; generation++) {
+    addClosedChains(f);
+    await f.emit("agent_settled"); await f.waitMaintenance();
+  }
+  const blocks = () => f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
+  assert.equal(blocks().length, 2);
+  const firstKept = f.sm.getBranch().filter(e => e.type === "message" && e.message.role === "user")[1];
+  addClosedChains(f); // New work is eligible, but this boundary owns only existing views.
+  const controller = new AbortController();
+  await f.emit("session_before_compact", { signal: controller.signal, reason: "manual", willRetry: false,
+    branchEntries: f.sm.getBranch(), preparation: { firstKeptEntryId: firstKept.id, tokensBefore: 90000 } });
+  const id = f.sm.appendCompaction("Old prefix summarized", firstKept.id, 90000);
+  await f.emit("session_compact", { compactionEntry: f.sm.getEntry(id), reason: "manual", willRetry: false });
+  const messages = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages }))?.messages ?? messages;
+  const views = projected.filter(m => m.metisDerived?.kind === "condense-chain");
+  assert.equal(views.length, 2, "the partial first block and complete second block remain profitable");
+  assert.equal(blocks().length, 2, "readiness validation must not publish the third eligible group");
+  assert.ok(projected.some(m => m.role === "toolResult"), "new uncompressed evidence remains visible");
+  assert.equal(f.calls.length, 0);
 });
 
 test("capacity waiting restores published shared views without admitting new chains", async t => {

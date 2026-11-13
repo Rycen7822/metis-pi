@@ -66,7 +66,7 @@ import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./spill.
 import { bareToolCallId, occKey } from "./occurrence-key.ts";
 import { DiagnosticSink } from "./diagnostics.ts";
 import { TokenEstimator, projectionFingerprint } from "./token-estimator.ts";
-import { resolveRange, perBatchSummaryOverlapsDropped } from "./chain-range-prune.ts";
+import { createRangeResolver, resolveRange, perBatchSummaryOverlapsDropped } from "./chain-range-prune.ts";
 import {
   METIS_EVENTS, isBeforeRemoteCompactRequest, isCondenseMaintenanceRequest, isCondenseProjectRequest,
 } from "../collaboration.ts";
@@ -178,7 +178,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const sharedValidations = new Map<string, { shape: string; hasGain: boolean }>();
   let maintenanceAbort: AbortController | undefined;
   let maintenanceTask: Promise<void> | undefined;
-  let maintenanceNext: { ctx: ExtensionContext; version: number } | undefined;
+  let maintenanceNext: { ctx: ExtensionContext; version: number; mode: "automatic" | "validate" } | undefined;
+  let needsSharedValidation = false;
+  let nativeCompaction: { done: Promise<void>; finish: () => void } | undefined;
   let lastMaintenanceSource: string | undefined;
   const stagedChains = new Map<number, { entry: SingleChainCompressionEntry; source: string; config: string }>();
   let deferredFinal: number | undefined;
@@ -198,8 +200,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (isBeforeRemoteCompactRequest(data)) data.waits.push(stopMaintenance());
   });
   // Native/OCC preparation must wait for the current archive write before it owns I/O.
-  pi.on("session_before_compact", async () => {
-    tokenEstimator.clear(); sharedValidations.clear();
+  pi.on("session_before_compact", async (event) => {
+    // Cancellation changes no source. Retain witnesses; use-time shape checks
+    // reject changed windows, which must be revalidated before the next request.
+    tokenEstimator.clear(); needsSharedValidation = true;
+    const signal = event.signal;
+    if (signal && !signal.aborted) {
+      let release!: () => void; // Promise construction assigns synchronously before any use.
+      const done = new Promise<void>(resolve => { release = resolve; });
+      const pending = { done, finish() {
+        signal.removeEventListener("abort", pending.finish);
+        if (nativeCompaction === pending) nativeCompaction = undefined;
+        release();
+      } };
+      nativeCompaction = pending;
+      signal.addEventListener("abort", pending.finish, { once: true });
+    }
     await stopMaintenance();
   });
   const occ = registerOcc(pi, indexer, currentConfig);
@@ -212,6 +228,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
+    needsSharedValidation = true;
     stagedChains.clear();
     lastMaintenanceSource = undefined;
     activeFlushAbort?.abort();
@@ -1616,12 +1633,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   pi.on("model_select", async (_event, ctx) => {
     previousFraction = null;
     maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); stagedChains.clear(); lastMaintenanceSource = undefined;
+    needsSharedValidation = true;
     supersede.floor = 0;
     void maintainChains(ctx);
   });
-  pi.on("session_compact", async () => {
+  const finishNativeCompaction = async (_event: unknown, ctx: ExtensionContext) => {
+    nativeCompaction?.finish();
     supersede.floor = 0;
-  });
+    needsSharedValidation = true;
+    // A recovery waiting for Native already owns readiness; do not race it.
+    return recoveryTask ?? trackRecovery(revalidateSharedChains(ctx, lifecycle));
+  };
+  pi.on("session_compact", finishNativeCompaction);
+  pi.on("session_compact_failed", finishNativeCompaction);
   pi.on("thinking_level_select", async () => {
     supersede.floor = 0;
   });
@@ -1899,11 +1923,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       : { beforeChars: 0, afterChars: 0 } };
   };
 
-  function anchorId(ctx: ExtensionContext, role: "start" | "final", timestamp: number,
-    entries = ctx.sessionManager.buildSessionProjection().entries): string | undefined {
-    const matches = entries.filter(entry => entry.messages.some(message =>
-      message.timestamp === timestamp && (role === "final" ? message.role === "assistant" : message.role === "user" || message.role === "custom")));
-    return matches.length === 1 ? matches[0]!.sourceEntry.id : undefined;
+  function indexAnchorIds(entries: ReturnType<typeof readSourceEdits>["projection"]["entries"]) {
+    type Anchor = { id: string; ordinal: number };
+    const starts = new Map<number, Anchor | undefined>(), finals = new Map<number, Anchor | undefined>();
+    for (const [ordinal, entry] of entries.entries()) for (const message of entry.messages) {
+      if (Number.isNaN(message.timestamp)) continue;
+      const anchors = message.role === "assistant" ? finals : message.role === "user" || message.role === "custom" ? starts : undefined;
+      if (!anchors) continue;
+      if (anchors.has(message.timestamp)) {
+        if (anchors.get(message.timestamp)?.ordinal !== ordinal) anchors.set(message.timestamp, undefined);
+      } else anchors.set(message.timestamp, { id: entry.sourceEntry.id, ordinal });
+    }
+    return (role: "start" | "final", timestamp: number) => (role === "start" ? starts : finals).get(timestamp)?.id;
   }
 
   // Request-local only: index anchors before consulting old recovery records. Do
@@ -1915,7 +1946,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (matches) matches.push(chain);
       else byStart.set(chain.startUserTimestamp, [chain]);
     }
-    return { byStart, grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns), source };
+    return { byStart, resolve: createRangeResolver(raw), anchors: source && indexAnchorIds(source.projection.entries),
+      grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns), source };
   }
 
   function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext,
@@ -1923,15 +1955,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const { grace, byStart } = analysis;
     const source = analysis.source ?? readSourceEdits(ctx);
     const edited = source.changedToolIds;
-    const anchors = source.projection.entries;
+    const anchors = analysis.anchors ?? indexAnchorIds(source.projection.entries);
     return chainMembers(entry).filter((view, i) => {
       const member = entry.members[i]!;
       const chain = byStart.get(view.startUserTimestamp)?.[0];
       if (!chain || view.droppedToolCallIds.some(id => edited.has(id)) || chainMatchesGrace(chain, grace)) return false;
-      const range = resolveRange(view, raw);
+      const range = analysis.resolve(view);
       if (!range) return false;
-      if (member.startEntryId !== anchorId(ctx, "start", member.startUserTimestamp, anchors)
-        || member.finalEntryId !== anchorId(ctx, "final", member.finalAssistantTimestamp!, anchors)) return false;
+      if (member.startEntryId !== anchors("start", member.startUserTimestamp)
+        || member.finalEntryId !== anchors("final", member.finalAssistantTimestamp!)) return false;
       if (member.sourceFingerprint !== projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))) return false;
       view.protectedToolCallIds = chain.protectedToolCallIds;
       const owned = indexer.getOwnedSummaryText(view.droppedOccurrenceKeys ?? []);
@@ -1972,14 +2004,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return { projection, changedToolIds, editedToolIds, editedSummaries };
   }
 
-  function sharedShape(before: any[], views: SingleChainCompressionEntry[]): string {
+  function indexChainProjection(messages: any[]) {
+    return { messages, resolve: createRangeResolver(messages),
+      summaries: messages.filter(message => message.customType === CUSTOM_TYPE_SUMMARY) };
+  }
+
+  function sharedShape(before: ReturnType<typeof indexChainProjection>, views: SingleChainCompressionEntry[]): string {
     const middle = views.flatMap(view => {
-      const range = resolveRange(view, before);
-      return range ? before.slice(range.startIndex, range.endIndex + 1) : [];
+      const range = before.resolve(view);
+      return range ? before.messages.slice(range.startIndex, range.endIndex + 1) : [];
     });
     const keys = new Set(views.flatMap(view => view.droppedOccurrenceKeys ?? []));
-    const summaries = before.filter(message => message.customType === CUSTOM_TYPE_SUMMARY
-      && perBatchSummaryOverlapsDropped(message, keys, new Set()));
+    const summaries = before.summaries.filter(message => perBatchSummaryOverlapsDropped(message, keys, new Set()));
     return projectionFingerprint([views, middle, summaries, currentConfig.value.chainCompression]);
   }
 
@@ -2014,14 +2050,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   function currentChainViews(messages: any[], ctx?: ExtensionContext,
     source?: ReturnType<typeof readSourceEdits>): SingleChainCompressionEntry[] {
     const entries = indexer.getChainEntries();
-    if (entries.length === 0) return [];
+    const shared = ctx ? entries.filter((entry): entry is SharedChainCompressionEntry =>
+      isSharedChain(entry) && !!sharedValidations.get(entry.blockId)?.hasGain) : [];
+    if (shared.length === 0 && !entries.some(entry => !isSharedChain(entry))) return [];
     source ??= ctx && readSourceEdits(ctx);
     const raw = source?.projection.messages ?? messages;
     const analysis = analyzeChains(raw, source);
     const singles = singleCandidates(entries, analysis, ctx);
-    const shared = entries.filter(isSharedChain);
     if (!ctx || shared.length === 0) return singles;
-    const before = projectContext(messages, ctx.model?.api, { ctx, source, chainViews: singles, probe: true }).messages;
+    let before: ReturnType<typeof indexChainProjection> | undefined;
     // This synchronous tree owns one source view. Awaiting writers must obtain
     // a fresh view before checking whether their result can be published.
     return singles.concat(
@@ -2029,12 +2066,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const validation = sharedValidations.get(entry.blockId);
         if (!validation?.hasGain) return [];
         const views = sharedCandidates(entry, raw, ctx, analysis);
-        return views.length && validation.shape === sharedShape(before, views) ? views : [];
+        if (!views.length) return [];
+        before ??= indexChainProjection(projectContext(messages, ctx.model?.api, { ctx, source, chainViews: singles, probe: true }).messages);
+        return validation.shape === sharedShape(before, views) ? views : [];
       }),
     );
   }
 
-  const maintainChains = (ctx: ExtensionContext, prepared?: PreparedProjection): Promise<void> => {
+  const maintainChains = (ctx: ExtensionContext, prepared?: PreparedProjection,
+    mode: "automatic" | "validate" = "automatic"): Promise<void> => {
     if (!currentConfig.value.enabled) {
       maintenanceAbort?.abort();
       tokenEstimator.clear();
@@ -2045,7 +2085,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       return Promise.resolve();
     }
     if (maintenanceTask) {
-      maintenanceNext = { ctx, version: lifecycle };
+      maintenanceNext = { ctx, version: lifecycle, mode };
       return maintenanceTask;
     }
     if (
@@ -2054,7 +2094,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       isFlushing ||
       isArchiving ||
       isCompactingChains ||
-      occ.isRunning()
+      nativeCompaction ||
+      (mode === "automatic" && occ.isRunning())
     )
       return Promise.resolve();
     // With no published shared view to restore, capacity waiting needs no source read at all.
@@ -2074,7 +2115,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         isFlushing ||
         isArchiving ||
         isCompactingChains ||
-        occ.isRunning() ||
+        nativeCompaction ||
+        (mode === "automatic" && occ.isRunning()) ||
         config !== policyFingerprint(currentConfig.value)
       )
         throw new Error("Chain maintenance invalidated");
@@ -2111,15 +2153,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Every shared entry compares against the same single-chain projection.
       // Keep this baseline local to this pass; source checks after awaits still
       // reject any changed session before an approval can be published.
-      let singleBaseline: any[] | undefined;
+      let singleBaseline: ReturnType<typeof indexChainProjection> | undefined;
       for (const entry of entries.filter(isSharedChain)) {
         assertValid();
         const views = sharedCandidates(entry, raw, ctx, analysis);
         if (!views.length) { sharedValidations.delete(entry.blockId); continue; }
-        const before = singleBaseline ??= projectContext(raw, ctx.model?.api,
-          { ctx, source: sourceView, chainViews: singles, probe: true }).messages;
+        const baseline = singleBaseline ??= indexChainProjection(projectContext(raw, ctx.model?.api,
+          { ctx, source: sourceView, chainViews: singles, probe: true }).messages);
+        const before = baseline.messages;
         if (ctx.mode === "tui" && frozenSource) await cooperate();
-        const shape = sharedShape(before, views);
+        const shape = sharedShape(baseline, views);
         if (sharedValidations.get(entry.blockId)?.shape === shape) continue;
         sharedValidations.delete(entry.blockId);
         const source = frozenSource ?? captureSharedSource(raw);
@@ -2136,9 +2179,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           if (source !== captureSharedSource(current.messages)) return;
           sourceView = readSourceEdits(ctx, current);
           analysis.source = sourceView;
+          analysis.anchors = indexAnchorIds(sourceView.projection.entries);
         }
         sharedValidations.set(entry.blockId, { shape, hasGain });
       }
+      needsSharedValidation = false;
+      if (mode === "validate") return;
       // Capacity admission and the automatic switch govern new work only;
       // existing views above still obey source, lifecycle and Native ownership.
       if (occ.isCapacityWaiting() || !currentConfig.value.chainCompression.enabled) {
@@ -2217,11 +2263,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return sum + (range ? JSON.stringify(before.slice(range.startIndex + 1, range.endIndex)).length : 0);
       }, 0);
       if (backlogChars < currentConfig.value.minBatchChars) return;
-      const anchors = sourceView.projection.entries;
+      const anchors = indexAnchorIds(sourceView.projection.entries);
       const entry = await prepareSharedChain(eligible, 0, { indexer, blockRefs, messages: raw,
         now: Date.now, appendEntry, diagnostics,
         backfill: { ...archiveOptions(manager), assertValid: assertNewWork } },
-        (role, timestamp) => anchorId(ctx, role, timestamp, anchors), grace, signal);
+        anchors, grace, signal);
       assertNewWork();
       if (!entry) return;
       const preparedSource = manager.buildSessionProjection();
@@ -2252,29 +2298,37 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       indexer.registerChain(entry);
       const plain = projectContext(raw, ctx.model?.api,
         { ctx, source: readSourceEdits(ctx, measuredSource), chainViews: singles, probe: true, chainFloor: floor }).messages;
-      sharedValidations.set(entry.blockId, { shape: sharedShape(plain, views), hasGain: true });
+      sharedValidations.set(entry.blockId, { shape: sharedShape(indexChainProjection(plain), views), hasGain: true });
       lowerFloor(supersede, floor);
       statsAccum.addChainsCompressed(views.length);
       occ.rewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;
-      if (!signal.aborted && version === lifecycle) diagnostics.report("backfill-empty", "shared-maintenance", String(error));
+      if (!signal.aborted && version === lifecycle) {
+        needsSharedValidation = false; // Leave raw evidence; do not spin a foreground request on a persistent failure.
+        diagnostics.report("backfill-empty", "shared-maintenance", String(error));
+      }
     }).finally(() => {
       if (maintenanceAbort === controller) maintenanceAbort = undefined;
       maintenanceTask = undefined;
       const next = maintenanceNext; maintenanceNext = undefined;
-      if (next?.version === lifecycle) void maintainChains(next.ctx);
+      if (next?.version === lifecycle) void maintainChains(next.ctx, undefined, next.mode);
       if (version === lifecycle) notifyPruneActions(ctx, { chains: publishedChains });
     });
     return maintenanceTask;
   };
 
   const revalidateSharedChains = async (ctx: ExtensionContext, version: number, prepared?: PreparedProjection) => {
-    if (!indexer.getChainEntries().some(isSharedChain)) return;
-    await maintainChains(ctx, prepared);
-    // A cancelled older pass may hand off to this restored session. Awaiting
-    // only its original promise would expose an unvalidated projection as ready.
-    while (version === lifecycle && maintenanceTask) await maintenanceTask;
+    needsSharedValidation = true;
+    if (!indexer.getChainEntries().some(isSharedChain)) { needsSharedValidation = false; return; }
+    while (version === lifecycle && needsSharedValidation) {
+      await nativeCompaction?.done;
+      await stopMaintenance();
+      if (version !== lifecycle || !projectionContext || ctx.signal?.aborted || !currentConfig.value.enabled) return;
+      if (isFlushing || isArchiving || isCompactingChains) return;
+      await maintainChains(ctx, prepared, "validate");
+      prepared = undefined; // An interrupted pass cannot reuse a same-leaf source snapshot.
+    }
   };
 
   pi.on("turn_end", (_event, ctx) => { void maintainChains(ctx); });
@@ -2321,7 +2375,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!isCondenseProjectRequest(data)) return;
     const request = data;
     if (request.sessionId !== activeSessionId) return;
-    if (recoveryTask || isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
+    if (recoveryTask || isFlushing || ((nativeCompaction || occ.isRunning()) && !request.maintenance)) { request.busy = true; return; }
     if (projectionContext) indexer.syncSummaryEntries(projectionContext);
     const source = projectionContext && readSourceEdits(projectionContext);
     const messages = request.includeSummaries && projectionContext
@@ -2329,7 +2383,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     request.messages = projectContext(messages, request.api, { ctx: projectionContext, source }).messages;
   });
   pi.on("context", async (event, ctx) => {
+    await nativeCompaction?.done;
     await awaitRecovery();
+    if (needsSharedValidation) await trackRecovery(revalidateSharedChains(ctx, lifecycle));
     if (!projectionContext || activeSessionId !== ctx.sessionManager.getSessionId()) return;
     if (ctx.mode === "tui" && currentConfig.value.enabled) {
       // Agent activity is already real, but chained microtasks can starve its
@@ -2389,7 +2445,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   });
 
   const compactChains = async (ctx: any) => {
-    if (isFlushing || isArchiving || isCompactingChains || occ.isRunning())
+    if (nativeCompaction || isFlushing || isArchiving || isCompactingChains || occ.isRunning())
       throw new Error("Another context rewrite is running; retry after it settles");
     const version = lifecycle;
     const abort = new AbortController();
@@ -2437,6 +2493,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     start, tree,
     shutdown(ctx: ExtensionContext) {
       lifecycle++;
+      nativeCompaction?.finish();
       jsonSizes.clear();
       maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); stagedChains.clear();
       activeFlushAbort?.abort();
