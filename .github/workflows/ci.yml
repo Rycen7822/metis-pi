@@ -81,13 +81,18 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv pip install --system --python python -r test/subagents/requirements.txt
       - run: npm ci --ignore-scripts --bin-links=false --no-audit --no-fund
+      - name: Prepare the shipped SDK without changing a managed Pi installation
+        run: npm run prepare:pi-sdk
       - name: Cache TypeScript build info
         uses: actions/cache@v4
         with:
           path: .work/tsc
-          key: ${{ runner.os }}-node22-tsc-${{ hashFiles('package-lock.json', 'tsconfig.json', 'config/typescript/*.json', 'src/pi-*/tsconfig.json') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-node22-tsc-${{ hashFiles('package-lock.json', 'tsconfig.json', 'config/typescript/*.json', 'src/pi-*/tsconfig.json') }}-
+          key: >-
+            ${{ runner.os }}-node22-tsc-${{ hashFiles('package-lock.json', 'src/pi-sdk/distribution.json',
+            'tsconfig.json', 'config/typescript/*.json', 'src/pi-*/tsconfig.json') }}-${{ github.sha }}
+          restore-keys: >-
+            ${{ runner.os }}-node22-tsc-${{ hashFiles('package-lock.json', 'src/pi-sdk/distribution.json',
+            'tsconfig.json', 'config/typescript/*.json', 'src/pi-*/tsconfig.json') }}-
       - name: Verify selected host packages
         shell: bash
         env:

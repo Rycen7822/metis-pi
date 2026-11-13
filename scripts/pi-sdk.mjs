@@ -90,9 +90,37 @@ async function packageSDK(sdk) {
       archive: { file, sha256: digest(archive), bytes: archive.length, unpackedBytes: bytes } }, null, 2) + "\n");
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
+async function prepareSDK(distribution, archive) {
+  const targets = new Map();
+  for (const name of sdkPackages) {
+    const directory = path.join(root, "node_modules/@earendil-works", `pi-${name}`);
+    const stat = await lstat(directory), manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
+    assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), `SDK dependencies must be physical: ${directory}`);
+    assert.equal(manifest.name, `@earendil-works/pi-${name}`);
+    assert.equal(manifest.version, distribution.piVersion, `SDK preparation requires Pi ${distribution.piVersion}`);
+    targets.set(name, directory);
+  }
+  await mkdir(path.join(root, ".work"), { recursive: true });
+  const staging = await mkdtemp(path.join(root, ".work/pi-sdk-prepare-"));
+  try {
+    await tar.x({ file: archive, cwd: staging, strict: true });
+    for (const [name, directory] of targets) {
+      await rm(path.join(directory, "dist"), { recursive: true, force: true });
+      await cp(path.join(staging, name, "dist"), path.join(directory, "dist"), { recursive: true });
+    }
+    for (const file of sdkFiles) {
+      const [name, ...parts] = file.split("/"), target = path.join(targets.get(name), ...parts);
+      await mkdir(path.dirname(target), { recursive: true });
+      await cp(path.join(staging, file), target);
+    }
+  } finally { await rm(staging, { recursive: true, force: true }); }
+}
 if (process.argv[2] === "package" && process.argv[3]) await packageSDK(path.resolve(process.argv[3]));
-else if (process.argv[2] !== "verify") throw new Error("Usage: node scripts/pi-sdk.mjs package <patched-sdk> | verify");
+else if (!["verify", "prepare"].includes(process.argv[2]))
+  throw new Error("Usage: node scripts/pi-sdk.mjs package <patched-sdk> | verify | prepare");
 const distribution = await readDistribution(), identity = await patchIdentity();
 assert.deepEqual({ patches: distribution.patches, patchSet: distribution.patchSet }, identity, "SDK archive is stale; rebuild after patch changes");
-await verifiedArchive(distribution);
-console.log(`Pi ${distribution.piVersion}: ${distribution.patches.length} SDK patches, archive verified`);
+const archive = await verifiedArchive(distribution);
+if (process.argv[2] === "prepare") await prepareSDK(distribution, archive);
+console.log(`Pi ${distribution.piVersion}: ${distribution.patches.length} SDK patches, archive verified`
+  + (process.argv[2] === "prepare" ? `; project dependencies prepared (${distribution.patchSet.slice(0, 12)})` : ""));

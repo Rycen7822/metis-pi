@@ -46,6 +46,7 @@
     "postinstall": "node src/pi-sdk/install.mjs && node src/neural-search/runtime/install.mjs",
     "build:pi-sdk": "node scripts/pi-sdk.mjs package",
     "verify:pi-sdk": "node scripts/pi-sdk.mjs verify",
+    "prepare:pi-sdk": "node scripts/pi-sdk.mjs prepare",
     "build:neural-engine": "node scripts/neural-engine.mjs",
     "verify:neural-engine": "node scripts/neural-engine.mjs verify",
     "verify:native-assets": "node scripts/verify-native-assets.mjs",

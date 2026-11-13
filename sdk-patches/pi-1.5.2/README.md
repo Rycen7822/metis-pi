@@ -41,6 +41,12 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
 - ai/tui/codemode/coding-agent 的完整 dist、CLI bundle 和 codemode 文档必须作为一组交付；不局部替换已安装包。
   构建和测试工作区使用实体副本，不用软链接或硬链接拼装。
 
+## 开发与CI依赖
+
+`npm ci --ignore-scripts --bin-links=false` 只安装NPM原版SDK。运行依赖补丁接口的测试前，执行 `npm run prepare:pi-sdk`：
+它先核对patch/归档身份及四包版本，再用随包预编译产物替换本项目node_modules中的四包dist和配套文档。
+仅供开发/CI，不构建SDK、不访问网络、不触碰managed安装或个人配置。要恢复原版依赖，重新运行npm ci。
+
 ## 隔离重建
 
 Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.5.2 且已使用

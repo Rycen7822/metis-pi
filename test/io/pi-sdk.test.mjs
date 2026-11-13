@@ -89,6 +89,43 @@ test("normal SDK install activates all packages together and retains source and 
   await h.preserved();
 });
 
+test("project SDK preparation replaces all verified payloads and rejects mixed versions before changing dependencies", async t => {
+  const h = await fixture(t);
+  await mkdir(path.join(h.pkg, "scripts"));
+  await cp(path.join(root, "scripts/pi-sdk.mjs"), path.join(h.pkg, "scripts/pi-sdk.mjs"));
+  const patches = path.join(h.pkg, "sdk-patches/pi-1.5.2");
+  await mkdir(patches, { recursive: true });
+  const { manifest } = await h.payload();
+  manifest.patches = await Promise.all(Array.from({ length: sdkPatchCount }, async (_, index) => {
+    const file = `${String(index).padStart(4, "0")}.patch`, body = `offline-patch-${index}\n`;
+    await writeFile(path.join(patches, file), body);
+    return { file, sha256: digest(body) };
+  }));
+  manifest.patchSet = digest(JSON.stringify(manifest.patches));
+  await writeFile(path.join(h.pkg, "src/pi-sdk/distribution.json"), JSON.stringify(manifest));
+  for (const name of sdkPackages) {
+    const target = h.sdkDir(h.pkg, name);
+    await cp(h.sdkDir(h.source, name), target, { recursive: true });
+    await writeFile(path.join(target, "dist/stale.txt"), "not-in-new-payload");
+  }
+  const prepare = () => run(process.execPath, [path.join(h.pkg, "scripts/pi-sdk.mjs"), "prepare"], { timeout: 30_000 });
+  assert.match((await prepare()).stdout, /project dependencies prepared/);
+  for (const name of sdkPackages) {
+    const target = h.sdkDir(h.pkg, name);
+    assert.equal(await readFile(path.join(target, "dist/owner.txt"), "utf8"), "new-sdk");
+    await assert.rejects(readFile(path.join(target, "dist/stale.txt")), { code: "ENOENT" });
+    await writeFile(path.join(target, "dist/owner.txt"), "before-rejected-prepare");
+  }
+  for (const file of sdkFiles)
+    assert.equal(await readFile(path.join(h.pkg, "node_modules/@earendil-works", `pi-${file}`), "utf8"), "new-sdk");
+  const last = h.sdkDir(h.pkg, sdkPackages.at(-1));
+  await writeFile(path.join(last, "package.json"), JSON.stringify({ name: `@earendil-works/pi-${sdkPackages.at(-1)}`, version: "1.5.1" }));
+  await assert.rejects(prepare(), /SDK preparation requires Pi 1\.5\.2/);
+  for (const name of sdkPackages)
+    assert.equal(await readFile(path.join(h.sdkDir(h.pkg, name), "dist/owner.txt"), "utf8"), "before-rejected-prepare");
+  await h.preserved();
+});
+
 test("package postinstall replaces the snapshot while preserving both previous runtimes", async t => {
   const h = await fixture(t);
   await h.ensureSDK({ managedRoot: h.managedRoot });

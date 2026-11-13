@@ -8,6 +8,7 @@ import {
   createAgentSession,
   createCodemodeExtension,
   DefaultResourceLoader,
+  initTheme,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -130,6 +131,7 @@ test(
   "metis discovers deferred native subagents through codemode and preserves explicit direct calls and receipts",
   { timeout: 45000 },
   async (t) => {
+    initTheme("dark", false);
     const root = fileURLToPath(new URL("../../", import.meta.url));
     mkdirSync(join(root, ".work"), { recursive: true });
     const dir = mkdtempSync(join(root, ".work/metis-subagent-contract-")),
