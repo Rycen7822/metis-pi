@@ -18,6 +18,8 @@
 | `0008` | 脚本可调用 `tool_search` 时收起 `searchTools()`；模型说明和错误提示同步，无网关时保留原生发现。 |
 | `0009` | 公开主 TUI 的 renderer、编辑器主题、聊天 viewport 及工具 renderer 解析；离屏帧保留光标，BTW 复用完整渲染/滚动/选择链，不接管终端。 |
 | `0010` | 投影和分支批量读取预选有界热正文窗口，避免超预算顺序扫描反复失效；提供可取消的协作式投影读取，沿用完整内容、编辑和压缩规则。 |
+| `0011` | CLI codemode分离在途准入、FIFO执行与结果消费背压；有界预览保留总数/失败/未结算状态，终态不再更新，迟到结果不序列化。 |
+| `0012` | Read显式`format: page`返回原文与行游标/完整性状态；沿用流式读取和原预算，默认string/image与模型正文不变。 |
 
 按编号顺序应用；`0002` 已由上游覆盖，编号留空。
 保留 1.5.2 的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
@@ -29,7 +31,11 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
   这是缓存预算，不是进程总内存限制；调用方持有的完整正文仍占内存。
   投影窗口按有效条目的分支顺序选择，所有条目仍完整返回；异步读取独占 fd/Buffer，重写或切分支时回到当前完整投影。
   单条解码仍不可中断；调用方跨 await 发布前仍须校验正文，不能用 leaf ID 代替。
-- 历史格式、迁移、context edit、图片、持久化失败回滚和原生取消合同不变。
+- 历史格式、迁移、context edit、默认图片和持久化失败回滚合同不变。
+- CLI codemode每次最多128在途、8执行；输入8 Mi/单结果16 Mi/未确认传输32 Mi，单位为JSON字符，不是进程堆上限。
+  执行slot保持到guest消费；ready队列不超过执行并发。累计调用不设128/256上限，独立库未配置execute和deterministic start不启用预算。
+  原生与Metis预览有界；unfinished表示外部结果未知，取消不回滚，不自动重做。忽略abort的宿主工具可跨脚本存活，本限制不是全局工具配额。
+  prelude变化会改变durable指纹，旧检查点不匹配应拒绝恢复。Read page需正整数limit，offset默认1；不提供跨页文件快照，图片和单行超预算明确拒绝。
 - OAuth 登录标识仅表达本机凭据存储中的 provider 级连续性。
   账户、路由、headers 与持久检查点范围仍由调用方验证；普通 API key 不获得 OAuth 豁免。
 - ai/tui/codemode/coding-agent 的完整 dist、CLI bundle 和 codemode 文档必须作为一组交付；不局部替换已安装包。
@@ -73,7 +79,7 @@ npm --prefix "$METIS" run verify:pi-sdk
 避免副本破坏相对引用或制造第二个模块实例；类型也由同一源码导出，不添加假声明或放宽检查。
 
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
-`build:pi-sdk` 核对官方 SHA，干净重放十补丁并逐路径比对源码，再构建四个 SDK 包；
+`build:pi-sdk` 核对官方 SHA，干净重放十二补丁并逐路径比对源码，再构建四个 SDK 包；
 归档包含 `coding-agent/docs/codemode.md`，使运行时指向的文档同步更新；独立沙箱和 bundled worker 均使用补丁后的规则。
 输出 `assets/pi-sdk/pi-1.5.2.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
 若 check 格式化改写源码，先同步补丁，再重新构建；不能沿用旧归档改名充当新版本。

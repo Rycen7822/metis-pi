@@ -38,8 +38,8 @@ class ActionRun {
 
   publish = (result: Result): void => {
     this.latest = result;
-    const calls = asRecord(result.details).calls;
-    this.nativeCalls = Array.isArray(calls) ? calls.length : this.nativeCalls;
+    const details = asRecord(result.details), calls = details.calls, total = asRecord(details.callSummary).total;
+    this.nativeCalls = typeof total === "number" ? total : Array.isArray(calls) ? calls.length : this.nativeCalls;
     this.update?.(this.attach(result));
   };
 

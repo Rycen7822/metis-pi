@@ -42,13 +42,21 @@
     {
       "file": "0010-stream-session-projections.patch",
       "sha256": "f13a49e35f274887a9683e9f2cf6d2d185fc73bfc179531acb5081388bb6edb9"
+    },
+    {
+      "file": "0011-bound-codemode-execution.patch",
+      "sha256": "084730115e17590e5b0061a2a05b604c254c7e6d1af0f00abf5206ac4c7e038b"
+    },
+    {
+      "file": "0012-add-programmatic-read-pages.patch",
+      "sha256": "9d28884a2dde042330aec9698d89f228966deb332cb4688df6189e3da19d7c18"
     }
   ],
-  "patchSet": "b0bea2d53bf176584ce1c373ed63458348cf13209fdc19be37de92625c26fb79",
+  "patchSet": "ab8a6e31401d37251f6cfec5e021ff330c77f7b91152ee6842788bd0fe1a0c7b",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "555c09268a28994f3193ed5b273721aaf61354345ad6470db10acbc79eb18378",
-    "bytes": 6015673,
-    "unpackedBytes": 26686356
+    "sha256": "91d9920b945f39429aae247e27c8da0213aa11e2fbf639dc15bbbd111fcffa85",
+    "bytes": 6030265,
+    "unpackedBytes": 26735186
   }
 }

@@ -63,15 +63,15 @@ function setup(t, overrides = {}, lifecycle = false, sources = {}, options = {})
   }
   t.after(() => handle.dispose());
   const row = new Host("codemode", context.getRegisteredToolDefinition("codemode"), { code });
-  const parentEvent = { toolCallId: parent, toolName: "codemode", args: { code } };
+  const parentEvent = { type: "tool_execution_start", toolCallId: parent, toolName: "codemode", args: { code } };
   if (lifecycle) handlers.get("tool_execution_start")(parentEvent, ctx);
   else store.start(parentEvent, true);
   function capture(id, name, args, result, isError = false) {
-    const event = { toolCallId: `${parent}/${id}`, parentToolCallId: parent, toolName: name, args };
+    const event = { type: "tool_execution_start", toolCallId: `${parent}/${id}`, parentToolCallId: parent, toolName: name, args };
     if (lifecycle) handlers.get("tool_execution_start")(event, ctx);
     else store.start(event);
     // Actual nested end events omit args; the start owns them.
-    const end = { ...event, args: undefined, result, isError };
+    const end = { ...event, type: "tool_execution_end", args: undefined, result, isError };
     if (result !== undefined) {
       if (lifecycle) handlers.get("tool_execution_end")(end, ctx);
       else store.finish(end);
@@ -593,6 +593,33 @@ test("parallel running calls use real lifecycle ids and independent callback sta
   assert.equal(results.at(-1), true);
 });
 
+test("bounded call previews preserve omitted failures and unfinished outcomes on replay", t => {
+  const { row } = setup(t);
+  row.updateResult(deepFreeze({ content: [], details: {
+    calls: [call(999, "fixture_external", {}, "unfinished")],
+    callSummary: { total: 1000, omitted: 999, error: 7, ok: 992, unfinished: 1, running: 0, cancelled: 0, cost: 0 },
+  } }), false);
+  assert.match(plain(row), /999 earlier call previews not retained/);
+  assert.match(plain(row), /1000 total, 7 failed/);
+  assert.match(plain(row), /1 unfinished calls; external results unknown/);
+  assert.match(plain(row), /\? fixture_external/);
+  assert.doesNotMatch(plain(row), /✓ fixture_external/);
+});
+
+test("bounded preview issue order cannot borrow a different earlier live execution", t => {
+  const { row, capture } = setup(t);
+  capture(1, "read", { path: "old.md" }, { content: [{ type: "text", text: "old" }] });
+  try {
+    row.updateResult({ content: [], details: {
+      calls: [{ ...call("?", "read", { path: "new.md" }, "running"), order: 999 }],
+    } }, true);
+    assert.match(plain(row), /new\.md/);
+  } finally {
+    row.updateResult({ content: [], details: { calls: [] } }, false);
+    plain(row); // Stop the native streaming timer even when the assertion fails.
+  }
+});
+
 test("reloaded bash uses persisted complete arguments instead of the truncated preview", (t) => {
   const { row } = setup(t);
   const command = ["printf HISTORY_HEAD", ...Array(20).fill("printf middle"), "printf HISTORY_TAIL"].join("\n");
@@ -691,6 +718,22 @@ test("appearance lifecycle supplies finalized nested results and clears them on 
   row.setExpanded(false); row.setExpanded(true);
   assert.doesNotMatch(plain(row), /FINAL_POST_HOOK_BODY/);
   assert.match(plain(row), /Nested results unavailable/);
+});
+
+test("display cache follows the bounded tail without evicting active calls", () => {
+  const store = new CodemodeViewStore();
+  store.start({ toolCallId: parent, toolName: "codemode" }, true);
+  for (let id = 0; id < 260; id++) {
+    const event = { toolCallId: `${parent}/${id}`, parentToolCallId: parent, toolName: "read", args: { path: `${id}.md` } };
+    store.start(event);
+    if (id) store.finish({ ...event, result: { content: [{ type: "text", text: `${id}` }] } });
+  }
+  assert.equal(store.entries(parent).length, 256);
+  assert.equal(store.get(parent, `${parent}/0`).isPartial, true);
+  assert.equal(store.get(parent, `${parent}/1`), undefined);
+  assert.equal(store.get(parent, `${parent}/259`).result.content[0].text, "259");
+  store.start({ toolCallId: `${parent}/oversized`, parentToolCallId: parent, toolName: "read", args: "x".repeat(3 * 1024 * 1024) });
+  assert.equal(store.entries(parent).length, 256, "a refused result does not first evict an older retained call");
 });
 
 test("display cache ignores foreign parents, refuses oversized results, and clears references", () => {

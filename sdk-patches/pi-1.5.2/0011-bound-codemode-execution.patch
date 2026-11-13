@@ -1,0 +1,1390 @@
+diff --git a/packages/codemode/src/index.ts b/packages/codemode/src/index.ts
+index 3eedea10e..a4b95204a 100644
+--- a/packages/codemode/src/index.ts
++++ b/packages/codemode/src/index.ts
+@@ -43,6 +43,7 @@ export {
+ } from "./source.ts";
+ export type {
+ 	CodemodeCall,
++	CodemodeCallLimits,
+ 	CodemodeCallStatus,
+ 	CodemodeDeclaredGlobal,
+ 	CodemodeDeclaredTool,
+diff --git a/packages/codemode/src/portable.ts b/packages/codemode/src/portable.ts
+index 27069de33..0cee4c3d2 100644
+--- a/packages/codemode/src/portable.ts
++++ b/packages/codemode/src/portable.ts
+@@ -31,6 +31,7 @@ export {
+ } from "./runtime/remote.ts";
+ export type {
+ 	CodemodeCall,
++	CodemodeCallLimits,
+ 	CodemodeCallStatus,
+ 	CodemodeDeclaredGlobal,
+ 	CodemodeDeclaredTool,
+diff --git a/packages/codemode/src/runtime/execution.ts b/packages/codemode/src/runtime/execution.ts
+index 06199e9f3..0d488542e 100644
+--- a/packages/codemode/src/runtime/execution.ts
++++ b/packages/codemode/src/runtime/execution.ts
+@@ -24,6 +24,7 @@
+ import { toCodemodeIdentifier } from "../identifier.ts";
+ import type {
+ 	CodemodeCall,
++	CodemodeCallLimits,
+ 	CodemodeCallStatus,
+ 	CodemodeDeclaredGlobal,
+ 	CodemodeDeclaredTool,
+@@ -146,6 +147,8 @@ interface PendingCall {
+ 	record: CodemodeCall | undefined;
+ 	startedAt: number;
+ 	controller: AbortController;
++	inputChars: number;
++	resultChars?: number;
+ }
+ 
+ /** Checks global names: identifiers or `namespace.member`, not shadowing a built-in global or each other. */
+@@ -181,9 +184,30 @@ interface ExecutionOptions {
+ 	store: Record<string, string>;
+ 	deterministic?: { startedAt: number; seed: number };
+ 	control?: Control;
++	callLimits?: CodemodeCallLimits;
++	maxRecordedCalls?: number;
+ 	launch: VmLauncher;
+ }
+ 
++function checkedLimits(value: CodemodeCallLimits | undefined): CodemodeCallLimits | undefined {
++	if (value === undefined) return;
++	const limits = {
++		maxPendingCalls: value?.maxPendingCalls,
++		maxConcurrentCalls: value?.maxConcurrentCalls,
++		maxInputChars: value?.maxInputChars,
++		maxResultChars: value?.maxResultChars,
++		maxUnconsumedResultChars: value?.maxUnconsumedResultChars,
++	};
++	for (const [name, limit] of Object.entries(limits)) {
++		if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error(name + " must be a positive safe integer");
++	}
++	if (limits.maxConcurrentCalls > limits.maxPendingCalls)
++		throw new Error("Concurrency cannot exceed pending admission");
++	if (limits.maxResultChars > limits.maxUnconsumedResultChars)
++		throw new Error("A result must fit in the delivery window");
++	return limits;
++}
++
+ /** One script run in its own VM. */
+ class Execution {
+ 	readonly promise: Promise<CodemodeResult>;
+@@ -200,6 +224,14 @@ class Execution {
+ 	private readonly output: CodemodeOutputItem[] = [];
+ 	private readonly calls: CodemodeCall[] = [];
+ 	private readonly pending = new Map<number, PendingCall>();
++	private readonly queued: Extract<WorkerToHostMessage, { type: "call" }>[] = [];
++	private readonly replies: HostToWorkerMessage[] = [];
++	private readonly limits: CodemodeCallLimits | undefined;
++	private readonly maxRecordedCalls: number | undefined;
++	private callsOmitted = 0;
++	private activeCalls = 0;
++	private inputChars = 0;
++	private unconsumedChars = 0;
+ 	/** Whether the execution has its outcome. */
+ 	finished = false;
+ 
+@@ -210,6 +242,8 @@ class Execution {
+ 		this.executors = options.executors;
+ 		this.control = options.control;
+ 		this.signal = options.signal;
++		this.limits = options.callLimits;
++		this.maxRecordedCalls = options.maxRecordedCalls;
+ 
+ 		if (Number.isFinite(options.timeoutMs)) {
+ 			this.timer = setTimeout(() => {
+@@ -236,6 +270,7 @@ class Execution {
+ 			globals: options.globals.map((global) => ({ name: global.name, spread: global.spread === true })),
+ 			memoryLimitBytes: options.memoryLimitBytes,
+ 			store: options.store,
++			...(this.limits ? { callLimits: this.limits } : {}),
+ 			...(options.deterministic ? { deterministic: options.deterministic } : {}),
+ 		};
+ 		const events: VmEvents = {
+@@ -337,8 +372,20 @@ class Execution {
+ 			case "call":
+ 				if (this.pending.has(message.id)) throw new BridgeError(`duplicate call id ${message.id}`);
+ 				if (this.control) this.forwardCall(message, this.control);
+-				else void this.handleCall(message);
++				else this.handleCall(message);
+ 				break;
++			case "consumed": {
++				const pending = this.pending.get(message.id);
++				if (this.limits && pending?.resultChars !== undefined) {
++					this.unconsumedChars -= pending.resultChars;
++					this.inputChars -= pending.inputChars;
++					this.pending.delete(message.id);
++					this.activeCalls--;
++					this.flushReplies();
++					this.dispatch();
++				}
++				break;
++			}
+ 			case "started":
+ 				this.control?.onStarted?.(message.fingerprint);
+ 				break;
+@@ -370,19 +417,67 @@ class Execution {
+ 		const args = message.args === undefined ? undefined : parseBridgeJson(message.args, "call arguments");
+ 		const record: CodemodeCall | undefined =
+ 			target === "tool" ? { name, status: "cancelled", durationMs: 0 } : undefined;
+-		if (record) this.calls.push(record);
+-		this.pending.set(id, { record, startedAt: performance.now(), controller: new AbortController() });
++		if (record) this.recordCall(record);
++		this.pending.set(id, { record, startedAt: performance.now(), controller: new AbortController(), inputChars: 0 });
+ 		control.onCall({ id, target, name, args });
+ 	}
+ 
+-	private async handleCall(message: Extract<WorkerToHostMessage, { type: "call" }>): Promise<void> {
++	private recordCall(record: CodemodeCall): void {
++		this.calls.push(record);
++		if (this.maxRecordedCalls !== undefined && this.calls.length > this.maxRecordedCalls) {
++			this.calls.shift();
++			this.callsOmitted++;
++		}
++	}
++
++	private handleCall(message: Extract<WorkerToHostMessage, { type: "call" }>): void {
+ 		const { id, name } = message;
+-		const isTool = message.target === "tool";
+-		const record: CodemodeCall | undefined = isTool ? { name, status: "cancelled", durationMs: 0 } : undefined;
+-		if (record) this.calls.push(record);
+-		const pending: PendingCall = { record, startedAt: performance.now(), controller: new AbortController() };
+-		this.pending.set(id, pending);
++		const inputChars = message.args?.length ?? 0;
++		if (
++			this.limits &&
++			(this.pending.size >= this.limits.maxPendingCalls || this.inputChars + inputChars > this.limits.maxInputChars)
++		) {
++			this.post({
++				type: "result",
++				id,
++				ok: false,
++				payload: "Call admission limit exceeded; the call did not start.",
++			});
++			return;
++		}
++		const record: CodemodeCall | undefined =
++			message.target === "tool" ? { name, status: "cancelled", durationMs: 0 } : undefined;
++		if (record) this.recordCall(record);
++		this.pending.set(id, { record, startedAt: performance.now(), controller: new AbortController(), inputChars });
++		this.inputChars += inputChars;
++		this.queued.push(message);
++		this.dispatch();
++	}
+ 
++	private dispatch(): void {
++		while (
++			!this.finished &&
++			this.queued.length > 0 &&
++			this.activeCalls < (this.limits?.maxConcurrentCalls ?? Infinity)
++		) {
++			const message = this.queued.shift();
++			if (!message) return;
++			const pending = this.pending.get(message.id);
++			if (!pending) continue;
++			this.activeCalls++;
++			void this.executeCall(message, pending).catch((error: unknown) => {
++				this.finish({ kind: "sandbox", message: errorMessage(error) });
++			});
++		}
++	}
++
++	private async executeCall(
++		message: Extract<WorkerToHostMessage, { type: "call" }>,
++		pending: PendingCall,
++	): Promise<void> {
++		const { id, name } = message;
++		const { record } = pending;
++		const isTool = message.target === "tool";
+ 		let status: CodemodeCallStatus;
+ 		let reply: HostToWorkerMessage;
+ 		try {
+@@ -390,21 +485,59 @@ class Execution {
+ 			if (!tool) throw new Error(`Unknown ${isTool ? "tool" : "global"} "${name}"`);
+ 			const args: unknown = message.args === undefined ? undefined : JSON.parse(message.args);
+ 			const value = await tool.execute(args, { signal: pending.controller.signal });
+-			reply = { type: "result", id, ok: true, payload: value === undefined ? undefined : JSON.stringify(value) };
++			// Uncooperative tools may finish after the VM ended; avoid late serialization too.
++			if (this.finished) return;
++			const payload = value === undefined ? undefined : JSON.stringify(value);
++			if (this.limits && (payload?.length ?? 0) > this.limits.maxResultChars) {
++				throw new Error(
++					"Result exceeds delivery limit; operation may have run. Request less data; do not retry side effects blindly.",
++				);
++			}
++			reply = { type: "result", id, ok: true, payload };
+ 			status = "ok";
+ 		} catch (error) {
+-			reply = { type: "result", id, ok: false, payload: errorMessage(error) };
++			if (this.finished) return;
++			const text = errorMessage(error);
++			reply = {
++				type: "result",
++				id,
++				ok: false,
++				payload: this.limits ? text.slice(0, this.limits.maxResultChars) : text,
++			};
+ 			status = "error";
+ 		}
+ 
+-		// Already cancelled by finish(): the record keeps "cancelled" and the
+-		// VM is gone or going.
+-		if (!this.pending.delete(id)) return;
++		if (!this.pending.has(id)) return;
+ 		if (record) {
+ 			record.status = status;
+ 			record.durationMs = performance.now() - pending.startedAt;
+ 		}
+-		this.post(reply);
++		if (this.limits) {
++			this.replies.push(reply);
++			this.flushReplies();
++		} else {
++			this.pending.delete(id);
++			this.inputChars -= pending.inputChars;
++			this.activeCalls--;
++			this.post(reply);
++			this.dispatch();
++		}
++	}
++
++	private flushReplies(): void {
++		if (!this.limits) return;
++		while (!this.finished && this.replies.length > 0) {
++			const reply = this.replies[0];
++			if (!reply) return;
++			const chars = reply.payload?.length ?? 0;
++			if (this.unconsumedChars + chars > this.limits.maxUnconsumedResultChars) return;
++			this.replies.shift();
++			const pending = this.pending.get(reply.id);
++			if (!pending) continue;
++			pending.resultChars = chars;
++			this.unconsumedChars += chars;
++			this.post(reply);
++		}
+ 	}
+ 
+ 	private finish(
+@@ -424,9 +557,15 @@ class Execution {
+ 			pending.controller.abort();
+ 		}
+ 		this.pending.clear();
++		this.queued.length = 0;
++		this.replies.length = 0;
++		this.activeCalls = this.inputChars = this.unconsumedChars = 0;
+ 		this.unsent = [];
+ 
+-		const ended = during === undefined ? {} : { during: { seq: during.seq, issued: during.issued } };
++		const ended = {
++			...(during === undefined ? {} : { during: { seq: during.seq, issued: during.issued } }),
++			...(this.callsOmitted ? { callsOmitted: this.callsOmitted } : {}),
++		};
+ 		const result: CodemodeResult = error
+ 			? { ok: false, error, output: this.output, calls: this.calls, ...ended }
+ 			: {
+@@ -500,6 +639,13 @@ export class CodemodeSandboxBase {
+ 	 */
+ 	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
+ 		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
++		const callLimits = checkedLimits(options.callLimits);
++		if (
++			options.maxRecordedCalls !== undefined &&
++			(!Number.isSafeInteger(options.maxRecordedCalls) || options.maxRecordedCalls <= 0)
++		) {
++			throw new Error("maxRecordedCalls must be a positive safe integer");
++		}
+ 		const tools = new Map(this.toolsByName);
+ 		const execution = new Execution({
+ 			code,
+@@ -510,6 +656,8 @@ export class CodemodeSandboxBase {
+ 			signal: options.signal,
+ 			memoryLimitBytes: this.memoryLimitBytes,
+ 			store: serializeStore(options.store),
++			callLimits,
++			maxRecordedCalls: options.maxRecordedCalls,
+ 			launch: this.launch,
+ 		});
+ 		this.running.add(execution);
+diff --git a/packages/codemode/src/runtime/prelude-source.ts b/packages/codemode/src/runtime/prelude-source.ts
+index 6cc9e641d..0166b2f7b 100644
+--- a/packages/codemode/src/runtime/prelude-source.ts
++++ b/packages/codemode/src/runtime/prelude-source.ts
+@@ -45,7 +45,7 @@ export const MAX_OUTPUT_ITEMS = 100_000;
+ const IMAGE_HELPER_EXPECTS =
+ 	'image expects a non-empty image URL string, an object with image_url, or an image block { type: "image", data, mimeType }';
+ 
+-export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson, storeJson) {
++export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson, storeJson, limitsJson) {
+ 	"use strict";
+ 
+ 	// Freeze every object reachable from the built-in globals, plus the intrinsics that are only
+@@ -144,6 +144,8 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
+ 	const TypeErrorCtor = TypeError;
+ 	const RangeErrorCtor = RangeError;
+ 	const pending = new Map();
++	const limits = limitsJson === undefined ? null : parse(limitsJson);
++	let inputChars = 0;
+ 	let nextId = 1;
+ 	let finished = false;
+ 	// Thrown by exit() to unwind the script after it already reported success.
+@@ -206,8 +208,15 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
+ 					reject(error);
+ 					return;
+ 				}
++				const chars = json === undefined ? 0 : json.length;
++				if (limits && (pending.size >= limits.maxPendingCalls || inputChars + chars > limits.maxInputChars)) {
++					reject(new RangeErrorCtor("Call admission limit exceeded; await earlier calls or batch with smaller inputs. " +
++						"The call did not start."));
++					return;
++				}
+ 				const id = nextId++;
+-				pending.set(id, { resolve, reject });
++				inputChars += chars;
++				pending.set(id, { resolve, reject, chars });
+ 				bridge(kind, id, name, json);
+ 			});
+ 	}
+@@ -462,6 +471,7 @@ export const PRELUDE_SOURCE: string = `(function (bridge, toolsJson, globalsJson
+ 			const entry = pending.get(id);
+ 			if (!entry) return;
+ 			pending.delete(id);
++			inputChars -= entry.chars;
+ 			if (!ok) {
+ 				const error = new ErrorCtor(payload);
+ 				if (propertiesJson !== undefined) {
+diff --git a/packages/codemode/src/runtime/protocol.ts b/packages/codemode/src/runtime/protocol.ts
+index 0f1e126a4..ce34e1361 100644
+--- a/packages/codemode/src/runtime/protocol.ts
++++ b/packages/codemode/src/runtime/protocol.ts
+@@ -1,4 +1,4 @@
+-import type { CodemodeDuring, CodemodeOutputItem } from "../types.ts";
++import type { CodemodeCallLimits, CodemodeDuring, CodemodeOutputItem } from "../types.ts";
+ import type { CodemodeWasmModule } from "../wasm.ts";
+ 
+ /**
+@@ -19,6 +19,7 @@ export interface VmStartData {
+ 	memoryLimitBytes: number | undefined;
+ 	/** Snapshot for `load()`: key to JSON text. */
+ 	store: Record<string, string>;
++	callLimits?: CodemodeCallLimits;
+ 	/**
+ 	 * Run deterministically (`CodemodeSandboxBase.start()`): UTC, a virtual clock starting at `startedAt` (ms since
+ 	 * the epoch) that moves only with delivered results, randomness from `seed`, no `WeakRef`, results applied in
+@@ -41,6 +42,7 @@ export interface WorkerData extends VmStartData {
+ export type ScriptErrorJson = string;
+ 
+ export type WorkerToHostMessage =
++	| { type: "consumed"; id: number }
+ 	| { type: "call"; id: number; target: "tool" | "global"; name: string; args: string | undefined }
+ 	| { type: "output"; item: CodemodeOutputItem }
+ 	/**
+@@ -80,6 +82,7 @@ export function isWorkerToHostMessage(value: unknown): value is WorkerToHostMess
+ 	const type = (value as { type?: unknown }).type;
+ 	return (
+ 		type === "call" ||
++		type === "consumed" ||
+ 		type === "output" ||
+ 		type === "done" ||
+ 		type === "crash" ||
+diff --git a/packages/codemode/src/runtime/remote.ts b/packages/codemode/src/runtime/remote.ts
+index f5f02de26..a44de7ad4 100644
+--- a/packages/codemode/src/runtime/remote.ts
++++ b/packages/codemode/src/runtime/remote.ts
+@@ -168,6 +168,7 @@ export function serveCodemodeRemote(
+ 					break;
+ 				// Sent at once: a host replaying a script waits for it to see that the script issued no further call.
+ 				case "call":
++				case "consumed":
+ 				case "idle":
+ 					exchange([...takeBuffer(), typed]).then(reply, () => end(undefined));
+ 					break;
+diff --git a/packages/codemode/src/runtime/vm.ts b/packages/codemode/src/runtime/vm.ts
+index 2618eef9b..97b521c92 100644
+--- a/packages/codemode/src/runtime/vm.ts
++++ b/packages/codemode/src/runtime/vm.ts
+@@ -197,6 +197,8 @@ export async function startVm(options: StartVmOptions): Promise<VmSession> {
+ 				message.properties === undefined ? vm.undefined : vm.newString(message.properties),
+ 			);
+ 		});
++		// Release the transport window after parsing, before continuations issue more calls.
++		if (data.callLimits) post({ type: "consumed", id: message.id });
+ 		drain();
+ 	};
+ 	const session: VmSession = {
+@@ -305,6 +307,7 @@ export async function startVm(options: StartVmOptions): Promise<VmSession> {
+ 					vm.newString(JSON.stringify(data.tools)),
+ 					vm.newString(JSON.stringify(data.globals)),
+ 					vm.newString(JSON.stringify(data.store)),
++					vm.newString(JSON.stringify(data.callLimits ?? null)),
+ 				),
+ 			),
+ 		);
+diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
+index e69cd290f..eb3c64cd6 100644
+--- a/packages/codemode/src/types.ts
++++ b/packages/codemode/src/types.ts
+@@ -97,6 +97,7 @@ export type CodemodeResult =
+ 			value: unknown;
+ 			output: CodemodeOutputItem[];
+ 			calls: CodemodeCall[];
++			callsOmitted?: number;
+ 			storeWrites: CodemodeStoreWrites;
+ 			during?: CodemodeDuring;
+ 	  }
+@@ -105,6 +106,7 @@ export type CodemodeResult =
+ 			error: CodemodeError;
+ 			output: CodemodeOutputItem[];
+ 			calls: CodemodeCall[];
++			callsOmitted?: number;
+ 			during?: CodemodeDuring;
+ 	  };
+ 
+@@ -242,8 +244,22 @@ export interface CodemodeRun {
+ 	deliver(seq: number, now: number, id: number, outcome: CodemodeOutcome): void;
+ }
+ 
++/** Optional host/guest budgets for one execution; they never limit cumulative calls. */
++export interface CodemodeCallLimits {
++	maxPendingCalls: number;
++	maxConcurrentCalls: number;
++	/** Serialized JSON characters, not UTF-8 bytes or a whole-process heap limit. */
++	maxInputChars: number;
++	maxResultChars: number;
++	maxUnconsumedResultChars: number;
++}
++
+ export interface CodemodeExecuteOptions {
+ 	signal?: AbortSignal;
++	/** Opt-in admission, FIFO dispatch and result-consumption backpressure. */
++	callLimits?: CodemodeCallLimits;
++	/** Keep only this many call records. Omission is reported in callsOmitted. */
++	maxRecordedCalls?: number;
+ 	/** Overrides the sandbox default for this execution. */
+ 	timeoutMs?: number;
+ 	/**
+diff --git a/packages/codemode/test/sandbox.test.ts b/packages/codemode/test/sandbox.test.ts
+index 58a24f669..4f3a698dd 100644
+--- a/packages/codemode/test/sandbox.test.ts
++++ b/packages/codemode/test/sandbox.test.ts
+@@ -3,7 +3,7 @@ import vm from "node:vm";
+ import { afterEach, beforeEach, describe, expect, it } from "vitest";
+ import {
+ 	CodemodeSandbox,
+-	type CodemodeSandboxBase,
++	CodemodeSandboxBase,
+ 	type CodemodeSandboxBaseOptions,
+ 	type CodemodeTool,
+ 	InlineCodemodeSandbox,
+@@ -70,11 +70,271 @@ describe("embedded sources", () => {
+ 	});
+ });
+ 
++describe("host-side optional budgets", () => {
++	const callLimits = {
++		maxPendingCalls: 1,
++		maxConcurrentCalls: 1,
++		maxInputChars: 4,
++		maxResultChars: 128,
++		maxUnconsumedResultChars: 128,
++	};
++
++	it("independently rejects oversized or excessive VM requests before executing tools", async () => {
++		let calls = 0;
++		const gate = Promise.withResolvers<void>(),
++			launched = Promise.withResolvers<void>();
++		let send: (message: unknown) => void = () => {
++			throw new Error("Not launched");
++		};
++		const replies: unknown[] = [];
++		const sandbox = new CodemodeSandboxBase(
++			{
++				tools: [
++					{
++						name: "write",
++						execute: async () => {
++							calls++;
++							await gate.promise;
++						},
++					},
++				],
++			},
++			(_data, events) => {
++				send = events.message;
++				launched.resolve();
++				return { post: (message) => replies.push(message), stop: async () => {} };
++			},
++		);
++		sandboxes.push(sandbox);
++		const run = sandbox.execute("", { callLimits });
++		try {
++			await launched.promise;
++			send({ type: "call", id: 1, target: "tool", name: "write", args: "not valid JSON" });
++			expect(calls).toBe(0);
++			send({ type: "call", id: 2, target: "tool", name: "write", args: "{}" });
++			send({ type: "call", id: 3, target: "tool", name: "write", args: "{}" });
++			expect(calls).toBe(1);
++			expect(replies).toEqual([
++				expect.objectContaining({ id: 1, ok: false, payload: expect.stringContaining("admission") }),
++				expect.objectContaining({ id: 3, ok: false, payload: expect.stringContaining("admission") }),
++			]);
++			send({ type: "done", ok: true, value: undefined, writes: "[]" });
++			expect(await run).toMatchObject({ ok: true });
++		} finally {
++			gate.resolve();
++			await sandbox.close();
++		}
++	});
++
++	it("holds a ready result until the preceding delivery is consumed", async () => {
++		const launched = Promise.withResolvers<void>(),
++			first = Promise.withResolvers<void>();
++		let send: (message: unknown) => void = () => {
++			throw new Error("Not launched");
++		};
++		const replies: { id: number }[] = [];
++		const sandbox = new CodemodeSandboxBase(
++			{ tools: [{ name: "read", execute: () => "x".repeat(90) }] },
++			(_data, events) => {
++				send = events.message;
++				launched.resolve();
++				return {
++					post(message) {
++						replies.push(message);
++						first.resolve();
++					},
++					stop: async () => {},
++				};
++			},
++		);
++		sandboxes.push(sandbox);
++		const run = sandbox.execute("", { callLimits: { ...callLimits, maxPendingCalls: 2, maxConcurrentCalls: 2 } });
++		await launched.promise;
++		send({ type: "call", id: 1, target: "tool", name: "read", args: "{}" });
++		send({ type: "call", id: 2, target: "tool", name: "read", args: "{}" });
++		await first.promise;
++		await Promise.resolve();
++		expect(replies.map((r) => r.id)).toEqual([1]);
++		send({ type: "consumed", id: 1 });
++		expect(replies.map((r) => r.id)).toEqual([1, 2]);
++		send({ type: "consumed", id: 2 });
++		send({ type: "done", ok: true, value: undefined, writes: "[]" });
++		expect(await run).toMatchObject({ ok: true });
++	});
++
++	it("rejects invalid limits before launching a VM", () => {
++		const sandbox = new CodemodeSandboxBase({}, () => {
++			throw new Error("Must not launch");
++		});
++		sandboxes.push(sandbox);
++		for (const limits of [
++			{ ...callLimits, maxInputChars: 0 },
++			{ ...callLimits, maxResultChars: Infinity },
++			{ ...callLimits, maxConcurrentCalls: 2 },
++			{ ...callLimits, maxUnconsumedResultChars: 64 },
++		])
++			expect(() => sandbox.execute("", { callLimits: limits })).toThrow();
++		expect(() => sandbox.execute("", { maxRecordedCalls: 0 })).toThrow();
++	});
++});
++
+ describe.each(Object.keys(BACKENDS))("%s backend", (name) => {
+ 	beforeEach(() => {
+ 		backend = name;
+ 	});
+ 
++	const callLimits = {
++		maxPendingCalls: 6,
++		maxConcurrentCalls: 2,
++		maxInputChars: 1024,
++		maxResultChars: 128,
++		maxUnconsumedResultChars: 128,
++	};
++
++	it("rejects pending fan-out before dispatch while allSettled observes each rejection", async () => {
++		const gate = Promise.withResolvers<void>(),
++			started = Promise.withResolvers<void>();
++		let calls = 0;
++		const sandbox = createSandbox([
++			{
++				name: "slow",
++				execute: async () => {
++					if (++calls === 2) started.resolve();
++					await gate.promise;
++					return calls;
++				},
++			},
++		]);
++		const run = sandbox.execute("return await Promise.allSettled(Array.from({length:5}, () => tools.slow({})))", {
++			callLimits: { ...callLimits, maxPendingCalls: 2 },
++		});
++		try {
++			await Promise.race([
++				started.promise,
++				run.then(() => {
++					throw new Error("Script ended before admission");
++				}),
++			]);
++			expect(calls).toBe(2);
++		} finally {
++			gate.resolve();
++		}
++		const result = await run;
++		expect(result).toMatchObject({
++			ok: true,
++			value: [
++				{ status: "fulfilled" },
++				{ status: "fulfilled" },
++				{ status: "rejected" },
++				{ status: "rejected" },
++				{ status: "rejected" },
++			],
++		});
++	});
++
++	it("bounds FIFO dispatch and drains a delivery window smaller than parallel result totals", async () => {
++		let active = 0,
++			maxActive = 0;
++		const seen: number[] = [];
++		const sandbox = createSandbox([
++			{
++				name: "work",
++				execute: async (args) => {
++					seen.push(args as number);
++					maxActive = Math.max(maxActive, ++active);
++					await Promise.resolve();
++					active--;
++					return "x".repeat(90);
++				},
++			},
++		]);
++		const result = await sandbox.execute(
++			"return (await Promise.all(Array.from({length:6}, (_, i) => tools.work(i)))).map(x => x.length)",
++			{ callLimits },
++		);
++		expect(result).toMatchObject({ ok: true, value: [90, 90, 90, 90, 90, 90] });
++		expect(seen).toEqual([0, 1, 2, 3, 4, 5]);
++		expect(maxActive).toBeLessThanOrEqual(2);
++	});
++
++	it("rejects oversized input and result explicitly and releases input after consumption", async () => {
++		let calls = 0;
++		const sandbox = createSandbox([
++			{
++				name: "echo",
++				execute: (args) => {
++					calls++;
++					return args;
++				},
++			},
++		]);
++		const result = await sandbox.execute(
++			'const a = await tools.echo("界"); const b = await tools.echo("界"); ' +
++				'let failed = false; try { await tools.echo("界界界"); } catch { failed = true; } return {a,b,failed};',
++			{ callLimits: { ...callLimits, maxInputChars: 4 } },
++		);
++		expect(result).toMatchObject({ ok: true, value: { a: "界", b: "界", failed: true } });
++		expect(calls).toBe(2);
++		const large = createSandbox([{ name: "large", execute: () => "x".repeat(256) }]);
++		expect(
++			await large.execute("try { await tools.large({}); } catch (e) { return e.message; }", { callLimits }),
++		).toMatchObject({ ok: true, value: expect.stringMatching(/delivery limit.*operation may have run/) });
++	});
++
++	it("does not execute cancelled queued calls or serialize late external results", async () => {
++		const gate = Promise.withResolvers<void>(),
++			started = Promise.withResolvers<void>();
++		const controller = new AbortController();
++		let calls = 0,
++			serialized = false;
++		const sandbox = createSandbox([
++			{
++				name: "slow",
++				execute: async () => {
++					if (++calls === 2) started.resolve();
++					await gate.promise;
++					return {
++						toJSON() {
++							serialized = true;
++							return "late";
++						},
++					};
++				},
++			},
++		]);
++		const run = sandbox.execute("await Promise.all(Array.from({length:6}, () => tools.slow({})))", {
++			callLimits,
++			signal: controller.signal,
++		});
++		try {
++			await Promise.race([
++				started.promise,
++				run.then(() => {
++					throw new Error("Script ended before dispatch");
++				}),
++			]);
++			controller.abort();
++			expect(await run).toMatchObject({ ok: false, error: { kind: "aborted" } });
++		} finally {
++			gate.resolve();
++		}
++		await new Promise<void>((resolve) => setImmediate(resolve));
++		expect(calls).toBe(2);
++		expect(serialized).toBe(false);
++	});
++
++	it("bounds records without limiting cumulative completed calls", async () => {
++		let calls = 0;
++		const sandbox = createSandbox([{ name: "tick", execute: () => ++calls }]);
++		const result = await sandbox.execute('for(let i=0;i<19;i++) await tools.tick({}); return "done";', {
++			callLimits,
++			maxRecordedCalls: 4,
++		});
++		expect(result).toMatchObject({ ok: true, value: "done", callsOmitted: 15 });
++		expect(result.calls).toHaveLength(4);
++		expect(calls).toBe(19);
++	});
++
+ 	describe("script execution", () => {
+ 		it("returns the script's return value after a JSON round trip", async () => {
+ 			const sandbox = createSandbox();
+diff --git a/packages/coding-agent/docs/codemode.md b/packages/coding-agent/docs/codemode.md
+index 76512975a..fcac8a035 100644
+--- a/packages/coding-agent/docs/codemode.md
++++ b/packages/coding-agent/docs/codemode.md
+@@ -15,7 +15,7 @@ A script may start with an options line. It must be the first line; an options l
+ - `max_output_tokens` (default 10000) limits the output. Longer output keeps its start and end, and the full text is written to a temp file whose path is included in the result. A script fails when its output passes 16777216 characters of text and base64 image data or 100000 `text()`, `image()`, and `console` calls; write large data to a file with a tool instead.
+ - `timeout_ms` is a hard deadline for the whole script, including any wait for a free worker. It is unset by default. Image generation can take minutes, so do not set a short deadline for scripts that generate images.
+ 
+-The result starts with `Script completed` or `Script failed`, the wall time, and the output. Text and image items appear in order, each on its own line. When the output has more than one text item (from `text()` or `return`), each starts with a `==> text N/M <==` line. `console` calls follow in one `<console_output>` block with one line per call. A failed script keeps its partial output, followed by `Script error:` and the error. Tool calls are real: calls made before a failure are not undone. Calls still running when the script ends are cancelled, and unawaited promises are discarded.
++The result starts with `Script completed` or `Script failed`, the wall time, and the output. Text and image items appear in order, each on its own line. When the output has more than one text item (from `text()` or `return`), each starts with a `==> text N/M <==` line. `console` calls follow in one `<console_output>` block with one line per call. A failed script keeps its partial output, followed by `Script error:` and the error. Tool calls are real: calls made before a failure are not undone. Ending a script requests cancellation of pending calls and discards unawaited guest promises. Unfinished calls have unknown external results: receiving an abort signal does not prove an operation stopped, and completed side effects are not undone. Do not retry unknown writes or sends automatically. Live previews keep the latest 256 rows with independent totals; omitted previews do not mean earlier calls succeeded.
+ 
+ ## Globals
+ 
+@@ -54,6 +54,14 @@ Bindings are fixed at script start: a newly registered tool is callable in the n
+ 
+ While `codemode` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools stay declared, and their descriptions say how to call them from scripts. With `only` they are hidden from the model and listed in the `codemode` description instead, so the model calls them through scripts. Tool declarations in the `codemode` description, `describeTool()`, and `ALL_TOOLS` carry the tools' prompt guidelines, since the system prompt rules only cover declared tools.
+ 
++## Bounded workflows
++
++Use one script until the next step needs model judgment or user approval. Keep deterministic pagination,
++filtering, counting and checks in the program; emit conclusions, exceptions and evidence locations instead
++of every intermediate value. Do not filter away errors or incomplete-result notices.
++Batch independent calls with Promise.allSettled, run dependent work in order, and await every outcome
++that matters. Neither a script failure nor cancellation rolls back tool side effects.
++
+ ## Store values
+ 
+ `store(key, value)` keeps a JSON value under a string key for later `codemode` calls; storing `undefined` deletes the key. `load(key)` returns the value, or `undefined`. Writes are kept only when the script succeeds: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path.
+@@ -231,3 +239,16 @@ for (const block of result.output) {
+ - At most two codemode workers may be alive across all sessions in one pi process; `PI_CODEMODE_MAX_WORKERS` changes the limit. A cancelled worker occupies its slot until it exits. At capacity, new scripts wait for a free worker in arrival order. A script that gets no worker within 60 seconds, or before its `timeout_ms`, fails without running.
+ - A script that waits on a promise that can never settle (no tool call pending) fails immediately, since there are no timers.
+ - Scripts cannot start other `codemode` scripts.
++- CLI executions admit at most 128 pending bridge requests (tools, metadata helpers and model calls),
++  with up to 8 executors running. There is no cumulative call limit; process large jobs in bounded batches.
++  Excess pending requests or aggregate inputs over 8 Mi JSON characters reject before dispatch.
++- One serialized result is limited to 16 Mi JSON characters. A result above that budget rejects after the
++  tool may already have executed; request less data, and do not blindly retry side effects.
++- Delivery holds executor slots until the guest parses the result. At most 32 Mi serialized JSON characters
++  await consumption; a full window backpressures a bounded ready queue (at most the executor count).
++  Error text also has a character budget. These are character counts, not UTF-8 bytes or whole-process
++  heap guarantees: serialization and the tool's own allocations still cost memory.
++- Limits are per evaluation, not a global cap on uncooperative host tools that outlive their script.
++  Standalone library execute() opts in with callLimits and maxRecordedCalls; unconfigured execute()
++  and host-controlled deterministic start() retain their defaults. Runtime fingerprints change when
++  the prelude changes; an incompatible durable checkpoint must fail closed, not silently replay.
+diff --git a/packages/coding-agent/src/extensions/codemode/call-tracker.ts b/packages/coding-agent/src/extensions/codemode/call-tracker.ts
+new file mode 100644
+index 000000000..296af9c0c
+--- /dev/null
++++ b/packages/coding-agent/src/extensions/codemode/call-tracker.ts
+@@ -0,0 +1,68 @@
++import type { AgentToolResult } from "@earendil-works/pi-agent-core";
++import type { CodemodeNestedCall, CodemodeToolDetails } from "./tool.ts";
++
++/** Live previews are not the transcript: keep bounded rows and independent totals. */
++export class CodemodeCallTracker {
++	readonly calls: CodemodeNestedCall[] = [];
++	private readonly active = new Map<CodemodeNestedCall, boolean>();
++	private readonly summary = {
++		total: 0,
++		ok: 0,
++		error: 0,
++		cancelled: 0,
++		unfinished: 0,
++		cost: 0,
++	};
++	closed = false;
++
++	private readonly onUpdate: ((result: AgentToolResult<CodemodeToolDetails>) => void) | undefined;
++
++	constructor(onUpdate: ((result: AgentToolResult<CodemodeToolDetails>) => void) | undefined) {
++		this.onUpdate = onUpdate;
++	}
++
++	start(call: CodemodeNestedCall, dispatched = true): void {
++		call.sequence = this.summary.total;
++		this.active.set(call, dispatched);
++		this.summary.total++;
++		this.calls.push(call);
++		if (this.calls.length > 256) this.calls.shift();
++		this.publish();
++	}
++
++	dispatched(call: CodemodeNestedCall): void {
++		if (!this.closed && this.active.has(call)) this.active.set(call, true);
++	}
++
++	settle(
++		call: CodemodeNestedCall,
++		status: "ok" | "error" | "cancelled",
++		fields: Partial<Pick<CodemodeNestedCall, "id" | "durationMs" | "error" | "cost">>,
++	): void {
++		if (this.closed || !this.active.delete(call)) return;
++		Object.assign(call, fields, { status });
++		this.summary[status]++;
++		this.summary.cost += fields.cost ?? 0;
++		this.publish();
++	}
++
++	publish(): void {
++		if (!this.closed) this.onUpdate?.({ content: [], details: this.snapshot() });
++	}
++
++	close(): void {
++		this.closed = true;
++		for (const [call, dispatched] of this.active) {
++			call.status = dispatched ? "unfinished" : "cancelled";
++			this.summary[call.status]++;
++		}
++		this.active.clear();
++	}
++
++	snapshot(): CodemodeToolDetails & { callSummary: NonNullable<CodemodeToolDetails["callSummary"]> } {
++		return {
++			calls: this.calls.map((call) => ({ ...call })),
++			callSummary: { ...this.summary, running: this.active.size, omitted: this.summary.total - this.calls.length },
++		};
++	}
++}
+diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
+index fa3e4956b..51cc652c3 100644
+--- a/packages/coding-agent/src/extensions/codemode/execute.ts
++++ b/packages/coding-agent/src/extensions/codemode/execute.ts
+@@ -31,6 +31,7 @@ import { formatSize, sliceHead, sliceTail } from "../../core/tools/truncate.ts";
+ import { combineUsage } from "../../core/usage-totals.ts";
+ import { writeOutputFile } from "../../utils/output-files.ts";
+ import { Bm25Ranker, createToolSearchDocument, DEFAULT_TOOL_SEARCH_LIMIT } from "../tool-search/tool.ts";
++import { CodemodeCallTracker } from "./call-tracker.ts";
+ import {
+ 	CODEMODE_DOCS_PATH,
+ 	CODEMODE_STORE_ENTRY_TYPE,
+@@ -57,6 +58,13 @@ const MAX_CONCURRENT_MODEL_CALLS = 4;
+ const CODEMODE_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
+ // Shared across calls and sessions. Allow one replacement while a cancelled worker is still exiting.
+ const DEFAULT_MAX_CODEMODE_WORKERS = 2;
++const CODEMODE_CALL_LIMITS = {
++	maxPendingCalls: 128,
++	maxConcurrentCalls: 8,
++	maxInputChars: 8 * 1024 * 1024,
++	maxResultChars: 16 * 1024 * 1024,
++	maxUnconsumedResultChars: 32 * 1024 * 1024,
++};
+ 
+ /** `PI_CODEMODE_MAX_WORKERS` if it is a positive integer. Read per call so SDK hosts can set it at runtime. */
+ function maxCodemodeWorkers(): number {
+@@ -500,7 +508,9 @@ export async function executeCodemode(
+ ): Promise<AgentToolResult<CodemodeToolDetails>> {
+ 	const startedAt = performance.now();
+ 	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
+-	const calls: CodemodeNestedCall[] = [];
++	const tracker = new CodemodeCallTracker(onUpdate);
++	const calls = tracker.calls;
++	let toolOrder = 0;
+ 	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
+ 	let modelUsage: Usage | undefined;
+ 	// Images returned by `models.generateImages()`, to notice a script that never shows them.
+@@ -512,10 +522,8 @@ export async function executeCodemode(
+ 		modelUsage = modelUsage ? combineUsage(modelUsage, usage) : usage;
+ 	};
+ 
+-	const snapshot = (): CodemodeToolDetails => ({ calls: calls.map((call) => ({ ...call })) });
+-	const publish = () => onUpdate?.({ content: [], details: snapshot() });
+ 	// Show the script as running before its first nested call, so the row's timer starts.
+-	publish();
++	tracker.publish();
+ 
+ 	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
+ 	// A callable tool_search replaces searchTools(), so scripts get one way to find tools.
+@@ -534,23 +542,34 @@ export async function executeCodemode(
+ 				name: tool.name,
+ 				args: previewArgs(args),
+ 				status: "running",
++				order: toolOrder++,
+ 			};
+-			calls.push(record);
+-			publish();
++			tracker.start(record);
+ 			const callStartedAt = performance.now();
+-			// Only tools from ctx.tools are callable, so ctx is set here.
+-			if (!ctx) throw new Error("Tool calls need a session");
+-			const outcome = await ctx.executeTool(tool.name, args, { signal: callSignal });
+-			record.id = outcome.toolCall.id;
+-			record.durationMs = performance.now() - callStartedAt;
+-			if (outcome.isError) {
+-				record.status = callSignal.aborted ? "cancelled" : "error";
+-				record.error = truncateText(textOf(outcome.result) || `Tool "${tool.name}" failed`, ERROR_PREVIEW_CHARS);
+-			} else {
+-				record.status = "ok";
++			try {
++				// Only tools from ctx.tools are callable, so ctx is set here.
++				if (!ctx) throw new Error("Tool calls need a session");
++				const outcome = await ctx.executeTool(tool.name, args, { signal: callSignal });
++				tracker.settle(record, outcome.isError ? "error" : "ok", {
++					id: outcome.toolCall.id,
++					durationMs: performance.now() - callStartedAt,
++					...(outcome.isError
++						? {
++								error: truncateText(
++									textOf(outcome.result) || `Tool "${tool.name}" failed`,
++									ERROR_PREVIEW_CHARS,
++								),
++							}
++						: {}),
++				});
++				return toScriptValue(tool, outcome);
++			} catch (error) {
++				tracker.settle(record, "error", {
++					durationMs: performance.now() - callStartedAt,
++					error: truncateText(error instanceof Error ? error.message : String(error), ERROR_PREVIEW_CHARS),
++				});
++				throw error;
+ 			}
+-			publish();
+-			return toScriptValue(tool, outcome);
+ 		},
+ 	}));
+ 
+@@ -573,7 +592,7 @@ export async function executeCodemode(
+ 				{ type: "text", text: `Script failed\nWall time ${waited} seconds\nOutput:\n` },
+ 				{ type: "text", text: `Script error:\n${error}\n\nThe script did not start.` },
+ 			],
+-			details: snapshot(),
++			details: tracker.snapshot(),
+ 			isError: true,
+ 		};
+ 	}
+@@ -589,7 +608,7 @@ export async function executeCodemode(
+ 			globals: [
+ 				...createDiscoveryGlobals(callable, samples, options, toolSearch),
+ 				...(options.models && ctx
+-					? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
++					? createModelGlobals(ctx.modelRegistry, toolCallId, tracker, addModelUsage, addGeneratedImages)
+ 					: []),
+ 			],
+ 			timeoutMs: Math.max(1, Math.round(deadline - waitedMs)),
+@@ -604,18 +623,15 @@ export async function executeCodemode(
+ 			},
+ 		});
+ 		const store = ctx ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
+-		result = await sandbox.execute(code, { signal, store });
++		result = await sandbox.execute(code, { signal, store, callLimits: CODEMODE_CALL_LIMITS, maxRecordedCalls: 256 });
+ 	} finally {
++		tracker.close();
+ 		await sandbox?.close();
+ 		if (reserved) {
+ 			reserved = false;
+ 			releaseCodemodeWorker();
+ 		}
+ 	}
+-	// Calls still marked running were cut off by the script ending, a timeout, or an abort.
+-	for (const call of calls) {
+-		if (call.status === "running") call.status = "cancelled";
+-	}
+ 
+ 	const scriptOutput = [...result.output];
+ 	if (result.ok) {
+@@ -628,6 +644,16 @@ export async function executeCodemode(
+ 	}
+ 	const items = formatOutput(scriptOutput);
+ 	if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
++	const details = tracker.snapshot();
++	const totals = details.callSummary;
++	if (totals.omitted || totals.unfinished) {
++		items.push({
++			type: "text",
++			text:
++				`${totals.total} calls; ${totals.omitted} earlier previews omitted; ` +
++				`${totals.unfinished} unfinished (external results unknown; cancellation does not undo side effects).`,
++		});
++	}
+ 	if (generatedImages > 0 && !items.some((item) => item.type === "image")) {
+ 		items.push({
+ 			type: "text",
+@@ -644,7 +670,6 @@ export async function executeCodemode(
+ 	const output = joinAdjacentText(await saveImages(truncated.items));
+ 	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
+ 	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
+-	const details = snapshot();
+ 	if (truncated.fullOutputPath) details.fullOutputPath = truncated.fullOutputPath;
+ 	return {
+ 		content: [{ type: "text", text: header }, ...output],
+@@ -748,8 +773,7 @@ function createDiscoveryGlobals(
+ function createModelGlobals(
+ 	models: CodemodeModelRuntime,
+ 	toolCallId: string,
+-	calls: CodemodeNestedCall[],
+-	publish: () => void,
++	tracker: CodemodeCallTracker,
+ 	addUsage: (usage: Usage) => void,
+ 	addGeneratedImages: (count: number) => void,
+ ): CodemodeTool[] {
+@@ -766,6 +790,7 @@ function createModelGlobals(
+ 		[model, context]: unknown[],
+ 		checkContext: (context: unknown) => TContext,
+ 		run: (resolved: ModelTypeMap[TType], context: TContext) => Promise<TResult>,
++		signal: AbortSignal,
+ 	): Promise<TResult> => {
+ 		const listHint = `List the ${type} models you can use with models.getAvailableOfType("${type}").`;
+ 		const given = model as ScriptValue;
+@@ -801,19 +826,32 @@ function createModelGlobals(
+ 			args: `${resolved.provider}/${resolved.id}`,
+ 			status: "running",
+ 		};
+-		calls.push(record);
+-		publish();
++		tracker.start(record, false);
+ 		const startedAt = performance.now();
+-		const result = await limit(() => run(resolved, checked));
+-		record.durationMs = performance.now() - startedAt;
+-		record.status = result.stopReason === "stop" ? "ok" : result.stopReason === "aborted" ? "cancelled" : "error";
+-		if (result.errorMessage) record.error = truncateText(result.errorMessage, ERROR_PREVIEW_CHARS);
+-		if (result.usage) {
+-			record.cost = result.usage.cost.total;
+-			addUsage(result.usage);
++		try {
++			const result = await limit(() => {
++				if (signal.aborted) throw new Error("Operation aborted before model dispatch");
++				tracker.dispatched(record);
++				return run(resolved, checked);
++			});
++			tracker.settle(
++				record,
++				result.stopReason === "stop" ? "ok" : result.stopReason === "aborted" ? "cancelled" : "error",
++				{
++					durationMs: performance.now() - startedAt,
++					...(result.errorMessage ? { error: truncateText(result.errorMessage, ERROR_PREVIEW_CHARS) } : {}),
++					...(result.usage ? { cost: result.usage.cost.total } : {}),
++				},
++			);
++			if (result.usage && !tracker.closed) addUsage(result.usage);
++			return result;
++		} catch (error) {
++			tracker.settle(record, "error", {
++				durationMs: performance.now() - startedAt,
++				error: truncateText(error instanceof Error ? error.message : String(error), ERROR_PREVIEW_CHARS),
++			});
++			throw error;
+ 		}
+-		publish();
+-		return result;
+ 	};
+ 	const implementations: Record<string, CodemodeTool["execute"]> = {
+ 		"models.getModelsOfType": (args) => {
+@@ -836,8 +874,13 @@ function createModelGlobals(
+ 			return model === undefined ? undefined : toModelInfo(model);
+ 		},
+ 		"models.classify": (args, { signal }) =>
+-			runModelCall("models.classify", "classifier", args as unknown[], checkClassifierContext, (resolved, context) =>
+-				models.classify(resolved, context, { signal }),
++			runModelCall(
++				"models.classify",
++				"classifier",
++				args as unknown[],
++				checkClassifierContext,
++				(resolved, context) => models.classify(resolved, context, { signal }),
++				signal,
+ 			),
+ 		"models.generateImages": (args, { signal }) =>
+ 			runModelCall(
+@@ -850,6 +893,7 @@ function createModelGlobals(
+ 					addGeneratedImages(result.output.filter((block) => block.type === "image").length);
+ 					return result;
+ 				},
++				signal,
+ 			),
+ 	};
+ 	return Object.entries(implementations).map(([name, execute]) => ({ name, spread: true, execute }));
+diff --git a/packages/coding-agent/src/extensions/codemode/renderer.ts b/packages/coding-agent/src/extensions/codemode/renderer.ts
+index 660803e68..abefafc05 100644
+--- a/packages/coding-agent/src/extensions/codemode/renderer.ts
++++ b/packages/coding-agent/src/extensions/codemode/renderer.ts
+@@ -51,6 +51,8 @@ function statusIcon(call: CodemodeNestedCall, theme: Theme): string {
+ 			return theme.fg("error", "✗");
+ 		case "cancelled":
+ 			return theme.fg("muted", "⊘");
++		case "unfinished":
++			return theme.fg("warning", "?");
+ 	}
+ }
+ 
+@@ -64,6 +66,7 @@ function formatCall(call: CodemodeNestedCall, theme: Theme, expanded: boolean):
+ 	if (args) line += ` ${theme.fg("muted", args)}`;
+ 	if (duration) line += ` ${theme.fg("dim", duration)}`;
+ 	if (call.cost) line += ` ${theme.fg("dim", formatCost(call.cost))}`;
++	if (call.status === "unfinished") line += ` ${theme.fg("warning", "(external result unknown)")}`;
+ 	if (expanded && call.error) line += `\n    ${theme.fg("error", call.error.split("\n").join("\n    "))}`;
+ 	return line;
+ }
+@@ -108,6 +111,20 @@ export const codemodeRenderers: Pick<
+ 		const component = (context.lastComponent as Container | undefined) ?? new Container();
+ 		component.clear();
+ 		const calls = result.details?.calls ?? [];
++		const totals = result.details?.callSummary;
++		if (totals?.omitted) {
++			component.addChild(
++				new Text(
++					theme.fg(
++						"muted",
++						`${totals.omitted} earlier call previews not retained ` +
++							`(${totals.total} total, ${totals.error} failed)`,
++					),
++					0,
++					0,
++				),
++			);
++		}
+ 		if (calls.length > 0) {
+ 			const shown = options.expanded ? calls : calls.slice(-CALL_PREVIEW_COUNT);
+ 			const lines = shown.map((call) => formatCall(call, theme, options.expanded));
+@@ -118,8 +135,8 @@ export const codemodeRenderers: Pick<
+ 			}
+ 			// Collapsed rows hide earlier calls, so the total covers every call.
+ 			const priced = calls.filter((call) => call.cost);
+-			if (priced.length > 1) {
+-				const total = priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);
++			if (priced.length > 1 || (totals?.omitted && totals.cost)) {
++				const total = totals?.cost ?? priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);
+ 				lines.push(theme.fg("muted", `Model calls: ${formatCost(total)}`));
+ 			}
+ 			component.addChild(new Spacer(1));
+diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
+index bf9ef1002..2da6a0c40 100644
+--- a/packages/coding-agent/src/extensions/codemode/tool.ts
++++ b/packages/coding-agent/src/extensions/codemode/tool.ts
+@@ -88,7 +88,7 @@ export const codemodeSchema = Type.Object({
+ 
+ export type CodemodeToolInput = Static<typeof codemodeSchema>;
+ 
+-export type CodemodeNestedCallStatus = "running" | "ok" | "error" | "cancelled";
++export type CodemodeNestedCallStatus = "running" | "ok" | "error" | "cancelled" | "unfinished";
+ 
+ export interface CodemodeNestedCall {
+ 	/** Tool call id of the nested call, `<codemode call id>/<n>`. */
+@@ -97,6 +97,10 @@ export interface CodemodeNestedCall {
+ 	/** Compact JSON of the arguments, truncated for display. */
+ 	args: string;
+ 	status: CodemodeNestedCallStatus;
++	/** Tool issue order, for matching live events when only the bounded tail is retained. */
++	order?: number;
++	/** Issue position across tools and model calls, for helper action ordering. */
++	sequence?: number;
+ 	durationMs?: number;
+ 	/** Error text, truncated for display. */
+ 	error?: string;
+@@ -106,6 +110,17 @@ export interface CodemodeNestedCall {
+ 
+ export interface CodemodeToolDetails {
+ 	calls: CodemodeNestedCall[];
++	/** Totals independent of the bounded preview. Unfinished does not imply side effects stopped. */
++	callSummary?: {
++		total: number;
++		running: number;
++		ok: number;
++		error: number;
++		cancelled: number;
++		unfinished: number;
++		omitted: number;
++		cost: number;
++	};
+ 	/** Temp file with the full text output, when the output was truncated. */
+ 	fullOutputPath?: string;
+ }
+@@ -121,7 +136,12 @@ export const codemodeToolSystemPromptContribution = {
+ export const CODEMODE_DOCS_PATH = join(getDocsPath(), "codemode.md");
+ 
+ const DESCRIPTION_INTRO = `Run JavaScript that calls other tools. The input is raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
+-- \`await tools.<name>({ ...args })\` resolves to a string, or an object if the tool's declaration says so, and rejects with an Error on failure. A tool whose declaration returns an object resolves on failure too when it returned that object; check its fields. Calls still running when the script ends are cancelled.
++- \`await tools.<name>({ ...args })\` returns a string or declared object, and rejects on failure.
++  Object-returning tools can resolve with error fields; check them. Script cancellation requests abort, not rollback.
++  Unfinished external results remain unknown; do not blindly retry side effects.
++- Batch large fan-outs: at most 128 requests are pending and 8 execute at once. Admission rejects before dispatch; cumulative calls are not capped.
++- In-flight inputs use at most 8 Mi JSON characters; one result uses at most 16 Mi. Request smaller pages when rejected.
++- Live call previews retain 256 rows with total/failure/unfinished counts; an omitted preview is not a successful or rolled-back operation.
+ - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\``;
+ 
+ /** One line per global. The details live in {@link CODEMODE_DOCS_PATH}. */
+diff --git a/packages/coding-agent/test/suite/agent-session-codemode.test.ts b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+index 0ea7fb791..7e05f77ed 100644
+--- a/packages/coding-agent/test/suite/agent-session-codemode.test.ts
++++ b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+@@ -335,6 +335,100 @@ describe("AgentSession codemode tool", () => {
+ 		expect(toolResults).toHaveLength(1);
+ 	});
+ 
++	it("bounds previews without capping cumulative calls or losing failure totals", async () => {
++		const harness = await setup([
++			(pi) => {
++				pi.on("tool_call", (event) =>
++					event.toolName === "echo" ? { block: true, reason: "blocked fixture" } : undefined,
++				);
++			},
++		]);
++		harness.setResponses([
++			fauxAssistantMessage(
++				[
++					fauxToolCall("codemode", {
++						code:
++							'try { await tools.echo({ text: "blocked" }); } catch {} ' +
++							'for (let i = 0; i < 260; i++) await tools.stats({}); text("done");',
++					}),
++				],
++				{ stopReason: "toolUse" },
++			),
++			fauxAssistantMessage("done"),
++		]);
++		await harness.session.prompt("go");
++		const result = codemodeResult(harness);
++		const details = result.details as unknown as CodemodeToolDetails;
++		expect(result.isError).toBe(false);
++		expect(details.calls).toHaveLength(256);
++		expect(details.callSummary).toMatchObject({
++			total: 261,
++			ok: 260,
++			error: 1,
++			running: 0,
++			unfinished: 0,
++			omitted: 5,
++		});
++		const updates = harness.eventsOfType("tool_execution_update").filter((event) => event.toolName === "codemode");
++		expect(updates.length).toBeGreaterThan(0);
++		for (const event of updates) {
++			expect((event.partialResult.details as CodemodeToolDetails).calls.length).toBeLessThanOrEqual(256);
++		}
++	});
++
++	it("reports unresolved external work and does not publish after the script ends", async () => {
++		const gate = Promise.withResolvers<void>(),
++			ended = Promise.withResolvers<void>();
++		let started = false;
++		const harness = await setup([
++			(pi) => {
++				pi.registerTool({
++					name: "slow",
++					label: "slow",
++					description: "Wait on an external operation",
++					parameters: Type.Object({}),
++					execute: async () => {
++						started = true;
++						await gate.promise;
++						return { content: [{ type: "text", text: "external work completed" }], details: {} };
++					},
++				});
++			},
++		]);
++		harness.session.subscribe((event) => {
++			if (event.type === "tool_execution_end" && event.toolName === "slow") ended.resolve();
++		});
++		harness.setResponses([
++			fauxAssistantMessage(
++				[
++					fauxToolCall("codemode", {
++						code: "void tools.slow({}); await tools.stats({});",
++					}),
++				],
++				{ stopReason: "toolUse" },
++			),
++			fauxAssistantMessage("done"),
++		]);
++		const updates = () =>
++			harness.eventsOfType("tool_execution_update").filter((event) => event.toolName === "codemode");
++		let count = 0;
++		try {
++			await harness.session.prompt("go");
++			expect(started).toBe(true);
++			const result = codemodeResult(harness),
++				details = result.details as unknown as CodemodeToolDetails;
++			expect(details.callSummary).toMatchObject({ total: 2, ok: 1, unfinished: 1, running: 0 });
++			expect(details.calls[0].status).toBe("unfinished");
++			expect(resultText(result)).toContain("external results unknown");
++			count = updates().length;
++		} finally {
++			gate.resolve();
++			if (started) await ended.promise;
++		}
++		await new Promise<void>((resolve) => setImmediate(resolve));
++		expect(updates()).toHaveLength(count);
++	});
++
+ 	it("routes nested calls through extension hooks", async () => {
+ 		const harness = await setup([
+ 			(pi) => {
+@@ -890,6 +984,54 @@ describe("codemode models", () => {
+ 		expect(plain?.description).not.toContain("`models`");
+ 	});
+ 
++	it("distinguishes model calls cancelled in the limiter from dispatched external work", async () => {
++		const { harness } = await setup();
++		const gate = Promise.withResolvers<void>(),
++			returned = Promise.withResolvers<void>();
++		let started = 0,
++			completed = 0;
++		harness.session.modelRuntime.registerProvider("scorer", {
++			apiKey: "fixture-key",
++			models: [scorerModel],
++			classifiers: {
++				"test-classifier": {
++					classify: async (model): Promise<ClassifierResult> => {
++						started++;
++						await gate.promise;
++						if (++completed === 4) returned.resolve();
++						return {
++							api: model.api,
++							provider: model.provider,
++							model: model.id,
++							answers: {},
++							stopReason: "stop",
++							timestamp: 0,
++						};
++					},
++				},
++			},
++		});
++		try {
++			const result = await run(
++				harness,
++				'for(let i=0;i<5;i++) models.classify({provider:"scorer",id:"judge"}, ' +
++					`{state:{},questions:${questions}}); await describeTool("read");`,
++			);
++			expect(result.isError).toBe(false);
++			expect(started).toBe(4);
++			expect((result.details as unknown as CodemodeToolDetails).callSummary).toMatchObject({
++				total: 5,
++				unfinished: 4,
++				cancelled: 1,
++			});
++		} finally {
++			gate.resolve();
++		}
++		await returned.promise;
++		await new Promise<void>((resolve) => setImmediate(resolve));
++		expect(started).toBe(4);
++	});
++
+ 	it("lists models and classifies with catalog auth, ignoring script-supplied fields", async () => {
+ 		const { harness, observed, maxActive } = await setup();
+ 		const result = await run(

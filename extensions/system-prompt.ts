@@ -21,5 +21,18 @@ export default function systemPrompt(pi: ExtensionAPI): void {
     if (options.customPrompt || options.forceSystemPrompt !== undefined) return;
     options.sections.docs = "Pi documentation (read only when the user asks about Pi itself, its SDK, extensions, themes, skills, or TUI):\n" +
       `- Read ${guidePath} for documentation locations and usage guidance.`;
+    if (options.selectedTools.includes("codemode")) {
+      options.sections.metis_codemode = [
+        "Use one codemode script for a bounded workflow up to the next step needing model judgment, not a script per tool call.",
+        "Keep deterministic pagination, filtering, counting and checks in the program. Batch independent calls with Promise.allSettled; " +
+          "run dependent calls and timing measurements in order, and split large fan-outs into bounded batches.",
+        "Emit conclusions, exceptions and necessary evidence instead of all intermediate data. Keep exit codes and errors; " +
+          "check completeness and pagination before treating a result as the whole. Do not hide failures or truncation to save tokens.",
+        "Await every outcome that matters. Cancellation does not undo side effects; do not automatically retry an operation " +
+          "whose external result is unknown. Return for model judgment or user approval before proceeding when needed.",
+      ].join("\n");
+    } else {
+      delete options.sections.metis_codemode;
+    }
   });
 }

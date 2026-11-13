@@ -1,0 +1,325 @@
+diff --git a/packages/coding-agent/docs/codemode.md b/packages/coding-agent/docs/codemode.md
+index fcac8a035..a57ca5de7 100644
+--- a/packages/coding-agent/docs/codemode.md
++++ b/packages/coding-agent/docs/codemode.md
+@@ -54,6 +54,31 @@ Bindings are fixed at script start: a newly registered tool is callable in the n
+ 
+ While `codemode` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools stay declared, and their descriptions say how to call them from scripts. With `only` they are hidden from the model and listed in the `codemode` description instead, so the model calls them through scripts. Tool declarations in the `codemode` description, `describeTool()`, and `ALL_TOOLS` carry the tools' prompt guidelines, since the system prompt rules only cover declared tools.
+ 
++## Explicit text pages
++
++The default read result remains a text string or image. For programmatic text processing, request
++`format: "page"` and a positive integer `limit`; `offset` is a positive 1-based integer (default 1).
++
++```js
++let offset = 1, lines = 0;
++for (;;) {
++  const page = await tools.read({ path: "large.txt", format: "page", offset, limit: 500 });
++  if (page.type !== "text_page") throw new Error("Expected a text page");
++  lines += page.lines;
++  if (page.eof) break;
++  offset = page.nextOffset;
++}
++text({ lines });
++```
++
++Pages return raw `text`, `offset`, `lines`, `totalLines`, `nextOffset` (null at EOF), `eof`,
++`truncated` and `truncatedBy` ("lines", "bytes" or null). Model-facing notices are not part of raw text.
++The existing 2000-line/50 KiB safety limits remain: explicit pagination alone sets EOF/nextOffset,
++while truncated describes a safety limit cutting the requested range. An empty file counts as one
++empty line, and a trailing newline adds an empty final line; join consecutive raw pages with "\\n"
++to reconstruct stable text. Images and a line too large to fit one page reject explicitly.
++Each read is independent, not a file snapshot; callers must handle files changing between pages.
++
+ ## Bounded workflows
+ 
+ Use one script until the next step needs model judgment or user approval. Keep deterministic pagination,
+diff --git a/packages/coding-agent/src/core/tools/read.ts b/packages/coding-agent/src/core/tools/read.ts
+index dd123cb4e..8b3753148 100644
+--- a/packages/coding-agent/src/core/tools/read.ts
++++ b/packages/coding-agent/src/core/tools/read.ts
+@@ -14,7 +14,15 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
+ const readSchema = Type.Object({
+ 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
+ 	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
+-	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
++	limit: Type.Optional(
++		Type.Number({ description: "Maximum lines to read; required positive integer for format: page" }),
++	),
++	format: Type.Optional(
++		Type.Union([Type.Literal("text"), Type.Literal("page")], {
++			description:
++				"Default text preserves string/image results. Page returns raw text and explicit line pagination; text files only.",
++		}),
++	),
+ });
+ 
+ export const readToolSystemPromptContribution = {
+@@ -25,13 +33,27 @@ export const readToolSystemPromptContribution = {
+ export type ReadToolInput = Static<typeof readSchema>;
+ 
+ /**
+- * Result for programmatic callers such as codemode scripts: the text for text files, and an image
+- * block for images that codemode's `image()` accepts. `note` is the text that goes with the image,
+- * such as resize hints. Property descriptions are left out so the type stays on one line in tool
+- * descriptions.
++ * Default programmatic reads return text strings or an image that image() accepts, with tool notes.
++ * Explicit text pages add raw content and line cursors without model notices. Default behavior
++ * and the direct model-facing content remain unchanged.
+  */
++const readPageSchema = Type.Object({
++	type: Type.Literal("text_page"),
++	text: Type.String(),
++	offset: Type.Number(),
++	lines: Type.Number(),
++	totalLines: Type.Number(),
++	nextOffset: Type.Union([Type.Number(), Type.Null()]),
++	eof: Type.Boolean(),
++	truncated: Type.Boolean(),
++	truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes"), Type.Null()]),
++});
++
++type ReadPage = Static<typeof readPageSchema>;
++
+ const readOutputSchema = Type.Union([
+ 	Type.String(),
++	readPageSchema,
+ 	Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String(), note: Type.String() }),
+ ]);
+ 
+@@ -243,11 +265,22 @@ export function createReadToolDefinition(
+ 		constrainedSampling: { type: "json_schema", strict: "prefer" },
+ 		async execute(
+ 			_toolCallId,
+-			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
++			{ path, offset, limit, format }: { path: string; offset?: number; limit?: number; format?: "text" | "page" },
+ 			signal?: AbortSignal,
+ 			_onUpdate?,
+ 			ctx?: ExtensionContext,
+ 		) {
++			if (
++				format === "page" &&
++				(!Number.isSafeInteger(offset ?? 1) ||
++					(offset ?? 1) < 1 ||
++					!Number.isSafeInteger(limit) ||
++					(limit ?? 0) <= 0 ||
++					!Number.isSafeInteger((offset ?? 1) + (limit ?? 0)))
++			) {
++				throw new Error("Page reads require a positive integer limit and a positive integer offset (default 1).");
++			}
++			let page: ReadPage | undefined;
+ 			return new Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }>(
+ 				(resolve, reject) => {
+ 					if (signal?.aborted) {
+@@ -273,6 +306,8 @@ export function createReadToolDefinition(
+ 							let details: ReadToolDetails | undefined;
+ 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+ 							if (mimeType) {
++								if (format === "page")
++									throw new Error("Page reads support text files only; use the default format for images.");
+ 								// Read image as binary.
+ 								const buffer = await ops.readFile(absolutePath);
+ 								const processed = await processImage(buffer, mimeType, {
+@@ -313,11 +348,35 @@ export function createReadToolDefinition(
+ 								// A user-specified limit is honored before truncation.
+ 								const userLimitedLines =
+ 									limit === undefined ? undefined : Math.min(startLine + limit, totalFileLines) - startLine;
++								if (format === "page") {
++									if (truncation.firstLineExceedsLimit) {
++										throw new Error(
++											`Line ${startLineDisplay} exceeds the page byte limit; request a bounded byte slice with another tool.`,
++										);
++									}
++									const lines = truncation.truncated
++										? truncation.outputLines
++										: Math.min(limit ?? 0, totalFileLines - startLine);
++									const eof = startLine + lines >= totalFileLines;
++									page = {
++										type: "text_page",
++										text: truncation.content,
++										offset: startLineDisplay,
++										lines,
++										totalLines: totalFileLines,
++										nextOffset: eof ? null : startLine + lines + 1,
++										eof,
++										truncated: truncation.truncated,
++										truncatedBy: truncation.truncatedBy,
++									};
++								}
+ 								let outputText: string;
+ 								if (truncation.firstLineExceedsLimit) {
+ 									// First line alone exceeds the byte limit. Point the model at a bash fallback.
+ 									const firstLineSize = formatSize(firstLineBytes);
+-									outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
++									outputText =
++										`[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. ` +
++										`Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
+ 									details = { truncation };
+ 								} else if (truncation.truncated) {
+ 									// Truncation occurred. Build an actionable continuation notice.
+@@ -327,7 +386,9 @@ export function createReadToolDefinition(
+ 									if (truncation.truncatedBy === "lines") {
+ 										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
+ 									} else {
+-										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
++										outputText +=
++											`\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} ` +
++											`(${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
+ 									}
+ 									details = { truncation };
+ 								} else if (userLimitedLines !== undefined && startLine + userLimitedLines < totalFileLines) {
+@@ -351,7 +412,7 @@ export function createReadToolDefinition(
+ 						}
+ 					})();
+ 				},
+-			).then((result) => ({ ...result, structuredContent: toReadOutput(result.content) }));
++			).then((result) => ({ ...result, structuredContent: page ?? toReadOutput(result.content) }));
+ 		},
+ 		...readRenderers,
+ 	};
+diff --git a/packages/coding-agent/test/read-streaming.test.ts b/packages/coding-agent/test/read-streaming.test.ts
+index 0a8883e4f..210d39ec4 100644
+--- a/packages/coding-agent/test/read-streaming.test.ts
++++ b/packages/coding-agent/test/read-streaming.test.ts
+@@ -146,6 +146,97 @@ describe("read tool streaming", () => {
+ 	const tempDir = mkdtempSync(join(tmpdir(), "pi-read-streaming-"));
+ 	afterAll(() => rmSync(tempDir, { recursive: true, force: true }));
+ 
++	it("reconstructs stable text from explicit raw pages, including empty and trailing lines", async () => {
++		for (const text of [
++			"",
++			"a\nb\n",
++			"a\n\nb",
++			"\uFEFFé\n😀\r\n字\n",
++			lines(2005, (i) => "line " + i),
++			lines(3, () => "x".repeat(20 * 1024)),
++		]) {
++			for (const streaming of [false, true]) {
++				const bytes = Buffer.from(text),
++					pages: string[] = [];
++				const ops = streaming ? streamingOps(bytes, 4096) : { access: async () => {}, readFile: async () => bytes };
++				const tool = createReadToolDefinition(process.cwd(), { operations: ops });
++				let offset = 1,
++					count = 0;
++				while (true) {
++					const result = await tool.execute("page", { path: FILE_PATH, offset, limit: 3000, format: "page" });
++					const page = result.structuredContent;
++					if (typeof page !== "object" || page.type !== "text_page") throw new Error("Expected a text page");
++					expect(page.totalLines).toBe(text.split("\n").length);
++					expect(page.lines).toBeGreaterThan(0);
++					expect(Buffer.byteLength(page.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
++					pages.push(page.text);
++					count += page.lines;
++					if (page.eof) {
++						expect(page.nextOffset).toBeNull();
++						break;
++					}
++					expect(page.nextOffset).toBeGreaterThan(offset);
++					if (page.nextOffset === null) throw new Error("A partial page must advance");
++					offset = page.nextOffset;
++				}
++				expect(count).toBe(text.split("\n").length);
++				expect(pages.join("\n")).toBe(text);
++			}
++		}
++	});
++
++	it("separates requested pagination from safety truncation and never mixes notices into raw text", async () => {
++		const tool = createReadToolDefinition(process.cwd(), { operations: streamingOps(Buffer.from("a\nb\nc\n"), 1) });
++		expect((await tool.execute("page", { path: FILE_PATH, format: "page", limit: 2 })).structuredContent).toEqual({
++			type: "text_page",
++			text: "a\nb",
++			offset: 1,
++			lines: 2,
++			totalLines: 4,
++			nextOffset: 3,
++			eof: false,
++			truncated: false,
++			truncatedBy: null,
++		});
++		const defaultResult = await tool.execute("text", { path: FILE_PATH, limit: 2 });
++		expect(defaultResult.structuredContent).toContain("more lines");
++	});
++
++	it("rejects invalid page ranges, unsupported images and lines that cannot make progress", async () => {
++		const tool = createReadToolDefinition(process.cwd(), { operations: streamingOps(Buffer.from("a\nb"), 1) });
++		for (const range of [
++			{},
++			{ limit: 0 },
++			{ limit: -1 },
++			{ limit: 1.5 },
++			{ limit: 2, offset: 0 },
++			{ limit: 2, offset: 1.5 },
++			{ limit: 2, offset: Number.MAX_SAFE_INTEGER },
++		]) {
++			await expect(tool.execute("page", { path: FILE_PATH, format: "page", ...range })).rejects.toThrow(
++				/positive integer/,
++			);
++		}
++		const large = createReadToolDefinition(process.cwd(), {
++			operations: streamingOps(Buffer.from("x".repeat(DEFAULT_MAX_BYTES + 1)), 4096),
++		});
++		await expect(large.execute("page", { path: FILE_PATH, format: "page", limit: 1 })).rejects.toThrow(
++			/Line 1 exceeds/,
++		);
++		const image = createReadToolDefinition(process.cwd(), {
++			operations: {
++				access: async () => {},
++				detectImageMimeType: async () => "image/png",
++				readFile: async () => {
++					throw new Error("Must not read image bytes for a text page");
++				},
++			},
++		});
++		await expect(image.execute("page", { path: FILE_PATH, format: "page", limit: 1 })).rejects.toThrow(
++			/text files only/,
++		);
++	});
++
+ 	it("gives the same output as the whole-file algorithm", async () => {
+ 		for (const [name, text] of Object.entries(TEXT_CASES)) {
+ 			const bytes = Buffer.from(text, "utf-8");
+diff --git a/packages/coding-agent/test/suite/agent-session-codemode.test.ts b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+index 7e05f77ed..6ddc45da1 100644
+--- a/packages/coding-agent/test/suite/agent-session-codemode.test.ts
++++ b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+@@ -429,6 +429,39 @@ describe("AgentSession codemode tool", () => {
+ 		expect(updates()).toHaveLength(count);
+ 	});
+ 
++	it("reads structured text pages through the native tool pipeline without parsing model notices", async () => {
++		const harness = await setup();
++		harness.session.setActiveToolsByName(["codemode", "read"]);
++		const file = join(harness.tempDir, "pages.txt");
++		writeFileSync(file, "a\nb\nc\n");
++		harness.setResponses([
++			fauxAssistantMessage(
++				[
++					fauxToolCall("codemode", {
++						code:
++							"const parts = []; let offset = 1; for (;;) { " +
++							"const p = await tools.read({path: " +
++							JSON.stringify(file) +
++							', format: "page", offset, limit: 2}); ' +
++							'if (p.type !== "text_page") throw new Error("Expected a page"); ' +
++							"parts.push(p.text); if (p.eof) break; offset = p.nextOffset; } " +
++							'text({text: parts.join("\\n"), pages: parts.length});',
++					}),
++				],
++				{ stopReason: "toolUse" },
++			),
++			fauxAssistantMessage("done"),
++		]);
++		await harness.session.prompt("go");
++		const result = codemodeResult(harness);
++		expect(result.isError).toBe(false);
++		expect(resultText(result)).toContain(JSON.stringify({ text: "a\nb\nc\n", pages: 2 }));
++		expect((result.details as unknown as CodemodeToolDetails).calls.map((call) => call.name)).toEqual([
++			"read",
++			"read",
++		]);
++	});
++
+ 	it("routes nested calls through extension hooks", async () => {
+ 		const harness = await setup([
+ 			(pi) => {

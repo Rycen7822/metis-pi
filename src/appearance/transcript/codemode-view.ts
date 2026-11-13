@@ -133,9 +133,14 @@ export class CodemodeViewStore {
     // Count starts even when their payload cannot be admitted. A later live
     // call must not take an earlier /? slot just because its args were smaller.
     const order = parent.nextOrder++;
-    if (parent.calls.size >= 256) return;
+    const oldest = parent.calls.size >= 256 ? [...parent.calls].find(([, view]) => !view.isPartial) : undefined;
+    if (parent.calls.size >= 256 && !oldest) return;
     const bytes = sizeOf(event.args);
-    if (!this.#makeRoom(bytes)) return;
+    if (bytes > this.#maxBytes || !this.#makeRoom(Math.max(0, bytes - (oldest?.[1].bytes ?? 0)), oldest?.[1])) return;
+    if (oldest) {
+      parent.calls.delete(oldest[0]);
+      this.#bytes -= oldest[1].bytes;
+    }
     parent.calls.set(event.toolCallId, { name: event.toolName, order, args: event.args, isError: false, isPartial: true, bytes });
     this.#bytes += bytes;
   }
@@ -332,14 +337,16 @@ export function makeCodemodeRenderers(input: {
       for (const call of recorded) {
         const id = String(call.id), preview = id === previewId;
         if (!preview && used.has(id)) continue;
-        const position = isModelCall(call, parent) ? undefined : order++;
+        const position = isModelCall(call, parent) ? undefined : typeof call.order === "number" ? call.order : order++;
         const candidate = preview && position !== undefined ? byOrder.get(position) : undefined;
         // Exact identity wins; positional inference needs matching names and
         // cannot borrow an execution reserved by a later exact record.
         const current = liveCalls.get(id)
           ?? (candidate && candidate.name === call.name && !exactIds.has(candidate.id) ? candidate : undefined);
         if (current && !used.has(current.id)) {
-          calls.push(current.name === call.name ? { ...call, ...current } : current);
+          calls.push(current.name === call.name
+            ? { ...call, ...current, status: call.status === "unfinished" && current.status === "running" ? "unfinished" : current.status }
+            : current);
           used.add(current.id);
         } else {
           calls.push(call);
@@ -349,6 +356,8 @@ export function makeCodemodeRenderers(input: {
       for (const [id, call] of liveCalls) if (!used.has(id)) calls.push(call);
       const actions = readCodemodeActions(details);
       const steps = commandSteps(calls, actions.calls);
+      const retainedSlots = new Set(steps.map(step => step.call.id));
+      for (const id of view.slots.keys()) if (!retainedSlots.has(id)) view.slots.delete(id);
       const allCalls = view.allCalls ?? view.expanded;
       // Keep explicitly opened older actions visible while new calls stream in.
       const shown = allCalls ? steps : steps.filter((step, index) => index >= steps.length - CALL_PREVIEW_COUNT
@@ -359,6 +368,12 @@ export function makeCodemodeRenderers(input: {
         parts.push(clickRegion(input.makeText(theme.fg("dim", notice)), context, () => { view.allCalls = !allCalls; }));
       }
       if (actions.omitted) parts.push(input.makeText(theme.fg("dim", `… ${actions.omitted} earlier helper actions not retained`)));
+      const totals = asRecord(details.callSummary);
+      if (typeof totals.omitted === "number" && totals.omitted > 0)
+        parts.push(input.makeText(theme.fg("dim", `… ${totals.omitted} earlier call previews not retained ` +
+          `(${totals.total} total, ${totals.error} failed)`)));
+      if (typeof totals.unfinished === "number" && totals.unfinished > 0)
+        parts.push(input.makeText(theme.fg("error", `${totals.unfinished} unfinished calls; external results unknown`)));
       if (!steps.length) {
         const title = context.isError ? "Script failed" : options.isPartial ? "Running script" : "Ran script";
         parts.push(input.makeText(`${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(title))}`));
@@ -405,7 +420,7 @@ export function makeCodemodeRenderers(input: {
           captured?.result === undefined ? undefined : { content: rawResult.content, details: rawResult.details };
         const renderers = call.name !== "codemode" && !preview ? input.resolve(call.name, viewResult) : undefined;
         const partial = captured?.isPartial ?? call.status === "running";
-        const isError = captured?.isError ?? ["error", "cancelled"].includes(String(call.status));
+        const isError = captured?.isError ?? ["error", "cancelled", "unfinished"].includes(String(call.status));
         let callComponent: Component, resultComponent: Component | undefined;
         if (!renderers || args === undefined) {
           if (renderers?.renderCall === input.shell.renderCall) {
@@ -502,7 +517,8 @@ function commandSteps(calls: Readonly<Record<string, unknown>>[], helpers: Codem
   const steps: CommandStep[] = [];
   let helper = 0;
   for (let index = 0; index <= calls.length; index++) {
-    while (helper < helpers.length && helpers[helper]!.beforeCall <= index)
+    const position = typeof calls[index]?.sequence === "number" ? Number(calls[index]?.sequence) : index;
+    while (helper < helpers.length && helpers[helper]!.beforeCall <= position)
       steps.push({ kind: "helper", call: helpers[helper++]! });
     if (index < calls.length) steps.push({ kind: "tool", call: calls[index]! });
   }
@@ -531,8 +547,8 @@ function helperSummary(action: CodemodeAction, theme: Palette, expanded: boolean
 }
 
 function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expanded: boolean): string {
-  const failed = ["error", "cancelled"].includes(String(call.status));
-  const icon = call.status === "running" ? "…" : failed ? "✗" : "✓";
+  const failed = ["error", "cancelled", "unfinished"].includes(String(call.status));
+  const icon = call.status === "running" ? "…" : call.status === "unfinished" ? "?" : failed ? "✗" : "✓";
   const rawArgs = typeof call.args === "string" ? safeText(call.args) : "";
   const args = !expanded && rawArgs.length > 80 ? `${rawArgs.slice(0, 77)}…` : rawArgs;
   const cost = typeof call.cost === "number" && call.cost > 0 ? ` $${call.cost.toPrecision(2)}` : "";
@@ -545,6 +561,7 @@ function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expand
     `${args ? ` ${args}` : ""}` +
     `${duration}` +
     `${cost}` +
+    `${call.status === "unfinished" ? " (external result unknown)" : ""}` +
     `${error}`
   );
 }
