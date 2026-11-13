@@ -117,7 +117,7 @@ export function pruneMessages(
     // Render-time re-check: a record summarized before protectedPaths
     // covered it is repaired here — the raw toolResult still lives in the
     // session JSONL, so skipping the stub restores it verbatim.
-    if (record?.metadataUnavailable || (protection && record && isProtected(record.toolName, record.args, protection))) {
+    if (record?.archiveOnly || record?.metadataUnavailable || (protection && record && isProtected(record.toolName, record.args, protection))) {
       return msg;
     }
     if (inGrace.has(key)) {

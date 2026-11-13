@@ -3,7 +3,6 @@ import { Worker } from "node:worker_threads";
 import { convertToLlm, estimateTokens } from "@earendil-works/pi-coding-agent";
 
 export interface TokenComparison {
-  fingerprint: string;
   piBefore: number;
   piAfter: number;
   proxyDelta: number;
@@ -11,7 +10,7 @@ export interface TokenComparison {
   proxyAfter?: number;
 }
 type Job = {
-  id: number; before: any[]; after: any[]; fingerprint: string; cacheKey: string;
+  id: number; before: string[]; after: string[]; cacheKey: string;
   piBefore: number; piAfter: number; absolute: boolean;
   signal?: AbortSignal; abort: () => void;
   resolve: (result: TokenComparison | null) => void;
@@ -42,33 +41,57 @@ export class TokenEstimator {
 
   compare(before: any[], after: any[], signal?: AbortSignal, absolute = false): Promise<TokenComparison | null> {
     if (signal?.aborted) return Promise.resolve(null);
-    const fingerprint = `${absolute}:` + projectionFingerprint(before) + ":" + projectionFingerprint(after);
-    const piBefore = before.reduce((n, m) => n + estimateTokens(m), 0);
-    const piAfter = after.reduce((n, m) => n + estimateTokens(m), 0);
-    let snapshot: [any[], any[]], cacheKey: string;
+    // Pi counts remain full-context facts; shared identities are stable within this synchronous call.
+    const piCounts = new Map<any, number>();
+    const pi = (messages: any[]) => messages.reduce((total, message) => {
+      let count = piCounts.get(message);
+      if (count === undefined) { count = estimateTokens(message); piCounts.set(message, count); }
+      return total + count;
+    }, 0);
+    const piBefore = pi(before), piAfter = pi(after);
+    let snapshot: [string[], string[]], cacheKey: string;
     try {
       // Count only model-facing fields. In particular, custom.details/display
       // and tool execution metadata are not evidence sent to the model.
-      const normalize = (messages: any[]) => convertToLlm(messages).map(message => message.role === "toolResult"
+      const normalize = (messages: any[]) => convertToLlm(messages).map(message => JSON.stringify(message.role === "toolResult"
         ? { role: message.role, toolCallId: message.toolCallId, toolName: message.toolName,
           content: message.content, isError: message.isError }
-        : { role: message.role, content: message.content });
-      const normalized: [any[], any[]] = [normalize(before), normalize(after)];
-      // Source authorization still uses the complete fingerprint above. Only encoder
-      // results ignore fields the worker never counts, such as render timestamps.
-      cacheKey = `${absolute}:` + projectionFingerprint(normalized[0]) + ":" + projectionFingerprint(normalized[1]);
+        : { role: message.role, content: message.content }));
+      let left = before, right = after;
+      if (!absolute) {
+        // The worker delta is additive per message. Cancel shared objects before serializing or
+        // cloning them, preserving multiplicity; different objects still get full encoder checks.
+        const copies = new Map<any, number>();
+        for (const message of before) copies.set(message, (copies.get(message) ?? 0) + 1);
+        for (const message of after) copies.set(message, (copies.get(message) ?? 0) - 1);
+        const remaining = (messages: any[], sign: number) => messages.filter(message => {
+          const count = copies.get(message) ?? 0;
+          if (count * sign <= 0) return false;
+          copies.set(message, count - sign);
+          return true;
+        });
+        left = remaining(before, 1); right = remaining(after, -1);
+      }
+      snapshot = [normalize(left), normalize(right)];
+      // Runtime owns full-source authorization. Encoder memoization counts only model-facing
+      // fields, so render timestamps and display metadata must not force another measurement.
+      const fingerprint = (messages: string[]) => {
+        const hash = createHash("sha256");
+        for (const message of messages) hash.update(message).update("\n");
+        return hash.digest("hex");
+      };
+      cacheKey = `${absolute}:` + fingerprint(snapshot[0]) + ":" + fingerprint(snapshot[1]);
       const cached = this.cache.get(cacheKey);
       if (cached) {
         this.cache.delete(cacheKey);
         this.cache.set(cacheKey, cached);
-        return Promise.resolve({ fingerprint, piBefore, piAfter, ...cached });
+        return Promise.resolve({ piBefore, piAfter, ...cached });
       }
-      // postMessage snapshots synchronous dispatch; deferred jobs need their request-time contents now.
-      snapshot = this.active || this.retiring ? structuredClone(normalized) : normalized;
+      // Immutable counted text snapshots queued work now; the worker need not clone objects or serialize it again.
     }
     catch { return Promise.resolve(null); }
     return new Promise(resolve => {
-      const job: Job = { id: ++this.nextId, before: snapshot[0], after: snapshot[1], fingerprint, cacheKey, signal, resolve,
+      const job: Job = { id: ++this.nextId, before: snapshot[0], after: snapshot[1], cacheKey, signal, resolve,
         piBefore, piAfter, absolute,
         abort: () => this.clear() };
       signal?.addEventListener("abort", job.abort, { once: true });
@@ -99,8 +122,7 @@ export class TokenEstimator {
           const current = this.active;
           if (this.worker !== worker || !current || current.id !== result.id) return;
           if (result.error || !Number.isFinite(result.delta)) { this.clear(); return; }
-          const measured: TokenComparison = { fingerprint: current.fingerprint,
-            piBefore: current.piBefore, piAfter: current.piAfter,
+          const measured: TokenComparison = { piBefore: current.piBefore, piAfter: current.piAfter,
             proxyDelta: result.delta, proxyBefore: result.before, proxyAfter: result.after };
           this.cache.delete(current.cacheKey);
           this.cache.set(current.cacheKey, {

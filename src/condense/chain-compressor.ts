@@ -91,7 +91,8 @@ export interface ChainCompressorIndexerDeps {
   getPerBatchSummariesForToolCallIds(toolCallIds: string[]): string[];
   getToolRefsForToolCallIds(toolCallIds: string[]): string[];
   registerChain(entry: import("./types.ts").ChainCompressionEntry): void;
-  getIndex(): Map<string, ToolCallRecord>;
+  hasRecord(key: string): boolean;
+  getRecord(key: string): ToolCallRecord | undefined;
   backfillChainRecords(
     records: ToolCallRecord[],
     opts: {
@@ -255,7 +256,7 @@ export async function compressEligible(
     // Small skipped outputs can share a chain with summarized outputs. Archive
     // them before any range drop; archive-only records never authorize stubbing.
     if (deps.indexer.hasPerBatchSummaryCoveringAny(lookupKeys)) {
-      const fresh = extractChainRecords(deps.messages, chain, key => deps.indexer.getIndex().has(key));
+      const fresh = extractChainRecords(deps.messages, chain, key => deps.indexer.hasRecord(key));
       try {
         if (fresh.length) await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry });
       } catch {
@@ -267,13 +268,12 @@ export async function compressEligible(
     if (!deps.indexer.hasPerBatchSummaryCoveringAny(lookupKeys)) {
       // Deterministic zero-LLM fallback (spec 2026-08-14). Fail-closed: any
       // failure below preserves the historical no-summary skip.
-      const index = deps.indexer.getIndex();
       const indexed: ToolCallRecord[] = [];
       for (const key of lookupKeys) {
-        const r = index.get(key);
+        const r = deps.indexer.getRecord(key);
         if (r) indexed.push(r);
       }
-      const fresh = extractChainRecords(deps.messages, chain, (k) => index.has(k));
+      const fresh = extractChainRecords(deps.messages, chain, (k) => deps.indexer.hasRecord(k));
       if (fresh.length === 0 && indexed.length === 0) {
         const protectedIds = new Set(chain.protectedToolCallIds ?? []);
         const fullyProtected =
@@ -325,7 +325,7 @@ export async function compressEligible(
     const blockId = deps.blockRefs.issue();
     const toolRefs = deps.indexer.getToolRefsForToolCallIds(lookupKeys);
     const uncovered = lookupKeys
-      .map((key) => deps.indexer.getIndex().get(key))
+      .map((key) => deps.indexer.getRecord(key))
       .filter((record): record is ToolCallRecord => record?.archiveOnly === true);
     const extraBody = uncovered.length
       ? buildDeterministicBody(
@@ -394,11 +394,11 @@ export async function prepareSharedChain(
     if (calls.length !== keys.length) continue;
     const owned = deps.indexer.getOwnedSummaryText(keys);
     if (owned === null) continue;
-    const fresh = extractChainRecords(deps.messages, { ...chain, protectedToolCallIds: [] }, key => deps.indexer.getIndex().has(key));
+    const fresh = extractChainRecords(deps.messages, { ...chain, protectedToolCallIds: [] }, key => deps.indexer.hasRecord(key));
     if (fresh.length) await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry,
       assertValid: () => { signal.throwIfAborted(); deps.backfill.assertValid?.(); } });
     signal.throwIfAborted();
-    const records = keys.map(key => deps.indexer.getIndex().get(key));
+    const records = keys.map(key => deps.indexer.getRecord(key));
     if (records.some(record => !record || record.metadataUnavailable || record.archiveComplete === false)) continue;
     const uncovered = records.filter((record): record is ToolCallRecord => !!record && (!owned || record.archiveOnly === true));
     const facts = uncovered.length ? uncovered.map(record => {

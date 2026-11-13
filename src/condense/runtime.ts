@@ -8,7 +8,7 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
 import {
-  captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex,
+  activeCaptureSource, captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex,
   groupBatchesByMode, projectBranchMessages, readMessageBranch,
 } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
@@ -72,6 +72,10 @@ import {
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 type NativeProjection = ReturnType<ExtensionContext["sessionManager"]["buildSessionProjection"]>;
+type PreparedProjection = {
+  projection: NativeProjection; leaf: ReturnType<ExtensionContext["sessionManager"]["getLeafId"]>;
+  source?: { capture: ReturnType<typeof createSourceSnapshotter>; snapshot: string | undefined };
+};
 
 /** Load cooperatively where supported; publication guards below remain synchronous and content-based. */
 async function readProjection(ctx: ExtensionContext, signal = ctx.signal): Promise<NativeProjection> {
@@ -167,6 +171,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   const pendingBatches: CapturedBatch[] = [];
   let lifecycle = 0;
+  let recoveryTask: Promise<void> | undefined;
+  const awaitRecovery = async () => { while (recoveryTask) await recoveryTask; };
   const tokenEstimator = new TokenEstimator();
   const sharedApprovals = new Map<string, string>();
   let maintenanceAbort: AbortController | undefined;
@@ -325,30 +331,26 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Cache only pre-request admission failures; rejected generated output must still retry/fallback.
   const budgetAdmissions = new Set<string>();
   const capturePendingBatches = (ctx: any, opts?: {
-    rethrow?: boolean; rawBranch?: ReturnType<typeof readMessageBranch>; projection?: NativeProjection; visible?: any[];
+    rethrow?: boolean; projection?: NativeProjection; visible?: any[];
   }): CapturedBatch[] => {
     let batches: CapturedBatch[] = [];
     let projection = opts?.projection;
     try {
       indexer.syncSummaryEntries(ctx);
-      const references = branchEntryReferences(ctx.sessionManager);
-      const sourceTurns = new Map<string, number>();
-      let turnIndex = 0;
-      for (const entry of references)
-        if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
+      const current: NativeProjection = projection ?? ctx.sessionManager.buildSessionProjection();
+      projection = current;
+      const source = activeCaptureSource(ctx.sessionManager, current.entries);
       const projectedCapture = occ.enabled();
-      projection ??= projectedCapture ? ctx.sessionManager.buildSessionProjection() : undefined;
-      const branch = projectedCapture && projection
-        ? projection.entries.flatMap((entry: any) =>
+      const branch = projectedCapture
+        ? current.entries.flatMap((entry: any) =>
               entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
             )
-        : opts?.rawBranch ?? readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "message" || entry.type === "custom_message",
-          { cacheAdmission: "bypass" });
+        : source.readBranch();
       batches = captureUnindexedBatchesFromSession(
         branch,
         { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },
         protectionPredicate,
-        sourceTurns,
+        { turnIndices: source.turnIndices, userGroups: projectedCapture ? undefined : source.userGroups },
       );
     } catch (err) {
       if (opts?.rethrow) throw err;
@@ -468,7 +470,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const backfill = { ...archiveOptions(ctx.sessionManager), assertValid: () => { assertCurrent(version); signal?.throwIfAborted(); } };
     for (const chain of selectEligible(chains, rollingWindow,
       new Set(indexer.getChainEntries().flatMap(chainMembers).map(entry => entry.startUserTimestamp)), inGrace)) {
-      const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.getIndex().has(key));
+      const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.hasRecord(key));
       if (fresh.length) await indexer.backfillChainRecords(fresh, { ...backfill, appendEntry: append });
     }
     const validatedGains = new Map<string, number>();
@@ -477,7 +479,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       messages, diagnostics, validate: async entry => {
         const keys = entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds;
         if (indexer.getOwnedSummaryText(keys) === null || !singleSummaryCurrent(entry, ctx)) return false;
-        if (keys.some(key => { const record = indexer.getIndex().get(key);
+        if (keys.some(key => { const record = indexer.getRecord(key);
           return !record || record.metadataUnavailable || record.archiveComplete === false; })) return false;
         if (automatic && !zeroCall) {
           const range = resolveRange(entry, messages);
@@ -622,6 +624,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
+    await awaitRecovery();
+    if (!projectionContext || activeSessionId !== ctx.sessionManager.getSessionId())
+      return { ok: false, reason: "failed", error: "Condense history recovery is not ready" };
     if (isFlushing || isArchiving || isCompactingChains) return { ok: false, reason: "already-flushing" };
     const trigger: FlushTrigger = options.trigger ?? "manual";
     if (trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "deferred-occ" };
@@ -752,7 +757,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Previewed work retains its original candidate; neither preparation waits nor queued input
       // may silently become a new model-source baseline for that candidate.
       batches = options.preparedBatches ?? options.previewedBatches ?? capturePendingBatches(ctx,
-        { rawBranch, projection: preparedProjection, visible: preparedVisible });
+        { projection: preparedProjection, visible: preparedVisible });
       // Do not retain older, non-projected history while waiting for providers.
       rawBranch = undefined; preparedVisible = undefined;
       if (trigger === "message-end") {
@@ -1453,10 +1458,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     blockRefs.rebuildFrom(indexer.getChainEntries().map((e) => e.blockId));
     statsAccum.reconstructFromSession(ctx);
   };
+  const recoverBranchIndex = async (ctx: ExtensionContext, version: number): Promise<void> => {
+    if (ctx.mode === "tui") {
+      const leaf = ctx.sessionManager.getLeafId();
+      await indexer.reconstructFromSessionAsync(ctx, () => {
+        assertCurrent(version);
+        if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("branch changed during recovery");
+      });
+    } else indexer.reconstructFromSession(ctx);
+    blockRefs.rebuildFrom(indexer.getChainEntries().map((e) => e.blockId));
+    statsAccum.reconstructFromSession(ctx);
+  };
 
   /** Reset branch-scoped diagnostics/frontier state, drop the old branch's queued
    * batches, then re-probe for recoverable pending work and refresh the footer. */
-  const restoreBranchPending = (ctx: ExtensionContext): void => {
+  const restoreBranchPending = (ctx: ExtensionContext, projection?: NativeProjection): void => {
     queuedSummaryKeys.clear();
     diagnostics.reset();
     supersede.activated.clear();
@@ -1471,7 +1487,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     latestPruneDetail = () => "No pending turns";
     if (currentConfig.value.enabled) {
       try {
-        const count = capturePendingBatches(ctx, { rethrow: true }).length;
+        const count = capturePendingBatches(ctx, { rethrow: true, projection }).length;
         rearmedPending = count > 0;
         if (rearmedPending) latestPruneDetail = queuedDetail(count, `${count} pending batch(es) recovered from current branch — `);
       } catch (err) {
@@ -1496,11 +1512,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     occ.restore(ctx);
     restoreArguments(ctx);
   };
-  const warmJsonSizes = async (ctx: ExtensionContext, version: number) => {
+  const warmJsonSizes = async (ctx: ExtensionContext, version: number, projection: NativeProjection) => {
     if (ctx.mode !== "tui" || !currentConfig.value.enabled) return;
     let slice = performance.now();
     try {
-      const projection = ctx.sessionManager.buildSessionProjection();
       for (const { sourceEntry } of projection.entries) {
         if (version !== lifecycle) return;
         if (sourceEntry.type !== "message" && sourceEntry.type !== "custom_message") continue;
@@ -1512,7 +1527,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (version === lifecycle) jsonSizes.measure(projection.messages);
     } catch { /* Optional warming must leave session setup intact on a read or serialization failure. */ }
   };
-  const start = async (ctx: ExtensionContext) => {
+  const prepareRecoveryProjection = async (ctx: ExtensionContext, version: number, projection: NativeProjection) => {
+    const capture = indexer.getChainEntries().some(isSharedChain) ? createSourceSnapshotter() : undefined;
+    const prepared: PreparedProjection = { projection, leaf: ctx.sessionManager.getLeafId(),
+      source: capture ? { capture, snapshot: capture(projection.messages) } : undefined };
+    if (ctx.mode === "tui") {
+      const assertValid = () => {
+        assertCurrent(version);
+        if (prepared.leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("recovery window changed");
+      };
+      await setImmediate(); assertValid();
+      await indexer.prepareContext(projection.messages, assertValid);
+    }
+    return prepared;
+  };
+  const startSession = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
     maintenanceAbort?.abort();
     tokenEstimator.clear();
@@ -1523,18 +1552,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceNext = undefined;
     activeFlushAbort?.abort();
     clearBoot();
+    activeSessionId = undefined; projectionContext = undefined;
     restore(ctx);
     const config = await loadConfig();
     if (version !== lifecycle) return;
     currentConfig.value = config;
-    rebuildBranchIndex(ctx);
+    await recoverBranchIndex(ctx, version);
+    const projection = await readProjection(ctx);
+    assertCurrent(version);
     fallbackController = new FallbackController();
-    restoreBranchPending(ctx);
+    const prepared = await prepareRecoveryProjection(ctx, version, projection);
+    restoreBranchPending(ctx, projection);
     activeSessionId = ctx.sessionManager.getSessionId();
     projectionContext = ctx;
     // Pay the initial string-encoding cost during cooperative session setup,
     // not on the first completed answer of a resumed large session.
-    await warmJsonSizes(ctx, version);
+    await warmJsonSizes(ctx, version, projection);
     if (version !== lifecycle) return;
     if (currentConfig.value.showPruneStatusLine) {
       ctx.ui.setWidget("pruner-boot", [
@@ -1543,9 +1576,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       bootTimer = setTimeout(clearBoot, 10000);
       bootTimer.unref?.();
     }
-    await revalidateSharedChains(ctx, version);
+    await revalidateSharedChains(ctx, version, prepared);
   };
-  const tree = async (ctx: ExtensionContext) => {
+  const restoreTree = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
     maintenanceAbort?.abort();
     tokenEstimator.clear();
@@ -1555,15 +1588,27 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     lastMaintenanceSource = undefined;
     maintenanceNext = undefined;
     activeFlushAbort?.abort();
+    activeSessionId = undefined; projectionContext = undefined;
     restore(ctx);
-    rebuildBranchIndex(ctx);
-    restoreBranchPending(ctx);
+    await recoverBranchIndex(ctx, version);
+    const projection = await readProjection(ctx);
+    assertCurrent(version);
+    const prepared = await prepareRecoveryProjection(ctx, version, projection);
+    restoreBranchPending(ctx, projection);
     activeSessionId = ctx.sessionManager.getSessionId();
     projectionContext = ctx;
-    await warmJsonSizes(ctx, version);
+    await warmJsonSizes(ctx, version, projection);
     if (version !== lifecycle) return;
-    await revalidateSharedChains(ctx, version);
+    await revalidateSharedChains(ctx, version, prepared);
   };
+
+  const trackRecovery = (task: Promise<void>, version = lifecycle) => {
+    const guarded = task.catch(error => { if (version === lifecycle) throw error; });
+    recoveryTask = guarded;
+    return guarded.finally(() => { if (recoveryTask === guarded) recoveryTask = undefined; });
+  };
+  const start = (ctx: ExtensionContext) => trackRecovery(startSession(ctx));
+  const tree = (ctx: ExtensionContext) => trackRecovery(restoreTree(ctx));
 
   // Cache is a per-model prefix; these three moments are cold regardless, so
   // activating every pending supersession here costs no extra cache miss.
@@ -1893,6 +1938,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   // A transient read view, never a writer's authorization across awaits.
   function readSourceEdits(ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection()) {
+    indexer.retainForContext(projection.messages);
     const changedToolIds = new Set<string>(), editedToolIds = new Set<string>(), editedSummaries = new Set<string>();
     for (const { sourceEntry: source, messages } of projection.entries) {
       const summary = source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY;
@@ -1981,7 +2027,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     );
   }
 
-  const maintainChains = (ctx: ExtensionContext): Promise<void> => {
+  const maintainChains = (ctx: ExtensionContext, prepared?: PreparedProjection): Promise<void> => {
     if (!currentConfig.value.enabled) {
       maintenanceAbort?.abort();
       tokenEstimator.clear();
@@ -1996,6 +2042,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       return maintenanceTask;
     }
     if (
+      !projectionContext ||
       maintenanceHandoffs ||
       isFlushing ||
       isArchiving ||
@@ -2038,7 +2085,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         } while (maintenanceNext?.version === version);
       }
       indexer.syncSummaryEntries(ctx);
-      let sourceView = readSourceEdits(ctx, await readProjection(ctx, signal));
+      const usePrepared = prepared?.leaf === manager.getLeafId();
+      const projection = usePrepared ? prepared.projection : await readProjection(ctx, signal);
+      let sourceView = readSourceEdits(ctx, projection);
+      const captureSharedSource = usePrepared && prepared.source ? prepared.source.capture : projectionFingerprint;
+      const frozenSource = usePrepared ? prepared.source?.snapshot : undefined;
+      const cooperate = async () => { await setImmediate(undefined, { signal }); assertValid(); };
       assertValid();
       let raw = sourceView.projection.messages;
       const analysis = {
@@ -2058,19 +2110,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       for (const entry of indexer.getChainEntries().filter(isSharedChain)) {
         assertValid();
         const views = sharedCandidates(entry, raw, ctx, analysis);
+        if (!views.length) { sharedApprovals.delete(entry.blockId); continue; }
         const before = singleBaseline ??= projectContext(raw, ctx.model?.api,
           { ctx, source: sourceView, chainViews: singles, probe: true }).messages;
+        if (ctx.mode === "tui" && frozenSource) await cooperate();
         const shape = sharedShape(before, views);
         if (sharedApprovals.get(entry.blockId) === shape) continue;
         sharedApprovals.delete(entry.blockId);
-        if (!views.length) continue;
-        const source = projectionFingerprint(raw);
+        const source = frozenSource ?? captureSharedSource(raw);
+        if (ctx.mode === "tui") await cooperate();
         const after = projectContext(raw, ctx.model?.api,
           { ctx, source: sourceView, chainViews: singles.concat(views), probe: true }).messages;
+        if (ctx.mode === "tui") await cooperate();
         const counts = await tokenEstimator.compare(before, after, signal);
         assertValid();
         const current = manager.buildSessionProjection();
-        if (source !== projectionFingerprint(current.messages)) return;
+        if (source !== captureSharedSource(current.messages)) return;
         sourceView = readSourceEdits(ctx, current);
         analysis.source = sourceView;
         if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0) sharedApprovals.set(entry.blockId, shape);
@@ -2081,7 +2136,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return;
       }
       raw = sourceView.projection.messages;
-      const source = projectionFingerprint(raw);
       const chains = detectChains(raw, protectionPredicate);
       const window = currentConfig.value.chainCompression.rollingWindow;
       const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
@@ -2096,8 +2150,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         (chain) =>
           chain.finalAssistantTimestamp !== deferredFinal && !chain.middleToolCallIds.some((id) => edited.has(id)),
       );
+      if (eligible.length === 0) return;
+      const source = projectionFingerprint(raw);
       const attempt = source + config + [...known].join(",");
-      if (attempt === lastMaintenanceSource || eligible.length === 0) return;
+      if (attempt === lastMaintenanceSource) return;
       lastMaintenanceSource = attempt;
       const appendEntry = (type: string, data: unknown) => {
         assertValid();
@@ -2203,9 +2259,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return maintenanceTask;
   };
 
-  const revalidateSharedChains = async (ctx: ExtensionContext, version: number) => {
+  const revalidateSharedChains = async (ctx: ExtensionContext, version: number, prepared?: PreparedProjection) => {
     if (!indexer.getChainEntries().some(isSharedChain)) return;
-    await maintainChains(ctx);
+    await maintainChains(ctx, prepared);
     // A cancelled older pass may hand off to this restored session. Awaiting
     // only its original promise would expose an unvalidated projection as ready.
     while (version === lifecycle && maintenanceTask) await maintenanceTask;
@@ -2255,7 +2311,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!isCondenseProjectRequest(data)) return;
     const request = data;
     if (request.sessionId !== activeSessionId) return;
-    if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
+    if (recoveryTask || isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
     if (projectionContext) indexer.syncSummaryEntries(projectionContext);
     const source = projectionContext && readSourceEdits(projectionContext);
     const messages = request.includeSummaries && projectionContext
@@ -2263,6 +2319,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     request.messages = projectContext(messages, request.api, { ctx: projectionContext, source }).messages;
   });
   pi.on("context", async (event, ctx) => {
+    await awaitRecovery();
+    if (!projectionContext || activeSessionId !== ctx.sessionManager.getSessionId()) return;
     if (ctx.mode === "tui" && currentConfig.value.enabled) {
       // Agent activity is already real, but chained microtasks can starve its
       // first frame. Yield a frame before reading fresh source/protection state.
@@ -2314,7 +2372,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return result.changed ? { messages: result.messages } : undefined;
   });
 
-  registerQueryTool(pi, indexer);
+  registerQueryTool(pi, indexer, async ctx => {
+    await awaitRecovery();
+    if (!projectionContext || activeSessionId !== ctx.sessionManager.getSessionId())
+      throw new Error("Condense history recovery is not ready");
+  });
 
   const compactChains = async (ctx: any) => {
     if (isFlushing || isArchiving || isCompactingChains || occ.isRunning())

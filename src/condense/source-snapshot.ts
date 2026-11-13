@@ -10,26 +10,23 @@ export function createSourceSnapshotter(): (value: unknown) => string | undefine
   const isRawJSON = (JSON as typeof JSON & {
     isRawJSON?: (value: unknown) => value is { rawJSON: string };
   }).isRawJSON;
-  const intern = (literal: string) => {
-    let id = literals.get(literal);
+  const intern = (values: Map<string, string>, value: string, prefix: string) => {
+    let id = values.get(value);
     if (id === undefined) {
-      id = String(literals.size);
-      literals.set(literal, id);
+      id = prefix + values.size;
+      values.set(value, id);
     }
     return id;
   };
   return value => JSON.stringify(value, (_key, part: unknown) => {
     const text = typeof part === "string" ? part : isStringObject(part) ? String(part) : undefined;
-    if (text !== undefined) {
-      let id = strings.get(text);
-      if (id === undefined) {
-        id = intern(JSON.stringify(text));
-        strings.set(text, id);
-      }
-      return id;
+    // Ordinary values need no second escaped copy. Only raw literals can have a distinct spelling.
+    if (text !== undefined) return intern(strings, text, "s");
+    if (isRawJSON?.(part) && part.rawJSON.startsWith('"')) {
+      const value: unknown = JSON.parse(part.rawJSON);
+      return typeof value === "string" && JSON.stringify(value) === part.rawJSON
+        ? intern(strings, value, "s") : intern(literals, part.rawJSON, "r");
     }
-    // Raw string literals bypass JSON's escaping; retain their exact spelling.
-    if (isRawJSON?.(part) && part.rawJSON.startsWith('"')) return intern(part.rawJSON);
     return part;
   });
 }

@@ -7,8 +7,7 @@ const encoding = new Tiktoken(ranks.bpe_ranks, ranks.special_tokens, ranks.pat_s
 const cache = new Map();
 function difference(before, after, used) {
   const remaining = new Map();
-  for (const [messages, sign] of [[before, 1], [after, -1]]) for (const message of messages) {
-    const text = JSON.stringify(message);
+  for (const [messages, sign] of [[before, 1], [after, -1]]) for (const text of messages) {
     const key = createHash("sha256").update(text).digest("hex");
     used.add(key);
     const old = remaining.get(key);
@@ -29,8 +28,7 @@ parentPort.on("message", ({ id, before, after, absolute }) => {
     const used = new Set();
     const result = { id };
     if (absolute) {
-      const count = messages => messages.reduce((sum, message) => {
-        const text = JSON.stringify(message);
+      const count = messages => messages.reduce((sum, text) => {
         const key = createHash("sha256").update(text).digest("hex");
         used.add(key);
         let tokens = cache.get(key);

@@ -72,6 +72,45 @@ test("spill paths preserve distinct occurrence bodies after reload and keep exis
   assert.equal((await run({ toolCallIds: ["duplicate@4"] })).details.results[0].text, originals[0][1]);
 });
 
+test("cold directory preserves historical refs without retaining or loading payloads for listing", async t => {
+  const prefix = JSON.stringify({ path: "old.txt", content: "" }).length - 2;
+  const args = { path: "old.txt", content: "x".repeat(255 - prefix) + "😀" + "large args ".repeat(1000) };
+  const first = record("reused", "ORIGINAL_ONE 宽字符", 3, { args });
+  const second = record("reused", "ORIGINAL_TWO", 5);
+  const f = queryFixture([first, second]);
+  const archive = f.ctx.sessionManager.appendCustomEntry("context-prune-index",
+    { toolCalls: [first], backfilled: true, refs: [{ shortId: "t70", toolCallId: "reused", resultTimestamp: 3 }] });
+  const kept = f.ctx.sessionManager.appendMessage({ role: "user", content: "current window", timestamp: 10 });
+  f.ctx.sessionManager.appendCompaction("old tasks compressed", kept, 1000);
+  await f.indexer.reconstructFromSessionAsync(f.ctx, () => {});
+  const reader = f.ctx.sessionManager.getEntryForScan.bind(f.ctx.sessionManager);
+  const reads = [];
+  t.mock.method(f.ctx.sessionManager, "getEntryForScan", id => { reads.push(id); return reader(id); });
+  const directory = [...f.indexer.directory()];
+  assert.equal(directory.length, 2);
+  assert.ok(directory.every(entry => !("args" in entry) && !("resultText" in entry)));
+  assert.equal(directory.find(entry => entry.ref === "t70").argsPreview, JSON.stringify(first.args).slice(0, 256));
+  assert.equal(f.indexer.lookupByContent(first.toolName, first.resultText), "reused@3");
+  assert.equal(f.indexer.resolveToolCallId("reused"), undefined, "reused bare IDs remain ambiguous");
+  assert.deepEqual(reads, [], "directory and dedup lookup must not hydrate old payloads");
+  assert.equal((await f.run({ toolCallIds: ["t70"] })).details.results[0].text, first.resultText);
+  assert.ok(reads.length > 0 && reads.every(id => id === archive), "recall reads only the addressed archival entry");
+  assert.equal(f.indexer.getRecord("reused@5").resultText, second.resultText);
+});
+
+test("cancelled cold reconstruction cannot publish a partial directory and remains retryable", async () => {
+  const f = queryFixture([record("existing", "EXISTING")]);
+  f.ctx.sessionManager.appendCustomEntry("context-prune-index", { toolCalls: [record("new", "NEW")] });
+  const controller = new AbortController();
+  const pending = f.indexer.reconstructFromSessionAsync(f.ctx, () => controller.signal.throwIfAborted());
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(f.indexer.getRecord("existing@3").resultText, "EXISTING");
+  assert.equal(f.indexer.getRecord("new@3"), undefined, "no half-built replacement escapes cancellation");
+  await f.indexer.reconstructFromSessionAsync(f.ctx, () => {});
+  assert.equal(f.indexer.getRecord("new@3").resultText, "NEW");
+});
+
 test("archive retries reuse occurrence refs, append only changed records and restore missing spill evidence", async t => {
   const dir = temporaryDirectory(t, "condense-archive-retry-");
   const sm = SessionManager.create(dir, dir), f = queryFixture([], sm);

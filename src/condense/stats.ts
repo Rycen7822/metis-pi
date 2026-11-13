@@ -1,5 +1,5 @@
 import type { SummarizerStats, LiveReclaim } from "./types.ts";
-import { customEntries } from "./custom-entries.ts";
+import { reverseCustomEntries } from "./custom-entries.ts";
 import { CUSTOM_TYPE_STATS } from "./types.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -68,17 +68,15 @@ export class StatsAccumulator {
 
   reconstructFromSession(ctx: ExtensionContext): void {
     this.reset();
-    for (const entry of customEntries(ctx.sessionManager, CUSTOM_TYPE_STATS)) {
+    for (const entry of reverseCustomEntries(ctx.sessionManager, CUSTOM_TYPE_STATS)) {
       const data = entry.data as SummarizerStats;
-      if (data) this.fromJSON(data);
+      if (data) { this.fromJSON(data); break; }
     }
     this.baselineTokens = this.stats.totalInputTokens + this.stats.totalOutputTokens;
   }
 
   /**
-   * Persist current stats to the session.
-   * Each call appends a new entry; on reconstructFromSession we scan
-   * all entries and apply the LAST one (since each entry is a full snapshot).
+   * Each persisted entry is a full snapshot; restore reads only the latest usable one.
    */
   persist(pi: ExtensionAPI): void {
     pi.appendEntry(CUSTOM_TYPE_STATS, this.getStats());

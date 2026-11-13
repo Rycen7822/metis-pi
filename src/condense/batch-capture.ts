@@ -1,6 +1,6 @@
 import { captureFusionResult } from "./fusion.ts";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
+import { branchEntryReferences, readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { isChainAnchorCustom } from "./chain-detector.ts";
@@ -41,6 +41,33 @@ export function deriveLiveTurnIndex(branch: readonly SessionEntryReference[]): n
 /** Complete message history for raw evidence and chain logic, excluding unrelated extension payloads. */
 export function readMessageBranch(manager: ExtensionContext["sessionManager"]): SessionEntry[] {
   return [...readHistoryEntries(manager, "branch", entry => entry.type === "message" || entry.type === "custom_message")];
+}
+
+/** Native selection plus raw assistant dependencies; ordinal/group facts need metadata, not old message bodies. */
+export function activeCaptureSource(manager: ExtensionContext["sessionManager"],
+  entries: ReadonlyArray<{ sourceEntry: SessionEntry; messages: readonly unknown[] }>) {
+  const selected = new Map(entries.filter(entry => entry.messages.length && isProjectableEntry(entry.sourceEntry))
+    .map(entry => [entry.sourceEntry.id, entry.sourceEntry]));
+  const wanted = new Set(selected.keys());
+  const references = branchEntryReferences(manager);
+  const turnIndices = new Map<string, number>(), userGroups = new Map<string, number>();
+  let assistant: string | undefined, turn = 0, group = 0;
+  for (const entry of references) {
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      assistant = entry.id; turnIndices.set(entry.id, turn++); userGroups.set(entry.id, group);
+    } else if (entry.type === "message" && entry.message.role === "user"
+      || entry.type === "custom_message" && isChainAnchorCustom({ role: "custom", customType: entry.customType })) group++;
+    if (wanted.has(entry.id) && entry.type === "message" && entry.message.role === "toolResult" && assistant) wanted.add(assistant);
+  }
+  return { turnIndices, userGroups, readBranch: () => {
+    for (const entry of readHistoryEntries(manager, "branch", entry => wanted.has(entry.id) && !selected.has(entry.id),
+      { cacheAdmission: "bypass" })) selected.set(entry.id, entry);
+    return references.filter(entry => wanted.has(entry.id)).map(entry => {
+      const body = selected.get(entry.id);
+      if (!body) throw new Error(`Capture source unavailable: ${entry.id}`);
+      return body;
+    });
+  } };
 }
 
 function isProjectableEntry(e: any): boolean {
@@ -138,7 +165,7 @@ export function captureUnindexedBatchesFromSession(
   branch: Iterable<any>,
   indexer: { isSummarized(id: string): boolean },
   exclude?: (toolName: string, args: unknown) => boolean,
-  sourceTurnIndices?: ReadonlyMap<string, number>,
+  source?: { turnIndices: ReadonlyMap<string, number>; userGroups?: ReadonlyMap<string, number> },
 ): CapturedBatch[] {
   const batches: CapturedBatch[] = [];
   // Every assistant counts, including text-only: this is the persisted frontier's numbering domain.
@@ -177,7 +204,9 @@ export function captureUnindexedBatchesFromSession(
       finishTurn();
       turnResults.clear();
       const fallback = turnCounter++;
-      currentTurn = { entry, msg, turnIndex: sourceTurnIndices?.get(entry.id) ?? fallback, userTurnGroup };
+      const turnIndex = source ? source.turnIndices.get(entry.id) : fallback;
+      if (turnIndex === undefined) throw new Error(`Assistant source position unavailable: ${entry.id}`);
+      currentTurn = { entry, msg, turnIndex, userTurnGroup: source?.userGroups?.get(entry.id) ?? userTurnGroup };
     } else {
       if (msg.role === "user" || isChainAnchorCustom(msg)) userTurnGroup++;
       if (currentTurn && msg.role === "toolResult" && msg.toolCallId && !turnResults.has(msg.toolCallId)) {

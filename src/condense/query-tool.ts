@@ -2,7 +2,7 @@ import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import { readHistoryEntries } from "../session-history.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { auxiliaryToolRenderers, displayRecord } from "../execution/ui/auxiliary-tool.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
 import { QUERY_TOOL_NAME, type ToolCallRecord } from "./types.ts";
@@ -115,7 +115,8 @@ async function readPage(source: ByteSource, offset: number, budget: number) {
   }
 }
 
-export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): void {
+export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer,
+  ready?: (ctx: ExtensionContext) => Promise<void>): void {
   pi.registerTool({
     name: QUERY_TOOL_NAME,
     exposure: "deferred",
@@ -196,6 +197,8 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
       if (component === "arguments" && !params.toolCallIds && !params.parentToolCallId)
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
+      if (!params.sourceEntryIds?.length) await ready?.(ctx);
+      signal?.throwIfAborted();
       const sourceIds = new Set(params.sourceEntryIds);
       const sourceBranch = params.sourceEntryIds
         ? [...readHistoryEntries(ctx.sessionManager, "branch", entry => sourceIds.has(entry.id))]
@@ -214,9 +217,13 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
           })
         : params.parentToolCallId
           ? (() => {
-              const records = [...indexer.getIndex()].filter(([, r]) => r.parentToolCallId === params.parentToolCallId);
+              const records = [...indexer.directory()].filter(record => record.parentToolCallId === params.parentToolCallId);
               return records.length
-                ? records.map(([ref, record]): Selection => ({ kind: "tool-record", ref, record }))
+                ? records.map(({ occurrence }): Selection => {
+                    const record = indexer.getRecord(occurrence);
+                    if (!record) throw new Error(`Execution archive unavailable: ${occurrence}`);
+                    return { kind: "tool-record", ref: occurrence, record };
+                  })
                 : [{ kind: "missing" as const, ref: params.parentToolCallId }];
             })()
           : params.toolCallIds
@@ -230,15 +237,15 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
                 {
                   kind: "evidence-directory",
                   ref: "directory",
-                  text: [...indexer.getIndex()]
-                    .map(([key, r]) =>
+                  text: [...indexer.directory()]
+                    .map((r) =>
                       JSON.stringify({
-                        ref: indexer.getShortRefForToolCallId(key) ?? key,
-                        occurrence: key,
+                        ref: r.ref,
+                        occurrence: r.occurrence,
                         tool: r.toolName,
                         parentToolCallId: r.parentToolCallId,
                         status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
-                        argsPreview: JSON.stringify(r.args).slice(0, 256),
+                        argsPreview: r.argsPreview,
                         archive: r.spillPath,
                         archiveComplete: r.archiveComplete,
                         source: r.archiveSource ?? "tool-result",

@@ -11,6 +11,16 @@ export function* customEntries(source: Iterable<SessionEntry> | ExtensionContext
   }
 }
 
+/** Newest snapshots first, without decoding older matching bodies. */
+export function* reverseCustomEntries(manager: ExtensionContext["sessionManager"], customType: string) {
+  for (const reference of reverseBranchEntryReferences(manager)) {
+    if (reference.type !== "custom" || reference.customType !== customType) continue;
+    const entry = manager.getEntry(reference.id);
+    if (!entry) throw new Error(`Session entry not found: ${reference.id}`);
+    if (entry.type === "custom" && entry.customType === customType) yield entry;
+  }
+}
+
 export function hasCustomEntryData(manager: ExtensionContext["sessionManager"], customType: string, data: unknown): boolean {
   // Publication normally checks the just-appended record; retain the older-record fallback.
   for (const reference of reverseBranchEntryReferences(manager)) {

@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { customEntries } from "./custom-entries.ts";
+import { reverseCustomEntries } from "./custom-entries.ts";
 import type { PruneFrontier } from "./types.ts";
 import { CUSTOM_TYPE_FRONTIER } from "./types.ts";
 
@@ -36,9 +36,9 @@ export class PruneFrontierTracker {
 
   reconstructFromSession(ctx: ExtensionContext): void {
     this.reset();
-    for (const entry of customEntries(ctx.sessionManager, CUSTOM_TYPE_FRONTIER)) {
+    for (const entry of reverseCustomEntries(ctx.sessionManager, CUSTOM_TYPE_FRONTIER)) {
       const data = entry.data as PruneFrontier;
-      if (data) this.fromJSON(data);
+      if (data?.lastAttemptedToolCallId) { this.fromJSON(data); break; }
     }
   }
 

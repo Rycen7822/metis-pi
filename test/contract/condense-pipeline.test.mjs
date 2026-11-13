@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SessionManager, createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
+import { SessionManager, createEventBus, estimateTokens, initTheme } from "@earendil-works/pi-coding-agent";
 import { SettingsList } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import registerCondense from "../../extensions/condense.ts";
@@ -971,6 +971,18 @@ test("model-facing proxy measurements ignore metadata/timestamps and concurrent 
   const results = await Promise.all(jobs);
   assert.ok(results.every(result => result !== null));
   assert.ok(results.every(result => result.before === results[0].before));
+  const shared = { role: "user", content: "unchanged evidence ".repeat(500), timestamp: 3 };
+  const replacement = { role: "user", content: "compact replacement", timestamp: 4 };
+  const before = [shared, shared, { ...shared, content: "distinct evidence" }], after = [shared, replacement];
+  const delta = await encoder.compare(before, after), absolute = await encoder.measure(before, after);
+  assert.equal(delta.proxyDelta, absolute.before - absolute.after, "shared cancellation retains duplicate multiplicity");
+  assert.equal(delta.piBefore, before.reduce((sum, message) => sum + estimateTokens(message), 0));
+  assert.equal(delta.piAfter, after.reduce((sum, message) => sum + estimateTokens(message), 0));
+  const mutable = { role: "user", content: "request-time evidence", timestamp: 5 };
+  const expected = await encoder.measure([mutable], []);
+  const pending = encoder.measure([mutable], []);
+  mutable.content = "subsequently modified evidence ".repeat(1000);
+  assert.equal((await pending).before, expected.before, "encoder work retains request-time text despite later mutation");
   assert.equal(shouldBudgetFlush({ tokens: 67000, contextWindow: 100000 }, 0.7, 83000), true, "native reserve and 16K headroom can admit below 70%");
   assert.equal(shouldBudgetFlush({ tokens: 69999, contextWindow: 100000 }, 0.7), false);
   assert.equal(shouldBudgetFlush({ tokens: 70000, contextWindow: 100000 }, 0.7), true);
@@ -1032,8 +1044,30 @@ test("historical oversized frontiers retain their boundary without becoming live
   assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "summarized");
 });
 
-test("effective rescan preserves raw frontier ordinals after global compaction", async t => {
-  const f = await fixture(t, { occ: true });
+test("failed tree recovery cannot expose the old archive but raw source recall remains available", async t => {
+  const f = await fixture(t, { mode: "tui" });
+  const root = f.sm.getLeafId();
+  f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: "old-branch", toolName: "read",
+    args: { path: "old" }, resultText: "OLD_BRANCH", turnIndex: 0, timestamp: 3, resultTimestamp: 3 }] });
+  await f.emit("session_start");
+  f.sm.branch(root);
+  const source = f.sm.appendMessage({ role: "user", content: "NEW_BRANCH", timestamp: 4 });
+  const broken = f.sm.appendCustomEntry("context-prune-index", { toolCalls: [] });
+  const getEntry = f.sm.getEntryForScan.bind(f.sm);
+  t.mock.method(f.sm, "getEntryForScan", id => {
+    if (id === broken) throw new Error("recovery read failed");
+    return getEntry(id);
+  });
+  await assert.rejects(f.emit("session_tree"), /recovery read failed/);
+  const tool = f.tools.get("context_tree_query");
+  await assert.rejects(tool.execute("old", { toolCallIds: ["old-branch"] }, undefined, undefined, f.ctx), /recovery is not ready/);
+  const raw = await tool.execute("raw", { sourceEntryIds: [source] }, undefined, undefined, f.ctx);
+  assert.match(raw.details.results[0].text, /NEW_BRANCH/);
+});
+
+for (const occ of [false, true])
+  test(`effective rescan preserves raw frontier ordinals after global compaction (OCC=${occ})`, async t => {
+  const f = await fixture(t, { occ });
   for (let i = 0; i < 12; i++) f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: `old ${i}` }], timestamp: 100 + i });
   f.sm.appendCustomEntry("context-prune-frontier", { lastAttemptedToolCallId: "old", lastAttemptedTurnIndex: 11 });
   const kept = f.sm.appendMessage({ role: "user", content: "new effective task", timestamp: 200 });

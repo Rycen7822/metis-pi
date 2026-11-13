@@ -20,15 +20,41 @@ import {
   normalizeSummaryToolCallRefs,
   type SummaryToolCallRef,
 } from "./summary-refs.ts";
-import { captureUnindexedBatchesFromSession, readMessageBranch } from "./batch-capture.ts";
+import { captureUnindexedBatchesFromSession } from "./batch-capture.ts";
+import { setImmediate } from "node:timers/promises";
 import { hashToolResult } from "./content-hash.ts";
 import { occKey, parseOccKey } from "./occurrence-key.ts";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { applySpill, blobDirFor, blobPathFor } from "./spill.ts";
 
+type DirectoryMetadata = Pick<ToolCallRecord, "toolCallId" | "resultTimestamp" | "archiveOnly" | "contentHash"
+  | "toolName" | "parentToolCallId" | "isError" | "metadataUnavailable" | "spillPath" | "archiveComplete" | "archiveSource">;
+function argumentPreview(args: unknown): string {
+  const json = JSON.stringify(args) ?? "";
+  // Copy bounded UTF-16 units: a sliced preview must not retain its large backing string.
+  return json.length <= 256 ? json : Buffer.from(json.slice(0, 256), "utf16le").toString("utf16le");
+}
+function directoryMetadata(record: DirectoryMetadata): DirectoryMetadata {
+  const { toolCallId, resultTimestamp, archiveOnly, contentHash, toolName, parentToolCallId,
+    isError, metadataUnavailable, spillPath, archiveComplete, archiveSource } = record;
+  return { toolCallId, resultTimestamp, archiveOnly, contentHash, toolName, parentToolCallId,
+    isError, metadataUnavailable, spillPath, archiveComplete, archiveSource };
+}
+type StoredRecord = DirectoryMetadata & {
+  argsPreview: string;
+  entryId: string;
+  position: number;
+  activated?: boolean;
+};
+type IndexedRecord = { record: ToolCallRecord } | StoredRecord;
+type RecordReader = ExtensionContext["sessionManager"] & { getEntryForScan?(id: string): SessionEntry | undefined };
+
 export class ToolCallIndexer {
-  /** occurrence key (`id@resultTimestamp`, or bare id for legacy) -> record */
-  private index = new Map<string, ToolCallRecord>();
+  /** Historical payloads stay in the session store; only newly published records are retained here. */
+  private index = new Map<string, IndexedRecord>();
+  private sourceReader?: RecordReader;
+  private activeKeys = new Set<string>();
+  private activeBodies = new Map<string, ToolCallRecord>();
   /** bare toolCallId -> its occurrence keys, in insertion order */
   private bareIdToKeys = new Map<string, string[]>();
   private aliasToToolCallId = new Map<string, string>();
@@ -50,84 +76,100 @@ export class ToolCallIndexer {
   private seenSummaryEntries = new Set<string>();
   private chainRegistry = new Map<string, ChainCompressionEntry>();
 
-  /**
-   * Rebuilds the in-memory index from session history by scanning all
-   * custom entries with customType === CUSTOM_TYPE_INDEX.
-   */
+  /** Rebuild a directory, never retain all historical args/results in the extension. */
   reconstructFromSession(ctx: ExtensionContext): void {
-    this.index.clear();
-    this.bareIdToKeys.clear();
-    this.aliasToToolCallId.clear();
-    this.toolCallIdToAlias.clear();
-    this.contentHashToOriginal.clear();
-    this.nextShortAliasNumber = 1;
-    this.summaryBodies = [];
-    this.seenSummaryEntries.clear();
-    this.chainRegistry.clear();
+    const next = new ToolCallIndexer();
+    for (const _ of next.reconstruction(ctx)) { /* Drain the same replay without UI scheduling. */ }
+    this.adopt(next);
+  }
 
-    // Read originals before legacy aliases so recovery can find their source bodies.
-    const dedupAliasEntries: DedupAliasEntryData[] = [];
+  async reconstructFromSessionAsync(ctx: ExtensionContext, assertValid: () => void): Promise<void> {
+    const next = new ToolCallIndexer();
+    let slice = performance.now();
+    await setImmediate();
+    assertValid();
+    for (const _ of next.reconstruction(ctx)) {
+      if (performance.now() - slice < 8) continue;
+      await setImmediate();
+      assertValid();
+      slice = performance.now();
+    }
+    assertValid();
+    this.adopt(next); // No half-restored state can escape an aborted or superseded replay.
+  }
 
+  private adopt(next: ToolCallIndexer): void {
+    this.index = next.index;
+    this.sourceReader = next.sourceReader;
+    this.activeKeys = next.activeKeys;
+    this.activeBodies = next.activeBodies;
+    this.bareIdToKeys = next.bareIdToKeys;
+    this.aliasToToolCallId = next.aliasToToolCallId;
+    this.toolCallIdToAlias = next.toolCallIdToAlias;
+    this.contentHashToOriginal = next.contentHashToOriginal;
+    this.nextShortAliasNumber = next.nextShortAliasNumber;
+    this.summaryBodies = next.summaryBodies;
+    this.seenSummaryEntries = next.seenSummaryEntries;
+    this.chainRegistry = next.chainRegistry;
+  }
+
+  private *reconstruction(ctx: ExtensionContext): Generator<void> {
+    this.sourceReader = ctx.sessionManager;
+    const aliases: DedupAliasEntryData[] = [];
     const entries = readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom"
-      && [CUSTOM_TYPE_INDEX, CUSTOM_TYPE_CHAIN, CUSTOM_TYPE_DEDUP_ALIAS].includes(entry.customType));
+      && [CUSTOM_TYPE_INDEX, CUSTOM_TYPE_CHAIN, CUSTOM_TYPE_DEDUP_ALIAS].includes(entry.customType), { cacheAdmission: "bypass" });
     for (const entry of customEntries(entries)) {
       if (entry.customType === CUSTOM_TYPE_INDEX) {
         const data = entry.data as IndexEntryData;
-        const backfilled = data.backfilled === true;
-        if (data && Array.isArray(data.toolCalls)) {
-          for (const toolCall of data.toolCalls) {
-            const key = this.indexRecord(toolCall);
-            // First-seen wins so the contentHashToOriginal map matches what
-            // addBatch would have produced at append time. Backfilled records
-            // never seed this map (dedup poison guard - see backfillChainRecords).
-            if (!backfilled) {
-              const hash = toolCall.contentHash ?? hashToolResult(toolCall.toolName, toolCall.resultText);
-              if (!this.contentHashToOriginal.has(hash)) {
-                this.contentHashToOriginal.set(hash, key);
-              }
-            }
+        if (Array.isArray(data?.toolCalls)) for (const [position, record] of data.toolCalls.entries()) {
+          const hash = record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined);
+          const key = this.indexRecord(record);
+          this.index.set(key, { ...directoryMetadata(record), entryId: entry.id, position, contentHash: hash,
+            argsPreview: argumentPreview(record.args) });
+          if (!data.backfilled) {
+            const originalHash = hash ?? hashToolResult(record.toolName, record.resultText);
+            if (!this.contentHashToOriginal.has(originalHash)) this.contentHashToOriginal.set(originalHash, key);
           }
         }
-        if (backfilled && Array.isArray(data.refs)) this.registerSummaryRefs(data.refs);
-        continue;
-      }
-
-      if (entry.customType === CUSTOM_TYPE_CHAIN) {
+        if (data?.backfilled && Array.isArray(data.refs)) this.registerSummaryRefs(data.refs);
+      } else if (entry.customType === CUSTOM_TYPE_CHAIN) {
         const data = entry.data as ChainCompressionEntry;
         if (data?.blockId && (isSharedChain(data) ? Array.isArray(data.members) : typeof data.startUserTimestamp === "number")) {
           this.registerChain(data);
         }
-        continue;
-      }
-
-      if (entry.customType === CUSTOM_TYPE_DEDUP_ALIAS) {
+      } else {
         const data = entry.data as DedupAliasEntryData;
-        if (data?.newToolCallId && data?.originalToolCallId) {
-          dedupAliasEntries.push(data);
-        }
+        if (data?.newToolCallId && data?.originalToolCallId) aliases.push(data);
       }
+      yield;
     }
 
-    // Old aliases shared the original execution metadata. Recover the actual
-    // occurrence from immutable source messages before projecting or recalling it.
+    // Legacy aliases need their own execution metadata, not a copy of the original's args.
     const sources = new Map<string, ToolCallRecord>();
-    if (dedupAliasEntries.length) {
-      for (const batch of captureUnindexedBatchesFromSession(readMessageBranch(ctx.sessionManager), { isSummarized: () => false })) {
-        for (const call of batch.toolCalls) {
-          sources.set(occKey(call.toolCallId, call.resultTimestamp), {
-            ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp,
-          });
-        }
+    if (aliases.some(data => !this.index.has(occKey(data.newToolCallId, data.newResultTimestamp)))) {
+      const branch: SessionEntry[] = [];
+      for (const entry of readHistoryEntries(ctx.sessionManager, "branch",
+        entry => entry.type === "message" || entry.type === "custom_message", { cacheAdmission: "bypass" })) {
+        branch.push(entry); yield;
+      }
+      for (const batch of captureUnindexedBatchesFromSession(branch, { isSummarized: () => false })) {
+        for (const call of batch.toolCalls) sources.set(occKey(call.toolCallId, call.resultTimestamp), {
+          ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp,
+        });
+        yield;
       }
     }
-    for (const data of dedupAliasEntries) {
+    for (const data of aliases) {
       const key = occKey(data.newToolCallId, data.newResultTimestamp);
       if (this.index.has(key)) continue;
       const original = this.getRecord(occKey(data.originalToolCallId, data.originalResultTimestamp));
       const own = sources.get(key) ?? (original && this.unknownLegacyOccurrence(key, original));
       if (own) this.indexRecord(own);
     }
-    this.syncSummaryEntries(ctx);
+    for (const entry of readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom_message"
+      && entry.customType === CUSTOM_TYPE_SUMMARY, { cacheAdmission: "bypass" })) {
+      this.syncSummaryBranch([entry]); yield;
+    }
   }
 
   /**
@@ -137,7 +179,8 @@ export class ToolCallIndexer {
    */
   private indexRecord(record: ToolCallRecord): string {
     const key = occKey(record.toolCallId, record.resultTimestamp);
-    this.index.set(key, record);
+    this.index.set(key, { record });
+    this.activeBodies.delete(key);
     const keys = this.bareIdToKeys.get(record.toolCallId) ?? [];
     if (!keys.includes(key)) keys.push(key);
     this.bareIdToKeys.set(record.toolCallId, keys);
@@ -159,12 +202,43 @@ export class ToolCallIndexer {
    * ToolResultMessage, including duplicates with their own index records.
    */
   isSummarized(occurrenceKey: string): boolean {
-    const record = this.index.get(occurrenceKey);
-    return !!record && !record.archiveOnly;
+    const item = this.index.get(occurrenceKey);
+    return !!item && !("record" in item ? item.record : item).archiveOnly;
   }
 
-  getIndex(): Map<string, ToolCallRecord> {
-    return this.index;
+  hasRecord(key: string): boolean { return this.index.has(key); }
+
+  /** Cache payloads only for the Native active window; historical recalls remain transient. */
+  retainForContext(messages: readonly any[]): void {
+    const keys = new Set<string>();
+    for (const message of messages) {
+      if (message.role !== "toolResult") continue;
+      const key = occKey(message.toolCallId, message.timestamp);
+      if (this.index.has(key)) keys.add(key);
+      else if (this.hasLegacyBareRecord(message.toolCallId)) keys.add(message.toolCallId);
+    }
+    this.activeKeys = keys;
+    for (const key of this.activeBodies.keys()) if (!keys.has(key)) this.activeBodies.delete(key);
+  }
+
+  async prepareContext(messages: readonly any[], assertValid: () => void): Promise<void> {
+    this.retainForContext(messages);
+    let slice = performance.now();
+    for (const key of this.activeKeys) {
+      if (this.isSummarized(key)) this.getRecord(key);
+      if (performance.now() - slice < 8) continue;
+      await setImmediate(); assertValid(); slice = performance.now();
+    }
+    assertValid();
+  }
+
+  /** Directory/parent selection must not load archived argument or result bodies. */
+  *directory(): Generator<DirectoryMetadata & { occurrence: string; ref: string; argsPreview: string }> {
+    for (const [key, item] of this.index) {
+      const record = "record" in item ? item.record : item;
+      yield { ...directoryMetadata(record), occurrence: key, ref: this.getShortRefForToolCallId(key) ?? key,
+        argsPreview: "record" in item ? argumentPreview(item.record.args) : item.argsPreview };
+    }
   }
 
   /**
@@ -229,7 +303,26 @@ export class ToolCallIndexer {
   getRecord(toolCallIdOrAlias: string): ToolCallRecord | undefined {
     const resolved = this.resolveToolCallId(toolCallIdOrAlias);
     if (!resolved) return undefined;
-    return this.index.get(resolved);
+    const item = this.index.get(resolved);
+    if (!item) return undefined;
+    if ("record" in item) return item.record;
+    let record = this.activeBodies.get(resolved);
+    if (!record) {
+      const reader = this.sourceReader;
+      const entry = reader && (reader.getEntryForScan ?? reader.getEntry).call(reader, item.entryId);
+      const records = entry?.type === "custom" && entry.customType === CUSTOM_TYPE_INDEX
+        ? (entry.data as IndexEntryData)?.toolCalls : undefined;
+      record = records?.[item.position];
+      if (records && this.activeKeys.has(resolved)) for (const [position, body] of records.entries()) {
+        const key = occKey(body.toolCallId, body.resultTimestamp), owner = this.index.get(key);
+        if (this.activeKeys.has(key) && owner && !("record" in owner)
+          && owner.entryId === item.entryId && owner.position === position) this.activeBodies.set(key, body);
+      }
+    }
+    if (!record || occKey(record.toolCallId, record.resultTimestamp) !== resolved) {
+      throw new Error(`Execution archive record unavailable: ${resolved}`);
+    }
+    return item.activated ? { ...record, archiveOnly: false } : record;
   }
 
   lookupToolCalls(toolCallIds: string[]): ToolCallRecord[] {
@@ -259,7 +352,7 @@ export class ToolCallIndexer {
     if (block) return this.lookupToolCalls(chainMembers(block).flatMap(member => member.droppedOccurrenceKeys ?? member.droppedToolCallIds));
     const keys = this.bareIdToKeys.get(input);
     const records = (keys ?? [])
-      .map((k) => this.index.get(k))
+      .map((k) => this.getRecord(k))
       .filter((r): r is ToolCallRecord => r !== undefined);
 
     if (records.length > 0) {
@@ -287,8 +380,8 @@ export class ToolCallIndexer {
    * bare-id path.
    */
   hasLegacyBareRecord(toolCallId: string): boolean {
-    const record = this.index.get(toolCallId);
-    if (!record || record.archiveOnly) return false;
+    const item = this.index.get(toolCallId);
+    if (!item || ("record" in item ? item.record : item).archiveOnly) return false;
     const keys = this.bareIdToKeys.get(toolCallId);
     return keys !== undefined && keys.length === 1;
   }
@@ -365,10 +458,15 @@ export class ToolCallIndexer {
     if (!text || toolCallIds.length === 0) return;
     this.summaryBodies.push({ toolCallIds, text });
     for (const key of toolCallIds) {
-      const record = this.index.get(key);
-      if (!record?.archiveOnly) continue;
-      this.index.set(key, { ...record, archiveOnly: false });
-      const hash = record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined);
+      const item = this.index.get(key);
+      if (!item) continue;
+      const record = "record" in item ? item.record : item;
+      if (!record.archiveOnly) continue;
+      this.index.set(key, "record" in item ? { record: { ...item.record, archiveOnly: false } }
+        : { ...item, archiveOnly: false, activated: true });
+      const hash = "record" in item
+        ? item.record.contentHash ?? (!item.record.spillPath ? hashToolResult(item.record.toolName, item.record.resultText) : undefined)
+        : item.contentHash;
       if (hash && !this.contentHashToOriginal.has(hash)) this.contentHashToOriginal.set(hash, key);
     }
   }
@@ -526,7 +624,7 @@ export class ToolCallIndexer {
     const refs: SummaryToolCallRef[] = [], changed: ToolCallRecord[] = [], changedRefs: SummaryToolCallRef[] = [];
     for (const r of records) {
       opts.assertValid?.();
-      const key = occKey(r.toolCallId, r.resultTimestamp), existing = this.index.get(key);
+      const key = occKey(r.toolCallId, r.resultTimestamp), existing = this.getRecord(key);
       const shortId = this.toolCallIdToAlias.get(key);
       const matches = existing !== undefined && this.sameArchive(existing, r);
       if (matches && shortId && await this.archiveExists(existing, r)) {
