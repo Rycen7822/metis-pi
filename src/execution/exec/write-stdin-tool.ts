@@ -5,6 +5,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { renderWriteStdinCall } from "../ui/rendering.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { renderTerminalOutput } from "./output.ts";
+import { toolOutputGutter } from "../../presentation/terminal-text.ts";
 
 const WRITE_STDIN_PARAMETERS = Type.Object({
 	session_id: Type.Number({ description: "Session ID" }),
@@ -77,6 +78,7 @@ export function createWriteStdinTool(sessions: ExecSessionManager) {
   const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
     name: "write_stdin",
     label: "write_stdin",
+    renderShell: "self",
     description: "Write/poll exec session",
     promptSnippet: "Write to exec session",
     parameters: WRITE_STDIN_PARAMETERS,
@@ -111,7 +113,8 @@ export function createWriteStdinTool(sessions: ExecSessionManager) {
         const output = renderTerminalOutput(state.output).trimEnd();
         const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
         const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;
-        return new Text(theme.fg("dim", [tail, status].filter(Boolean).join("\n") || "Waiting for output"), 0, 0);
+        const text = [tail, status].filter(Boolean).join("\n") || "Waiting for output";
+        return new Text(toolOutputGutter(text.split("\n"), theme, "dim"), 0, 0);
       }
       const output = renderTerminalOutput(state.output);
       let text = theme.fg("dim", output || "(no output)");
@@ -121,7 +124,7 @@ export function createWriteStdinTool(sessions: ExecSessionManager) {
       if (state.exitCode !== undefined) {
         text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
       }
-      return new Text(text, 0, 0);
+      return new Text(toolOutputGutter(text.split("\n"), theme, "dim"), 0, 0);
     },
   };
   return tool;

@@ -1,5 +1,3 @@
-import type { Palette } from "./contracts.ts";
-
 /** Strip untrusted terminal controls before adding presentation-owned ANSI. */
 export function safeText(text: string): string {
   return text
@@ -11,6 +9,6 @@ export function safeText(text: string): string {
 }
 
 /** Shared result gutter: first output row owns the branch; later rows align under its body. */
-export function toolOutputGutter(lines: readonly string[], theme: Pick<Palette, "fg">, color = "toolOutput"): string {
+export function toolOutputGutter(lines: readonly string[], theme: { fg(color: string, text: string): string }, color = "toolOutput"): string {
   return lines.map((line, i) => `${theme.fg("dim", i === 0 ? "  └ " : "    ")}${theme.fg(color, line)}`).join("\n");
 }
