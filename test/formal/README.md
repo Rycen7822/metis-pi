@@ -24,7 +24,7 @@ TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal -- AsyncReaders P
 |---|---|---|
 |PressureGrid|300K至1M每100K一档，675组profile；level/headroom、未饱和delta、native严格容量线|`src/condense/budget.ts`；Pi原生compaction|
 |OccScheduler|60/52/72%、请求内耗尽/重入、work/hold、near接管与复用次数取整|`src/condense/occ.ts`|
-|ChainEconomics|微小整理费用反例；即时回本对照、已付缓存读预算与消费、增量滞回、容量救急/交接|`chain-scheduler.ts`、`runtime.ts`|
+|ChainEconomics|微小整理费用反例；即时回本对照、已付缓存读预算与消费、增量滞回、容量救急/交接|`rewrite-policy.ts`、`runtime.ts`|
 |ColdBoundary|冷许可绑定请求与来源；计划/取消、上次低命中、准备后变热不能冒充当前已冷|chain经济准入的参考约束；`runtime.ts`|
 |PublicationTxn|等待前捕获；来源正文/策略/生命周期完整校验与发布原子边界；无收益延期|`src/condense/runtime.ts`|
 |RetryLifecycle|恢复/修复后的稳定ref、无重复归档；候选级负向准入缓存、手动及生成后拒绝重试|`src/condense/indexer.ts`、`runtime.ts`|

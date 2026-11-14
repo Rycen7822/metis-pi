@@ -4,7 +4,9 @@ import { branchEntryReferences, readHistoryEntries, sourceEntryReference, type S
 import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
-import { ChainScheduler, isChainWork, protectChainWorkingSet } from "./chain-scheduler.ts";
+import {
+  RewriteBudget, batchRewriteAdmission, isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, type RewriteGain,
+} from "./rewrite-policy.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
@@ -177,7 +179,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   let recoveryTask: Promise<void> | undefined;
   const awaitRecovery = async () => { while (recoveryTask) await recoveryTask; };
   const tokenEstimator = new TokenEstimator();
-  const chainScheduler = new ChainScheduler();
+  const rewriteBudget = new RewriteBudget();
   const sharedValidations = new Map<string, { shape: string; hasGain: boolean }>();
   let maintenanceAbort: AbortController | undefined;
   let maintenanceTask: Promise<void> | undefined;
@@ -185,7 +187,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   let needsSharedValidation = false;
   let nativeCompaction: { done: Promise<void>; finish: () => void } | undefined;
   let lastMaintenanceSource: string | undefined;
-  let deferredFinal: number | undefined;
+  let deferredFinal: { timestamp: number; keys: ReadonlySet<string> } | undefined;
   const assertCurrent = (version: number) => {
     if (version !== lifecycle) throw new CondenseContextChangedError("condense lifecycle changed");
   };
@@ -231,7 +233,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     tokenEstimator.clear();
     sharedValidations.clear();
     needsSharedValidation = true;
-    chainScheduler.reset();
+    rewriteBudget.reset();
     lastMaintenanceSource = undefined;
     activeFlushAbort?.abort();
   };
@@ -473,7 +475,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const admitAutomaticChain = (ctx: ExtensionContext, before: any[], after: any[], counts: TokenComparison) => {
     const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
-    return chainScheduler.admits(counts.piBefore, gain, unchangedPrefixTokens(before, after),
+    return rewriteBudget.admits(counts.piBefore, gain, unchangedPrefixTokens(before, after),
       currentConfig.value.chainCompression, ctx.model, chainEmergency(ctx, counts.piBefore));
   };
   const compressChains = async (ctx: any, rollingWindow: number,
@@ -539,8 +541,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     if (result.compressedEntries.length > 0) {
       statsAccum.addChainsCompressed(result.compressedEntries.length);
-      if (automatic) chainScheduler.published(gain);
-      else chainScheduler.reset();
+      if (automatic) rewriteBudget.published(gain);
+      else rewriteBudget.reset();
       occ.rewrite(ctx, beforeRewrite);
     }
     return { ...result, reclaimedTokens };
@@ -633,10 +635,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const counts = await tokenEstimator.measure(before, stubs, signal);
     if (!counts) return unavailable("measurement");
     const timestamp = Date.now();
-    const render = (text: string, deterministic = false) => ({ role: "custom", customType: CUSTOM_TYPE_SUMMARY,
+    const render = (text: string, deterministic = false) => ({ role: "custom" as const, customType: CUSTOM_TYPE_SUMMARY,
       content: substituteInlineRefs(text, refs, batch.toolCalls.map(call => call.toolName)) + formatSummaryToolCallRefs(refs),
       display: false, details: { ...makeSummaryDetails(batch, refs), representation: deterministic ? "packed" : "summary" }, timestamp });
-    const empty = await tokenEstimator.measure([render("")], [], signal);
+    const emptyMessage = render("");
+    const empty = await tokenEstimator.measure([emptyMessage], [], signal);
     if (!empty) return unavailable("measurement");
     const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length, currentConfig.value.summaryBudget);
     budget.target = Math.max(budget.target, empty.before + 256);
@@ -644,13 +647,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (budgetAdmissions.size >= 64) budgetAdmissions.delete(budgetAdmissions.keys().next().value!);
       budgetAdmissions.add(admissionKey);
     }
+    const piSaved = before.reduce((sum, message) => sum + estimateTokens(message), 0)
+      - stubs.reduce((sum, message) => sum + estimateTokens(message), 0);
     return { before, stubs, replacements, render, budget,
-      accepts: async (text: string, deterministic = false) => {
-        const size = await tokenEstimator.measure([render(text, deterministic)], [], signal);
-        if (!size) { onDeferred("measurement"); return false; }
+      upperGain: { pi: piSaved - estimateTokens(emptyMessage), proxy: counts.before - counts.after - empty.before },
+      evaluate: async (text: string, deterministic = false) => {
+        const summary = render(text, deterministic);
+        const size = await tokenEstimator.measure([summary], [], signal);
+        if (!size) { onDeferred("measurement"); return undefined; }
         const accepted = deterministic ? counts.after + size.before < counts.before : size.before <= budget.limit;
-        if (!accepted) onDeferred(deterministic ? "no-gain" : "budget");
-        return accepted;
+        if (!accepted) { onDeferred(deterministic ? "no-gain" : "budget"); return undefined; }
+        return { pi: piSaved - estimateTokens(summary), proxy: counts.before - counts.after - size.before };
       } };
   };
 
@@ -660,6 +667,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       return { ok: false, reason: "failed", error: "Condense history recovery is not ready" };
     if (isFlushing || isArchiving || isCompactingChains) return { ok: false, reason: "already-flushing" };
     const trigger: FlushTrigger = options.trigger ?? "manual";
+    const closedKeys = options.closedKeys;
     if (trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "deferred-occ" };
     const version = lifecycle;
     const abort = new AbortController();
@@ -691,6 +699,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let argumentCharsSaved = 0;
     let firstChangedMessage: number | undefined;
     let modelAttempted = false;
+    let batchAdmission: ReturnType<typeof batchRewriteAdmission> | undefined;
+    let automaticEmergency = false;
+    let nativeUsageOffset = 0;
     let outcome: FlushMetricsEntry["outcome"] = "empty";
     let failureReason: string | undefined, failureMessage: string | undefined;
     const deferredReasons: Partial<Record<DeferredReason, number>> = {};
@@ -789,6 +800,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // may silently become a new model-source baseline for that candidate.
       batches = options.preparedBatches ?? options.previewedBatches ?? capturePendingBatches(ctx,
         { projection: preparedProjection, visible: preparedVisible });
+      // A deferred final owns only the results already available at that boundary, not a later task's live tool loop.
+      if (closedKeys) batches = batches.map(batch => ({ ...batch,
+        toolCalls: batch.toolCalls.filter(call => closedKeys.has(occKey(call.toolCallId, call.resultTimestamp))),
+      })).filter(batch => batch.toolCalls.length > 0);
+      if (trigger !== "manual") {
+        const source = preparedProjection ?? ctx.sessionManager.buildSessionProjection();
+        const visible = preparedVisible ?? projectContext(source.messages, ctx.model?.api,
+          { ctx, source: readSourceEdits(ctx, source), probe: true }).messages;
+        const estimated = visible.reduce((sum, message) => sum + estimateTokens(message), 0);
+        // Native usage can include provider overhead absent from the message estimate; relief must track the same baseline.
+        nativeUsageOffset = Math.max(0, (ctx.getContextUsage()?.tokens ?? 0) - estimated);
+        automaticEmergency = chainEmergency(ctx, estimated + nativeUsageOffset);
+        if (!automaticEmergency) batches = protectBatchWorkingSet(batches, source.messages, visible, currentConfig.value.chainCompression);
+        rewriteBudget.observeWork(source.messages, ctx.model);
+      }
       // Do not retain older, non-projected history while waiting for providers.
       rawBranch = undefined; preparedVisible = undefined;
       if (trigger === "message-end") {
@@ -1057,13 +1083,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
       const allowPaid = trigger === "manual" || paidPressure(ctx, options.closingMessage);
+      const waitingForWork = trigger !== "manual" && !automaticEmergency
+        && rewriteBudget.waitingForWork(currentConfig.value.chainCompression);
       const workKind = (record: BatchRecord) => {
         if (record.deduped.length > 0 && record.batch.toolCalls.length === 0) return "deduped";
         // Packing wins over the small-batch guard; minBatchChars=0 disables
         // only that guard, not deterministic packing or paid admission.
-        if (record.prepared.packedBatch.toolCalls.length === record.batch.toolCalls.length) return "packed";
+        if (record.prepared.packedBatch.toolCalls.length === record.batch.toolCalls.length) return waitingForWork ? "deferred" : "packed";
         if (minChars > 0 && record.prepared.candidateChars < minChars && record.batch.toolCalls.length > 0) return "trivial";
-        return allowPaid ? "paid" : "deferred";
+        return allowPaid && !waitingForWork ? "paid" : "deferred";
       };
       // Only a wholly deferred pass can omit source snapshots. Derive this
       // from the same admission policy used by scheduling below.
@@ -1080,6 +1108,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let nextRequest = 0, failedRequest = Infinity;
       const controller = fallbackController;
       const config = currentConfig.value;
+      const admitBatch = (record: BatchRecord, gain: RewriteGain) => {
+        if (trigger === "manual") return true;
+        batchAdmission ??= batchRewriteAdmission(rewriteBudget, visibleForPlanning(), config.chainCompression,
+          ctx.model, tokens => chainEmergency(ctx, tokens + nativeUsageOffset));
+        const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain);
+        if (!allowed) record.deferredReason = "economics";
+        return allowed;
+      };
+      const evaluateBatch = async (record: BatchRecord, text: string, deterministic = false) => {
+        const gain = await record.plan!.evaluate(text, deterministic);
+        return gain && admitBatch(record, gain) ? gain : undefined;
+      };
       const checkActive = () => { assertCurrent(version); signal.throwIfAborted(); };
       const checkSource = (projection?: NativeProjection) => {
         checkActive();
@@ -1096,7 +1136,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           const kind = workKind(record);
           if (kind === "deduped" || kind === "trivial") { record.result = kind; continue; }
           if (kind === "deferred") {
-            record.deferredReason = config.autoBudgetThreshold === null ? "automatic-disabled" : "pressure";
+            record.deferredReason = waitingForWork ? "economics"
+              : config.autoBudgetThreshold === null ? "automatic-disabled" : "pressure";
             record.result = "deferred"; continue;
           }
           const deterministic = kind === "packed";
@@ -1107,19 +1148,24 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           });
           checkActive();
           if (!record.plan) { record.result = "deferred"; continue; }
+          if (!deterministic && record.plan.budget.limit < record.plan.budget.target) {
+            record.deferredReason = "budget"; record.result = "deferred"; continue;
+          }
+          if (!deterministic && !admitBatch(record, record.plan.upperGain)) {
+            record.result = "deferred"; continue;
+          }
           if (deterministic) {
-            record.result = await record.plan.accepts(record.prepared.packedText, true)
+            record.result = await evaluateBatch(record, record.prepared.packedText, true)
               ? { summaryText: record.prepared.packedText, deterministic: true } : "deferred";
             continue;
           }
-          if (record.plan.budget.limit < record.plan.budget.target) { record.deferredReason = "budget"; record.result = "deferred"; continue; }
           // Rejected plans cannot publish. Read fresh source only before real provider work.
           checkSource(await readProjection(ctx, signal));
           options.onProgress?.(i, records.length, record.batch, "start");
           const requestSignal = AbortSignal.any([signal, record.abort.signal]);
           record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
             signal: requestSignal, controller, outputBudget: record.plan.budget,
-            acceptSummary: text => record.plan!.accepts(text),
+            acceptSummary: async text => !!await evaluateBatch(record, text),
             onUsage: usage => { if (!signal.aborted) statsAccum.add(usage); },
             onModelAttempt: () => { modelAttempted = true; },
             onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
@@ -1222,9 +1268,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           charsSaved += original.length - replacement.length;
           if (firstChanged < 0 && original !== replacement) firstChanged = index;
         }
-        const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || !await plan.accepts(result.summaryText, result.deterministic);
+        const gain = await evaluateBatch(record, result.summaryText, result.deterministic);
         checkActive();
-        if (shouldSkipOversized) {
+        if (replaced !== archivedBatch.toolCalls.length || !gain) {
           if (replaced !== archivedBatch.toolCalls.length) record.deferredReason = "replacement";
           deferRecord(record);
           options.onProgress?.(i, records.length, record.batch, "skipped");
@@ -1266,6 +1312,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               break;
             }
             actions.batches++;
+            batchAdmission?.published(plan.replacements.keys(), gain);
             publishedCharsSaved += charsSaved;
             firstChangedMessage = firstChangedMessage === undefined ? firstChanged : Math.min(firstChangedMessage, firstChanged);
             stubCount += archivedBatch.toolCalls.length + dedupCount;
@@ -1475,6 +1522,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       abort.abort();
       if (activeFlushAbort === abort) activeFlushAbort = undefined;
       isFlushing = false;
+      if (version === lifecycle) batchAdmission?.finish();
       if (version === lifecycle && (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)) occ.rewrite(ctx, beforeRewrite);
       emitFlushMetricsOnce();
       if (version === lifecycle && trigger !== "manual") notifyPruneActions(ctx, actions);
@@ -1574,7 +1622,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
-    chainScheduler.reset();
+    rewriteBudget.reset();
     deferredFinal = undefined;
     lastMaintenanceSource = undefined;
     maintenanceNext = undefined;
@@ -1611,7 +1659,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
-    chainScheduler.reset();
+    rewriteBudget.reset();
     deferredFinal = undefined;
     lastMaintenanceSource = undefined;
     maintenanceNext = undefined;
@@ -1642,13 +1690,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // activating every pending supersession here costs no extra cache miss.
   pi.on("model_select", async (_event, ctx) => {
     previousFraction = null;
-    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); chainScheduler.reset(); lastMaintenanceSource = undefined;
+    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); rewriteBudget.reset(); lastMaintenanceSource = undefined;
     needsSharedValidation = true;
     supersede.floor = 0;
     void maintainChains(ctx);
   });
   const finishNativeCompaction = async (_event: unknown, ctx: ExtensionContext) => {
-    chainScheduler.reset();
+    rewriteBudget.reset();
     nativeCompaction?.finish();
     supersede.floor = 0;
     needsSharedValidation = true;
@@ -1826,9 +1874,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!currentConfig.value.enabled) return;
     if (currentConfig.value.pruneOn !== "agent-message") return;
     if (!isFinalAssistantMessage(event.message)) return;
-    const result = await flushPending(ctx, { delivery: "session", closingMessage: event.message, trigger: "message-end" });
-    deferredFinal = (!result.ok && result.reason !== "empty") || (result.ok && result.reason === "partial")
-      ? event.message.timestamp : undefined;
+    const version = lifecycle;
+    await awaitRecovery();
+    if (version !== lifecycle) return;
+    const batches = capturePendingBatches(ctx);
+    const keys = new Set(batches.flatMap(batch => batch.toolCalls.map(call => occKey(call.toolCallId, call.resultTimestamp))));
+    const result = await flushPending(ctx, { delivery: "session", closingMessage: event.message, trigger: "message-end",
+      preparedBatches: batches, closedKeys: keys });
+    if (version === lifecycle) deferredFinal = (!result.ok && result.reason !== "empty") || (result.ok && result.reason === "partial")
+      ? { timestamp: event.message.timestamp, keys } : undefined;
   });
 
   // agent-message normally flushes on message_end. By agent_end, print-mode Pi may
@@ -2090,7 +2144,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       maintenanceAbort?.abort();
       tokenEstimator.clear();
       sharedValidations.clear();
-      chainScheduler.reset();
+      rewriteBudget.reset();
       lastMaintenanceSource = undefined;
       maintenanceNext = undefined;
       return Promise.resolve();
@@ -2218,7 +2272,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (candidates.length === 0) return;
       const before = projectContext(raw, ctx.model?.api, { ctx, source: sourceView, probe: true }).messages;
       const eligible = protectChainWorkingSet(candidates, raw, before, currentConfig.value.chainCompression).filter(chain =>
-        !chainMatchesGrace(chain, grace) && chain.finalAssistantTimestamp !== deferredFinal
+        !chainMatchesGrace(chain, grace) && chain.finalAssistantTimestamp !== deferredFinal?.timestamp
         && !chain.middleToolCallIds.some(id => edited.has(id)) && findCompressibleRange(chain, raw, rawResolve));
       if (eligible.length === 0) return;
       const beforeTokens = before.reduce((sum, message) => sum + estimateTokens(message), 0);
@@ -2227,7 +2281,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const range = resolve(chain);
         return sum + (range ? before.slice(range.startIndex + 1, range.endIndex).reduce((n, m) => n + estimateTokens(m), 0) : 0);
       }, 0);
-      if (!chainScheduler.ready(beforeTokens, upperGain, currentConfig.value.chainCompression, chainEmergency(ctx, beforeTokens))) return;
+      if (!rewriteBudget.ready(beforeTokens, upperGain, currentConfig.value.chainCompression, chainEmergency(ctx, beforeTokens))) return;
       const source = projectionFingerprint(raw);
       const attempt = source + config + [...known].join(",");
       if (attempt === lastMaintenanceSource) return;
@@ -2286,7 +2340,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       sharedValidations.set(entry.blockId, { shape: sharedShape(indexChainProjection(plain), views), hasGain: true });
       lowerFloor(supersede, floor);
       statsAccum.addChainsCompressed(views.length);
-      chainScheduler.published(Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta));
+      rewriteBudget.published(Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta));
       occ.rewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;
@@ -2318,14 +2372,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   pi.on("message_end", (event, ctx) => {
-    if (!currentConfig.value.enabled || !currentConfig.value.chainCompression.enabled) return;
-    chainScheduler.observe(event.message, ctx.model);
+    if (!currentConfig.value.enabled) return;
+    rewriteBudget.observe(event.message, ctx.model);
     lastMaintenanceSource = undefined;
   });
   pi.on("turn_end", (event, ctx) => {
-    if (currentConfig.value.enabled && currentConfig.value.chainCompression.enabled && isChainWork(event.message, event.toolResults ?? [])) {
+    if (currentConfig.value.enabled && isUsefulWork(event.message, event.toolResults ?? [])) {
       const tokens = [event.message, ...event.toolResults].reduce((sum, message) => sum + estimateTokens(message), 0);
-      chainScheduler.observe(event.message, ctx.model, tokens);
+      rewriteBudget.observe(event.message, ctx.model, tokens);
     }
     void maintainChains(ctx);
   });
@@ -2407,7 +2461,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // subsequent request arrives and pressure now admits paid work.
     if (currentConfig.value.enabled && currentConfig.value.pruneOn === "agent-message"
       && deferredFinal !== undefined && paidPressure(ctx)) {
-      const flush = await flushPending(ctx, { delivery: "session", trigger: "context", signal: ctx.signal });
+      const flush = await flushPending(ctx, { delivery: "session", trigger: "context", signal: ctx.signal, closedKeys: deferredFinal.keys });
       if (flush.ok && flush.reason !== "partial" || !flush.ok && flush.reason === "empty") deferredFinal = undefined;
     }
     indexer.syncSummaryEntries(ctx);
@@ -2492,7 +2546,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       lifecycle++;
       nativeCompaction?.finish();
       jsonSizes.clear();
-      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); chainScheduler.reset();
+      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); rewriteBudget.reset();
       activeFlushAbort?.abort();
       clearBoot();
       resetNested();

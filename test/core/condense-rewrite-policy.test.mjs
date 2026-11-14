@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ChainScheduler, protectChainWorkingSet, isChainWork } from "../../src/condense/chain-scheduler.ts";
+import {
+  RewriteBudget, batchRewriteAdmission, protectBatchWorkingSet, protectChainWorkingSet, isUsefulWork,
+} from "../../src/condense/rewrite-policy.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { detectChains } from "../../src/condense/chain-detector.ts";
 
@@ -10,7 +12,7 @@ const completion = (timestamp, cached = 320000) => ({ role: "assistant", api: mo
   timestamp, stopReason: "stop", usage: { cacheRead: cached, cost: { cacheRead: cached / 1_000_000 } } });
 
 test("a batch must be material and refill after publication rather than follow the same high water level", () => {
-  const scheduler = new ChainScheduler();
+  const scheduler = new RewriteBudget();
   assert.equal(scheduler.admits(320000, 3000, 8000, config, model, false), false);
   assert.equal(scheduler.admits(320000, 80000, 235000, config, model, false), true);
   scheduler.published(80000);
@@ -20,7 +22,7 @@ test("a batch must be material and refill after publication rather than follow t
 });
 
 test("old history may use bounded observed spending, but the same receipt or allowance cannot be reused", () => {
-  const scheduler = new ChainScheduler();
+  const scheduler = new RewriteBudget();
   for (let i = 1; i <= 9; i++) scheduler.observe(completion(i), model);
   const affordable = () => scheduler.admits(329000, 260000, 8000, config, model, false);
   assert.equal(affordable(), false);
@@ -35,7 +37,7 @@ test("old history may use bounded observed spending, but the same receipt or all
 });
 
 test("unknown, failed and mismatched usage cannot earn budget; model/lifecycle changes revoke old allowance", () => {
-  const scheduler = new ChainScheduler();
+  const scheduler = new RewriteBudget();
   const admits = current => scheduler.admits(320000, 260000, 8000, config, current, false);
   scheduler.observe({ ...completion(1, 10000000), stopReason: "aborted" }, model);
   scheduler.observe({ ...completion(2, 10000000), model: "other" }, model);
@@ -51,7 +53,7 @@ test("unknown, failed and mismatched usage cannot earn budget; model/lifecycle c
 });
 
 test("zero/unknown prices stay conservative while no-discount inputs still honor batch policy", () => {
-  const scheduler = new ChainScheduler();
+  const scheduler = new RewriteBudget();
   assert.equal(scheduler.admits(100000, 20000, 0, config, { ...model, cost: { input: 0, cacheRead: 0 } }, false), false);
   assert.equal(scheduler.admits(100000, 20000, 0, config, { ...model, cost: { input: 1, cacheRead: 1 } }, false), true);
   assert.equal(scheduler.admits(100000, 2000, 0, config, { ...model, cost: { input: 1, cacheRead: 1 } }, false), false);
@@ -74,11 +76,34 @@ function history(sizes, open = false) {
 test("recent work and token tail are a union; open tasks never authorize arbitrary tool-round cuts", () => {
   const raw = history([1000, 1000, 1000, 1000, 1000], true);
   const chains = detectChains(raw);
+  const batches = [{ timestamp: 0, turnIndex: 0, toolCalls: raw.filter(m => m.role === "toolResult").map(m => ({
+    toolCallId: m.toolCallId, toolName: m.toolName, args: {}, resultText: m.content[0].text,
+    isError: false, resultTimestamp: m.timestamp,
+  })) }];
   const work = { ...config, rollingWindow: 0, minWorkTurns: 2, minRecentTokens: 0 };
+  assert.deepEqual(protectBatchWorkingSet(batches, raw, raw, work).flatMap(b => b.toolCalls.map(c => c.toolCallId)),
+    ["t0", "t1", "t2"], "ordinary batches retain the same recent useful rounds");
   assert.deepEqual(protectChainWorkingSet(chains, raw, raw, work).map(c => c.startUserTimestamp), [0, 4, 8]);
   assert.deepEqual(protectChainWorkingSet(chains, raw, raw, { ...work, minRecentTokens: 100000 }), []);
   const visible = raw.map(message => message.role === "toolResult" ? { ...message, content: [{ type: "text", text: "stub" }] } : message);
   assert.deepEqual(protectChainWorkingSet(chains, raw, visible, { ...work, minRecentTokens: 2000 }), []);
+  assert.deepEqual(protectBatchWorkingSet(batches, raw, visible, { ...work, minRecentTokens: 2000 }), [],
+    "the recent raw guard is measured on the effective view, including prior stubs");
+});
+
+test("one flush groups admitted chunks, then batch and chain share the same refill", () => {
+  const budget = new RewriteBudget(), raw = history([10000, 10000]);
+  const fullPrice = { ...model, cost: { input: 1, cacheRead: 1 } };
+  const frame = batchRewriteAdmission(budget, raw, config, fullPrice, () => false);
+  const gain = { pi: 1500, proxy: 1500 };
+  assert.equal(frame.accepts(["t0@2"], gain), true);
+  frame.published(["t0@2"], gain);
+  assert.equal(frame.accepts(["t1@6"], gain), true, "a single flush need not refill between chunks");
+  frame.published(["t1@6"], gain);
+  frame.finish();
+  assert.equal(budget.ready(10000, 5000, config, false), false, "another rewrite cannot reuse that growth");
+  budget.observe(completion(1), fullPrice, 1000);
+  assert.equal(budget.ready(10000, 5000, config, false), true);
 });
 
 test("recent small closed tasks fit the reference budget without pinning a large old task", () => {
@@ -95,9 +120,9 @@ test("recent small closed tasks fit the reference budget without pinning a large
 test("polling and failures do not age evidence, including incomplete command executions", () => {
   const message = { role: "assistant", content: [{ type: "toolCall", id: "t", name: "exec_command" }], stopReason: "toolUse" };
   const result = { role: "toolResult", toolCallId: "t", toolName: "exec_command", isError: false, details: { exit_code: 0 } };
-  assert.equal(isChainWork(message, [result]), true);
-  assert.equal(isChainWork(message, [{ ...result, details: {} }]), false);
-  assert.equal(isChainWork(message, [{ ...result, toolName: "write_stdin" }]), false);
-  assert.equal(isChainWork({ ...message, stopReason: "aborted" }, [result]), false);
-  assert.equal(isChainWork(message, [{ ...result, isError: true }]), false);
+  assert.equal(isUsefulWork(message, [result]), true);
+  assert.equal(isUsefulWork(message, [{ ...result, details: {} }]), false);
+  assert.equal(isUsefulWork(message, [{ ...result, toolName: "write_stdin" }]), false);
+  assert.equal(isUsefulWork({ ...message, stopReason: "aborted" }, [result]), false);
+  assert.equal(isUsefulWork(message, [{ ...result, isError: true }]), false);
 });

@@ -201,10 +201,10 @@ exclude = []
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `rollingWindow` | `3` | 综合工作集中的近期闭合任务参考数，≥0；参考原文累计受`minRecentTokens`预算限制，不无条件锁定N条链。 |
-| `minWorkTurns` | `4` | 至少保留最近有效工具工作轮次，≥0；失败、轮询、回读不让资料变旧。 |
-| `minRecentTokens` | `65536` | 至少保留有效投影的近期原文尾部，与工作轮次取并集；≥0。 |
-| `minGainTokens` | `8192` | 自动批次最低净释放量，正安全整数。 |
-| `minGainFraction` | `0.1` | 净释放量还须达到有效上下文的此比例，[0,1]。 |
+| `minWorkTurns` | `4` | 自动工具批次与chain共同保留的最近有效工作轮次，≥0；失败、轮询、回读不让资料变旧。 |
+| `minRecentTokens` | `65536` | 自动工具批次与chain共同保留的近期原文尾部，与工作轮次取并集；≥0。 |
+| `minGainTokens` | `8192` | 自动chain最低净释放量；也是工具批次/chain发布后的最低新工作增长量，正安全整数。 |
+| `minGainFraction` | `0.1` | 自动chain净释放量还须达到有效上下文的此比例，[0,1]；工具摘要沿用summaryBudget局部门槛。 |
 | `maxCostOverhead` | `0.1` | 用已观测cache-read支出的此比例支付估算额外重建成本，[0,1]；0只允许即时回本。 |
 | `stripFinalAssistantThinking` | `true` | 去掉已压链最终回复的thinking，保留正文。 |
 | `fuseRangeSummary` | `true` | 允许手动now/compact额外付费融合；失败/预算不足保留机械拼接。 |
@@ -215,7 +215,9 @@ exclude = []
 64k是近期原文的最低保护量，也是闭合任务参考的软预算，不是整个工作集上限；活跃链/工作轮次/显式保护仍可保留更多。
 `rollingWindow=0`只关闭链数参考；显式`minRecentTokens=0`同时取消原文最低量与链参考的token限额，其他保护照常。
 旧配置中的3等数值直接参加新综合规则，不再维持一套自动硬锁链数策略；手动now沿用原链数窗口，compact仍整理全部合格闭合链。
-成功发布后须新增至少`max(minGainTokens, 上次净收益/4)`有效工作tokens才允许下一普通批次。
+工具摘要、机械packing与chain共享成本额度及增长间隔，一轮flush只按实际发布的合计收益消费一次。
+成功发布后须新增至少`max(minGainTokens, 上次净收益/4)`有效工作tokens才允许下一普通改写。
+`enabled`只开关自动chain，以上近期保护/成本/增长参数同时约束自动工具批次；手动`now`不受自动调度门限制。
 当前模型价格与usage均可信才积累费用额度，发布后清零；模型/配置/分支/Native边界重置，不预支未来请求。
 价格未知或零价登记视为未知，不赚额度；按输入/缓存读10:1的保守参考仅允许即时回本。
 这些是本地估算约束，不保证真实账单增加不超过10%；provider缓存/计数/路由差异仍以实际费用为准。
@@ -240,7 +242,7 @@ exclude = []
 | `growthHeadroomTokens` | `16384` | 可解析原生容量线前的增长余量，≥0；0 不额外预留。 |
 | `nativeTargetTokens` | `16384` | **仅 OCC** 的原生摘要输出文本软目标，≥0；0 不附加目标。不改变 Pi/provider 硬 cap，不自动注入普通原生路径。 |
 
-`G=max(minGainTokens,ceil(minGainFraction×B))`，`R=min(maxProxyTokens,B-K-G)`，`Q=min(maxProxyTokens,targetBaseTokens+targetPerCallTokens×N)`。B 仅为实际被替换结果，K 为真实 stub/预览/路径；目标至少保留空包装加 256 tokens 的正文余地。不足时保留原文/pending，frontier 不跨缺口。手动请求只绕过压力，不绕过输出/收益预算。机械去重/packing 只需实测正收益。
+`G=max(minGainTokens,ceil(minGainFraction×B))`，`R=min(maxProxyTokens,B-K-G)`，`Q=min(maxProxyTokens,targetBaseTokens+targetPerCallTokens×N)`。B 仅为实际被替换结果，K 为真实 stub/预览/路径；目标至少保留空包装加 256 tokens 的正文余地。不足时保留原文/pending，frontier 不跨缺口。手动请求绕过自动调度门，不绕过输出/收益预算。机械去重须实测正收益；自动packing还须通过共同近期保护、增长和缓存经济门。
 
 这些是用户可调策略，覆盖范围限于这里列出的参数。局部 o200k proxy、provider `maxTokens`、native 容量信用和账单是相互独立的口径；语义质量与经济回本以实际输出为准。所有备用模型受同一最终消息校验，输出预算拒绝后改用机械整理。完整行为与恢复边界见包内 `docs/features/condense.md`。
 

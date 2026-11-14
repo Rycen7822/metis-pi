@@ -373,11 +373,12 @@ export interface ChainCompressionConfig {
   enabled: boolean;
   /** Recent closed-task references within minRecentTokens' raw-span budget, alongside work/tail protection. Default 3. */
   rollingWindow: number;
-  /** Minimum useful tool rounds and effective raw-tail tokens to retain; their union is protected. */
+  /** Useful rounds and effective raw-tail tokens retained by automatic tool batches and chains; their union is protected. */
   minWorkTurns: number;
   minRecentTokens: number;
-  /** Automatic batch must satisfy both absolute and fractional net token savings. */
+  /** Automatic chain gain floor; also the shared post-publication useful-work growth floor. */
   minGainTokens: number;
+  /** Chain-wide fractional gain floor; tool summaries retain their own local proxy gain budget. */
   minGainFraction: number;
   /** Fraction of observed cache-read spending available for estimated extra rewrite cost; 0 means immediate payback. */
   maxCostOverhead: number;
@@ -546,11 +547,12 @@ export interface ContextMetricsSnapshot {
 
 export type FlushTrigger = "budget" | "delta" | "frontier-gap" | "message-end" | "context" | "manual" | "rearmed";
 
-export type DeferredReason = "automatic-disabled" | "pressure" | "measurement" | "replacement" | "budget" | "no-gain";
+export type DeferredReason = "automatic-disabled" | "pressure" | "measurement" | "replacement" | "budget" | "no-gain" | "economics";
 
 export const DEFERRED_REASON_LABELS: Record<DeferredReason, string> = {
   "automatic-disabled": "automatic summarization disabled",
   pressure: "automatic summaries not admitted by pressure/capacity policy",
+  economics: "waiting for useful growth or a cache-economical rewrite",
   measurement: "token measurement unavailable",
   replacement: "safe complete replacement unavailable",
   budget: "complete-summary token budget insufficient",
@@ -712,6 +714,8 @@ export interface FlushOptions {
   previewedBatches?: CapturedBatch[];
   /** Manual preview snapshot already grouped by splitPackingRuns; skips only that preparation. */
   preparedBatches?: CapturedBatch[];
+  /** Deferred final retries may revisit only these already-closed tool occurrences. */
+  closedKeys?: ReadonlySet<string>;
   /**
    * Abort signal — when fired the in-flight summarization is cancelled and
    * `flushPending` returns `{ ok: false, reason: "aborted" }`. Completed chunks

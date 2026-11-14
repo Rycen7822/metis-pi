@@ -67,7 +67,8 @@ async function host(
     // Economic scenarios have an explicit small budget, independent of Pi's
     // native defaults; native-default cases below deliberately override with 0.
     compactionSummaryMaxTokens: 400,
-    spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
+    // These cases isolate Native capacity accounting after a local rewrite, not recent-working-set admission.
+    spillThreshold: 1000000, chainCompression: { enabled: false, minRecentTokens: 0, minWorkTurns: 0 }, purgeErrors: { enabled: false },
     ...pruneOverrides,
   }) }));
   const sm = SessionManager.create(dir, dir);
@@ -81,7 +82,8 @@ async function host(
     modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model = { id: "occ-local", name: "OCC local", provider: "occ-local", api: "openai-completions",
     baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    cost: localSummary ? { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }
+      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const calls = [], errors = [], notices = [];
   let actualWork = 0;
   const workEvidence = index => localSummary === "dense" ? `NEW_WORK_EVIDENCE_${index}\n` + "界".repeat(6000)
@@ -1118,6 +1120,7 @@ test("near native capacity allows local summaries while skipping economic OCC", 
     auto: true,
     workTurns: 1,
     localSummary: true,
+    pruneOverrides: { chainCompression: { enabled: false, minRecentTokens: 65536, minWorkTurns: 4 } },
     onWork: () => ({ usage: pressureUsage(95000) }),
   });
   await h.session.prompt("Inspect and finish.");

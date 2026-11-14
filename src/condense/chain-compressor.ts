@@ -57,7 +57,7 @@ export function closedChainCandidates(chains: ChainRange[], alreadyCompressed: S
 
 /**
  * Fixed-count selection for manual callers or already-selected groups.
- * Automatic composite retention belongs to chain-scheduler; both paths share
+ * Automatic composite retention belongs to rewrite-policy; both paths share
  * the same closed/uncompressed candidate predicate.
  *
  * @param chains Must be in chronological order (oldest first), as emitted by

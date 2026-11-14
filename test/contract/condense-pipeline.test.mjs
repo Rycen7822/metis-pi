@@ -609,6 +609,10 @@ test("automatic chain compression archives skipped small outputs and preserves t
         };
       }
       await f.finish();
+      f.sm.appendMessage({ role: "user", content: "Continue with another build", timestamp: f.nextTimestamp() });
+      const progress = f.add(buildLog, "npm run build");
+      await f.emit("turn_end", { message: progress.assistant, toolResults: [progress.result] });
+      await f.waitMaintenance();
       assert.equal(f.sm.getBranch().filter((e) => e.customType === "context-prune-chain").length, failure ? 0 : 1);
       assert.ok(
         f.sm.getBranch().some((e) => e.details?.representation === "packed"),
@@ -640,6 +644,12 @@ test("automatic chain compression reuses durable summaries without a second paid
   await f.finish();
   assert.equal(f.calls.length, 2);
   assert.equal(f.sm.getBranch().filter((e) => e.customType === "context-prune-summary").length, 2);
+  assert.equal(f.sm.getBranch().filter((e) => e.customType === "context-prune-chain").length, 0,
+    "batch and chain rewrites cannot spend the same growth twice");
+  f.sm.appendMessage({ role: "user", content: "Continue with another build", timestamp: f.nextTimestamp() });
+  const progress = f.add(buildLog, "npm run build");
+  await f.emit("turn_end", { message: progress.assistant, toolResults: [progress.result] });
+  await f.waitMaintenance();
   assert.equal(f.sm.getBranch().filter((e) => e.customType === "context-prune-chain").length, 1);
   await f.emit("session_tree");
   await f.finish(false);
@@ -709,7 +719,8 @@ test("session restore drops the previous queue while a tree switch keeps its own
   const settings = { contextPrune: {
     enabled: true, showPruneStatusLine: true, minBatchChars: 5000, pruneOn: "on-demand", batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
-    chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
+    chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true, minRecentTokens: 0, minWorkTurns: 0 },
+    purgeErrors: { enabled: false },
   } };
   writeFileSync(join(f.dir, "metis-pi.toml"), stringify(settings));
   await f.emit("session_start");
@@ -889,6 +900,44 @@ test("manual paid fusion budgets the full chain wrapper and retains concatenatio
   });
 });
 
+test("automatic batch rewrites cannot buy small savings by chilling a long suffix; manual still works", async t => {
+  for (const packed of [false, true]) await t.test(packed ? "packed" : "semantic", async t => {
+    const f = await fixture(t);
+    f.ctx.model.cost = { input: 10, output: 1, cacheRead: 1, cacheWrite: 1 };
+    const call = f.add(packed ? buildLog : "Important evidence remains available. ".repeat(1500),
+      packed ? "npm run build" : "inspect-unknown-tool");
+    f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "Unchanged suffix. ".repeat(12000) }],
+      timestamp: f.nextTimestamp(), stopReason: "stop" });
+    await f.finish();
+    assert.equal(f.calls.length, 0, "reject the optimistic cache cost before paying a summary model");
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 0);
+    const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+    assert.equal(metric.deferredReasons.economics, 1);
+    const raw = f.sm.buildSessionProjection().messages;
+    const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    assert.deepEqual(projected.find(m => m.toolCallId === call.id), call.result);
+    await f.commands.get("pruner").handler("now", f.ctx);
+    assert.equal(f.calls.length, packed ? 0 : 1, "explicit manual pruning retains its existing authority");
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
+  });
+});
+
+test("a second small automatic batch waits for useful growth, not another final or context callback", async t => {
+  const f = await fixture(t, { chainCompression: { minGainTokens: 10000 } });
+  f.add("First useful evidence. ".repeat(1600), "inspect-first");
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  const next = f.add("Second useful evidence. ".repeat(1600), "inspect-second");
+  await f.finish();
+  const raw = f.sm.buildSessionProjection().messages;
+  await f.emit("context", { messages: raw });
+  assert.equal(f.calls.length, 1, "callbacks do not count as new useful work");
+  assert.deepEqual((await f.emit("context", { messages: raw })).messages.find(m => m.toolCallId === next.id), next.result);
+  f.add("New completed useful work. ".repeat(7000), "inspect-more-work");
+  await f.finish();
+  assert.ok(f.calls.length > 1, "enough completed work reopens automatic admission");
+});
+
 test("pressure deferral keeps a frontier gap, permits packing and retries on the next real context", async t => {
   const f = await fixture(t);
   f.ctx.getContextUsage = () => ({ tokens: 60000, contextWindow: 100000 });
@@ -908,8 +957,11 @@ test("pressure deferral keeps a frontier gap, permits packing and retries on the
     "later packing cannot cross a deferred semantic gap",
   );
   f.ctx.getContextUsage = () => ({ tokens: 75000, contextWindow: 100000 });
+  const fresh = f.add("Current task still needs this raw evidence. ".repeat(1000), "unknown-command", "fresh-round");
   const raw = f.sm.buildSessionProjection().messages;
   const projected = (await f.emit("context", { messages: raw })).messages;
+  assert.deepEqual(projected.find(m => m.toolCallId === fresh.id), fresh.result,
+    "retrying an older final cannot summarize a new tool result before the main model sees it");
   assert.equal(f.calls.length, 1);
   assert.ok(
     projected.some((m) => m.customType === "context-prune-summary" && m.details?.representation === "summary"),
@@ -967,7 +1019,7 @@ test("global TOML policy governs actual paid summary admission and full-message 
       writeFileSync(
         join(f.dir, "metis-pi.toml"),
         "[contextPrune]\nenabled=true\nminBatchChars=0\nautoBudgetThreshold=0.7\n[contextPrun" +
-          "e.chainCompression]\nenabled=false\n[contextPrune.summaryBudget]\nminGainTokens=512" +
+          "e.chainCompression]\nenabled=false\nminRecentTokens=0\nminWorkTurns=0\n[contextPrune.summaryBudget]\nminGainTokens=512" +
           "\nminGainFraction=0.1\nmaxProxyTokens=1000\ntargetBaseTokens=128\ntargetPerCallToken" +
           "s=0\n",
       );
