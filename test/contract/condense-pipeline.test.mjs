@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -31,10 +32,10 @@ const usage = {
 const buildLog =
   Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function waitForSummarizer(f) {
-  const deadline = performance.now() + 3000;
-  while (!f.calls.length && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.ok(f.calls.length, "offline provider must start before checking in-flight state");
+async function waitForSummarizer(f, count = 1) {
+  // Wait for provider starts, not a machine-speed assumption about preflight tokenization.
+  const signal = AbortSignal.timeout(15000);
+  while (f.calls.length < count) await once(f.summaryStarted, "request", { signal });
 }
 
 async function changeSetting(f, id, selectedValue) {
@@ -111,7 +112,7 @@ async function fixture(
   const model = { id: "summary", name: "summary", api, provider: "local", baseUrl: "http://invalid", reasoning: false,
     input: ["text"], contextWindow: 100000, maxTokens: 10000, cost: { input: 1, output: 0, cacheRead: 1, cacheWrite: 0 } };
   const summaryModel = { ...model, id: "cheap-summary", cost: { input: 0.01, output: 0.01, cacheRead: 0.01, cacheWrite: 0 } };
-  const releases = [];
+  const releases = [], summaryStarted = new EventTarget();
   const stream = (_model, context, options) => {
     calls.push(context);
     requests.push(options);
@@ -143,6 +144,7 @@ async function fixture(
     options.signal?.addEventListener("abort", finish, { once: true });
     releases.push(finish);
     if (!defer) queueMicrotask(finish);
+    summaryStarted.dispatchEvent(new Event("request"));
     return output;
   };
   const pi = {
@@ -246,7 +248,7 @@ async function fixture(
     rmSync(dir, { recursive: true, force: true });
   });
   sm.appendMessage({ role: "user", content: "Build", timestamp: 1 });
-  return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets,
+  return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets, summaryStarted,
     waitMaintenance, nextTimestamp: () => clock++,
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
@@ -1452,7 +1454,7 @@ test("parallel summaries commit in order within a three-record window and reject
         f.add(`source-${i}\n` + "界".repeat(6000), `cat source-${i}.txt`, `parallel-${i}`);
       }
       const pending = f.finish();
-      for (let i = 0; i < 600 && f.calls.length < 3; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      await waitForSummarizer(f, 3);
       assert.equal(f.calls.length, 3, "requests overlap before any provider is released");
       assert.match(f.statuses.get("context-prune"), /\nSummarizing 1\/5/, "stale-source cases start with visible progress");
       f.release(2);
