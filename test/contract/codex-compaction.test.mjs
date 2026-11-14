@@ -219,7 +219,10 @@ test("native collaboration ignores malformed facts and preserves synchronous que
 
 test("manual compaction persists a native checkpoint and resumes with it, not a textual marker", async t => {
   const h = await host(t, { condense: true });
+  const fullBranch = ["getBranch", "getBranchAsync"].map(name => t.mock.method(SessionManager.prototype, name,
+    () => assert.fail("normal compaction must not materialize full history")));
   const result = await h.session.compact("Preserve the current goal").catch(error => { throw new Error(`${error.message}: ${h.notices.join("; ")}`); });
+  for (const reader of fullBranch) reader.mock.restore();
   const entry = compactions(h).at(-1), cp = entry.details[key];
   assert.match(result.summary, /^\[Metis Codex remote checkpoint /);
   assert.deepEqual(cp.history.map(i => i.role ?? i.type), ["user", "user", "compaction"]);

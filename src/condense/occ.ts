@@ -9,7 +9,7 @@ import {
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
-import { branchEntryReferences, readHistoryEntries } from "../session-history.ts";
+import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 import { customEntries } from "./custom-entries.ts";
 import { createCompactionOutputLimiter } from "./output-limit.ts";
 import { hasUnavailableNestedEvidence, isProtected } from "./protected.ts";
@@ -199,11 +199,14 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     // overhead, use half the reduction, and leave a full headroom buffer.
     if (event.reason !== "threshold" || !ctx.model || localTokensSaved <= 0 || requestTokens === undefined) return false;
     let usageValid = false;
-    for (const entry of event.branchEntries) {
-      if (entry.type === "context_edit" || entry.type === "compaction") usageValid = false;
-      else if (entry.type === "message" && entry.message.role === "assistant"
+    for (const reference of reverseBranchEntryReferences(ctx.sessionManager)) {
+      if (reference.type === "context_edit" || reference.type === "compaction") break;
+      if (reference.type !== "message" || reference.message.role !== "assistant") continue;
+      const entry = ctx.sessionManager.getEntry(reference.id);
+      if (!entry) throw new Error(`Session entry not found: ${reference.id}`);
+      if (entry.type === "message" && entry.message.role === "assistant"
         && entry.message.stopReason !== "error" && entry.message.stopReason !== "aborted"
-        && entry.message.usage && calculateContextTokens(entry.message.usage) > 0) usageValid = true;
+        && entry.message.usage && calculateContextTokens(entry.message.usage) > 0) { usageValid = true; break; }
     }
     const saved = Math.min(localTokensSaved, Math.max(0, requestTokens - estimatedTokens(visible(ctx).messages)));
     const threshold = ctx.model.contextWindow - event.preparation.settings.reserveTokens;

@@ -1,5 +1,203 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index ad510e794..2ec5044d1 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -76,7 +76,7 @@ import {
+ 	estimateProjectedContextTokens,
+ 	estimateTokens,
+ 	generateBranchSummary,
+-	prepareCompaction,
++	prepareProjectedCompaction,
+ 	shouldCompact,
+ } from "./compaction/index.ts";
+ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
+@@ -97,6 +97,7 @@ import {
+ 	type MessageStartEvent,
+ 	type MessageUpdateEvent,
+ 	type ReplacedSessionContext,
++	type SessionBeforeCompactEvent,
+ 	type SessionBeforeCompactResult,
+ 	type SessionBeforeTreeResult,
+ 	type SessionBoundaryDraft,
+@@ -2923,19 +2924,50 @@ export class AgentSession {
+ 		this._resolveIdleWaitIfIdle();
+ 	}
+ 
++	private async _prepareCompactionContext(settings: CompactionPreparation["settings"], signal: AbortSignal) {
++		signal.throwIfAborted();
++		const snapshot = this.sessionManager.createBranchPreview();
++		// The preview already contains exactly the captured branch in order.
++		const branchMetadata = snapshot.getEntriesMetadata();
++		const projection = await snapshot.buildSessionProjectionAsync({ signal });
++		return {
++			snapshot,
++			lastEntry: branchMetadata.at(-1),
++			preparation: prepareProjectedCompaction(projection, branchMetadata, settings),
++		};
++	}
++
++	private async _emitBeforeCompact(
++		snapshot: SessionManager,
++		event: Omit<SessionBeforeCompactEvent, "branchEntries">,
++	): Promise<SessionBeforeCompactResult | undefined> {
++		let fullBranch: SessionEntry[] | undefined;
++		let failure: { error: unknown } | undefined;
++		const result = await this._extensionRunner.emit({
++			...event,
++			get branchEntries() {
++				if (failure) throw failure.error;
++				try {
++					if (!fullBranch) fullBranch = snapshot.getBranch();
++					return fullBranch;
++				} catch (error) {
++					failure = { error };
++					throw error;
++				}
++			},
++			set branchEntries(entries: SessionEntry[]) {
++				fullBranch = entries;
++			},
++		});
++		// Extension errors are normally reported and ignored; a failed source read must stop the compaction itself.
++		if (failure) throw failure.error;
++		return result as SessionBeforeCompactResult | undefined;
++	}
++
+ 	/**
+-	 * Manually compact the session context.
+-	 *
+-	 * This is the manual entry point used by `/compact`, RPC, and extensions. It is
+-	 * separate from automatic threshold/overflow compaction, which enters through
+-	 * `_checkCompaction()` and `_runAutoCompaction()`. After preparation and the
+-	 * `session_before_compact` hook, both paths call the lower-level `compact()`
+-	 * function imported from `./compaction/index.ts`, unless the hook cancels or
+-	 * supplies a custom result.
+-	 *
+-	 * Aborts the current agent operation first. Manual compaction never retries or
+-	 * continues the interrupted agent turn.
+-	 *
++	 * Manually compact the session context, after aborting the current operation.
++	 * Shared preparation/hooks preserve the automatic path's summary semantics,
++	 * but manual compaction never retries or continues the interrupted turn.
+ 	 * @param customInstructions Optional instructions for the compaction summary
+ 	 */
+ 	async compact(customInstructions?: string): Promise<CompactionResult> {
+@@ -2952,12 +2984,12 @@ export class AgentSession {
+ 			}
+ 
+ 			const settings = this.settingsManager.getCompactionSettings(model);
+-			const pathEntries = this.sessionManager.getBranch();
+-
+-			const preparation = prepareCompaction(pathEntries, settings);
++			const { snapshot, lastEntry, preparation } = await this._prepareCompactionContext(
++				settings,
++				this._compactionAbortController.signal,
++			);
+ 			if (!preparation) {
+ 				// Check why we can't compact
+-				const lastEntry = pathEntries[pathEntries.length - 1];
+ 				if (lastEntry?.type === "compaction") {
+ 					throw new Error("Already compacted");
+ 				}
+@@ -2967,15 +2999,14 @@ export class AgentSession {
+ 			let extensionCompaction: CompactionResult | undefined;
+ 
+ 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
+-				const result = (await this._extensionRunner.emit({
++				const result = await this._emitBeforeCompact(snapshot, {
+ 					type: "session_before_compact",
+ 					preparation,
+-					branchEntries: pathEntries,
+ 					customInstructions,
+ 					reason: "manual",
+ 					willRetry: false,
+ 					signal: this._compactionAbortController.signal,
+-				})) as SessionBeforeCompactResult | undefined;
++				});
+ 
+ 				if (result?.cancel) {
+ 					cancelledByExtension = true;
+@@ -3278,14 +3309,12 @@ export class AgentSession {
+ 				return false;
+ 			}
+ 
+-			const pathEntries = this.sessionManager.getBranch();
+-			const preparation = prepareCompaction(pathEntries, settings);
++			abortController = new AbortController();
++			this._autoCompactionAbortController = abortController;
++			const { snapshot, preparation } = await this._prepareCompactionContext(settings, abortController.signal);
+ 			if (!preparation) {
+ 				return false;
+ 			}
+-
+-			abortController = new AbortController();
+-			this._autoCompactionAbortController = abortController;
+ 			started = true;
+ 			this._emit({ type: "compaction_start", reason });
+ 			abortController.signal.throwIfAborted();
+@@ -3293,15 +3322,14 @@ export class AgentSession {
+ 			let extensionCompaction: CompactionResult | undefined;
+ 
+ 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
+-				const extensionResult = (await this._extensionRunner.emit({
++				const extensionResult = await this._emitBeforeCompact(snapshot, {
+ 					type: "session_before_compact",
+ 					preparation,
+-					branchEntries: pathEntries,
+ 					customInstructions: undefined,
+ 					reason,
+ 					willRetry,
+ 					signal: abortController.signal,
+-				})) as SessionBeforeCompactResult | undefined;
++				});
+ 
+ 				if (extensionResult?.cancel) {
+ 					cancelledByExtension = true;
+diff --git a/packages/coding-agent/src/core/compaction/compaction.ts b/packages/coding-agent/src/core/compaction/compaction.ts
+index 8d453918f..b03590c72 100644
+--- a/packages/coding-agent/src/core/compaction/compaction.ts
++++ b/packages/coding-agent/src/core/compaction/compaction.ts
+@@ -869,7 +869,16 @@ export function prepareCompaction(
+ 		return undefined;
+ 	}
+ 
+-	const projection = buildSessionProjection(pathEntries);
++	return prepareProjectedCompaction(buildSessionProjection(pathEntries), pathEntries, settings);
++}
++
++/** Prepare from the authoritative visible window; historical usage invalidation needs only entry facts. */
++export function prepareProjectedCompaction(
++	projection: SessionProjection,
++	branchEntries: readonly { id: string; type: string }[],
++	settings: CompactionSettings,
++): CompactionPreparation | undefined {
++	if (branchEntries.at(-1)?.type === "compaction") return undefined;
+ 	const projectedEntries = projection.entries;
+ 	const sourceEntries = projectedEntries.map((entry) => entry.sourceEntry);
+ 	// The newest compaction is projected first. Older compaction entries can still
+@@ -886,7 +895,7 @@ export function prepareCompaction(
+ 		boundaryStart = prevCompactionIndex + 1;
+ 	}
+ 	const boundaryEnd = projectedEntries.length;
+-	const tokensBefore = estimateProjectedContextTokens(projection, pathEntries).tokens;
++	const tokensBefore = estimateProjectedContextTokens(projection, branchEntries).tokens;
+ 	const cutPoint = findProjectedCutPoint(projectedEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+ 
+ 	const firstKeptEntry = projectedEntries[cutPoint.firstKeptEntryIndex]?.sourceEntry;
+diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
+index 7fcc870a9..5f049d91d 100644
+--- a/packages/coding-agent/src/core/extensions/types.ts
++++ b/packages/coding-agent/src/core/extensions/types.ts
+@@ -806,6 +806,7 @@ export interface SessionBeforeForkEvent {
+ export interface SessionBeforeCompactEvent {
+ 	type: "session_before_compact";
+ 	preparation: CompactionPreparation;
++	/** Complete captured branch, materialized once on first access; prefer preparation for normal compaction. */
+ 	branchEntries: SessionEntry[];
+ 	customInstructions?: string;
+ 	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
 diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
-index 2ebe080..849dd98 100644
+index 2ebe080bb..420611218 100644
 --- a/packages/coding-agent/src/core/session-entry-store.ts
 +++ b/packages/coding-agent/src/core/session-entry-store.ts
 @@ -1,3 +1,5 @@
@@ -22,15 +220,31 @@ index 2ebe080..849dd98 100644
  /** Owns record locations and bounded decoded bodies; returned entries remain ordinary, complete objects. */
  export class SessionEntryStore {
  	private records: StoredRecord[] = [];
-@@ -27,6 +36,7 @@ export class SessionEntryStore {
+@@ -27,6 +36,8 @@ export class SessionEntryStore {
  	private cache = new Map<StoredSessionEntry, { entry: SessionEntry; bytes: number }>();
  	private cachedBytes = 0;
  	private entryReadBuffer?: Buffer;
 +	private rewriteEpoch = 0;
++	private sourceIsCurrent?: () => boolean;
  
  	constructor(entries: FileEntry[] = [], path?: string) {
  		this.path = path;
-@@ -122,6 +132,98 @@ export class SessionEntryStore {
+@@ -73,8 +84,13 @@ export class SessionEntryStore {
+ 	}
+ 
+ 	/** A non-persistent branch fork keeps locations and currently cached bodies, not the complete history. */
+-	createBranchPreview(branch: readonly SessionEntryMetadata[]): SessionEntryStore {
++	createBranchPreview(branch: readonly SessionEntryMetadata[], sourceCurrent?: () => boolean): SessionEntryStore {
+ 		const preview = new SessionEntryStore([], this.path);
++		const epoch = this.rewriteEpoch;
++		preview.sourceIsCurrent = () =>
++			epoch === this.rewriteEpoch &&
++			(!sourceCurrent || sourceCurrent()) &&
++			(!this.sourceIsCurrent || this.sourceIsCurrent());
+ 		const header = this.getHeader();
+ 		if (header) preview.records.push({ kind: "header", header });
+ 		for (const metadata of branch) {
+@@ -122,6 +138,115 @@ export class SessionEntryStore {
  		});
  	}
  
@@ -76,16 +290,19 @@ index 2ebe080..849dd98 100644
 +		metadata: readonly SessionEntryMetadata[],
 +		path: readonly SessionEntryMetadata[],
 +		signal?: AbortSignal,
++		isCurrent?: () => boolean,
 +	): Promise<SessionEntry[]> {
 +		const epoch = this.rewriteEpoch;
 +		const assertCurrent = () => {
 +			signal?.throwIfAborted();
-+			if (epoch !== this.rewriteEpoch) throw new SessionEntryStoreChangedError();
++			if (epoch !== this.rewriteEpoch || (isCurrent && !isCurrent())) throw new SessionEntryStoreChangedError();
 +		};
 +		assertCurrent();
 +		const admitted = this.projectionWindow(metadata, path);
 +		const entries: SessionEntry[] = [];
 +		let file: FileHandle | undefined, buffer: Buffer | undefined;
++		let bufferedOffset = -1,
++			bufferedBytes = 0;
 +		let sliceStarted = performance.now();
 +		try {
 +			for (const reference of metadata) {
@@ -97,19 +314,33 @@ index 2ebe080..849dd98 100644
 +				else {
 +					if (!this.path || !record.location) throw new Error(`Session entry has no body: ${record.metadata.id}`);
 +					const { offset, length } = record.location;
-+					file ??= await open(this.path, "r");
-+					assertCurrent();
-+					let bytes: Buffer;
-+					if (length <= MAX_REUSED_ENTRY_READ_BYTES) {
-+						buffer ??= Buffer.allocUnsafe(MAX_REUSED_ENTRY_READ_BYTES);
-+						bytes = buffer;
-+					} else bytes = Buffer.allocUnsafe(length);
-+					let read = 0;
-+					while (read < length) {
-+						const { bytesRead } = await file.read(bytes, read, length - read, offset + read);
++					if (!file) {
++						this.assertReadableSource();
++						file = await open(this.path, "r");
 +						assertCurrent();
-+						if (bytesRead === 0) throw new Error(`Session entry was truncated: ${record.metadata.id}`);
-+						read += bytesRead;
++						this.assertReadableSource();
++					}
++					let bytes: Buffer;
++					if (buffer && offset >= bufferedOffset && offset + length <= bufferedOffset + bufferedBytes) {
++						bytes = buffer.subarray(offset - bufferedOffset, offset - bufferedOffset + length);
++					} else {
++						if (length <= MAX_REUSED_ENTRY_READ_BYTES) {
++							buffer ??= Buffer.allocUnsafe(MAX_REUSED_ENTRY_READ_BYTES);
++							bytes = buffer;
++						} else bytes = Buffer.allocUnsafe(length);
++						this.assertReadableSource();
++						let read = 0;
++						while (read < length) {
++							const { bytesRead } = await file.read(bytes, read, bytes.length - read, offset + read);
++							assertCurrent();
++							this.assertReadableSource();
++							if (bytesRead === 0) throw new Error(`Session entry was truncated: ${record.metadata.id}`);
++							read += bytesRead;
++						}
++						if (bytes === buffer) {
++							bufferedOffset = offset;
++							bufferedBytes = read;
++						}
 +					}
 +					entries.push(this.decode(record, bytes, length, admitted.has(record) ? "retain" : "transient"));
 +				}
@@ -129,7 +360,7 @@ index 2ebe080..849dd98 100644
  	getEntry(id: string): SessionEntry | undefined {
  		const record = this.byId.get(id);
  		return record ? this.read(record) : undefined;
-@@ -161,14 +263,18 @@ export class SessionEntryStore {
+@@ -161,14 +286,23 @@ export class SessionEntryStore {
  		}
  	}
  
@@ -148,13 +379,18 @@ index 2ebe080..849dd98 100644
 +		return cached.entry;
 +	}
 +
++	private assertReadableSource(): void {
++		if (this.sourceIsCurrent && !this.sourceIsCurrent()) throw new SessionEntryStoreChangedError();
++	}
++
 +	private read(record: StoredSessionEntry, cacheMiss: "retain" | "transient" = "retain"): SessionEntry {
 +		const cached = this.cachedEntry(record);
 +		if (cached) return cached;
++		this.assertReadableSource();
  		if (!this.path || !record.location) throw new Error(`Session entry has no body: ${record.metadata.id}`);
  		const { offset, length } = record.location;
  		let bytes: Buffer;
-@@ -189,6 +295,15 @@ export class SessionEntryStore {
+@@ -189,6 +323,15 @@ export class SessionEntryStore {
  		} finally {
  			closeSync(fd);
  		}
@@ -170,7 +406,7 @@ index 2ebe080..849dd98 100644
  		const entry = JSON.parse(bytes.toString("utf8", 0, length)) as SessionEntry;
  		const expectedType = record.metadata.type === "unknown" ? record.metadata.sourceType : record.metadata.type;
  		if (!entry || entry.id !== record.metadata.id || entry.type !== expectedType) {
-@@ -217,6 +332,7 @@ export class SessionEntryStore {
+@@ -217,6 +360,7 @@ export class SessionEntryStore {
  
  	/** Rewrites explicitly materialize before truncation, so old offsets cannot refer into an overwritten source. */
  	writeToFile(path: string, flag: "w" | "wx"): void {
@@ -179,7 +415,7 @@ index 2ebe080..849dd98 100644
  			record.kind === "header"
  				? { kind: "header" as const, entry: record.header }
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index af1f28e..50e0898 100644
+index af1f28e14..680ad5b41 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -34,7 +34,7 @@ import {
@@ -191,25 +427,55 @@ index af1f28e..50e0898 100644
  import { parseSessionEntryLine, scanSessionFile } from "./session-file-reader.ts";
  import type { SessionTreeMessagePreview } from "./session-tree-preview.ts";
  
-@@ -84,6 +84,7 @@ export type ReadonlySessionManager = Pick<
+@@ -82,8 +82,10 @@ export type ReadonlySessionManager = Pick<
+ 	| "getContextEntriesMetadata"
+ 	| "getLabel"
  	| "getBranch"
++	| "getBranchAsync"
  	| "buildContextEntries"
  	| "buildSessionProjection"
 +	| "buildSessionProjectionAsync"
  	| "getHeader"
  	| "getEntries"
  	| "getTree"
-@@ -1283,7 +1284,8 @@ export class SessionManager {
+@@ -1224,7 +1226,14 @@ export class SessionManager {
+ 	 */
+ 	createBranchPreview(cwd: string = this.cwd): SessionManager {
+ 		const preview = SessionManager.inMemory(cwd);
+-		preview._loadStore(this.store.createBranchPreview(this.getBranchMetadata()));
++		const store = this.store;
++		const sourceFile = this.sessionFile;
++		preview._loadStore(
++			store.createBranchPreview(
++				this.getBranchMetadata(),
++				() => this.store === store || this.sessionFile !== sourceFile,
++			),
++		);
+ 		return preview;
+ 	}
+ 
+@@ -1283,7 +1292,19 @@ export class SessionManager {
  	 * Use buildSessionContext() to get the resolved messages for the LLM.
  	 */
  	getBranch(fromId?: string): SessionEntry[] {
 -		return this.store.readEntries(this.getBranchMetadata(fromId));
 +		const path = this.getBranchMetadata(fromId);
 +		return this.store.readProjectionEntries(path, path);
++	}
++
++	/** Complete captured branch with cooperative I/O. Rewrites/reloads reject rather than mixing source versions. */
++	async getBranchAsync(fromId?: string, options: { signal?: AbortSignal } = {}): Promise<SessionEntry[]> {
++		options.signal?.throwIfAborted();
++		const store = this.store;
++		const path = this.getBranchMetadata(fromId);
++		const entries = await store.readProjectionEntriesAsync(path, path, options.signal, () => store === this.store);
++		options.signal?.throwIfAborted();
++		if (store !== this.store) throw new SessionEntryStoreChangedError();
++		return entries;
  	}
  
  	/**
-@@ -1291,7 +1293,8 @@ export class SessionManager {
+@@ -1291,7 +1312,8 @@ export class SessionManager {
  	 * Uses tree traversal from current leaf.
  	 */
  	buildContextEntries(): SessionEntry[] {
@@ -219,7 +485,7 @@ index af1f28e..50e0898 100644
  	}
  
  	/**
-@@ -1300,7 +1303,32 @@ export class SessionManager {
+@@ -1300,7 +1322,32 @@ export class SessionManager {
  	 */
  	buildSessionProjection(): SessionProjection {
  		const path = this.getBranchMetadata();
@@ -253,3 +519,98 @@ index af1f28e..50e0898 100644
  	}
  
  	buildSessionContext(): SessionContext {
+diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+index 537b716bf..57977b072 100644
+--- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
++++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+@@ -14,7 +14,7 @@ describe("persisted session body cache", () => {
+ 
+ 	afterEach(() => rmSync(directory, { recursive: true, force: true }));
+ 
+-	it("reads complete multi-chunk UTF-8 records and the following small record", () => {
++	it("reads complete multi-chunk UTF-8 records and the following small record", async () => {
+ 		const seed = SessionManager.create(directory, directory);
+ 		const content = "界🙂é".repeat(180_000);
+ 		const largeId = seed.appendMessage(userMsg(content));
+@@ -26,6 +26,7 @@ describe("persisted session body cache", () => {
+ 
+ 		expect(session.getEntry(largeId)).toMatchObject({ message: { content } });
+ 		expect(session.getEntry(smallId)).toMatchObject({ message: { content: "following 界🙂é record" } });
++		expect(await SessionManager.open(file).getBranchAsync()).toEqual(session.getBranch());
+ 		expect(session.getBranchMetadata().map((entry) => entry.id)).toEqual([largeId, smallId]);
+ 		expect(JSON.stringify(session.getEntriesMetadata())).not.toContain("界🙂é");
+ 		expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
+diff --git a/packages/coding-agent/test/suite/agent-session-compaction.test.ts b/packages/coding-agent/test/suite/agent-session-compaction.test.ts
+index 3f72a3959..105aa5100 100644
+--- a/packages/coding-agent/test/suite/agent-session-compaction.test.ts
++++ b/packages/coding-agent/test/suite/agent-session-compaction.test.ts
+@@ -13,6 +13,7 @@ import {
+ import { Type } from "typebox";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { estimateTokens } from "../../src/core/compaction/index.ts";
++import { SessionManager } from "../../src/core/session-manager.ts";
+ import { createHarness, getUserTexts, type Harness } from "./harness.ts";
+ 
+ type SessionWithCompactionInternals = {
+@@ -133,6 +134,61 @@ describe("AgentSession compaction characterization", () => {
+ 		}
+ 	});
+ 
++	it("keeps a stable complete branch available to legacy compaction hooks", async () => {
++		let received: unknown;
++		const harness = await createHarness({
++			extensionFactories: [
++				(pi) => {
++					pi.on("session_before_compact", (event) => {
++						received = event.branchEntries;
++						expect(event.branchEntries).toBe(received);
++						return {
++							compaction: {
++								summary: "legacy summary",
++								firstKeptEntryId: event.preparation.firstKeptEntryId,
++								tokensBefore: event.preparation.tokensBefore,
++							},
++						};
++					});
++				},
++			],
++		});
++		harnesses.push(harness);
++		seedCompactableSession(harness);
++		const kept = harness.sessionManager.appendMessage({
++			role: "user",
++			content: "retained task",
++			timestamp: Date.now(),
++		});
++		harness.sessionManager.appendCompaction("earlier summary", kept, 100);
++		harness.sessionManager.appendMessage({ role: "user", content: "latest task", timestamp: Date.now() });
++		const expected = harness.sessionManager.getBranch();
++		await harness.session.compact();
++		expect(received).toEqual(expected);
++	});
++
++	it("propagates deferred history read failures instead of falling through to a summary", async () => {
++		const harness = await createHarness({
++			extensionFactories: [
++				(pi) => {
++					pi.on("session_before_compact", (event) => {
++						vi.spyOn(SessionManager.prototype, "getBranch").mockImplementation(() => {
++							throw new Error("History snapshot unreadable");
++						});
++						void event.branchEntries;
++						return undefined;
++					});
++				},
++			],
++		});
++		harnesses.push(harness);
++		seedCompactableSession(harness);
++		const calls = useSummaryStreamFn(harness, "must not fall through after a failed source read");
++		await expect(harness.session.compact()).rejects.toThrow("History snapshot unreadable");
++		expect(calls()).toBe(0);
++		expect(harness.session.isCompacting).toBe(false);
++	});
++
+ 	it("manually compacts using an extension-provided summary", async () => {
+ 		const summaryUsage = {
+ 			input: 10,

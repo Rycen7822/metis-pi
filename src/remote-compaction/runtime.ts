@@ -252,7 +252,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         if (pending === controller) pending = undefined;
       }
     }
-    const branch = ctx.sessionManager.getBranch().map(entry => entry.id === current.entry.id && entry.type === "compaction"
+    const branch = (await ctx.sessionManager.getBranchAsync(undefined, { signal: operationSignal })).map(entry =>
+      entry.id === current.entry.id && entry.type === "compaction"
       ? { ...entry, summary } : entry);
     return { summary, projection: buildSessionProjection(branch) };
   };
@@ -383,7 +384,6 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       pi.events.emit(METIS_EVENTS.beforeRemoteCompact, { waits, signal: event.signal } satisfies BeforeRemoteCompactRequest);
       await Promise.all(waits);
       const version = generation, model = ctx.model;
-      const branch = ctx.sessionManager.getBranch();
       const session = ctx.sessionManager.getSessionId(), source = sourceVersion(ctx);
       const request = remote && model ? await resolveRequest(ctx, model) : undefined;
       if (request?.auth.apiKey) secrets.push(request.auth.apiKey);
@@ -403,7 +403,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
           + "Use /compact to rebuild it after checking authentication.");
       let projected: ReturnType<typeof buildSessionProjection>;
       let rebuilding = false;
-      if (reusable || !previous) projected = buildSessionProjection(branch);
+      if (reusable || !previous) projected = await ctx.sessionManager.buildSessionProjectionAsync({ signal: event.signal });
       else {
         try { projected = (await portableProjection(previous, ctx, event.signal)).projection; }
         catch (error) {
@@ -415,7 +415,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
             && (!previous.data || bindingState(previous.data, request, previous.origin) !== "valid");
           if (event.signal.aborted || !repairable) throw error;
           rebuilding = true;
-          projected = buildSessionProjection(rawBranch(branch));
+          const restored = await ctx.sessionManager.getBranchAsync(undefined, { signal: event.signal });
+          projected = buildSessionProjection(rawBranch(restored));
         }
       }
       const cut = projected.entries.findIndex(e => e.sourceEntry.id === event.preparation.firstKeptEntryId);
