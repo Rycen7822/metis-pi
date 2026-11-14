@@ -1,11 +1,14 @@
 import { METIS_STATUS_IDS } from "../collaboration.ts";
-import { estimateTokens, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { ModelPricing } from "./model-pricing.ts";
+import { priceRefreshMarker } from "./refresh-prices.mjs";
 import { branchEntryReferences, readHistoryEntries, sourceEntryReference, type SessionEntryReference } from "../session-history.ts";
 import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import {
-  RewriteBudget, batchRewriteAdmission, isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, type RewriteGain,
+  RewriteBudget, batchRewriteAdmission, isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, summaryRequestCost, type RewriteGain,
 } from "./rewrite-policy.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
@@ -40,6 +43,7 @@ import type {
   ChainCompressionEntry,
   SingleChainCompressionEntry,
   SharedChainCompressionEntry,
+  SummarizeBatchOptions,
 } from "./types.ts";
 import {
   DEFERRED_REASON_LABELS, CUSTOM_TYPE_CHAIN,
@@ -187,6 +191,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   let needsSharedValidation = false;
   let nativeCompaction: { done: Promise<void>; finish: () => void } | undefined;
   let lastMaintenanceSource: string | undefined;
+  const agentDir = getAgentDir();
+  const pricing = new ModelPricing({
+    file: join(agentDir, "cache", "metis-model-prices.json"),
+    sources: [join(agentDir, "models-store.json"), priceRefreshMarker(agentDir)],
+    changed: () => { lastMaintenanceSource = undefined; },
+    warning: message => {
+      if (projectionContext) safeNotify(projectionContext, message, "warning");
+      else console.warn(message);
+    },
+  });
+  const economicModel = (ctx: ExtensionContext, model = ctx.model, tokens = ctx.getContextUsage()?.tokens ?? 0) => pricing.get(model, tokens);
   let deferredFinal: { timestamp: number; keys: ReadonlySet<string> } | undefined;
   const assertCurrent = (version: number) => {
     if (version !== lifecycle) throw new CondenseContextChangedError("condense lifecycle changed");
@@ -473,10 +488,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return capacity !== undefined && tokens <= capacity
       && tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
   };
-  const admitAutomaticChain = (ctx: ExtensionContext, before: any[], after: any[], counts: TokenComparison) => {
+  const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number) => {
     const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
-    return rewriteBudget.admits(counts.piBefore, gain, unchangedPrefixTokens(before, after),
-      currentConfig.value.chainCompression, ctx.model, chainEmergency(ctx, counts.piBefore));
+    return rewriteBudget.admits(counts.piBefore, gain, prefix,
+      currentConfig.value.chainCompression, economicModel(ctx), chainEmergency(ctx, counts.piBefore));
   };
   const compressChains = async (ctx: any, rollingWindow: number,
     appendEntry: (type: string, data: unknown) => void,
@@ -503,7 +518,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.hasRecord(key));
       if (fresh.length) await indexer.backfillChainRecords(fresh, { ...backfill, appendEntry: append });
     }
-    const measurements = new Map<string, TokenComparison>();
+    const measurements = new Map<string, { counts: TokenComparison; prefix: number }>();
     const result = await compressEligible(chains, rollingWindow, {
       indexer, blockRefs, appendEntry: append, now: () => Date.now(), fuseRange: makeFuseRange(ctx, signal, automatic),
       messages, diagnostics, validate: async entry => {
@@ -522,49 +537,53 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const counts = await tokenEstimator.compare(before, after, signal);
         assertCurrent(version); signal?.throwIfAborted();
         if (!counts && automatic) lastMaintenanceSource = undefined;
+        const prefix = unchangedPrefixTokens(before, after);
         const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
-          && (!automatic || admitAutomaticChain(ctx, before, after, counts))
+          && (!automatic || admitAutomaticChain(ctx, counts, prefix))
           && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
           && config === policyFingerprint(currentConfig.value);
-        if (accepted && counts) measurements.set(entry.blockId, counts);
+        if (accepted && counts) measurements.set(entry.blockId, { counts, prefix });
         return accepted;
       },
       backfill,
     }, inGrace);
     assertCurrent(version);
-    let reclaimedTokens = 0, gain = 0;
+    let reclaimedTokens = 0, gain = 0, beforeTokens = 0, prefix = Infinity;
     for (const entry of result.compressedEntries) {
-      const counts = measurements.get(entry.blockId);
-      if (!counts) continue;
+      const measured = measurements.get(entry.blockId);
+      if (!measured) continue;
+      const { counts } = measured;
       reclaimedTokens += counts.proxyDelta;
       gain += Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
+      beforeTokens = Math.max(beforeTokens, counts.piBefore);
+      prefix = Math.min(prefix, measured.prefix);
     }
     if (result.compressedEntries.length > 0) {
       statsAccum.addChainsCompressed(result.compressedEntries.length);
-      if (automatic) rewriteBudget.published(gain);
+      if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx));
       else rewriteBudget.reset();
       occ.rewrite(ctx, beforeRewrite);
     }
     return { ...result, reclaimedTokens };
   };
 
-  const paidPressure = (ctx: any, closingMessage?: any) => {
-    let usage = ctx.getContextUsage?.();
+  const pressureUsage = (ctx: ExtensionContext, closingMessage?: any) => {
+    const usage = ctx.getContextUsage();
     // message_end precedes persistence: ctx may still report the previous tool
     // request. Admit against the just-finished main response when available.
     const boundary = closingMessage?.usage;
     if (boundary && Number.isFinite(boundary.input)) {
       const tokens = boundary.input + (boundary.output ?? 0) + (boundary.cacheRead ?? 0) + (boundary.cacheWrite ?? 0);
-      if (Number.isFinite(tokens) && tokens > 0)
-        usage = { tokens, contextWindow: usage?.contextWindow ?? ctx.model?.contextWindow };
+      const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow;
+      if (Number.isFinite(tokens) && tokens > 0 && contextWindow !== undefined && contextWindow > 0)
+        return { tokens, contextWindow, percent: tokens / contextWindow * 100 };
     }
-    return shouldBudgetFlush(
-      usage,
-      currentConfig.value.autoBudgetThreshold,
-      occ.nativeCapacity(ctx),
-      currentConfig.value.summaryBudget,
-    );
+    return usage;
   };
+  const paidPressure = (ctx: ExtensionContext, closingMessage?: any) => shouldBudgetFlush(
+    pressureUsage(ctx, closingMessage), currentConfig.value.autoBudgetThreshold,
+    occ.nativeCapacity(ctx), currentConfig.value.summaryBudget,
+  );
 
   // Read at each preparation site; delivery and live assertions remain with the writer.
   const archiveOptions = (manager: ExtensionContext["sessionManager"]) => ({
@@ -810,10 +829,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           { ctx, source: readSourceEdits(ctx, source), probe: true }).messages;
         const estimated = visible.reduce((sum, message) => sum + estimateTokens(message), 0);
         // Native usage can include provider overhead absent from the message estimate; relief must track the same baseline.
-        nativeUsageOffset = Math.max(0, (ctx.getContextUsage()?.tokens ?? 0) - estimated);
+        nativeUsageOffset = Math.max(0, (pressureUsage(ctx, options.closingMessage)?.tokens ?? 0) - estimated);
         automaticEmergency = chainEmergency(ctx, estimated + nativeUsageOffset);
         if (!automaticEmergency) batches = protectBatchWorkingSet(batches, source.messages, visible, currentConfig.value.chainCompression);
-        rewriteBudget.observeWork(source.messages, ctx.model);
+        rewriteBudget.observeWork(source.messages, economicModel(ctx));
       }
       // Do not retain older, non-projected history while waiting for providers.
       rawBranch = undefined; preparedVisible = undefined;
@@ -1010,6 +1029,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         result: null as ResultSlot,
         frontierAdvanced: false,
         job: undefined as Promise<void> | undefined,
+        settleCost: undefined as SummarizeBatchOptions["onUsage"],
         abort: new AbortController(),
         error: undefined as unknown,
         failureReason: undefined as string | undefined,
@@ -1108,11 +1128,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let nextRequest = 0, failedRequest = Infinity;
       const controller = fallbackController;
       const config = currentConfig.value;
-      const admitBatch = (record: BatchRecord, gain: RewriteGain) => {
+      const admitBatch = (record: BatchRecord, gain: RewriteGain, fee = 0) => {
         if (trigger === "manual") return true;
         batchAdmission ??= batchRewriteAdmission(rewriteBudget, visibleForPlanning(), config.chainCompression,
-          ctx.model, tokens => chainEmergency(ctx, tokens + nativeUsageOffset));
-        const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain);
+          economicModel(ctx), tokens => chainEmergency(ctx, tokens + nativeUsageOffset));
+        const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee);
         if (!allowed) record.deferredReason = "economics";
         return allowed;
       };
@@ -1165,15 +1185,29 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           const requestSignal = AbortSignal.any([signal, record.abort.signal]);
           record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
             signal: requestSignal, controller, outputBudget: record.plan.budget,
+            acceptRequest: trigger === "manual" ? undefined : async (model, message, maxOutputTokens) => {
+              const counts = await tokenEstimator.measure([message], [], requestSignal);
+              checkActive();
+              if (!counts) { record.deferredReason = "measurement"; return false; }
+              const inputTokens = Math.max(estimateTokens(message), counts.before) + 256;
+              const fee = summaryRequestCost(economicModel(ctx), economicModel(ctx, model, inputTokens) ?? model, inputTokens, maxOutputTokens);
+              if (!admitBatch(record, record.plan!.upperGain, fee.cost)) return false;
+              const settle = rewriteBudget.reserveFee(fee.cost);
+              record.settleCost = usage => settle(fee.actual(usage));
+              return true;
+            },
             acceptSummary: async text => !!await evaluateBatch(record, text),
-            onUsage: usage => { if (!signal.aborted) statsAccum.add(usage); },
+            onUsage: usage => {
+              record.settleCost?.(usage);
+              if (!signal.aborted) statsAccum.add(usage);
+            },
             onModelAttempt: () => { modelAttempted = true; },
             onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
             onTextProgress: chars => options.onBatchTextProgress?.(i, records.length, record.batch, chars),
           }).then(result => {
             // Count completed provider work even if an earlier chunk later
             // prevents this result from being committed.
-            record.result = !result && record.failureReason === "output-budget" ? "deferred" : result;
+            record.result = !result && (record.failureReason === "output-budget" || record.failureReason === "economics") ? "deferred" : result;
           }).catch(error => { record.error = error; }).then(() => {
             if (record.result !== null || requestSignal.aborted) return;
             failedRequest = Math.min(failedRequest, i);
@@ -1633,6 +1667,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const config = await loadConfig();
     if (version !== lifecycle) return;
     currentConfig.value = config;
+    pricing.start(ctx.modelRegistry.getAll());
     await recoverBranchIndex(ctx, version);
     const projection = await readProjection(ctx);
     assertCurrent(version);
@@ -1688,7 +1723,30 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   // Cache is a per-model prefix; these three moments are cold regardless, so
   // activating every pending supersession here costs no extra cache miss.
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (!currentConfig.value.enabled) return;
+    const version = lifecycle;
+    try {
+      if (!await pricing.checkSources() || version !== lifecycle) return;
+      await stopMaintenance();
+      if (version !== lifecycle) return;
+      let reloaded = false;
+      try {
+        const result = await ctx.modelRegistry.refresh({ allowNetwork: false });
+        reloaded = !result.aborted;
+      } finally {
+        if (version === lifecycle) {
+          pricing.start(ctx.modelRegistry.getAll());
+          if (reloaded) pricing.acknowledgeSources();
+        }
+      }
+    } catch (error) {
+      if (version === lifecycle) safeNotify(ctx, `Could not reload local model prices: ${String(error)}`, "warning");
+    }
+  });
+
   pi.on("model_select", async (_event, ctx) => {
+    pricing.start(ctx.modelRegistry.getAll());
     previousFraction = null;
     maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); rewriteBudget.reset(); lastMaintenanceSource = undefined;
     needsSharedValidation = true;
@@ -1864,6 +1922,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         trigger: n === 0 ? "rearmed" : budgetHit ? "budget" : deltaHit ? "delta" : "frontier-gap",
       });
     }
+  });
+
+  // Observe the completed request BEFORE its final can publish a rewrite. It did not consume that future projection.
+  pi.on("message_end", (event, ctx) => {
+    if (!currentConfig.value.enabled) return;
+    rewriteBudget.observe(event.message, economicModel(ctx));
+    lastMaintenanceSource = undefined;
   });
 
   // A final assistant message is the earliest reliable boundary where the agent has
@@ -2323,7 +2388,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         lastMaintenanceSource = undefined;
         return;
       }
-      if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0 || !admitAutomaticChain(ctx, before, after, counts)) return;
+      const prefix = unchangedPrefixTokens(before, after);
+      if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0 || !admitAutomaticChain(ctx, counts, prefix)) return;
       const measuredSource = manager.buildSessionProjection();
       if (source !== projectionFingerprint(measuredSource.messages)) return;
       if (
@@ -2340,7 +2406,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       sharedValidations.set(entry.blockId, { shape: sharedShape(indexChainProjection(plain), views), hasGain: true });
       lowerFloor(supersede, floor);
       statsAccum.addChainsCompressed(views.length);
-      rewriteBudget.published(Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta));
+      rewriteBudget.published(counts.piBefore, Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta), prefix, economicModel(ctx));
       occ.rewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;
@@ -2371,15 +2437,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
   };
 
-  pi.on("message_end", (event, ctx) => {
-    if (!currentConfig.value.enabled) return;
-    rewriteBudget.observe(event.message, ctx.model);
-    lastMaintenanceSource = undefined;
-  });
   pi.on("turn_end", (event, ctx) => {
     if (currentConfig.value.enabled && isUsefulWork(event.message, event.toolResults ?? [])) {
       const tokens = [event.message, ...event.toolResults].reduce((sum, message) => sum + estimateTokens(message), 0);
-      rewriteBudget.observe(event.message, ctx.model, tokens);
+      rewriteBudget.observe(event.message, economicModel(ctx), tokens);
     }
     void maintainChains(ctx);
   });
@@ -2542,7 +2603,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   );
   return {
     start, tree,
-    shutdown(ctx: ExtensionContext) {
+    async shutdown(ctx: ExtensionContext) {
       lifecycle++;
       nativeCompaction?.finish();
       jsonSizes.clear();
@@ -2561,6 +2622,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       unsubscribeMaintenance();
       unsubscribeRemoteCompaction();
       try { ctx.ui.setStatus(METIS_STATUS_IDS.condense, undefined); } catch { /* UI may already be gone. */ }
+      await pricing.close();
     },
   };
 }

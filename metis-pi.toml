@@ -263,8 +263,9 @@ minRecentTokens = 65536
 # 自动chain须达到绝对与相对净收益；minGainTokens也作为工具批次/chain发布后的新工作增长下限。
 minGainTokens = 8192
 minGainFraction = 0.1
-# 工具摘要、packing与chain共用缓存费用额度；0仅即时回本，不是真实账单保证。
-maxCostOverhead = 0.1
+# 工具摘要、packing与chain共用三次主请求回本门及10%收益余量。
+# 有缓存折扣时，发布后还须连续三次主请求≥90%缓存；未知价按缓存:普通输入=1:10估算。
+# 费用/分词只是估算，不保证实际账单；缺价时SDK的零费用不代表免费。
 stripFinalAssistantThinking = true
 # 仅允许手动 now / compact 额外融合；失败或预算不足时保留机械拼接。
 fuseRangeSummary = true

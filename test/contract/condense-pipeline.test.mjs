@@ -65,10 +65,10 @@ test("settings Off suppresses automatic paid summaries while explicit manual sum
   assert.equal(f.calls.length, 1, "explicit manual summaries retain their model admission");
 });
 
-function addClosedChains(f) {
+function addClosedChains(f, thinking = "Independent intermediate reasoning. ".repeat(100)) {
   for (let i = 0; i < 2; i++) {
     f.sm.appendMessage({ role: "user", content: `request-${i}`, timestamp: f.nextTimestamp() });
-    f.add(`raw-${i}`, `echo member-${i}`, `member-${i}`, "Independent intermediate reasoning. ".repeat(100));
+    f.add(`raw-${i}`, `echo member-${i}`, `member-${i}`, thinking);
     f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: `final-${i}` }],
       stopReason: "stop", timestamp: f.nextTimestamp() });
   }
@@ -78,6 +78,7 @@ async function fixture(
   t,
   {
     reply = "[[1:bash]] Finished; evidence retained.",
+    summaryUsage = usage,
     stopReason = "stop",
     defer = false,
     occ = false,
@@ -97,7 +98,7 @@ async function fixture(
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 } }));
   writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: encodePruneConfig({
     enabled: true, opportunisticCompaction: occ, showPruneStatusLine, minBatchChars: 5000, pruneOn, batchingMode: "agent-message",
-    autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
+    autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1, summarizerModel: "local/cheap-summary",
     // Persistence/render tests opt out of scheduling thresholds; default-policy cases pass DEFAULT_CONFIG explicitly.
     chainCompression: { minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 1, minGainFraction: 0, ...chainCompression },
     purgeErrors: { enabled: false }, ...configOverrides,
@@ -109,6 +110,7 @@ async function fixture(
   const api = "condense-local-proof";
   const model = { id: "summary", name: "summary", api, provider: "local", baseUrl: "http://invalid", reasoning: false,
     input: ["text"], contextWindow: 100000, maxTokens: 10000, cost: { input: 1, output: 0, cacheRead: 1, cacheWrite: 0 } };
+  const summaryModel = { ...model, id: "cheap-summary", cost: { input: 0.01, output: 0.01, cacheRead: 0.01, cacheWrite: 0 } };
   const releases = [];
   const stream = (_model, context, options) => {
     calls.push(context);
@@ -122,18 +124,18 @@ async function fixture(
       const reason = options.signal?.aborted
         ? "aborted"
         : typeof stopReason === "function"
-          ? stopReason(callNumber)
+          ? stopReason(callNumber, context)
           : stopReason;
       const message = {
         role: "assistant",
         api,
-        provider: "local",
-        model: "summary",
+        provider: _model.provider,
+        model: _model.id,
         content: [{ type: "text", text: typeof reply === "function" ? reply(callNumber) : reply }],
         stopReason: reason,
         errorMessage: reason === "error" ? "Offline summary provider failed" : undefined,
         timestamp: 1,
-        usage,
+        usage: summaryUsage,
       };
       output.push({ type: reason === "error" ? "error" : "done", reason, message, error: message });
       output.end(message);
@@ -177,8 +179,9 @@ async function fixture(
     hasPendingMessages: () => false,
     getContextUsage: () => ({ tokens: capacity ? 96000 : 90000, contextWindow: 100000 }),
     modelRegistry: {
-      find: () => model,
-      getAvailable: () => [model],
+      find: () => summaryModel,
+      getAvailable: () => [model, summaryModel],
+      getAll: () => [model, summaryModel],
       streamSimple: stream,
     },
     ui: {
@@ -225,9 +228,10 @@ async function fixture(
       await status.pending;
     }
   }
-  function finish(settle = true) {
+  function finish(settle = true, responseUsage) {
     const pending = (async () => {
-      const message = { role: "assistant", content: [{ type: "text", text: "Final reply" }], stopReason: "stop", timestamp: clock++ };
+      const message = { role: "assistant", api, provider: model.provider, model: model.id, usage: responseUsage,
+        content: [{ type: "text", text: "Final reply" }], stopReason: "stop", timestamp: clock++ };
       await emit("message_end", { message }); sm.appendMessage(message);
       if (settle) { await emit("turn_end", { message, toolResults: [], turnIndex: 0 }); await waitMaintenance(); }
     })();
@@ -498,26 +502,27 @@ test("default chain policy releases old evidence but retains a long active multi
   assert.equal(f.notices.length, notices, "unchanged boundaries cannot trigger a second rewrite");
 });
 
-test("automatic chain cost allowance comes only from matching main request receipts", async t => {
+test("automatic chain payback waits for three matching high-cache main requests, not historical spending", async t => {
   const f = await fixture(t, { pruneOn: "on-demand", chainCompression: { enabled: true, rollingWindow: 0 } });
-  Object.assign(f.ctx.model, { contextWindow: 1000000, cost: { input: 10, output: 0, cacheRead: 1, cacheWrite: 0 } });
-  addClosedChains(f);
+  Object.assign(f.ctx.model, { contextWindow: 1000000, cost: { input: 2, output: 0, cacheRead: 1, cacheWrite: 0 } });
+  addClosedChains(f, "Intermediate evidence retained by the existing task summary. ".repeat(12000));
   f.sm.appendMessage({ role: "user", content: "Keep these original requirements. ".repeat(2500), timestamp: f.nextTimestamp() });
   const blocks = () => f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
   await f.emit("agent_settled"); await f.waitMaintenance();
-  assert.equal(blocks().length, 0, "positive volume alone cannot authorize an expensive prefix rewrite");
+  assert.equal(blocks().length, 0, "a material plan does not invent cache stability before main request receipts");
   const receipt = provider => ({ role: "assistant", api: f.ctx.model.api, provider, model: f.ctx.model.id,
     content: [{ type: "text", text: "Main request complete" }], stopReason: "stop", timestamp: f.nextTimestamp(),
     usage: { ...usage, cacheRead: 200000, cost: { ...usage.cost, cacheRead: 0.2 } } });
   await f.emit("message_end", { message: receipt("different-provider") });
   await f.emit("agent_settled"); await f.waitMaintenance();
-  assert.equal(blocks().length, 0, "an unrelated provider receipt cannot earn allowance");
-  for (let i = 0; i < 30; i++) {
+  assert.equal(blocks().length, 0, "an unrelated provider receipt cannot establish cache stability");
+  for (let i = 0; i < 3; i++) {
     const message = receipt(f.ctx.model.provider);
     await f.emit("message_end", { message }); f.sm.appendMessage(message);
+    await f.emit("agent_settled"); await f.waitMaintenance();
+    assert.equal(blocks().length, i === 2 ? 1 : 0, "only the third qualifying main request completes warmup");
   }
-  await f.emit("agent_settled"); await f.waitMaintenance();
-  assert.equal(blocks().length, 1, "a material old group can use previously observed rewrite allowance");
+  assert.equal(blocks().length, 1, "a large mechanically retained group passes the three-request payback gate");
   assert.equal(blocks()[0].data.kind, "shared-v1");
   assert.equal(f.calls.length, 0);
 });
@@ -904,11 +909,17 @@ test("automatic batch rewrites cannot buy small savings by chilling a long suffi
   for (const packed of [false, true]) await t.test(packed ? "packed" : "semantic", async t => {
     const f = await fixture(t);
     f.ctx.model.cost = { input: 10, output: 1, cacheRead: 1, cacheWrite: 1 };
+    const responseUsage = { ...usage, input: 10, cacheRead: 90000 };
+    for (let i = 0; i < 3; i++) await f.emit("message_end", { message: {
+      role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+      content: [{ type: "text", text: "Main request complete" }], stopReason: "stop",
+      timestamp: f.nextTimestamp(), usage: responseUsage,
+    } });
     const call = f.add(packed ? buildLog : "Important evidence remains available. ".repeat(1500),
       packed ? "npm run build" : "inspect-unknown-tool");
     f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "Unchanged suffix. ".repeat(12000) }],
       timestamp: f.nextTimestamp(), stopReason: "stop" });
-    await f.finish();
+    await f.finish(true, responseUsage);
     assert.equal(f.calls.length, 0, "reject the optimistic cache cost before paying a summary model");
     assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 0);
     const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
@@ -920,6 +931,49 @@ test("automatic batch rewrites cannot buy small savings by chilling a long suffi
     assert.equal(f.calls.length, packed ? 0 : 1, "explicit manual pruning retains its existing authority");
     assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
   });
+});
+
+test("automatic summary admission includes request caps and charged attempts, without treating economic refusal as an outage", async t => {
+  const billed = { ...usage, cost: { ...usage.cost, total: 10 } };
+  const f = await fixture(t, { summaryUsage: billed });
+  f.add("Keep these observations. ".repeat(2000), "inspect-source");
+  const summaryModel = f.ctx.modelRegistry.find();
+  summaryModel.cost.output = 1000000;
+  await f.finish();
+  assert.equal(f.calls.length, 0, "reject unaffordable output ceilings before the native provider starts");
+  summaryModel.cost.output = 0.01;
+  await f.finish();
+  assert.equal(f.calls.length, 1, "an affordable estimate permits real provider work");
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 0,
+    "the actual receipt is checked before publishing, even when it exceeds the estimate");
+  await f.finish();
+  assert.equal(f.calls.length, 1, "a failed publication does not refund the paid request on the next retry");
+  assert.ok(!f.notices.some(([message]) => /failing, using|summarization failed/.test(message)));
+  await f.commands.get("pruner").handler("now", f.ctx);
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
+});
+
+test("the final that publishes a rewrite cannot count toward its next three high-cache main requests", async t => {
+  const f = await fixture(t);
+  f.ctx.model.cost = { input: 2, output: 0, cacheRead: 1, cacheWrite: 0 };
+  const responseUsage = { ...usage, input: 10, cacheRead: 90000 };
+  const complete = async () => {
+    const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+      content: [{ type: "text", text: "Main request complete" }], stopReason: "stop",
+      timestamp: f.nextTimestamp(), usage: responseUsage };
+    await f.emit("message_end", { message }); f.sm.appendMessage(message);
+  };
+  for (let i = 0; i < 3; i++) await complete();
+  f.add("First evidence to summarize. ".repeat(1800), "inspect-first");
+  await f.finish(true, responseUsage);
+  const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length;
+  assert.equal(summaries(), 1);
+  f.add("Second useful evidence. ".repeat(1800), "inspect-second");
+  for (let i = 0; i < 3; i++) {
+    await complete();
+    assert.equal(summaries(), i < 2 ? 1 : 2,
+      "only new successful main requests, not the publishing final or summary receipt, reopen normal rewriting");
+  }
 });
 
 test("a second small automatic batch waits for useful growth, not another final or context callback", async t => {
@@ -1018,7 +1072,7 @@ test("global TOML policy governs actual paid summary admission and full-message 
       const f = await fixture(t, { reply: "论".repeat(size) });
       writeFileSync(
         join(f.dir, "metis-pi.toml"),
-        "[contextPrune]\nenabled=true\nminBatchChars=0\nautoBudgetThreshold=0.7\n[contextPrun" +
+        "[contextPrune]\nenabled=true\nminBatchChars=0\nautoBudgetThreshold=0.7\nsummarizerModel=\"local/cheap-summary\"\n[contextPrun" +
           "e.chainCompression]\nenabled=false\nminRecentTokens=0\nminWorkTurns=0\n[contextPrune.summaryBudget]\nminGainTokens=512" +
           "\nminGainFraction=0.1\nmaxProxyTokens=1000\ntargetBaseTokens=128\ntargetPerCallToken" +
           "s=0\n",
@@ -1120,7 +1174,8 @@ for (const stopReason of ["error", "length"]) test(`summary ${stopReason} record
   f.events.emit("metis:condense-project", request);
   assert.ok(request.messages.some(message => message.toolCallId === call.id && message.content[0].text === body));
   assert.ok(!request.messages.some(message => message.customType === "context-prune-flush-metrics"));
-  await f.finish(); assert.equal(f.calls.length, 2, "failed batches remain available for retry");
+  const attempts = f.calls.length;
+  await f.finish(); assert.ok(f.calls.length > attempts, "failed batches remain available for retry, including fallback routes");
 });
 
 test("historical oversized frontiers retain their boundary without becoming live flush results", async t => {
@@ -1285,9 +1340,13 @@ test("subagent control receipts remain verbatim while ordinary results are summa
 test("automatic and manual chunks keep durable progress through a failure inside one assistant turn", async (t) => {
   for (const path of ["automatic", "manual"])
     await t.test(path, async (t) => {
-      let fail = true;
+      let fail = true, failedInput;
       const f = await fixture(t, {
-        stopReason: (n) => (fail && n === 2 ? "error" : "stop"),
+        stopReason: (n, context) => {
+          const input = context.messages[0].content[0].text;
+          if (fail && n === 2) failedInput = input;
+          return fail && input === failedInput ? "error" : "stop";
+        },
         chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false },
       });
       const ids = Array.from({ length: 130 }, (_, i) => `large-chain-${i}`);
@@ -1317,7 +1376,8 @@ test("automatic and manual chunks keep durable progress through a failure inside
       const summaries = () => f.sm.getBranch().filter((e) => e.customType === "context-prune-summary");
       await flush();
       const attempted = f.calls.length;
-      assert(attempted >= 2 && attempted <= 3, "failure stops scheduling beyond the bounded request window");
+      const chunks = new Set(f.calls.map(context => context.messages[0].content[0].text));
+      assert(chunks.size >= 2 && chunks.size <= 3, "failure stops beyond three chunks, even when one chunk tries fallback routes");
       assert.equal(summaries().length, 1, "first chunk persists before the second fails");
       assert.equal(
         f.sm.getBranch().filter((e) => e.customType === "context-prune-chain").length,
@@ -1360,6 +1420,7 @@ test("summary requests reserve output space and local budget failures never requ
   const f = await fixture(t);
   f.ctx.model.contextWindow = 6000;
   f.ctx.model.maxTokens = 2000;
+  Object.assign(f.ctx.modelRegistry.find(), { contextWindow: 6000, maxTokens: 2000 });
   for (let i = 0; i < 3; i++) {
     const { assistant } = f.add(`结果-${i}\n` + "证据".repeat(3000), `cat unicode-${i}.txt`);
     assistant.content.unshift({ type: "text", text: "历史描述 ".repeat(2000) });

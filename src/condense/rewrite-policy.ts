@@ -1,15 +1,53 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
+import type { Usage } from "@earendil-works/pi-ai";
 import { createRangeResolver } from "./chain-range-prune.ts";
 import { occKey } from "./occurrence-key.ts";
 import type { CapturedBatch, ChainCompressionConfig, ChainRange } from "./types.ts";
 
-type Prices = { input: number; cacheRead: number };
-type Model = { id: string; provider: string; api: string; baseUrl?: string; cost?: Prices };
-type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction" | "maxCostOverhead">
-  & { minimumGain?: number };
+type Prices = { input: number; cacheRead: number; cacheWrite?: number };
+export type Model = { id: string; provider: string; api: string; baseUrl?: string;
+  cost?: Prices & { output?: number }; pricing?: "pi" | "models.dev" | "pending" };
+type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & { minimumGain?: number };
+const PAYBACK_REQUESTS = 3;
+const MIN_CACHE_HIT = 0.9;
+const BENEFIT_FRACTION = 0.9;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const idleTools = new Set(["context_tree_query", "write_stdin", "goal", "subagents_wait_agent", "subagents_inspect_agent",
   "subagents_list_agents"]);
+const knownPrices = (model: Model | undefined): Prices | undefined => {
+  const price = model?.cost;
+  const resolved = model?.pricing === "pi" || model?.pricing === "models.dev";
+  return price && finite(price.input) && (price.input > 0 || resolved) && finite(price.cacheRead) && price.input >= price.cacheRead
+    ? price : undefined;
+};
+const FALLBACK_PRICES: Prices = { input: 1, cacheRead: 0.1 };
+const coldPenalty = (before: number, gain: number, prefix: number, price: Prices) => {
+  // A provider may charge more to rebuild its cache than for ordinary uncached input.
+  const write = finite(price.cacheWrite) ? price.cacheWrite : price.input;
+  return Math.max(0, before - prefix - gain) * (Math.max(price.input, write) - price.cacheRead);
+};
+
+/** Unknown primary prices use relative input units, never another model's dollar receipt. */
+export function summaryRequestCost(primary: Model | undefined, model: Model, inputTokens: number, maxOutputTokens: number) {
+  const main = knownPrices(primary), price = model.cost;
+  const inputRate = price?.input, outputRate = price?.output;
+  const resolved = model.pricing === "pi" || model.pricing === "models.dev";
+  const known = finite(inputRate) && (inputRate > 0 || resolved) && finite(outputRate);
+  const scale = !main && known ? 1 / (inputRate || outputRate || 1) : 1;
+  const input = known ? inputRate * scale : main && main.input > 0 ? main.input : FALLBACK_PRICES.input;
+  const output = known ? outputRate * scale : input;
+  const cacheRead = known && finite(price?.cacheRead) ? price.cacheRead * scale : input / 10;
+  const cacheWrite = known && finite(price?.cacheWrite) ? price.cacheWrite * scale : input;
+  return {
+    cost: model.pricing === "pending" ? Infinity : inputTokens * input + maxOutputTokens * output,
+    actual(usage: Usage) {
+      const billed = usage.cost?.totalFromProvider === true || (known && model.pricing === undefined);
+      if (main && billed && finite(usage.cost?.total)) return usage.cost.total * 1_000_000;
+      if (![usage.input, usage.output, usage.cacheRead, usage.cacheWrite].every(finite)) return Infinity;
+      return usage.input * input + usage.output * output + usage.cacheRead * cacheRead + usage.cacheWrite * cacheWrite;
+    },
+  };
+}
 
 /** A completed useful tool round, not polling, a failed request, or a maintenance callback. */
 export function isUsefulWork(message: any, results: any[]): boolean {
@@ -98,7 +136,7 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
 
 export interface RewriteGain { pi: number; proxy: number }
 
-/** One flush measures its prefix once and spends one allowance across all actually published chunks. */
+/** One flush measures its prefix once; every published prefix must independently satisfy the aggregate payback gate. */
 export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], config: ChainCompressionConfig,
   model: Model | undefined, emergency: (tokens: number) => boolean) {
   const prefixes = new Map<string, number>();
@@ -118,11 +156,11 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
     return next;
   };
   return {
-    accepts(keys: Iterable<string>, gain: RewriteGain) {
+    accepts(keys: Iterable<string>, gain: RewriteGain, fee = 0) {
       const next = changedPrefix(keys);
       return next !== undefined && budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), next,
         // The batch plan already enforces its proxy gain floor; do not compare that floor to Pi-estimated tokens.
-        { ...config, minimumGain: 0 }, model, emergency(Math.max(0, before - pi)));
+        { ...config, minimumGain: 0 }, model, emergency(Math.max(0, before - pi)), fee);
     },
     published(keys: Iterable<string>, gain: RewriteGain) {
       const next = changedPrefix(keys);
@@ -130,15 +168,20 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
       prefix = next; pi += gain.pi; proxy += gain.proxy;
     },
     finish() {
-      if (pi > 0 && proxy > 0) budget.published(Math.min(pi, proxy));
+      if (pi > 0 && proxy > 0) budget.published(before, Math.min(pi, proxy), prefix, model);
     },
   };
 }
 
-/** One session-local allowance for ordinary batch and chain rewrites, never assumed earned savings. */
+/** Shared incremental-cost estimate, not credit for the cache spending that would also occur without compression. */
 export class RewriteBudget {
   private model?: string;
-  private allowance = 0;
+  private discounted = false;
+  private warmRequests = 0;
+  private debt = 0;
+  private fees = 0;
+  private unknownFees = 0;
+  private generation = 0;
   private growth = 0;
   private lastGain = 0;
   private lastUsage = -Infinity;
@@ -146,24 +189,26 @@ export class RewriteBudget {
 
   reset() {
     this.model = undefined;
-    this.allowance = this.growth = this.lastGain = 0;
+    this.discounted = false;
+    this.warmRequests = this.debt = this.fees = this.unknownFees = this.growth = this.lastGain = 0;
     this.lastUsage = this.lastWork = -Infinity;
+    this.generation++;
   }
 
-  private prices(model: Model | undefined): Prices | undefined {
-    const identity = model && JSON.stringify([model.provider, model.id, model.api, model.baseUrl, model.cost]);
+  private prices(model: Model | undefined): Prices {
+    const identity = model && JSON.stringify([model.provider, model.id, model.api, model.baseUrl, model.cost, model.pricing]);
     if (identity !== this.model) { this.reset(); this.model = identity; }
-    const price = model?.cost;
-    return price && finite(price.input) && price.input > 0 && finite(price.cacheRead) && price.input >= price.cacheRead
-      ? price : undefined;
+    const price = knownPrices(model) ?? FALLBACK_PRICES;
+    this.discounted = price.input > price.cacheRead;
+    return price;
   }
 
   observe(message: any, model: Model | undefined, workTokens = 0) {
     const price = this.prices(model);
     if (!model || message?.role !== "assistant" || message.provider !== model.provider || message.model !== model.id || message.api !== model.api
-      || ["error", "aborted", "length"].includes(message.stopReason) || !finite(message.timestamp)) return;
+      || !finite(message.timestamp)) return;
     if (workTokens > 0 && finite(workTokens)) {
-      if (message.timestamp <= this.lastWork) return;
+      if (["error", "aborted", "length"].includes(message.stopReason) || message.timestamp <= this.lastWork) return;
       this.lastWork = message.timestamp;
       this.growth += workTokens;
       return;
@@ -171,8 +216,31 @@ export class RewriteBudget {
     if (message.timestamp <= this.lastUsage) return;
     this.lastUsage = message.timestamp;
     const usage = message.usage;
-    if (!price || !finite(usage?.cacheRead) || !finite(usage?.cost?.cacheRead)) return;
-    this.allowance += Math.min(usage.cost.cacheRead * 1_000_000, usage.cacheRead * price.cacheRead);
+    if (["error", "aborted", "length"].includes(message.stopReason)
+      || !finite(usage?.input) || !finite(usage?.cacheRead) || !finite(usage?.cacheWrite)) {
+      this.warmRequests = 0;
+      return;
+    }
+    const input = usage.input + usage.cacheRead + usage.cacheWrite;
+    if (input <= 0) { this.warmRequests = 0; return; }
+    this.warmRequests = usage.cacheRead / input >= MIN_CACHE_HIT ? Math.min(PAYBACK_REQUESTS, this.warmRequests + 1) : 0;
+    this.debt = Math.max(0, this.debt - this.lastGain * price.cacheRead);
+  }
+
+  /** Keep the reservation when a paid request has no usage receipt; it is not evidence of a free attempt. */
+  reserveFee(cost: number): (actual: number) => void {
+    const generation = this.generation;
+    if (finite(cost)) this.fees += cost;
+    else this.unknownFees++;
+    let settled = false;
+    return actual => {
+      if (settled || generation !== this.generation) return;
+      settled = true;
+      if (finite(cost)) this.fees -= cost;
+      else this.unknownFees--;
+      if (finite(actual)) this.fees += actual;
+      else this.unknownFees++;
+    };
   }
 
   /** Recover completed work missed by a live callback; never replay historical spending receipts. */
@@ -189,7 +257,8 @@ export class RewriteBudget {
   }
 
   waitingForWork(config: RewritePolicy): boolean {
-    return this.lastGain > 0 && this.growth < Math.max(config.minGainTokens, this.lastGain / 4);
+    return this.debt > 0 || (this.discounted && this.warmRequests < PAYBACK_REQUESTS)
+      || (this.lastGain > 0 && this.growth < Math.max(config.minGainTokens, this.lastGain / 4));
   }
 
   ready(before: number, gain: number, config: RewritePolicy, emergency: boolean): boolean {
@@ -199,18 +268,22 @@ export class RewriteBudget {
   }
 
   admits(before: number, gain: number, prefix: number, config: RewritePolicy,
-    model: Model | undefined, emergency: boolean): boolean {
-    const prices = this.prices(model) ?? { input: 1, cacheRead: 0.1 };
-    if (!this.ready(before, gain, config, emergency) || !finite(prefix) || prefix > before) return false;
+    model: Model | undefined, emergency: boolean, fee = 0): boolean {
+    const prices = this.prices(model);
+    if (!this.ready(before, gain, config, emergency) || gain > before || !finite(prefix) || prefix > before) return false;
     if (emergency) return true;
-    const penalty = Math.max(0, before - prefix - gain) * (prices.input - prices.cacheRead);
-    const debit = Math.max(0, penalty - gain * prices.cacheRead);
-    return debit <= this.allowance * config.maxCostOverhead;
+    if (model?.pricing === "pending" || !finite(fee) || this.unknownFees > 0) return false;
+    const penalty = coldPenalty(before, gain, prefix, prices);
+    return penalty + this.fees + fee <= PAYBACK_REQUESTS * gain * prices.cacheRead * BENEFIT_FRACTION;
   }
 
-  published(gain: number) {
-    this.allowance = this.growth = 0;
+  published(before: number, gain: number, prefix: number, model: Model | undefined) {
+    const prices = this.prices(model);
+    this.debt = this.unknownFees > 0 ? Infinity
+      : coldPenalty(before, gain, prefix, prices) + this.fees;
+    this.fees = this.unknownFees = this.growth = this.warmRequests = 0;
     this.lastGain = gain;
-    // Publishing must not make an earlier usage or work round spendable again.
+    // Late or replayed receipts cannot settle another publication or make old work spendable again.
+    this.generation++;
   }
 }

@@ -963,6 +963,11 @@ test("local proxy gains do not suppress native pressure when Pi estimates no use
   });
   await h.session.prompt("Do four inspections and finish.");
   await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0, "automatic pruning rejects the unprofitable dense rewrite");
+  // A user-authorized rewrite still must not mistake proxy savings for actual Native headroom.
+  await h.session.prompt("/pruner now");
+  await h.session.prompt("Continue after the local rewrite.");
+  await h.session.waitForIdle();
   assert.deepEqual(
     h.calls.filter((c) => c.summarizing).map((c) => Boolean(c.local)),
     [true, true, true, true, false],

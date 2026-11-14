@@ -19,15 +19,15 @@ test("partial chain settings keep defaults, accept zero window and reject invali
   try {
     assert.deepEqual(DEFAULT_CONFIG.chainCompression, {
       enabled: true, rollingWindow: 3, minWorkTurns: 4, minRecentTokens: 65536,
-      minGainTokens: 8192, minGainFraction: 0.1, maxCostOverhead: 0.1,
+      minGainTokens: 8192, minGainFraction: 0.1,
       stripFinalAssistantThinking: true, fuseRangeSummary: true,
     });
     for (const [given, expected] of [[{ enabled: true, minRecentTokens: 2000 }, { enabled: true, minRecentTokens: 2000 }],
       [{ rollingWindow: 0, fuseRangeSummary: false }, { rollingWindow: 0, fuseRangeSummary: false }],
       [{ enabled: "yes", rollingWindow: -1 }, {}],
-      [{ minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 17, minGainFraction: 0, maxCostOverhead: 0 },
-        { minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 17, minGainFraction: 0, maxCostOverhead: 0 }],
-      [{ minWorkTurns: 1.5, minRecentTokens: -1, minGainTokens: 0, minGainFraction: 2, maxCostOverhead: -1 }, {}],
+      [{ minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 17, minGainFraction: 0 },
+        { minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 17, minGainFraction: 0 }],
+      [{ minWorkTurns: 1.5, minRecentTokens: -1, minGainTokens: 0, minGainFraction: 2 }, {}],
       [undefined, {}]]) {
       writeFileSync(join(dir, "metis-pi.toml"), stringify({ contextPrune: { chainCompression: given } }));
       assert.deepEqual((await loadConfig()).chainCompression, { ...DEFAULT_CONFIG.chainCompression, ...expected });

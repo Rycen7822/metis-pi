@@ -132,15 +132,19 @@ test("package postinstall replaces the snapshot while preserving both previous r
   const previous = await h.active();
   await h.payload("updated-sdk");
   await cp(path.join(root, "src/neural-search/runtime"), path.join(h.pkg, "src/neural-search/runtime"), { recursive: true });
+  await mkdir(path.join(h.pkg, "src/condense"), { recursive: true });
+  await cp(path.join(root, "src/condense/refresh-prices.mjs"), path.join(h.pkg, "src/condense/refresh-prices.mjs"));
   await cp(path.join(root, "package.json"), path.join(h.pkg, "package.json"));
   const command = "npm run postinstall --ignore-scripts";
   await run(process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm",
     process.platform === "win32" ? ["/d", "/s", "/c", command] : ["run", "postinstall", "--ignore-scripts"], {
       cwd: h.pkg, timeout: 30_000, windowsHide: true,
       // Semantic setup is separately tested; its supported external override prevents downloads here.
-      env: { ...process.env, PI_MANAGED_INSTALL_ROOT: h.managedRoot, SGREP_RUNTIME_DIR: h.dir },
+      env: { ...process.env, PI_MANAGED_INSTALL_ROOT: h.managedRoot, SGREP_RUNTIME_DIR: h.dir,
+        PI_CODING_AGENT_DIR: path.dirname(h.managedRoot) },
     });
   assert.notEqual(await h.active(), previous);
+  assert.ok((await readFile(path.join(path.dirname(h.managedRoot), "cache/metis-model-prices.refresh"), "utf8")).length > 0);
   const active = path.join(h.managedRoot, "releases", await h.active());
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(active, name), "dist/owner.txt"), "utf8"), "updated-sdk");
   assert.equal(await readFile(path.join(h.sdkDir(path.join(h.managedRoot, "releases", previous), "ai"), "dist/owner.txt"), "utf8"), "new-sdk");

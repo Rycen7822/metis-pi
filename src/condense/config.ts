@@ -205,7 +205,6 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
       minRecentTokens: safeInteger(chain?.minRecentTokens, defaults.chainCompression.minRecentTokens),
       minGainTokens: safeInteger(chain?.minGainTokens, defaults.chainCompression.minGainTokens, 1),
       minGainFraction: boundedFraction(chain?.minGainFraction, defaults.chainCompression.minGainFraction),
-      maxCostOverhead: boundedFraction(chain?.maxCostOverhead, defaults.chainCompression.maxCostOverhead),
       stripFinalAssistantThinking: loadScalar("chainCompression.stripFinalAssistantThinking", chain?.stripFinalAssistantThinking),
       fuseRangeSummary: loadScalar("chainCompression.fuseRangeSummary", chain?.fuseRangeSummary),
     },

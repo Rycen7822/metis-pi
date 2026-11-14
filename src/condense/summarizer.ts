@@ -1,4 +1,4 @@
-import type { AssistantMessage, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelsSimpleStreamOptions, UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   CapturedBatch,
@@ -122,6 +122,7 @@ export function isUsableSummary(llmText: string, stopReason: string): boolean {
 type RunOutcome =
   | { kind: "ok"; result: SummarizeResult }
   | { kind: "unusable" }
+  | { kind: "economics" }
   | { kind: "transient"; message: string; timedOut?: boolean };
 
 function modelLabel(model: any): string {
@@ -178,25 +179,23 @@ async function runOnce(
   try {
     if (options.signal?.aborted) throw new Error("summarize: aborted before authentication");
     if (!model) return { kind: "transient", message: "Summarizer model unavailable in registry" };
+    const message: UserMessage = {
+      role: "user", content: [{ type: "text", text: userMessage }], timestamp: Date.now(),
+    };
+    const maxTokens = summarizerLimits(model).maxTokens;
+    if (options.acceptRequest && !await options.acceptRequest(model, message, maxTokens)) return { kind: "economics" };
+    if (options.signal?.aborted) throw new Error("summarize: aborted before provider request");
     // Pass the combined signal so the underlying fetch is cancelled immediately
     // either when the user presses Esc, or when an idle/ceiling timeout fires.
     options.onModelAttempt?.();
     const responseStream = ctx.modelRegistry.streamSimple(
       model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: userMessage }],
-            timestamp: Date.now(),
-          },
-        ],
-      },
+      { messages: [message] },
       {
         signal: combineSignals(options.signal, timeoutController.signal),
         // Provider output includes model-specific tokenization/reasoning.
         // Keep its existing ceiling; enforce proxy limits on the rendered reply.
-        maxTokens: summarizerLimits(model).maxTokens,
+        maxTokens,
         ...summarizerThinkingOptions(config),
       }
     );
@@ -335,6 +334,10 @@ async function runSummarization(
       }
       emit(controller?.complete(decision, index) ?? (index > 0 ? "enter" : "none"), chain[index]);
       return outcome.result;
+    }
+    if (outcome.kind === "economics") {
+      options.onFailure?.("Summary request cannot repay its estimated cost within three main requests", "economics");
+      return null;
     }
     if (outcome.kind === "unusable") {
       options.onFailure?.("Summarizer returned empty or length-truncated text");

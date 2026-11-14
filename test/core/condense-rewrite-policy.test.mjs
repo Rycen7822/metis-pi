@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  RewriteBudget, batchRewriteAdmission, protectBatchWorkingSet, protectChainWorkingSet, isUsefulWork,
+  RewriteBudget, batchRewriteAdmission, protectBatchWorkingSet, protectChainWorkingSet, isUsefulWork, summaryRequestCost,
 } from "../../src/condense/rewrite-policy.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { detectChains } from "../../src/condense/chain-detector.ts";
@@ -9,54 +9,122 @@ import { detectChains } from "../../src/condense/chain-detector.ts";
 const config = { ...DEFAULT_CONFIG.chainCompression, minGainTokens: 1000, minGainFraction: 0.1 };
 const model = { id: "test", provider: "local", api: "test", cost: { input: 10, cacheRead: 1 } };
 const completion = (timestamp, cached = 320000) => ({ role: "assistant", api: model.api, provider: model.provider, model: model.id,
-  timestamp, stopReason: "stop", usage: { cacheRead: cached, cost: { cacheRead: cached / 1_000_000 } } });
+  timestamp, stopReason: "stop", usage: { input: 0, cacheRead: cached, cacheWrite: 0,
+    cost: { input: 0, output: 0, cacheRead: cached / 1_000_000, cacheWrite: 0, total: cached / 1_000_000 } } });
+const warm = (budget, current = model, start = 1) => {
+  for (let i = 0; i < 3; i++) budget.observe(completion(start + i), current);
+};
 
-test("a batch must be material and refill after publication rather than follow the same high water level", () => {
-  const scheduler = new RewriteBudget();
-  assert.equal(scheduler.admits(320000, 3000, 8000, config, model, false), false);
-  assert.equal(scheduler.admits(320000, 80000, 235000, config, model, false), true);
-  scheduler.published(80000);
-  assert.equal(scheduler.admits(240000, 40000, 200000, config, model, false), false);
-  scheduler.observe(completion(1), model, 20000);
-  assert.equal(scheduler.admits(240000, 40000, 200000, config, model, false), true);
+test("a material rewrite repays within three requests, then waits for cache reuse and useful growth", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  assert.equal(budget.admits(320000, 3000, 8000, config, model, false), false);
+  assert.equal(budget.admits(320000, 80000, 235000, config, model, false), true);
+  budget.published(320000, 80000, 235000, model);
+  budget.observe(completion(4), model, 20000);
+  for (const timestamp of [4, 5]) {
+    budget.observe(completion(timestamp), model);
+    assert.equal(budget.admits(240000, 40000, 200000, config, model, false), false);
+  }
+  budget.observe(completion(6), model);
+  assert.equal(budget.admits(240000, 40000, 200000, config, model, false), true);
 });
 
-test("old history may use bounded observed spending, but the same receipt or allowance cannot be reused", () => {
-  const scheduler = new RewriteBudget();
-  for (let i = 1; i <= 9; i++) scheduler.observe(completion(i), model);
-  const affordable = () => scheduler.admits(329000, 260000, 8000, config, model, false);
-  assert.equal(affordable(), false);
-  for (let i = 1; i <= 9; i++) scheduler.observe(completion(i), model);
-  assert.equal(affordable(), false, "replayed receipts cannot close the shortfall");
-  scheduler.observe(completion(10), model);
-  assert.equal(affordable(), true);
-  scheduler.published(260000);
-  scheduler.observe(completion(10), model);
-  scheduler.observe(completion(11), model, 100000);
-  assert.equal(affordable(), false, "publication consumes the allowance but not receipt identity");
+test("past cache spending cannot fund a rewrite that will not repay in three future requests", () => {
+  const budget = new RewriteBudget();
+  for (let i = 1; i <= 50; i++) budget.observe(completion(i), model);
+  assert.equal(budget.admits(300000, 15000, 13000, { ...config, minimumGain: 0 }, model, false), false);
+  assert.equal(budget.admits(329000, 260000, 8000, config, model, false), true,
+    "large real savings may repay a cold first request; immediate payback is not required");
+  const expensiveWrite = { ...model, cost: { ...model.cost, cacheWrite: 20 } }, writing = new RewriteBudget();
+  warm(writing, expensiveWrite);
+  assert.equal(budget.admits(100000, 30000, 65000, config, model, false), true);
+  assert.equal(writing.admits(100000, 30000, 65000, config, expensiveWrite, false), false,
+    "a listed cache-write surcharge is part of rebuilding the old suffix");
 });
 
-test("unknown, failed and mismatched usage cannot earn budget; model/lifecycle changes revoke old allowance", () => {
-  const scheduler = new RewriteBudget();
-  const admits = current => scheduler.admits(320000, 260000, 8000, config, current, false);
-  scheduler.observe({ ...completion(1, 10000000), stopReason: "aborted" }, model);
-  scheduler.observe({ ...completion(2, 10000000), model: "other" }, model);
-  scheduler.observe({ ...completion(3), usage: { cacheRead: 10000000 } }, model);
+test("only consecutive matching main requests warm cache; replay, failure, missing usage and route changes do not", () => {
+  const budget = new RewriteBudget();
+  const admits = current => budget.admits(320000, 80000, 235000, config, current, false);
+  budget.observe({ ...completion(1), provider: "other" }, model);
+  budget.observe({ ...completion(2), usage: { cacheRead: 320000 } }, model);
   assert.equal(admits(model), false);
-  scheduler.observe(completion(4, 10000000), model);
+  warm(budget, model, 3);
+  assert.equal(admits(model), true);
+  budget.observe({ ...completion(6), stopReason: "error" }, model);
+  budget.observe(completion(7), model);
+  budget.observe(completion(7), model);
+  budget.observe(completion(8), model);
+  assert.equal(admits(model), false, "replayed receipt does not complete a three-request warm interval");
+  budget.observe(completion(9), model);
+  assert.equal(admits(model), true);
+  budget.observe({ ...completion(10), usage: { ...completion(10).usage, input: 100000 } }, model);
+  assert.equal(admits(model), false, "a low hit rate restarts consecutive reuse");
+  warm(budget, model, 11);
   assert.equal(admits(model), true);
   assert.equal(admits({ ...model, baseUrl: "https://different.invalid" }), false);
-  scheduler.observe(completion(5, 10000000), model);
-  scheduler.reset();
+  budget.reset();
   assert.equal(admits(model), false);
-  assert.equal(scheduler.admits(320000, 1, 8000, config, model, true), true, "safe capacity relief is separate");
+  assert.equal(budget.admits(320000, 1, 8000, config, model, true), true, "capacity rescue is separate");
 });
 
-test("zero/unknown prices stay conservative while no-discount inputs still honor batch policy", () => {
+test("summary fees reserve before work, settle from receipts, and remain charged when attempts produce no receipt", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  const admits = fee => budget.admits(100000, 30000, 65000, config, model, false, fee);
+  assert.equal(admits(35000), true);
+  assert.equal(admits(40000), false);
+  const settle = budget.reserveFee(35000);
+  assert.equal(admits(0), true);
+  settle(50000);
+  assert.equal(admits(0), false, "reported cost, not the optimistic reservation, controls publication");
+  settle(0);
+  assert.equal(admits(0), false, "a repeated receipt cannot refund the same attempt");
+  const silent = new RewriteBudget();
+  warm(silent);
+  const late = silent.reserveFee(50000);
+  assert.equal(silent.admits(100000, 30000, 65000, config, model, false), false, "no receipt retains the reservation");
+  silent.reset();
+  late(0);
+  warm(silent);
+  assert.equal(silent.admits(100000, 30000, 65000, config, model, false), true, "a late old-route receipt does not affect a new budget");
+  budget.published(100000, 30000, 13000, model);
+  budget.observe(completion(4), model, 100000);
+  warm(budget, model, 4);
+  assert.equal(admits(0), false, "three warm requests alone do not repay a capacity rescue with large debt");
+});
+
+test("unknown prices use a 1:10 cache/input ratio, while no-discount inputs still honor batch policy", () => {
+  for (const cost of [undefined, { input: 0, cacheRead: 0 }]) {
+    const unknown = { ...model, cost }, budget = new RewriteBudget();
+    warm(budget, unknown);
+    assert.equal(budget.admits(100000, 50000, 40000, config, unknown, false), true,
+      "three cached savings cover a 9000-unit rebuild with a 1:10 relative price");
+    assert.equal(budget.admits(300000, 15000, 13000, { ...config, minimumGain: 0 }, unknown, false), false);
+  }
   const scheduler = new RewriteBudget();
   assert.equal(scheduler.admits(100000, 20000, 0, config, { ...model, cost: { input: 0, cacheRead: 0 } }, false), false);
   assert.equal(scheduler.admits(100000, 20000, 0, config, { ...model, cost: { input: 1, cacheRead: 1 } }, false), true);
   assert.equal(scheduler.admits(100000, 2000, 0, config, { ...model, cost: { input: 1, cacheRead: 1 } }, false), false);
+});
+
+test("unknown prices never turn zero SDK cost into free summaries or mix relative units with dollar receipts", () => {
+  const zero = { ...model, cost: { input: 0, output: 0, cacheRead: 0 } };
+  const auxiliary = { ...model, cost: { input: 2, output: 4, cacheRead: 0.2, cacheWrite: 2 } };
+  const receipt = { input: 100, output: 10, cacheRead: 1000, cacheWrite: 0, cost: { total: 0.123 } };
+  const known = summaryRequestCost(model, auxiliary, 1000, 100);
+  assert.equal(known.cost, 2400);
+  assert.equal(known.actual(receipt), 123000, "known currency honors the reported charge");
+  const relative = summaryRequestCost(zero, auxiliary, 1000, 100);
+  assert.equal(relative.cost, 1200);
+  assert.equal(relative.actual(receipt), 220, "unknown main price uses relative input/output units, not dollars");
+  const missing = { ...receipt, cost: { total: 0 } };
+  assert.equal(summaryRequestCost(model, zero, 1000, 100).actual(missing), 2100);
+  assert.equal(summaryRequestCost(zero, zero, 1000, 100).actual(missing), 210);
+  const publicFree = summaryRequestCost(model, { ...zero, pricing: "models.dev" }, 1000, 100);
+  assert.equal(publicFree.cost, 0, "an explicitly listed free quote differs from an unknown SDK zero");
+  assert.equal(publicFree.actual(missing), 0);
+  assert.equal(publicFree.actual({ ...receipt, cost: { total: 0.01, totalFromProvider: true } }), 10000);
 });
 
 function history(sizes, open = false) {

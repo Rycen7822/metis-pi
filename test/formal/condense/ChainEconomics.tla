@@ -2,12 +2,12 @@
 \* Chain publication cost model; structural working-set/archives are separate obligations.
 EXTENDS Integers, FiniteSets, TLC
 CONSTANTS Initial, Limit, Requests, Cadence, Gains, Growths, Stable, Retained,
-          ColdPrice, ReadPrice, Policy, ColdAt, AllowanceDivisor, KeepCredit, MinBatch, BatchDivisor
+          ColdPrice, ReadPrice, Policy, ColdAt, SummaryFee, MinBatch, BatchDivisor
 ASSUME /\ Initial > Stable /\ Stable >= 0 /\ Limit >= Initial /\ Requests > 0 /\ Cadence > 0
        /\ Gains # {} /\ Growths # {} /\ Gains \subseteq Nat /\ Growths \subseteq Nat
        /\ ColdPrice >= ReadPrice /\ ReadPrice > 0 /\ Retained >= 0 /\ ColdAt >= 0
-       /\ Policy \in {"funded","gain-only","input-credit","episodes"}
-       /\ AllowanceDivisor > 0 /\ MinBatch > 0 /\ BatchDivisor > 0
+       /\ Policy \in {"funded","gain-only","input-credit","payback","unlocked-payback"}
+       /\ SummaryFee >= 0 /\ MinBatch > 0 /\ BatchDivisor > 0
 OldSavings == {260000}
 TinySavings == {1000}
 ConstantSavings == {3000}
@@ -27,7 +27,8 @@ Init == s = [tick |-> 0, phase |-> "offer", raw |-> Initial, saved |-> 0,
   valid |-> Initial, rawValid |-> Initial, frontier |-> Stable, pending |-> 0, members |-> 0,
   cost |-> 0, baseCost |-> 0, rewrites |-> 0, lowHits |-> 0, largestBatch |-> 0,
   unfunded |-> FALSE, forced |-> 0, comparable |-> TRUE, handoff |-> FALSE,
-  credit |-> 0, earned |-> 0, spent |-> 0, growth |-> 0, totalGrowth |-> 0, lastGain |-> 0]
+  debt |-> 0, warm |-> 3, age |-> 3, early |-> FALSE, unpayable |-> FALSE,
+  growth |-> 0, totalGrowth |-> 0, lastGain |-> 0]
 \* An offer is a newly eligible closed chain; local loop indices are not provider turn counts.
 Offer == /\ s.phase = "offer" /\ s.tick < Requests
          /\ \E g \in Gains :
@@ -37,15 +38,16 @@ Offer == /\ s.phase = "offer" /\ s.tick < Requests
                 !.valid = IF s.tick+1 = ColdAt THEN 0 ELSE @,
                 !.rawValid = IF s.tick+1 = ColdAt THEN 0 ELSE @]
 Cut == Min(s.valid,s.frontier)
-\* Removed warm tokens save the read price, not the cold-input price; never pre-spend future requests.
+\* Three requests include the first cold request; removed warm tokens save the read price, not the full input price.
 Penalty == Max(0,s.valid-Cut-s.pending)*(ColdPrice-ReadPrice)
-Debit == Max(0,Penalty-s.pending*ReadPrice)
+Payable == (Penalty+SummaryFee)*10 <= 3*s.pending*ReadPrice*9
 Rearmed == s.rewrites = s.forced \/ s.growth >= Max(MinBatch,(s.lastGain+3) \div 4)
-Gate == CASE Policy = "episodes" -> /\ s.pending >= MinBatch /\ s.pending >= (s.raw-s.saved+BatchDivisor-1) \div BatchDivisor
-                                   /\ Rearmed /\ Debit*AllowanceDivisor <= s.credit
+Gate == CASE Policy \in {"payback","unlocked-payback"} ->
+               /\ s.pending >= MinBatch /\ s.pending >= (s.raw-s.saved+BatchDivisor-1) \div BatchDivisor
+               /\ Payable /\ (Policy = "unlocked-payback" \/ (Rearmed /\ s.warm = 3 /\ s.debt = 0))
           [] Policy = "gain-only" -> TRUE
-          [] Policy = "input-credit" -> s.pending*ColdPrice >= Penalty
-          [] OTHER -> s.pending*ReadPrice >= Penalty
+          [] Policy = "input-credit" -> s.pending*ColdPrice >= Penalty+SummaryFee
+          [] OTHER -> s.pending*ReadPrice >= Penalty+SummaryFee
 FitsCandidate == s.pending > 0 /\ s.pending+s.members*Retained <= s.raw-s.saved-s.frontier
 Pressure == s.raw-s.saved+MaxGrowth > Limit
 Commit == /\ s.phase = "decide" /\ FitsCandidate /\ (Pressure \/ Gate)
@@ -54,9 +56,9 @@ Commit == /\ s.phase = "decide" /\ FitsCandidate /\ (Pressure \/ Gate)
                !.rewrites = @+1, !.largestBatch = Max(@,s.members),
                !.unfunded = (@ \/ (~Pressure /\ s.pending*ReadPrice < Penalty)),
                !.forced = @+IF Pressure THEN 1 ELSE 0, !.comparable = @ /\ ~Pressure,
-               !.credit = IF KeepCredit THEN @ ELSE 0,
-               !.spent = @+IF Pressure THEN 0 ELSE Debit*AllowanceDivisor,
-               !.lastGain = s.pending, !.growth = 0]
+               !.cost = @+SummaryFee, !.debt = Penalty+SummaryFee, !.warm = 0, !.age = 0,
+               !.early = @ \/ (~Pressure /\ (s.warm < 3 \/ s.debt > 0 \/ ~Rearmed)),
+               !.unpayable = @ \/ (~Pressure /\ ~Payable), !.lastGain = s.pending, !.growth = 0]
 Defer == /\ s.phase = "decide" /\ ~(FitsCandidate /\ (Pressure \/ Gate))
          /\ s' = [s EXCEPT !.phase = "request"]
 Request == /\ s.phase = "request"
@@ -72,7 +74,8 @@ Request == /\ s.phase = "request"
                         !.cost = @+cached*ReadPrice+(input-cached)*ColdPrice,
                         !.baseCost = @+rawCached*ReadPrice+(rawNext-rawCached)*ColdPrice,
                         !.lowHits = @+IF cached*100 < input*10 THEN 1 ELSE 0,
-                        !.credit = @+cached*ReadPrice, !.earned = @+cached*ReadPrice,
+                        !.debt = Max(0,@-s.lastGain*ReadPrice), !.age = Min(3,@+1),
+                        !.warm = IF cached*100 >= input*90 THEN Min(3,@+1) ELSE 0,
                         !.growth = @+g, !.totalGrowth = @+g,
                         !.comparable = @ /\ rawNext <= Limit]
 \* A capacity rescue is outside the optional-cost claim; Native is neither free nor forbidden.
@@ -87,8 +90,10 @@ TypeOK == /\ s.tick \in 0..Requests /\ s.phase \in {"offer","decide","request","
           /\ s.cost >= 0 /\ s.baseCost >= 0 /\ s.rewrites >= s.forced
 FinalCostDominance == s.phase # "done" \/ ~s.comparable \/ s.cost <= s.baseCost
 OnlineCostDominance == ~s.comparable \/ s.cost <= s.baseCost
-OnlineAllowance == ~s.comparable \/ s.cost*AllowanceDivisor <= s.baseCost*(AllowanceDivisor+1)
-NoDoubleSpend == s.spent <= s.earned
+PaybackBound == ~s.unpayable
+StableBeforeRewrite == ~s.early
+ThreeRequestDebt == ~s.comparable \/ s.age < 3 \/ s.debt = 0
+CostDebtBound == ~s.comparable \/ s.cost <= s.baseCost+s.debt
 RefillBound == s.rewrites-s.forced <= 1+s.totalGrowth \div MinBatch
 NoUnfundedRewrite == ~s.unfunded
 NoRepeatedLowHit == s.lowHits < 2

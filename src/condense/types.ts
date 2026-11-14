@@ -1,4 +1,4 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import type { Api, Model, Usage, UserMessage } from "@earendil-works/pi-ai";
 import type { SummaryBudgetPolicy } from "./budget.ts";
 /**
  * Domain identities, policy values and durable records for condense.
@@ -380,8 +380,6 @@ export interface ChainCompressionConfig {
   minGainTokens: number;
   /** Chain-wide fractional gain floor; tool summaries retain their own local proxy gain budget. */
   minGainFraction: number;
-  /** Fraction of observed cache-read spending available for estimated extra rewrite cost; 0 means immediate payback. */
-  maxCostOverhead: number;
   /** Strip thinking blocks from the kept final text-only assistant. Default true. */
   stripFinalAssistantThinking: boolean;
   /**
@@ -735,11 +733,13 @@ export interface FlushOptions {
 
 export interface SummarizeBatchOptions {
   /** Reports a discarded result's cause without putting it in model context. */
-  onFailure?: (message: string, reason?: "input-budget" | "output-budget") => void;
+  onFailure?: (message: string, reason?: "input-budget" | "output-budget" | "economics") => void;
   /** Complete rendered-message proxy budget; not a provider maxTokens value. */
   outputBudget?: { target: number; limit: number };
   /** Validate the complete decorated candidate. A rejection never retries a fallback. */
   acceptSummary?: (text: string) => Promise<boolean>;
+  /** Reserve the estimated request cost before provider work; rejection is not a provider outage or fallback trigger. */
+  acceptRequest?: (model: Model<Api>, message: UserMessage, maxOutputTokens: number) => Promise<boolean>;
   /** Provider usage, including responses rejected by the output-budget guard. */
   onUsage?: (usage: Usage) => void;
   /** Invoked only when a provider stream is about to be requested. */

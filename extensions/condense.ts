@@ -22,8 +22,6 @@ export default function condense(pi: ExtensionAPI): void {
     }
     await runtime.start(ctx);
   });
-  pi.on("session_shutdown", (_event, ctx) => {
-    runtime?.shutdown(ctx);
-  });
+  pi.on("session_shutdown", (_event, ctx) => runtime?.shutdown(ctx));
   pi.on("session_tree", (_event, ctx) => runtime?.tree(ctx));
 }
