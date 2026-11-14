@@ -263,8 +263,9 @@ minRecentTokens = 65536
 # 自动chain须达到绝对与相对净收益；minGainTokens也作为工具批次/chain发布后的新工作增长下限。
 minGainTokens = 8192
 minGainFraction = 0.1
-# 工具摘要、packing与chain共用三次主请求回本门及10%收益余量。
-# 有缓存折扣时，发布后还须连续三次主请求≥90%缓存；未知价按缓存:普通输入=1:10估算。
+# 工具摘要、packing与chain共用冷请求＋三轮预测：双方每轮增长2000tokens、目标98%缓存。
+# 计入冷重建/摘要费后须严格更便宜，不另留10%余量；新增长不能算作已缓存。
+# 实际回执门仍为冷请求之后连续三次≥90%缓存；未知价按缓存:普通输入=1:10估算。
 # 费用/分词只是估算，不保证实际账单；缺价时SDK的零费用不代表免费。
 stripFinalAssistantThinking = true
 # 仅允许手动 now / compact 额外融合；失败或预算不足时保留机械拼接。

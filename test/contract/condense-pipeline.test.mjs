@@ -955,7 +955,7 @@ test("automatic summary admission includes request caps and charged attempts, wi
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
 });
 
-test("the final that publishes a rewrite cannot count toward its next three high-cache main requests", async t => {
+test("neither the publishing final nor the cold request counts toward the next three high-cache main requests", async t => {
   const f = await fixture(t);
   f.ctx.model.cost = { input: 2, output: 0, cacheRead: 1, cacheWrite: 0 };
   const responseUsage = { ...usage, input: 10, cacheRead: 90000 };
@@ -971,10 +971,10 @@ test("the final that publishes a rewrite cannot count toward its next three high
   const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length;
   assert.equal(summaries(), 1);
   f.add("Second useful evidence. ".repeat(1800), "inspect-second");
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     await complete();
-    assert.equal(summaries(), i < 2 ? 1 : 2,
-      "only new successful main requests, not the publishing final or summary receipt, reopen normal rewriting");
+    assert.equal(summaries(), i < 3 ? 1 : 2,
+      "cold rebuild precedes three new successful main requests; publishing finals and summary receipts are not reuse");
   }
 });
 

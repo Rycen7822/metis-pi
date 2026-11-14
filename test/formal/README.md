@@ -24,7 +24,7 @@ TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal -- AsyncReaders P
 |---|---|---|
 |PressureGrid|300K至1M每100K一档，675组profile；level/headroom、未饱和delta、native严格容量线|`src/condense/budget.ts`；Pi原生compaction|
 |OccScheduler|60/52/72%、请求内耗尽/重入、work/hold、near接管与复用次数取整|`src/condense/occ.ts`|
-|ChainEconomics|微小整理费用反例；即时回本对照、三次请求回本/摘要费、连续90%复用、增量滞回、容量救急/交接|`rewrite-policy.ts`、`runtime.ts`|
+|ChainEconomics|微小整理费用反例；冷请求＋三轮98%/2k增长预测、摘要费不提前抵扣、实际90%复用、增量滞回、容量救急/交接|`rewrite-policy.ts`、`runtime.ts`|
 |ColdBoundary|冷许可绑定请求与来源；计划/取消、上次低命中、准备后变热不能冒充当前已冷|chain经济准入的参考约束；`runtime.ts`|
 |PublicationTxn|等待前捕获；来源正文/策略/生命周期完整校验与发布原子边界；无收益延期|`src/condense/runtime.ts`|
 |RetryLifecycle|恢复/修复后的稳定ref、无重复归档；候选级负向准入缓存、手动及生成后拒绝重试|`src/condense/indexer.ts`、`runtime.ts`|
@@ -54,11 +54,15 @@ TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避
 - PressureGrid的threshold=0只刻画helper失效输入，不代表TOML的关闭值。配置关闭使用false；用量未知不授权自动付费。
   maxBudget是软门槛，不保证压缩后总上下文低于它；provider用量、proxy tokens和底账字节不能互相替代。
 - OCC的ready是瞬时布尔值，不是持久phase；取整后的剩余复用次数须至少11，不能用大于10的未取整值代替。
-- ChainEconomics的`funded`保留即时回本参考，`gain-only`保留体积下降却更贵的反例；产品使用`payback`三次主请求回本估算。
-  每次改写计入摘要费、留10%收益余量，之后还须债务估算清零、连续三次90%缓存和有效增长；旁路复用期会击穿StableBeforeRewrite。
-  三次包括第一次冷请求，不承诺提前结束时已经回本；CostDebtBound约束未回本代价。模型从已知热缓存开始，冷启动预热/错误usage由TS用例覆盖。
+- ChainEconomics的`funded`保留即时回本参考，`gain-only`保留体积下降却更贵的反例；产品使用`payback`冷请求＋三轮费用比较。
+  两侧后续同增2k/4k/6ktokens、目标98%缓存，缓存量不超过上一轮长度；包含冷重建/摘要费，严格更便宜才放行，不另留10%余量。
+  摘要费在提交时立即入账；预计冷请求盈利只能在该请求发生后抵扣，且首冷请求不同时抵扣暖请求收益或参与三次复用。
+  之后仍须债务清零、连续三次90%实际命中和有效增长；旁路复用期会击穿StableBeforeRewrite。
+  精确2k/98%profile检查ColdAndThreeRequestDebt及真正放行；变动增长保留CostDebtBound，不宣称任意增长四次必回本。
+  模型冷请求作为无额外增长的单独步骤，后面三轮才增加2k；不承诺提前结束时回本。冷启动预热/错误usage另由TS用例覆盖。
   大旧链在同一场景检查成本/债务安全与弱公平下最终放行，不能靠始终拒绝压缩来通过。
-  两组从相同热缓存开始、支付相同新增工作，按符号token与固定读/冷价记账；不验证实际工作分类、价格可信度和投影估算误差。
+  两组从相同缓存状态开始、支付相同新增工作，按符号token与固定读/冷价记账；费用放大100倍，均价还款向下量化，保守避免TLC整数溢出。
+  不验证实际工作分类、价格可信度、投影估算误差或实机账单；这些profile不是对任意服务端缓存行为的证明。
   模型minGain与fraction通过整数参数缩放；产品另取Pi/proxy较小收益，只用共享消息对象前缀作保守估计，不声明provider精确账单。
   真正容量救急及原对照超出容量后不承诺费用不增；Native交接不建模其账单。1M输入配置用1.5M抽象容量隔离经济问题。
   不验证provider分词、写缓存费用、过期/路由或真实延迟；不把低cache百分比直接等同账单上涨。

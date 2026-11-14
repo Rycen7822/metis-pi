@@ -15,28 +15,55 @@ const warm = (budget, current = model, start = 1) => {
   for (let i = 0; i < 3; i++) budget.observe(completion(start + i), current);
 };
 
-test("a material rewrite repays within three requests, then waits for cache reuse and useful growth", () => {
+test("a material rewrite separates the cold receipt from three warm requests and useful growth", () => {
   const budget = new RewriteBudget();
   warm(budget);
   assert.equal(budget.admits(320000, 3000, 8000, config, model, false), false);
   assert.equal(budget.admits(320000, 80000, 235000, config, model, false), true);
   budget.published(320000, 80000, 235000, model);
   budget.observe(completion(4), model, 20000);
-  for (const timestamp of [4, 5]) {
+  for (const timestamp of [4, 5, 6]) {
     budget.observe(completion(timestamp), model);
     assert.equal(budget.admits(240000, 40000, 200000, config, model, false), false);
   }
-  budget.observe(completion(6), model);
+  budget.observe(completion(7), model);
   assert.equal(budget.admits(240000, 40000, 200000, config, model, false), true);
 });
 
-test("past cache spending cannot fund a rewrite that will not repay in three future requests", () => {
+test("growing 98% forecasts include the cold request, do not cache fresh growth, and require strictly lower total cost", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  // Cold: original354000, shortened1000000. Warm requests add2k/4k/6k on BOTH paths:
+  // original costs356360/358720/361080; shortened120360/122720/125080. Total saving62000.
+  assert.equal(budget.admits(300000, 200000, 0, config, model, false, 61999), true);
+  assert.equal(budget.admits(300000, 200000, 0, config, model, false, 62000), false, "equal cost is not cheaper");
+  // After70k, fresh2k cannot already be cached: warm costs90000/92000/94000, not a fictional98% hit.
+  // Original total486160; shortened total391000, including cold. No extra10% margin is imposed.
+  assert.equal(budget.admits(100000, 30000, 65000, config, model, false, 95159), true);
+  assert.equal(budget.admits(100000, 30000, 65000, config, model, false, 95160), false);
+});
+
+test("cold cost is not repaid twice and actual 98% receipts repay the matching forecast", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  assert.equal(budget.admits(300000, 200000, 0, config, model, false), true);
+  budget.published(300000, 200000, 0, model);
+  budget.observe(completion(4), model, 50000);
+  budget.observe({ ...completion(4, 0), usage: { input: 100000, cacheRead: 0, cacheWrite: 0 } }, model);
+  for (let i = 1; i <= 3; i++) {
+    const input = 100000 + i * 2000;
+    budget.observe({ ...completion(4 + i), usage: { input: input * 0.02, cacheRead: input * 0.98, cacheWrite: 0 } }, model);
+    assert.equal(budget.admits(100000, 20000, 80000, config, model, false), i === 3);
+  }
+});
+
+test("past cache spending cannot fund a rewrite that will not repay after cold rebuild and three future requests", () => {
   const budget = new RewriteBudget();
   for (let i = 1; i <= 50; i++) budget.observe(completion(i), model);
   assert.equal(budget.admits(300000, 15000, 13000, { ...config, minimumGain: 0 }, model, false), false);
   assert.equal(budget.admits(329000, 260000, 8000, config, model, false), true,
     "large real savings may repay a cold first request; immediate payback is not required");
-  const expensiveWrite = { ...model, cost: { ...model.cost, cacheWrite: 20 } }, writing = new RewriteBudget();
+  const expensiveWrite = { ...model, cost: { ...model.cost, cacheWrite: 50 } }, writing = new RewriteBudget();
   warm(writing, expensiveWrite);
   assert.equal(budget.admits(100000, 30000, 65000, config, model, false), true);
   assert.equal(writing.admits(100000, 30000, 65000, config, expensiveWrite, false), false,
@@ -72,22 +99,30 @@ test("summary fees reserve before work, settle from receipts, and remain charged
   const budget = new RewriteBudget();
   warm(budget);
   const admits = fee => budget.admits(100000, 30000, 65000, config, model, false, fee);
-  assert.equal(admits(35000), true);
-  assert.equal(admits(40000), false);
-  const settle = budget.reserveFee(35000);
+  assert.equal(admits(95000), true);
+  assert.equal(admits(96000), false);
+  const settle = budget.reserveFee(95000);
   assert.equal(admits(0), true);
-  settle(50000);
+  settle(100000);
   assert.equal(admits(0), false, "reported cost, not the optimistic reservation, controls publication");
   settle(0);
   assert.equal(admits(0), false, "a repeated receipt cannot refund the same attempt");
   const silent = new RewriteBudget();
   warm(silent);
-  const late = silent.reserveFee(50000);
+  const late = silent.reserveFee(100000);
   assert.equal(silent.admits(100000, 30000, 65000, config, model, false), false, "no receipt retains the reservation");
   silent.reset();
   late(0);
   warm(silent);
   assert.equal(silent.admits(100000, 30000, 65000, config, model, false), true, "a late old-route receipt does not affect a new budget");
+  const fullPrice = { ...model, cost: { input: 1, cacheRead: 1 } }, cash = new RewriteBudget();
+  assert.equal(cash.admits(100000, 30000, 65000, config, fullPrice, false, 1000), true);
+  cash.reserveFee(1000);
+  cash.published(100000, 30000, 65000, fullPrice);
+  cash.observe(completion(1), fullPrice, 10000);
+  assert.equal(cash.waitingForWork(config), true, "forecast cold savings cannot refund spent fees before the main receipt");
+  cash.observe(completion(1), fullPrice);
+  assert.equal(cash.waitingForWork(config), false, "only the real cold receipt settles its forecast savings");
   budget.published(100000, 30000, 13000, model);
   budget.observe(completion(4), model, 100000);
   warm(budget, model, 4);
@@ -99,7 +134,7 @@ test("unknown prices use a 1:10 cache/input ratio, while no-discount inputs stil
     const unknown = { ...model, cost }, budget = new RewriteBudget();
     warm(budget, unknown);
     assert.equal(budget.admits(100000, 50000, 40000, config, unknown, false), true,
-      "three cached savings cover a 9000-unit rebuild with a 1:10 relative price");
+      "unknown quotes use the same cold-plus-three growing forecast in 1:10 relative units");
     assert.equal(budget.admits(300000, 15000, 13000, { ...config, minimumGain: 0 }, unknown, false), false);
   }
   const scheduler = new RewriteBudget();
@@ -171,7 +206,7 @@ test("one flush groups admitted chunks, then batch and chain share the same refi
   frame.finish();
   assert.equal(budget.ready(10000, 5000, config, false), false, "another rewrite cannot reuse that growth");
   budget.observe(completion(1), fullPrice, 1000);
-  assert.equal(budget.ready(10000, 5000, config, false), true);
+  assert.equal(budget.ready(10000, 5000, config, false), true, "no-discount inputs do not acquire a cache-only wait");
 });
 
 test("recent small closed tasks fit the reference budget without pinning a large old task", () => {
