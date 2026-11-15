@@ -70,7 +70,9 @@ import {
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
 import { detectChains, withClosingMessage } from "./chain-detector.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
-import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction, summaryBudget } from "./budget.ts";
+import {
+  shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction, summaryBudget, shouldDeferToNative,
+} from "./budget.ts";
 import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./spill.ts";
 import { bareToolCallId, occKey } from "./occurrence-key.ts";
 import { DiagnosticSink } from "./diagnostics.ts";
@@ -492,6 +494,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       && tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
   };
   const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number, candidateTokens?: number) => {
+    if (deferToNative(ctx, undefined, counts.piBefore)) return false;
     const config = currentConfig.value.chainCompression;
     const independent = candidateTokens === undefined ? undefined : independentChainPolicy(config, candidateTokens);
     if (candidateTokens !== undefined && !independent) return false;
@@ -596,15 +599,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     return usage;
   };
-  // Native pressure never authorizes consuming historical pending work, even above the native threshold.
-  const pendingBelongsToNative = (ctx: ExtensionContext, closingMessage?: any, estimated = 0) => {
+  // Preserve the prefix once natural growth is close to Pi's own compaction boundary.
+  const deferToNative = (ctx: ExtensionContext, closingMessage?: any, estimated = 0) => {
     const capacity = occ.nativeCapacity(ctx);
     if (capacity === undefined) return false;
-    const tokens = Math.max(estimated, pressureUsage(ctx, closingMessage)?.tokens ?? 0);
-    return tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
+    return shouldDeferToNative(Math.max(estimated, pressureUsage(ctx, closingMessage)?.tokens ?? 0), capacity);
   };
   const nativePendingStatus = (ctx: ExtensionContext) =>
-    updatePruneStatus(ctx, "Pending raw evidence retained — waiting for Pi native capacity compaction");
+    updatePruneStatus(ctx, "Automatic pruning paused at ≥90% of Pi's compaction threshold — raw evidence retained");
   const paidPressure = (ctx: ExtensionContext, closingMessage?: any) => shouldBudgetFlush(
     pressureUsage(ctx, closingMessage), currentConfig.value.autoBudgetThreshold,
     occ.nativeCapacity(ctx), currentConfig.value.summaryBudget,
@@ -713,12 +715,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const trigger: FlushTrigger = options.trigger ?? "manual";
     const closedKeys = options.closedKeys;
     if (trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "deferred-occ" };
-    if (trigger !== "manual" && pendingBelongsToNative(ctx, options.closingMessage)) {
+    if (trigger !== "manual" && deferToNative(ctx, options.closingMessage)) {
       nativePendingStatus(ctx);
       return { ok: false, reason: "deferred-native" };
     }
     const assertPendingOwnership = (estimated = 0) => {
-      if (trigger !== "manual" && pendingBelongsToNative(ctx, options.closingMessage, estimated)) throw new NativePendingDeferral();
+      if (trigger !== "manual" && deferToNative(ctx, options.closingMessage, estimated)) throw new NativePendingDeferral();
     };
     const version = lifecycle;
     const abort = new AbortController();
@@ -1865,8 +1867,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           assertCurrent(version);
           if (!currentConfig.value.enabled) return;
           let beforeRewrite = 0;
-          const deferred = occ.deferLocal(ctx);
-          if (occ.isCapacityWaiting()) {
+          const nativeDeferred = deferToNative(ctx);
+          const deferred = occ.deferLocal(ctx) || nativeDeferred;
+          if (nativeDeferred || occ.isCapacityWaiting()) {
             for (const call of capturedBatch.toolCalls) {
               if (!call.outputArchive || indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))) continue;
               const archive = { sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
@@ -1888,6 +1891,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             appendEntry: appendArchive,
             beforeIndex: () => {
               assertCurrent(version);
+              if (deferToNative(ctx)) throw new NativePendingDeferral();
               beforeRewrite = occ.measure(ctx);
             },
           });
@@ -1945,6 +1949,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
     const n = pendingBatches.length;
     if ((n > 0 || rearmedPending) && !isFlushing && (budgetHit || deltaHit || gapHit)) {
+      if (deferToNative(ctx)) { nativePendingStatus(ctx); return; }
       const reason = budgetHit ? "context budget reached" : deltaHit ? "context jumped this turn" : "un-pruned tail exceeded frontier gap threshold";
       // This is an evaluation hint, not a receipt for an actual rewrite.
       // Non-TUI keeps the existing notice even when its status line is off.
@@ -2264,8 +2269,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       (mode === "automatic" && occ.isRunning())
     )
       return Promise.resolve();
-    // With no published shared view to restore, capacity waiting needs no source read at all.
-    if (occ.isCapacityWaiting() && !indexer.getChainEntries().some(isSharedChain)) return Promise.resolve();
+    // New-work admission never disables restoration of an already published view.
+    if ((occ.isCapacityWaiting() || deferToNative(ctx)) && !indexer.getChainEntries().some(isSharedChain))
+      return Promise.resolve();
     const version = lifecycle;
     const controller = new AbortController();
     maintenanceAbort = controller;
@@ -2290,7 +2296,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     };
     const assertNewWork = () => {
       assertValid();
-      if (occ.isCapacityWaiting()) throw new Error("Chain maintenance waiting for capacity");
+      if (occ.isCapacityWaiting() || deferToNative(ctx)) throw new Error("Chain maintenance waiting for Native compaction");
     };
     maintenanceTask = (async () => {
       if (ctx.mode === "tui") {
@@ -2354,7 +2360,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (mode === "validate") return;
       // Capacity admission and the automatic switch govern new work only;
       // existing views above still obey source, lifecycle and Native ownership.
-      if (occ.isCapacityWaiting() || !currentConfig.value.chainCompression.enabled) {
+      if (occ.isCapacityWaiting() || deferToNative(ctx) || !currentConfig.value.chainCompression.enabled) {
         lastMaintenanceSource = undefined;
         return;
       }
@@ -2379,6 +2385,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const prefixTokens = [0];
       for (const message of before) prefixTokens.push(prefixTokens[prefixTokens.length - 1] + estimateTokens(message));
       const beforeTokens = prefixTokens[prefixTokens.length - 1];
+      if (deferToNative(ctx, undefined, beforeTokens)) return;
       const chainConfig = currentConfig.value.chainCompression;
       const emergency = chainEmergency(ctx, beforeTokens);
       const resolve = createRangeResolver(before);

@@ -22,8 +22,8 @@ A(t,w,d,p) == [P(t,w,100000+w*1000,d,p) EXCEPT !.window = Window, !.reserve = Re
 WindowScenario == <<A(CeilPct(60)-1,4,FALSE,"normal"), A(CeilPct(60),4,TRUE,"waiting"),
  A(CeilPct(72)-1,5,TRUE,"waiting"), A(CeilPct(72),5,TRUE,"ready"),
  A(CeilPct(52)-1,5,FALSE,"normal"), A(CeilPct(60),6,FALSE,"normal"),
- A(CeilPct(72),6,TRUE,"ready"), A(CeilPct(95)-1,6,TRUE,"ready"),
- A(CeilPct(95),6,FALSE,"normal"), A(Limit,6,FALSE,"normal"), A(Limit+1,6,TRUE,"normal"),
+ A(CeilPct(72),6,TRUE,"ready"), A(CeilPct(90)-1,6,TRUE,"ready"),
+ A(CeilPct(90),6,FALSE,"normal"), A(Limit,6,FALSE,"normal"), A(Limit+1,6,TRUE,"normal"),
  [A(CeilPct(60),7,TRUE,"waiting") EXCEPT !.newRequest = TRUE]>>
 VARIABLES state, index, wrong, wait, ready
 vars == <<state,index,wrong,wait,ready>>
@@ -41,7 +41,7 @@ Decision(s,p) ==
      held == initial.phase = "hold" /\ (p.work-initial.atWork < 4
        \/ (p.chars-initial.atChars)*100 < Max(500000,15*initial.atChars))
      base == IF initial.phase = "hold" /\ ~held THEN [initial EXCEPT !.phase = "normal"] ELSE initial
-     isNear == capKnown /\ p.known /\ (limit-p.tokens)*100 <= Max(102400,5*limit)
+     isNear == capKnown /\ p.known /\ p.tokens*10 >= 9*limit
      unavailable == ~p.known \/ ~p.capability \/ p.observations < 3
      economic == limit-p.tokens >= 11*p.growth
      enter == IF base.phase = "normal" /\ p.tokens*100 >= (IF base.exhausted THEN 72 ELSE 60)*denom /\ ~p.spent

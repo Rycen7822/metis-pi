@@ -1117,8 +1117,8 @@ test("real overflow after local condense bypasses stale-threshold deferral", asy
 });
 
 for (const goal of [false, true])
-  test(`capacity buffer skips ready OCC without spending its quota or stalling goal; goal=${goal}`, async (t) => {
-    const h = await host(t, { auto: true, goal, onWork: () => ({ usage: pressureUsage(95000) }) });
+  test(`90% Native handoff skips ready OCC without spending its quota or stalling goal; goal=${goal}`, async (t) => {
+    const h = await host(t, { auto: true, goal, onWork: () => ({ usage: pressureUsage(89550 - usage.output) }) });
     await h.session.prompt("Continue bounded work.");
     await h.session.waitForIdle();
     assert.equal(h.calls.filter((c) => c.summarizing).length, 0);
@@ -1175,7 +1175,7 @@ test("native capacity uses strict greater-than after reload, including the exact
   assert.equal(!!state().capacityWaiting, false);
   await h.session.prompt("Third.");
   await h.session.waitForIdle();
-  assert.equal(!!state().capacityWaiting, false, "the exact threshold remains eligible for local pruning");
+  assert.equal(!!state().capacityWaiting, false, "the exact threshold does not claim hard-capacity takeover");
   assert.equal(state().spentRequest, undefined);
   assert.equal(h.calls.filter((c) => c.summarizing).length, 0);
 });
@@ -1227,47 +1227,32 @@ test("disabled auto-compaction does not impose its near-capacity exclusion on OC
   assert.equal(h.calls.filter((c) => c.summarizing).length, 1);
 });
 
-test("OCC rejects before generation when the whole retained context lacks two buffers of headroom", async (t) => {
-  const h = await host(t, {
-    auto: true,
-    onWork: () => ({ usage: pressureUsage(93000) }),
-    beforeLoad(sm) {
-      sm.getBranch().find((e) => e.type === "message" && e.message.role === "toolResult").message.content[0].text =
-        "data".repeat(1500);
-    },
+test("OCC retains two buffers before and after generation below the Native handoff", async t => {
+  // Small windows exercise the 1024-token buffer floor without entering the 90% pause.
+  for (const scenario of [
+    { source: "data".repeat(1000), summary: "Short summary.", calls: 0, reason: "insufficient-capacity-headroom" },
+    { source: "sourcebody".repeat(1000), summary: "S".repeat(6000), calls: 1, reason: "insufficient-actual-headroom" },
+  ]) await t.test(scenario.reason, async t => {
+    const h = await host(t, {
+      auto: true, summary: scenario.summary,
+      onWork: () => ({ usage: pressureUsage(8350) }),
+      beforeLoad(sm, model) {
+        model.contextWindow = 10000;
+        for (const entry of sm.getBranch()) {
+          if (entry.type === "message" && entry.message.role === "assistant") entry.message.usage = pressureUsage(8350);
+        }
+        sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = scenario.source;
+        // Keep estimated reuse available so the test isolates headroom, not the cost gate.
+        sm.getBranch().findLast(e => e.customType === "metis-occ-state").data.recentGrowth = [10, 10, 10, 10];
+      },
+    });
+    await h.session.prompt("Continue.");
+    await h.session.waitForIdle();
+    assert.deepEqual(compactionReasons(h), ["manual"]);
+    assert.equal(h.calls.filter(c => c.summarizing).length, scenario.calls);
+    assert.equal(compactions(h).length, 0);
+    assert.equal(h.sm.getBranch().findLast(e => e.customType === "metis-occ-decision").data.reason, scenario.reason);
   });
-  await h.session.prompt("Continue.");
-  await h.session.waitForIdle();
-  assert.deepEqual(compactionReasons(h), ["manual"]);
-  assert.equal(h.calls.filter((c) => c.summarizing).length, 0);
-  assert.equal(compactions(h).length, 0);
-});
-
-test("OCC rechecks whole-context headroom after generating the candidate", async (t) => {
-  // Pi retains the system/tool table: counting it as freed history admits this candidate.
-  const h = await host(t, {
-    auto: true,
-    summary: "S".repeat(32000),
-    onWork: () => ({ usage: pressureUsage(94000) }),
-    beforeLoad(sm) {
-      sm.getBranch().find((e) => e.type === "message" && e.message.role === "toolResult").message.content[0].text =
-        "sourcebody".repeat(5000);
-    },
-  });
-  await h.session.prompt("Continue.");
-  await h.session.waitForIdle();
-  assert.equal(h.calls.filter((c) => c.summarizing).length, 1);
-  assert.equal(
-    compactions(h).length,
-    0,
-    JSON.stringify(
-      compactions(h).map((c) => ({
-        before: c.tokensBefore,
-        summary: c.summary.length,
-        protected: c.details.metisOcc.protectedChars,
-      })),
-    ),
-  );
 });
 
 test("successive native compactions flatten protected sources and retain exact historical entry recall", async (t) => {

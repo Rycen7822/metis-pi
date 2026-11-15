@@ -281,7 +281,9 @@ async function fixture(
 }
 
 test("no-op completions skip history while real spills retain capacity accounting with OCC off", async t => {
-  const f = await fixture(t, { spillThreshold: 1000, spillPreviewBytes: 64, recoveryGraceTurns: 0, occ: false });
+  const f = await fixture(t, { spillThreshold: 1000, spillPreviewBytes: 64, recoveryGraceTurns: 0, occ: false, capacity: true });
+  let tokens = 80000;
+  f.ctx.getContextUsage = () => ({ tokens, contextWindow: 100000 });
   const sizes = [];
   f.events.on(METIS_EVENTS.condenseProject, request => { sizes.push(JSON.stringify(request.messages).length); });
   const small = f.add("small retained result", "unrecognized-command", "no-spill");
@@ -291,6 +293,12 @@ test("no-op completions skip history while real spills retain capacity accountin
   await f.emit("turn_end", { message: large.assistant, toolResults: [large.result], turnIndex: 1 });
   assert.ok(sizes.length >= 2, "native stale-capacity accounting still measures both sides of a rewrite");
   assert.ok(sizes[0] > sizes.at(-1), "measurement observes the original result before its indexed stub");
+  tokens = 89550; // 90% of Pi's 100000 - 500 effective threshold, even with OCC disabled.
+  const retained = f.add("NATIVE_PENDING_" + "y".repeat(2000), "unrecognized-command", "native-spill");
+  const expected = structuredClone(retained.result);
+  await f.emit("turn_end", { message: retained.assistant, toolResults: [retained.result], turnIndex: 2 });
+  const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+  assert.deepEqual(projected.find(m => m.toolCallId === retained.id), expected);
   assert.equal(f.calls.length, 0);
 });
 
@@ -602,12 +610,13 @@ test("independent selection and shared fallback keep distinct admission contract
 
 test("pending publication yields to Native pressure even after generation and remains manually recoverable", async t => {
   const f = await fixture(t, { pruneOn: "on-demand", capacity: true, defer: true });
-  let tokens = 75000;
+  f.ctx.model.contextWindow = 1000000;
+  let tokens = 750000;
   f.ctx.getContextUsage = () => ({ tokens, contextWindow: f.ctx.model.contextWindow });
   const call = f.add("semantic source ".repeat(2000), "unknown-command");
   const pending = f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
   await waitForSummarizer(f);
-  tokens = 96000;
+  tokens = 899550; // 90% of the effective 999500-token Native threshold.
   f.release();
   await pending;
   const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
@@ -1964,6 +1973,7 @@ test("Native completion, cancellation and failure preserve published views befor
     await t.test(`${occ ? "OCC" : "Native"} ${outcome}`, async t => {
       const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", occ, capacity: occ,
         chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+      f.ctx.getContextUsage = () => ({ tokens: 80000, contextWindow: 100000 });
       f.sm.appendCustomMessageEntry("legacy-prefix", "Legacy context", false);
       addClosedChains(f);
       await f.emit("agent_settled"); await f.waitMaintenance();
@@ -2025,17 +2035,15 @@ test("Native window changes validate surviving members without publishing newly 
   assert.equal(f.calls.length, 0);
 });
 
-test("capacity waiting restores published shared views without admitting new chains", async t => {
+test("Native handoff restores published shared views without admitting new chains", async t => {
   const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", occ: true, capacity: true,
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  let tokens = 80000;
+  f.ctx.getContextUsage = () => ({ tokens, contextWindow: 100000 });
   addClosedChains(f);
   await f.emit("agent_settled"); await f.waitMaintenance();
   const blocks = () => f.sm.getBranchMetadata().filter(e => e.customType === "context-prune-chain");
   assert.equal(blocks().length, 1);
-  f.ctx.getContextUsage = () => ({ tokens: 100001, contextWindow: 100000 });
-  await f.finish(false);
-  const waiting = () => f.sm.getBranch().findLast(e => e.customType === "metis-occ-state").data.capacityWaiting;
-  assert.equal(waiting(), true, "actual boundary usage must persist the capacity hold");
   addClosedChains(f); // Fresh eligible work must remain deferred, not piggyback on local revalidation.
   const project = () => {
     const request = { sessionId: f.sm.getSessionId(), messages: f.sm.buildSessionProjection().messages,
@@ -2043,14 +2051,20 @@ test("capacity waiting restores published shared views without admitting new cha
     f.events.emit(METIS_EVENTS.condenseProject, request);
     return request.messages;
   };
-  const before = project();
-  assert.equal(before.filter(m => m.metisDerived?.kind === "condense-chain").length, 1);
-  for (const boundary of ["session_start", "session_tree"]) {
-    await f.emit(boundary);
-    await f.emit("agent_settled"); await f.waitMaintenance();
-    assert.deepEqual(project(), before, "published rendering is independent of capacity admission");
-    assert.equal(waiting(), true, "restoring a published view must not erase a real capacity hold");
-    assert.equal(blocks().length, 1, "capacity still blocks new chain publication");
+  assert.equal(project().filter(m => m.metisDerived?.kind === "condense-chain").length, 1);
+  for (const level of [89550, 100001]) {
+    tokens = level;
+    await f.finish(false);
+    const before = project();
+    const waiting = () => !!f.sm.getBranch().findLast(e => e.customType === "metis-occ-state").data.capacityWaiting;
+    assert.equal(waiting(), tokens > 99500, "soft handoff must not claim hard-capacity takeover");
+    for (const boundary of ["session_start", "session_tree"]) {
+      await f.emit(boundary);
+      await f.emit("agent_settled"); await f.waitMaintenance();
+      assert.deepEqual(project(), before, "published rendering is independent of capacity admission");
+      assert.equal(waiting(), tokens > 99500, "restoring a view must preserve the actual capacity state");
+      assert.equal(blocks().length, 1, "Native handoff still blocks new chain publication");
+    }
   }
   assert.equal(f.calls.length, 0, "existing shared validation does not request another model summary");
 });

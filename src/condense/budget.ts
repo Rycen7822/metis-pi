@@ -25,6 +25,11 @@ export function summaryBudget(before: number, fixed: number, calls: number, poli
   };
 }
 
+/** Automatic rewrites yield at 90% of Pi's effective compaction threshold, not its physical window. */
+export function shouldDeferToNative(tokens: number, nativeCapacity: number | undefined): boolean {
+  return nativeCapacity !== undefined && Number.isFinite(tokens) && tokens >= nativeCapacity * 0.9;
+}
+
 /**
  * True iff a budget-triggered flush should fire: at `threshold` of the model's
  * window, MAX_BUDGET_WINDOW, or resolved native capacity minus growth headroom.

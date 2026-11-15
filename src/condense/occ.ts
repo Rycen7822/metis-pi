@@ -9,6 +9,7 @@ import {
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
+import { shouldDeferToNative } from "./budget.ts";
 import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 import { customEntries } from "./custom-entries.ts";
 import { createCompactionOutputLimiter } from "./output-limit.ts";
@@ -149,9 +150,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (state.work - state.atWork < HOLD_WORK || size - state.atChars < Math.max(5000, state.atChars * 0.15)) return true;
       state.phase = "normal";
     }
-    // Near native capacity, avoid an economic model call while still allowing
-    // local pruning to create headroom. Pi takes over only above its limit.
-    if (budget && tokens != null && Number.isFinite(tokens) && budget.limit - tokens <= budget.buffer) {
+    // Soft handoff stops new rewrites, not goal continuation. Pi still takes
+    // hard-capacity ownership only above its actual limit.
+    if (tokens != null && shouldDeferToNative(tokens, budget?.limit)) {
       ready = false;
       if (state.phase === "waiting") { state.phase = "normal"; persist(); }
       return false;
@@ -318,24 +319,26 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       };
       if (upperAfter >= before * 0.75) return reject("protected-content-too-large");
       const budget = running ? capacity(ctx, p.settings) : undefined;
-      const wholeTokens = estimatedTokens(visible(ctx).messages);
+      const currentTokens = Math.max(estimatedTokens(visible(ctx).messages), p.tokensBefore);
+      const nativeHandoff = () => running && shouldDeferToNative(
+        Math.max(currentTokens, ctx.getContextUsage()?.tokens ?? 0), capacity(ctx)?.limit,
+      );
       // Pi carries the current system message (including tool schemas) across
       // compaction. Do not credit it as removed history even when it falls
       // before the cut; conservatively retain older system deltas as well.
       const removedTokens = estimatedTokens(request.messages.filter(m => m.role !== "system"));
-      const retainedTokens = Math.max(p.tokensBefore, wholeTokens) - removedTokens;
+      const retainedTokens = currentTokens - removedTokens;
       metrics.retainedTokens = retainedTokens;
       const fits = (summaryTokens: number) => !budget
         || budget.limit - (retainedTokens + summaryTokens + 128) >= 2 * budget.buffer;
-      if (budget && (budget.limit - p.tokensBefore <= budget.buffer
-        || !fits(Math.ceil(protection.length / 4) + summaryOutput))) return reject("insufficient-capacity-headroom");
+      if (nativeHandoff() || !fits(Math.ceil(protection.length / 4) + summaryOutput))
+        return reject("insufficient-capacity-headroom");
       if (running) {
         const saved = (before - upperAfter) / 4;
         const summaryCost = before / 4 * COST_RATIO.input + summaryOutput * COST_RATIO.output;
         const coldPrefixCost = (upperAfter + JSON.stringify(kept).length) / 4 * (COST_RATIO.input - COST_RATIO.cacheRead);
         const growth = Math.max(0, ...(state.recentGrowth ?? []).filter(n => Number.isFinite(n) && n > 0));
         const limit = ctx.model.contextWindow - p.settings.reserveTokens;
-        const currentTokens = Math.max(p.tokensBefore, wholeTokens);
         const reusableRequests = growth > 0 ? Math.max(0, Math.floor((limit - currentTokens) / growth)) : 0;
         const breakEvenRequests = (summaryCost + coldPrefixCost) / (saved * COST_RATIO.cacheRead);
         metrics.economics = { weights: COST_RATIO, growthTokens: growth, reusableRequests, breakEvenRequests,
@@ -365,6 +368,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
       if (version !== lifecycle || event.signal.aborted) return reject("cancelled-or-source-changed");
       if (!auth.ok) return reject("authentication-unavailable");
+      if (nativeHandoff()) return reject("native-handoff");
       const model = auth.baseUrl ? { ...ctx.model, baseUrl: auth.baseUrl } : ctx.model;
       const result = await compact({ ...p, messagesToSummarize: modelMessages, turnPrefixMessages: [],
         isSplitTurn: false, previousSummary: undefined }, model, auth.apiKey, undefined,
@@ -378,6 +382,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
           + result.usage.output * COST_RATIO.output;
       }
       if (version !== lifecycle || event.signal.aborted || signature(ctx) !== source) return reject("cancelled-or-source-changed");
+      if (nativeHandoff()) return reject("native-handoff");
       const summary = `[Program-retained sources]\n${protection}\n[Derived summary; non-authoritative]\n${result.summary}`;
       metrics.afterChars = summary.length;
       if (!result.summary.trim() || summary.length >= before * 0.8) return reject("insufficient-actual-savings");
