@@ -58,6 +58,66 @@ test("cold cost is not repaid twice and actual 98% receipts repay the matching f
   }
 });
 
+test("opaque requests use their full input and budget a cold rebuild even with an unchanged local prefix", () => {
+  const quote = { ...model, cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } }, budget = new RewriteBudget();
+  warm(budget, quote);
+  const policy = boundedRewritePolicy(config, 24000);
+  assert.equal(budget.admits(130000, 20000, 72000, policy, quote, false), true, "visible-only reference");
+  assert.equal(budget.admits(130000, 20000, 72000, policy, quote, false, 0,
+    { tokens: 190000, opaque: true }), false, "hidden input and cold-cache risk belong to the same forecast");
+  assert.equal(budget.admits(130000, 20000, 72000, policy, quote, false, 0,
+    { tokens: null, opaque: true }), false, "a checkpoint without post-compaction usage has no complete cost basis");
+});
+
+test("both forecast paths apply their own context tier while opaque cold costs remain funded", () => {
+  const base = { input: 2, cacheRead: 0.1, cacheWrite: 2.5 }, high = { input: 4, cacheRead: 0.2, cacheWrite: 5 };
+  const flat = { ...model, cost: base }, tiered = { ...flat, priceTiers: [{ after: 0, cost: base }, { after: 272000, cost: high }] };
+  const policy = boundedRewritePolicy(config, 48000), context = { tokens: 230000, opaque: true };
+  const budget = new RewriteBudget();
+  warm(budget, flat);
+  assert.equal(budget.admits(130000, 30000, 60000, policy, flat, false, 0, context), false);
+  warm(budget, tiered, 4);
+  assert.equal(budget.admits(130000, 30000, 60000, policy, tiered, false, 0, context), true,
+    "only the uncompressed path crosses 272k within the 32-request horizon");
+});
+
+test("an unexpectedly cold first receipt adds its actual loss before three warm requests can fund another rewrite", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  budget.published(320000, 80000, 235000, model);
+  budget.observe({ ...completion(4, 0), usage: { input: 240000, cacheRead: 0, cacheWrite: 0 } }, model);
+  budget.observe(completion(4), model, 100000);
+  warm(budget, model, 5);
+  assert.equal(budget.admits(240000, 80000, 155000, config, model, false), false,
+    "restored cache hits do not erase the first request's unpredicted cost");
+});
+
+test("a missing first usage retains its cold reserve instead of refunding it from a later warm request", () => {
+  for (const stopReason of ["stop", "error"]) {
+    const budget = new RewriteBudget();
+    warm(budget);
+    budget.published(320000, 80000, 235000, model);
+    budget.observe({ ...completion(4), usage: undefined, stopReason }, model);
+    budget.observe(completion(4), model, 100000);
+    for (let timestamp = 5; timestamp <= 8; timestamp++) budget.observe(completion(timestamp, 240000), model);
+    assert.equal(budget.waitingForWork(config), true, "missing usage keeps a full cold reserve after cache recovers");
+  }
+});
+
+test("moving into a quoted tier preserves outstanding cold debt and useful work", () => {
+  const base = { input: 2, cacheRead: 0.1, cacheWrite: 2.5 }, high = { input: 4, cacheRead: 0.2, cacheWrite: 5 };
+  const tiers = [{ after: 0, cost: base }, { after: 120000, cost: high }];
+  const low = { ...model, cost: base, priceTiers: tiers }, next = { ...model, cost: high, priceTiers: tiers, pricing: "pi" };
+  const budget = new RewriteBudget(), policy = boundedRewritePolicy(config, 48000);
+  warm(budget, low);
+  assert.equal(budget.admits(100000, 40000, 0, policy, low, false), true);
+  budget.published(100000, 40000, 0, low);
+  budget.observe({ ...completion(4, 0), usage: { input: 60000, cacheRead: 0, cacheWrite: 0 } }, low);
+  warm(budget, next, 5);
+  budget.observe(completion(8), next, 100000);
+  assert.equal(budget.waitingForWork(config), true, "a rate selection is not a new provider or an erased ledger");
+});
+
 test("past cache spending cannot fund a rewrite that will not repay after cold rebuild and three future requests", () => {
   const budget = new RewriteBudget();
   for (let i = 1; i <= 50; i++) budget.observe(completion(i), model);

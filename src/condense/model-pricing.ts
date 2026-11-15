@@ -18,6 +18,20 @@ function cost(value: unknown, snake = false, allowFree = false): Cost | undefine
   return { input: value.input, output: value.output,
     cacheRead: number(read) ? read : value.input / 10, cacheWrite: number(write) ? write : value.input };
 }
+function nativePrice(model: EconomicModel): Price | undefined {
+  const rates = cost({ ...model.cost, ...model.priceTiers?.[0]?.cost });
+  if (!rates) return;
+  const tiers: NonNullable<Price["tiers"]> = [];
+  const schedule = model.priceTiers?.slice(1)
+    ?? model.cost?.tiers?.map(tier => ({ after: tier.inputTokensAbove, cost: tier })) ?? [];
+  for (const tier of schedule) {
+    if (!number(tier.after)) continue;
+    const next = cost({ ...rates, ...tier.cost });
+    if (next) tiers.push({ after: tier.after, cost: next });
+  }
+  return { provider: model.provider, id: model.id, host: host(model.baseUrl), source: "pi", cost: rates,
+    ...(tiers.length ? { tiers: tiers.sort((a, b) => a.after - b.after) } : {}) };
+}
 const leaf = (id: string) => (id.split("/").at(-1) ?? id).toLowerCase();
 function pattern(id: string): RegExp {
   const parts = leaf(id).split(/[\s._:-]+/).filter(Boolean).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -118,10 +132,7 @@ export class ModelPricing {
   start(models: EconomicModel[]) {
     this.registered.clear();
     for (const model of models) this.registered.set(JSON.stringify([model.provider, model.id]), model);
-    this.native = models.flatMap(model => {
-      const rates = cost(model.cost);
-      return rates ? [{ provider: model.provider, id: model.id, host: host(model.baseUrl), source: "pi" as const, cost: rates }] : [];
-    });
+    this.native = models.flatMap(model => { const quote = nativePrice(model); return quote ? [quote] : []; });
     this.memo.clear();
     this.dirty = true;
     this.queue();
@@ -132,14 +143,12 @@ export class ModelPricing {
     // An active Agent can still hold its old Model object after a local registry refresh.
     const latest = this.registered.get(JSON.stringify([model.provider, model.id]));
     if (latest && latest !== model && JSON.stringify(latest.cost) !== JSON.stringify(model.cost)) {
-      const rates = cost(latest.cost);
-      model = { ...model, cost: rates ?? latest.cost, pricing: rates ? "pi" : undefined };
+      model = { ...model, cost: latest.cost, priceTiers: latest.priceTiers, pricing: cost(latest.cost) ? "pi" : undefined };
     }
-    const direct = cost(model.cost);
-    if (direct) return direct.input > 0 ? model : { ...model, cost: direct, pricing: "pi" };
+    const direct = nativePrice(model);
     const key = JSON.stringify([model.provider, model.id, host(model.baseUrl)]);
-    if (!this.memo.has(key)) this.memo.set(key, match(this.native, model) ?? match(this.remote, model) ?? null);
-    const row = this.memo.get(key);
+    if (!direct && !this.memo.has(key)) this.memo.set(key, match(this.native, model) ?? match(this.remote, model) ?? null);
+    const row = direct ?? this.memo.get(key);
     if (!row || row.source === "models.dev") {
       this.needed = true;
       this.queue();
@@ -147,7 +156,9 @@ export class ModelPricing {
     if (row) {
       let rates = row.cost;
       for (const tier of row.tiers ?? []) if (inputTokens > tier.after) rates = tier.cost;
-      return { ...model, cost: rates, pricing: row.source };
+      return { ...model, cost: rates,
+        priceTiers: row.tiers?.length ? [{ after: 0, cost: row.cost }, ...row.tiers] : undefined,
+        pricing: direct && rates.input > 0 ? model.pricing : row.source };
     }
     return !this.loaded || this.needsRefresh() ? { ...model, pricing: "pending" } : model;
   }

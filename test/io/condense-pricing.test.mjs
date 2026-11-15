@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ModelPricing } from "../../src/condense/model-pricing.ts";
 import { priceRefreshMarker, requestPriceRefresh } from "../../src/condense/refresh-prices.mjs";
+import { RewriteBudget, boundedRewritePolicy } from "../../src/condense/rewrite-policy.ts";
+import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 
 const prices = (input = 2) => ({ input, output: input * 3, cacheRead: input / 10, cacheWrite: input });
 const model = (id, provider = "vendor", cost = prices(0)) => ({ id, provider, api: "test", cost });
@@ -46,6 +48,32 @@ test("Pi quotes take priority, regex aliases preserve model qualifiers, and sele
   await f.wait();
   assert.equal(f.pricing.get(model("proto-4.1-mini")).cost.input, 0, "pro must never match mini");
   assert.equal(downloads, 1);
+});
+
+test("Pi context tiers survive alias lookup and fund each path at its own future input size", { timeout: 5000 }, async t => {
+  let downloads = 0;
+  const f = await fixture(t, async () => { downloads++; throw new Error("Pi prices are available"); });
+  const native = model("proto-4.1", "vendor", { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
+    tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }] });
+  f.pricing.start([native]);
+  assert.equal(f.pricing.get(native, 272000).cost.input, 2);
+  assert.equal(f.pricing.get(native, 272001).cost.input, 4);
+  const quote = f.pricing.get(model("vendor/proto-4-1-20261114"), 230000);
+  assert.equal(quote.cost.input, 2);
+  assert.equal(f.pricing.get(model("vendor/proto-4-1-20261114"), 300000).cost.cacheRead, 0.2);
+  assert.equal(f.pricing.get(quote, 300000).cost.input, 4, "a resolved alias retains its complete price schedule");
+  assert.equal(native.cost.input, 2, "selecting a tier leaves the registry object intact");
+  const budget = new RewriteBudget();
+  for (let timestamp = 1; timestamp <= 3; timestamp++) budget.observe({ role: "assistant", api: quote.api,
+    provider: quote.provider, model: quote.id, timestamp, stopReason: "stop",
+    usage: { input: 0, cacheRead: 230000, cacheWrite: 0 } }, quote);
+  assert.equal(budget.admits(230000, 30000, 0, boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 48000), quote, false), true);
+  const resolved = f.pricing.get(native, 230000);
+  f.pricing.start([model(native.id, native.provider, { ...prices(3), tiers: [{ inputTokensAbove: 272000, ...prices(5) }] })]);
+  assert.equal(f.pricing.get(resolved, 230000).cost.input, 3, "registry refresh replaces the resolved base quote");
+  assert.equal(f.pricing.get(resolved, 300000).cost.input, 5, "its refreshed tier belongs to the same quote");
+  await f.wait();
+  assert.equal(downloads, 0);
 });
 
 test("models.dev prices persist until a source update, with context tiers and live Pi priority", { timeout: 5000 }, async t => {

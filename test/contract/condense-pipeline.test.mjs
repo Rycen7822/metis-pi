@@ -544,6 +544,7 @@ test("default chain policy releases old evidence but retains a long active multi
 test("independent small chains publish without paid summaries while preserving the active tail and exact recovery", async t => {
   for (const scenario of [
     { total: 128000, sizes: [32000], price: 10, publish: true },
+    { total: 128000, sizes: [32000], price: 10, providerTokens: 1000000, publish: false },
     { total: 1000000, sizes: [32000], price: 10, publish: true },
     { total: 1000000, sizes: [6000], price: 2, publish: true },
     { total: 1000000, sizes: [32000], price: 2, perTurn: 240000, publish: false },
@@ -551,6 +552,7 @@ test("independent small chains publish without paid summaries while preserving t
     { total: 128000, sizes: [32000], price: 10, perTurn: 14000, minRecentTokens: 65536, publish: false },
   ]) await t.test(JSON.stringify(scenario), async t => {
     const f = await independentTasks(t, scenario);
+    if (scenario.providerTokens) f.ctx.getContextUsage = () => ({ tokens: scenario.providerTokens, contextWindow: 2000000 });
     await f.emit("agent_settled"); await f.waitMaintenance();
     const entries = f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
     assert.equal(entries.length, Number(scenario.publish));
@@ -585,6 +587,26 @@ test("independent small chains publish without paid summaries while preserving t
     await f.emit("agent_settled"); await f.waitMaintenance();
     assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
   });
+});
+
+test("a restored remote checkpoint budgets a full cold request before modifying a small closed chain", async t => {
+  const f = await independentTasks(t, { total: 128000, sizes: [32000], price: 20 });
+  const first = f.sm.getBranch().find(entry => entry.type === "message");
+  f.sm.appendCompaction("Remote history checkpoint", first.id, 128000, { metisCodexRemoteCompaction: { version: 2 } });
+  await f.emit("session_start");
+  f.ctx.getContextUsage = () => ({ tokens: 128000, contextWindow: 2000000 });
+  for (let i = 0; i < 3; i++) {
+    const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+      content: [{ type: "text", text: "Main request completed after recovery" }], stopReason: "stop",
+      timestamp: f.nextTimestamp(), usage: { ...usage, input: 2560, cacheRead: 125440 } };
+    await f.emit("message_end", { message }); f.sm.appendMessage(message);
+  }
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.equal(f.sm.getBranch().filter(entry => entry.customType === "context-prune-chain").length, 0);
+  const raw = f.sm.buildSessionProjection().messages;
+  const visible = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  assert.deepEqual(visible.find(message => message.toolCallId === f.tasks[0].id), f.tasks[0].result);
+  assert.equal(f.calls.length, 0);
 });
 
 test("independent selection and shared fallback keep distinct admission contracts", async t => {

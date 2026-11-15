@@ -161,12 +161,16 @@ Automatic work:
   (at most 6144 tokens by default). Billing comes from provider usage.
 
 Cache and costs:
-  Summaries, packing and chains share cost and reuse checks. Forecasts count
-  a cold request, summary fees, and later requests growing by 2000 tokens
-  each at 98% cache hits. Publication requires strictly lower estimated cost;
+  Summaries, packing and chains share cost and reuse checks. The input basis
+  includes Pi's provider-backed usage estimate. Remote checkpoints budget a
+  zero-cache first request; visible history uses its unchanged prefix. Later
+  requests grow by 2000 tokens each at 98% hits, priced at each path's tier.
+  Publication includes summary fees and requires strictly lower estimated cost;
   bounded independent candidates forecast up to 32 requests, ordinary ones 3.
-  Further automatic rewrites wait for estimated debt repayment and useful
-  growth; discounted-cache models also need 3 successful requests with at
+  The first receipt corrects cold debt, including larger cache losses;
+  missing usage keeps a full cold reserve. Further rewrites wait for debt
+  repayment and useful growth;
+  discounted-cache models also need 3 successful requests with at
   least 90% actual hits after the cold request. Actual costs depend on later
   work and provider caching.
   At 90% of Pi's effective compaction capacity, natural compaction takes over

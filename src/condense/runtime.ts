@@ -9,7 +9,7 @@ import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import {
   RewriteBudget, batchRewriteAdmission, boundedRewritePolicy, localRewritePrefixAllowed,
-  isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, summaryRequestCost, type RewriteGain,
+  isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, summaryRequestCost, type RewriteGain, type RewriteContext,
 } from "./rewrite-policy.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
@@ -486,7 +486,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return capacity !== undefined && tokens <= capacity
       && tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
   };
-  const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number, candidateTokens?: number) => {
+  const rewriteContext = (ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(),
+    closingMessage?: any): RewriteContext => {
+    const source = projection.entries.find(entry => entry.sourceEntry.type === "compaction")?.sourceEntry;
+    const details = source?.type === "compaction" ? source.details : undefined;
+    return { tokens: pressureUsage(ctx, closingMessage)?.tokens,
+      opaque: details !== null && typeof details === "object" && "metisCodexRemoteCompaction" in details };
+  };
+  const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number,
+    context: RewriteContext, candidateTokens?: number) => {
     if (deferToNative(ctx, undefined, counts.piBefore)) return false;
     const config = currentConfig.value.chainCompression;
     const independent = candidateTokens === undefined ? undefined : boundedRewritePolicy(config, candidateTokens);
@@ -494,7 +502,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const emergency = chainEmergency(ctx, counts.piBefore);
     if (independent && !emergency && !localRewritePrefixAllowed(counts.piBefore, prefix)) return false;
     const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
-    return rewriteBudget.admits(counts.piBefore, gain, prefix, independent ?? config, economicModel(ctx), emergency);
+    return rewriteBudget.admits(counts.piBefore, gain, prefix, independent ?? config, economicModel(ctx), emergency, 0, context);
   };
   const compressChains = async (ctx: any, rollingWindow: number,
     appendEntry: (type: string, data: unknown) => void,
@@ -505,7 +513,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const { closingMessage, signal, automatic = false, onPublished } = options;
     const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
-    const messages = withClosingMessage(ctx.sessionManager.buildSessionProjection().messages, closingMessage);
+    const projection = ctx.sessionManager.buildSessionProjection();
+    const costContext = rewriteContext(ctx, projection, closingMessage);
+    const messages = withClosingMessage(projection.messages, closingMessage);
     const chains = options.candidate ? [options.candidate]
       : options.chains ?? detectChains(messages, protectionPredicate).filter(chain => findCompressibleRange(chain, messages));
     const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
@@ -551,7 +561,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           candidateTokens = before.slice(span.bodyStart, span.endIndex).reduce((sum, message) => sum + estimateTokens(message), 0);
         }
         const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
-          && (!automatic || admitAutomaticChain(ctx, counts, prefix, candidateTokens))
+          && (!automatic || admitAutomaticChain(ctx, counts, prefix, costContext, candidateTokens))
           && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
           && config === policyFingerprint(currentConfig.value);
         if (accepted && counts) measurements.set(entry.blockId, { counts, prefix });
@@ -572,7 +582,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     if (result.compressedEntries.length > 0) {
       statsAccum.addChainsCompressed(result.compressedEntries.length);
-      if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx));
+      if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx), costContext);
       else rewriteBudget.reset();
       occ.rewrite(ctx, beforeRewrite);
     }
@@ -1161,7 +1171,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertPendingOwnership();
         if (trigger === "manual") return true;
         batchAdmission ??= batchRewriteAdmission(rewriteBudget, withClosingMessage(visibleForPlanning(), options.closingMessage),
-          config.chainCompression, economicModel(ctx));
+          config.chainCompression, economicModel(ctx), rewriteContext(ctx, sourceProjection, options.closingMessage));
         const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee);
         if (!allowed) record.deferredReason = "economics";
         return allowed;
@@ -2447,6 +2457,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const floor = earliestChainStart(views);
       const after = projectContext(raw, ctx.model?.api,
         { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages;
+      const costContext = rewriteContext(ctx, sourceView.projection);
       const counts = await tokenEstimator.compare(before, after, signal);
       assertNewWork();
       if (!counts) {
@@ -2454,7 +2465,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return;
       }
       const prefix = unchangedPrefixTokens(before, after);
-      if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0 || !admitAutomaticChain(ctx, counts, prefix)) return;
+      if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0
+        || !admitAutomaticChain(ctx, counts, prefix, costContext)) return;
       const measuredSource = manager.buildSessionProjection();
       if (source !== projectionFingerprint(measuredSource.messages)) return;
       if (
@@ -2471,7 +2483,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       sharedValidations.set(entry.blockId, { shape: sharedShape(indexChainProjection(plain), views), hasGain: true });
       lowerFloor(supersede, floor);
       statsAccum.addChainsCompressed(views.length);
-      rewriteBudget.published(counts.piBefore, Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta), prefix, economicModel(ctx));
+      rewriteBudget.published(counts.piBefore, Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta),
+        prefix, economicModel(ctx), costContext);
       occ.rewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;
