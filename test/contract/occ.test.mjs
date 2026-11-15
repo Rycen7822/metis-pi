@@ -102,8 +102,7 @@ async function host(
           content: [{ type: "text", text: localSummary === "dense" ? "a".repeat(7200)
             : "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
           stopReason: "stop", timestamp: Date.now(), usage };
-        Promise.resolve().then(async () => {
-          if (autoAfterLocal) { settingsManager.setCompactionEnabled(true); await settingsManager.flush(); }
+        Promise.resolve().then(() => {
           out.push({ type: "done", reason: "stop", message }); out.end(message);
         }).catch(error => out.end({ ...message, stopReason: "error", errorMessage: String(error) }));
         return out;
@@ -213,6 +212,19 @@ async function host(
     sessionManager: sm,
     model,
   });
+  if (autoAfterLocal) {
+    const emit = loaded.session.extensionRunner.emitMessageEnd.bind(loaded.session.extensionRunner);
+    let armed = true;
+    loaded.session.extensionRunner.emitMessageEnd = async event => {
+      const result = await emit(event);
+      if (armed && sm.getBranch().some(e => e.customType === "context-prune-summary")) {
+        armed = false;
+        settingsManager.setCompactionEnabled(true);
+        await settingsManager.flush();
+      }
+      return result;
+    };
+  }
   t.after(async () => {
     try {
       await loaded.session.extensionRunner.emit({ type: "session_shutdown" });
@@ -905,8 +917,8 @@ for (const oversized of [false, true])
     assert.equal(compactions(h).length, oversized ? 0 : 1);
   });
 
-// Enabling auto-compaction while a local summary is in flight remains a valid
-// stale-usage boundary even though the new buffer prevents starting it there.
+// Enable Native after the local rewrite commits. In-flight ownership changes
+// instead retain raw evidence, covered by the pipeline boundary regression.
 test("local condense defers a stale threshold but fresh high usage still permits capacity compaction", async (t) => {
   const h = await host(t, {
     auto: true,
@@ -1120,20 +1132,28 @@ for (const goal of [false, true])
     assert.equal(state.spentRequest, undefined);
   });
 
-test("near native capacity allows local summaries while skipping economic OCC", async (t) => {
+test("near capacity retains pending evidence and leaves hard-capacity compaction to Pi", async (t) => {
   const h = await host(t, {
     auto: true,
     workTurns: 1,
     localSummary: true,
     pruneOverrides: { chainCompression: { enabled: false, minRecentTokens: 65536, minWorkTurns: 4 } },
-    onWork: () => ({ usage: pressureUsage(95000) }),
+    onWork: ({ index }) => ({ usage: pressureUsage(index <= 2 ? 95000 : 100000) }),
   });
   await h.session.prompt("Inspect and finish.");
   await h.session.waitForIdle();
-  assert.equal(h.calls.filter((c) => c.summarizing).length, 2);
-  assert.ok(h.sm.getEntries().some((e) => e.type === "custom_message" && e.customType === "context-prune-summary"));
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(h.sm.getEntries().some(e => e.type === "custom_message" && e.customType === "context-prune-summary"), false);
   assert.deepEqual(compactionReasons(h), []);
-  assert.match(JSON.stringify(h.sm.getEntries()), /NEW_WORK_EVIDENCE/, "raw evidence remains recoverable");
+  const raw = h.sm.buildSessionProjection().messages;
+  const expected = structuredClone(raw);
+  const request = { sessionId: h.sm.getSessionId(), api: h.session.model.api, messages: raw };
+  h.eventBus.emit("metis:condense-project", request);
+  assert.deepEqual(request.messages, expected, "Native ownership preserves the model-facing evidence, not just its archive");
+  await h.session.prompt("Continue without discarding pending evidence.");
+  await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.local).length, 0, "Native takeover must not launch a local summarizer");
+  assert.deepEqual(compactionReasons(h), ["threshold"]);
 });
 
 test("native capacity uses strict greater-than after reload, including the exact threshold", async (t) => {

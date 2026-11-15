@@ -677,6 +677,7 @@ export type FlushResult =
         | "empty"
         | "already-flushing"
         | "deferred-occ"
+        | "deferred-native"
         | "deferred"
         | "deferred-budget"
         | "input-budget"

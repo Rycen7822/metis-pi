@@ -102,6 +102,8 @@ async function readProjection(ctx: ExtensionContext, signal = ctx.signal): Promi
   return projection;
 }
 
+class NativePendingDeferral extends Error {}
+
 class CondenseContextChangedError extends Error {
   constructor(reason: string) {
     super(`This extension ctx is stale: ${reason}`);
@@ -594,6 +596,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     return usage;
   };
+  // Native pressure never authorizes consuming historical pending work, even above the native threshold.
+  const pendingBelongsToNative = (ctx: ExtensionContext, closingMessage?: any, estimated = 0) => {
+    const capacity = occ.nativeCapacity(ctx);
+    if (capacity === undefined) return false;
+    const tokens = Math.max(estimated, pressureUsage(ctx, closingMessage)?.tokens ?? 0);
+    return tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
+  };
+  const nativePendingStatus = (ctx: ExtensionContext) =>
+    updatePruneStatus(ctx, "Pending raw evidence retained — waiting for Pi native capacity compaction");
   const paidPressure = (ctx: ExtensionContext, closingMessage?: any) => shouldBudgetFlush(
     pressureUsage(ctx, closingMessage), currentConfig.value.autoBudgetThreshold,
     occ.nativeCapacity(ctx), currentConfig.value.summaryBudget,
@@ -702,6 +713,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const trigger: FlushTrigger = options.trigger ?? "manual";
     const closedKeys = options.closedKeys;
     if (trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "deferred-occ" };
+    if (trigger !== "manual" && pendingBelongsToNative(ctx, options.closingMessage)) {
+      nativePendingStatus(ctx);
+      return { ok: false, reason: "deferred-native" };
+    }
+    const assertPendingOwnership = (estimated = 0) => {
+      if (trigger !== "manual" && pendingBelongsToNative(ctx, options.closingMessage, estimated)) throw new NativePendingDeferral();
+    };
     const version = lifecycle;
     const abort = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
@@ -733,8 +751,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let firstChangedMessage: number | undefined;
     let modelAttempted = false;
     let batchAdmission: ReturnType<typeof batchRewriteAdmission> | undefined;
-    let automaticEmergency = false;
-    let nativeUsageOffset = 0;
     let outcome: FlushMetricsEntry["outcome"] = "empty";
     let failureReason: string | undefined, failureMessage: string | undefined;
     const deferredReasons: Partial<Record<DeferredReason, number>> = {};
@@ -785,7 +801,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       isFlushing = true;
       activeFlushAbort = abort;
       await stopMaintenance();
-      assertCurrent(version); signal.throwIfAborted();
+      assertCurrent(version); signal.throwIfAborted(); assertPendingOwnership();
       // Bind the session appender as soon as delivery is known, BEFORE the
       // empty-capture/aborted exits below — so emitFlushMetricsOnce's finally
       // emit routes through sessionManager for those exits too, instead of
@@ -842,10 +858,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const visible = preparedVisible ?? projectContext(source.messages, ctx.model?.api,
           { ctx, source: readSourceEdits(ctx, source), probe: true }).messages;
         const estimated = visible.reduce((sum, message) => sum + estimateTokens(message), 0);
-        // Native usage can include provider overhead absent from the message estimate; relief must track the same baseline.
-        nativeUsageOffset = Math.max(0, (pressureUsage(ctx, options.closingMessage)?.tokens ?? 0) - estimated);
-        automaticEmergency = chainEmergency(ctx, estimated + nativeUsageOffset);
-        if (!automaticEmergency) batches = protectBatchWorkingSet(batches, source.messages, visible, currentConfig.value.chainCompression);
+        assertPendingOwnership(estimated);
+        batches = protectBatchWorkingSet(batches, source.messages, visible, currentConfig.value.chainCompression);
         rewriteBudget.observeWork(source.messages, economicModel(ctx));
       }
       // Do not retain older, non-projected history while waiting for providers.
@@ -872,6 +886,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             candidates.map(({ batch }) => batch),
             { indexer, ...archiveOptions(ctx.sessionManager), appendEntry: appendEntry! },
           );
+          assertPendingOwnership();
           const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, { ctx }).messages;
           if (
             currentConfig.value.enabled &&
@@ -1013,7 +1028,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
                   signal,
                 ));
               assertCurrent(version);
-              signal.throwIfAborted();
+              signal.throwIfAborted(); assertPendingOwnership();
               beneficial = !!counts && counts.before > counts.after;
             }
             if (beneficial) {
@@ -1056,6 +1071,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       type BatchRecord = (typeof records)[number];
 
       for (const [key, originalId, occurrence] of pendingAliases) {
+        assertPendingOwnership();
         indexer.registerDuplicate(key, originalId, appendEntry!, occurrence);
         publishedAliasesOrArchives = true;
         actions.dedupedCalls++;
@@ -1117,8 +1133,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
       const allowPaid = trigger === "manual" || paidPressure(ctx, options.closingMessage);
-      const waitingForWork = trigger !== "manual" && !automaticEmergency
-        && rewriteBudget.waitingForWork(currentConfig.value.chainCompression);
+      const waitingForWork = trigger !== "manual" && rewriteBudget.waitingForWork(currentConfig.value.chainCompression);
       const workKind = (record: BatchRecord) => {
         if (record.deduped.length > 0 && record.batch.toolCalls.length === 0) return "deduped";
         // Packing wins over the small-batch guard; minBatchChars=0 disables
@@ -1143,9 +1158,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const controller = fallbackController;
       const config = currentConfig.value;
       const admitBatch = (record: BatchRecord, gain: RewriteGain, fee = 0) => {
+        assertPendingOwnership();
         if (trigger === "manual") return true;
-        batchAdmission ??= batchRewriteAdmission(rewriteBudget, visibleForPlanning(), config.chainCompression,
-          economicModel(ctx), tokens => chainEmergency(ctx, tokens + nativeUsageOffset));
+        batchAdmission ??= batchRewriteAdmission(rewriteBudget, visibleForPlanning(), config.chainCompression, economicModel(ctx));
         const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee);
         if (!allowed) record.deferredReason = "economics";
         return allowed;
@@ -1154,7 +1169,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const gain = await record.plan!.evaluate(text, deterministic);
         return gain && admitBatch(record, gain) ? gain : undefined;
       };
-      const checkActive = () => { assertCurrent(version); signal.throwIfAborted(); };
+      const checkActive = () => { assertCurrent(version); signal.throwIfAborted(); assertPendingOwnership(); };
       const checkSource = (projection?: NativeProjection) => {
         checkActive();
         if (expectedSource !== undefined && snapshotSource((projection ?? ctx.sessionManager.buildSessionProjection()).messages) !== expectedSource) {
@@ -1550,6 +1565,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "stale-context", error: errorMessage(err) };
       }
       restoreUnprocessed();
+      if (err instanceof NativePendingDeferral) {
+        rearmedPending = true; // Rescan restores staged-but-unpublished aliases as well as the remaining batches.
+        outcome = processedCount > 0 ? "partial" : "deferred";
+        failureReason = "deferred-native"; failureMessage = undefined;
+        nativePendingStatus(ctx);
+        return { ok: false, reason: "deferred-native", batchCount: processedCount };
+      }
       outcome = signal.aborted ? "aborted" : processedCount > 0 ? "partial" : "error";
       // When the abort signal fired, summarizeBatch rethrows rather than
       // swallowing the error.  Don't show a UI error — the user intended this.

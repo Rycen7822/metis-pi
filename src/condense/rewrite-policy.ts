@@ -184,8 +184,7 @@ export function independentChainPrefixAllowed(before: number, prefix: number): b
 export interface RewriteGain { pi: number; proxy: number }
 
 /** One flush measures its prefix once; every published prefix must independently satisfy the aggregate payback gate. */
-export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], config: ChainCompressionConfig,
-  model: Model | undefined, emergency: (tokens: number) => boolean) {
+export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], config: ChainCompressionConfig, model: Model | undefined) {
   const prefixes = new Map<string, number>();
   let before = 0;
   for (const message of messages) {
@@ -207,7 +206,7 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
       const next = changedPrefix(keys);
       return next !== undefined && budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), next,
         // The batch plan already enforces its proxy gain floor; do not compare that floor to Pi-estimated tokens.
-        { ...config, minimumGain: 0 }, model, emergency(Math.max(0, before - pi)), fee);
+        { ...config, minimumGain: 0 }, model, false, fee);
     },
     published(keys: Iterable<string>, gain: RewriteGain) {
       const next = changedPrefix(keys);

@@ -600,6 +600,31 @@ test("independent selection and shared fallback keep distinct admission contract
   });
 });
 
+test("pending publication yields to Native pressure even after generation and remains manually recoverable", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", capacity: true, defer: true });
+  let tokens = 75000;
+  f.ctx.getContextUsage = () => ({ tokens, contextWindow: f.ctx.model.contextWindow });
+  const call = f.add("semantic source ".repeat(2000), "unknown-command");
+  const pending = f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
+  await waitForSummarizer(f);
+  tokens = 96000;
+  f.release();
+  await pending;
+  const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
+  assert.equal(summaries().length, 0, "a completed paid request does not authorize publishing across Native ownership");
+  assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.reason, "deferred-native");
+  const raw = f.sm.buildSessionProjection().messages;
+  const expected = structuredClone(raw);
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  assert.deepEqual(projected, expected, "retry preserves the entire model-facing prefix");
+  assert.equal(f.calls.length, 1, "re-entry must not start another paid summary");
+  const manual = f.commands.get("pruner").handler("now", f.ctx);
+  await waitForSummarizer(f, 2);
+  f.releaseAll();
+  await manual;
+  assert.ok(summaries().length > 0, "explicit manual pruning still has its original authority");
+});
+
 test("automatic chain payback waits for three matching high-cache main requests, not historical spending", async t => {
   const f = await fixture(t, { pruneOn: "on-demand", chainCompression: { enabled: true, rollingWindow: 0 } });
   Object.assign(f.ctx.model, { contextWindow: 1000000, cost: { input: 2, output: 0, cacheRead: 1, cacheWrite: 0 } });

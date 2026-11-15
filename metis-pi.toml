@@ -297,6 +297,7 @@ minArgChars = 500
 # 绝对压力 ceiling，也是 delta 窗口分母 ceiling；正安全整数。
 maxBudgetWindowTokens = 300000
 # 可解析 Pi 原生容量线前的增长余量；0 不额外预留。
+# 自动pending接近Pi有效容量减去此余量时保留原文，交原生压缩处理；不借救急绕过费用和近期保护。
 growthHeadroomTokens = 16384
 
 # --- 净收益与完整消息：本地 proxy tokens --------------------------------------

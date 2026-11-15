@@ -213,7 +213,7 @@ test("recent work and token tail are a union; open tasks never authorize arbitra
 test("one flush groups admitted chunks, then batch and chain share the same refill", () => {
   const budget = new RewriteBudget(), raw = history([10000, 10000]);
   const fullPrice = { ...model, cost: { input: 1, cacheRead: 1 } };
-  const frame = batchRewriteAdmission(budget, raw, config, fullPrice, () => false);
+  const frame = batchRewriteAdmission(budget, raw, config, fullPrice);
   const gain = { pi: 1500, proxy: 1500 };
   assert.equal(frame.accepts(["t0@2"], gain), true);
   frame.published(["t0@2"], gain);
