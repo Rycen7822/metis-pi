@@ -121,13 +121,13 @@ Usage:
   /pruner model <provider/model-id>:<level> Set model and thinking level together
   /pruner thinking [level]                 Show/set thinking: default, off, minimal, low, medium, high, xhigh
   /pruner prune-on                         Show or choose the trigger
-  /pruner prune-on on-demand               Evaluate pressure/growth at tool rounds; also allows manual now
+  /pruner prune-on on-demand               Combine manual now with pressure/growth triggers at tool rounds
   /pruner prune-on agent-message           Evaluate at complete visible text replies (default)
   /pruner batching                         Show or choose batching mode
   /pruner batching turn                    Keep model requests separate (default)
   /pruner batching agent-message           Merge adjacent requests within one text chain
   /pruner stats                            Show extra summarizer token usage
-  /pruner now                              Process pending work now; pruning must be enabled
+  /pruner now                              Process pending work now; enable pruning first
   /pruner compact                          Compress eligible closed text chains, ignoring rollingWindow
   /pruner protected-tools [names]          Show/edit protected tool names; comma/space-separated, 'none' clears
   /pruner protected-paths [globs]          Show/edit protected path globs; comma/space-separated, 'none' clears
@@ -140,49 +140,51 @@ Usage:
 Grouping:
   A batch contains one main-model request's tool calls and results. A text
   chain starts at a complete visible reply and ends before the next reply
-  or user/Goal boundary. A task starts at a user/Goal boundary. Thinking,
-  streaming deltas and derived messages do not start text chains.
-  Batching may split large inputs; it does not change these boundaries.
+  or user/Goal boundary. A task starts at a user/Goal boundary. Boundaries
+  come from persisted text messages; thinking, streaming deltas and derived
+  messages belong to their surrounding segment.
+  Batching splits large inputs while preserving these boundaries.
 
 Automatic work:
   Tool summaries and chains retain the latest 32768 estimated raw tokens
-  and 4 useful work rounds by default. Automatic replacements require a
-  later successful main response to confirm consumption. Spill has separate
+  and 4 useful work rounds by default. A later successful main response
+  confirms consumption before automatic replacement. Spill uses separate
   large-output rules. Protected results remain verbatim and may be archived;
-  path globs match args.path, not arbitrary shell command text.
-  Paid summaries also require pressure: by default, the earliest of 70% of
-  the model window, 300000 tokens, or Pi's effective capacity minus 16384.
-  Unknown usage does not permit automatic paid summaries. on-demand is not
-  manual-only; text-reply mode obeys pressure too.
-  A remaining semantic batch below minBatchChars (default 5000) makes no
-  model call. Paid replacements must save max(2048, 40% of replaced tokens).
-  The complete summary, including refs and wrapping, must fit its local
-  o200k budget (at most 6144 tokens by default). These are not billing tokens.
+  path globs read args.path.
+  Automatic paid summaries require valid usage and pressure: by default,
+  the earliest of 70% of the model window, 300000 tokens, or Pi's effective
+  capacity minus 16384. on-demand combines manual and automatic triggers;
+  text-reply mode uses the same pressure gate.
+  Semantic batches below minBatchChars (default 5000) retain their raw text.
+  Paid replacements save at least max(2048, 40% of replaced tokens). The
+  complete summary, including refs and wrapping, fits a local o200k budget
+  (at most 6144 tokens by default). Billing comes from provider usage.
 
 Cache and costs:
   Summaries, packing and chains share cost and reuse checks. Forecasts count
   a cold request, summary fees, and later requests growing by 2000 tokens
-  each at 98% cache hits. The rewrite must be strictly cheaper; bounded
-  independent candidates may forecast 32 requests, ordinary candidates 3.
+  each at 98% cache hits. Publication requires strictly lower estimated cost;
+  bounded independent candidates forecast up to 32 requests, ordinary ones 3.
   Further automatic rewrites wait for estimated debt repayment and useful
   growth; discounted-cache models also need 3 successful requests with at
-  least 90% actual hits after the cold request. Forecasts are not a savings
-  guarantee if work ends early or provider caching changes.
-  At 90% of Pi's effective compaction capacity, new automatic rewrites pause
-  for natural compaction. Existing valid views and archive recall still work.
-  Manual now/compact bypass automatic timing and forecast gates, not source,
-  protection, archive or summary-budget checks; they may reduce cache hits.
+  least 90% actual hits after the cold request. Actual costs depend on later
+  work and provider caching.
+  At 90% of Pi's effective compaction capacity, natural compaction takes over
+  new work. Existing valid views and archive recall remain available.
+  Manual now/compact skip automatic timing and forecast gates while retaining
+  source, protection, archive and summary-budget checks. Earlier edits can
+  reduce cache hits.
 
 Recovery and failures:
   Exact dedup keeps each execution's arguments, status, timestamp and ref.
   Use context_tree_query to read archived output/arguments and nested calls;
-  follow nextCursor with the same selection. eof is page progress, not proof
-  that original capture was complete. Missing archives are explicit errors.
-  Failed or rejected summaries retain raw evidence. Fault fallbacks do not
-  retry empty, truncated or over-budget output on another paid model.
+  follow nextCursor with the same selection. eof reports pagination;
+  archiveComplete reports capture completeness. Missing archives return
+  explicit errors. Failed or rejected summaries retain raw evidence.
+  Empty, truncated or over-budget output ends the current candidate.
 
 Settings are saved in [contextPrune] of global <agentDir>/metis-pi.toml
-(PI_CODING_AGENT_DIR or ~/.pi/agent). Manual file edits need /reload.
+(PI_CODING_AGENT_DIR or ~/.pi/agent). Run /reload after manual file edits.
 See docs/features/condense.md and metis-pi-config.md for full rules and units.`;
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;

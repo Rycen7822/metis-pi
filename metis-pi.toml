@@ -203,7 +203,7 @@ showOccStatusLine = true
 # --- 摘要模型与请求超时 -------------------------------------------------------
 # "default" 使用当前会话模型；也可指定已注册的 "provider/model-id"。
 summarizerModel = "default"
-# 有序故障备用链；当前会话模型总在最后。示例：["provider/fallback"]。
+# 有序故障备用链；去重后追加会话模型。示例：["provider/fallback"]。
 summarizerFallbackModels = []
 # 推理等级：default / off / minimal / low / medium / high / xhigh。
 summarizerThinking = "default"
@@ -216,14 +216,14 @@ summarizerMaxTimeoutMs = 180000
 pruneOn = "agent-message"
 # "turn" 保持主请求独立；"agent-message" 合并同一文本小 chain 内的相邻请求。输入超预算时仍会拆分。
 batchingMode = "turn"
-# 付费摘要的窗口占比，范围 (0,1]；false 禁用自动付费摘要。
-# 手动请求、确定性处理和 Pi 原生容量恢复不受此关闭开关影响。
+# 自动付费摘要的窗口占比，范围 (0,1]；false 关闭此入口。
+# 手动整理、本地规则和 Pi 原生压缩分别由各自设置控制。
 autoBudgetThreshold = 0.7
-# 待付费摘要的剩余内容低于此字符数时保留原文；0 只取消字符保护。
+# 待付费摘要内容低于此字符数时保留原文；0 表示直接进入后续预算检查。
 minBatchChars = 5000
-# 隐藏字符门槛和过大跳过通知，不改变处理规则。
+# 控制字符门槛和过大跳过通知的显示。
 quietOversizedSkips = false
-# 可选单轮增长触发：(0,1] 的窗口比例；false 关闭。仍须通过付费压力与收益检查。
+# 可选单轮增长触发：(0,1] 的窗口比例；false 关闭。触发后进入付费压力与收益检查。
 budgetTurnDelta = false
 # 可选尾部未整理内容触发量，单位 tokens，须 >0；false 关闭。
 frontierGapThresholdTokens = false
@@ -233,7 +233,7 @@ frontierGapThresholdTokens = false
 protectedTools = []
 # 对 args.path 的 glob；空数组关闭路径保护。
 protectedPaths = ["**/skills/**/*.md", "**/gauntlet-overrides.md"]
-# 原文回读后的保护期，按用户输入或 Goal 续推的大任务边界计数；文本回复不计数，0 关闭。
+# 原文回读后的保护期，按用户输入或 Goal 续推的大任务边界计数；0 关闭。
 recoveryGraceTurns = 3
 # 精确正文哈希去重；保留每次执行的参数/状态/ref，且实际 stub 必须更小。
 dedupByContentHash = true
@@ -242,32 +242,32 @@ dedupByContentHash = true
 # 单结果归档并留下预览的字符门槛，须 >0；预览大小单位 bytes，允许 0。
 spillThreshold = 65536
 spillPreviewBytes = 2048
-# 每请求保留最新 N 张图片（整数 >=1）；false 使用 API 默认，不是禁用图片。
-# 此限制在精简关闭时仍生效。
+# 每请求保留最新 N 张图片（整数 >=1）；false 使用 API 默认。
+# 图片限制独立于历史整理开关。
 maxImagesPerRequest = false
 
 # --- Pi 原生压缩输出 ----------------------------------------------------------
 # Pi 普通文字压缩的额外输出硬上限，单位 provider tokens；0 沿用 Pi/模型限制。
-# 不改变容量触发线，不限制远端加密检查点；与 OCC 文字软目标分开设置。
+# 容量触发线由 Pi 管理，远端加密检查点由对应协议管理；OCC 文字软目标单独设置。
 compactionSummaryMaxTokens = 0
 
-# 整理已闭合的文本小 chain；大任务尚未结束时也可整理其中旧段。自动整理不额外付费融合摘要。
+# 整理已闭合的文本小 chain，包括进行中的大任务内的旧段。自动整理复用现成摘要。
 [contextPrune.chainCompression]
 enabled = true
 # 在 minRecentTokens 预算内参考的近期闭合小 chain 数；开放组也占用该预算。
-# 0 只关闭链数参考，其他值同样使用近期原文、有效工作和费用保护。
+# 0 关闭链数参考，近期原文、有效工作和费用保护继续生效。
 rollingWindow = 3
 # 自动工具摘要与 chain 整理共同保留的工作轮数和原文 tokens，取保护并集；均允许 0。
-# 未消费结果不自动替换；开放小 chain 不做整组整理。
+# 自动替换要求结果已被消费；开放小 chain 保留完整原文。
 minWorkTurns = 4
 minRecentTokens = 32768
 # 大候选/共享 chain 的绝对、总量比例收益门槛；minGainTokens 也是发布后的新工作增长下限。
 # 独立 2,048–65,536 token 候选按自身比例检查，绝对底线为 min(2048, minGainTokens)。
 minGainTokens = 8192
 minGainFraction = 0.1
-# 去掉已整理边界的 thinking，保留可见文本，不处理下一组的右边界。
+# 去掉已整理边界的 thinking，保留可见文本；右边界文本属于下一组。
 stripFinalAssistantThinking = true
-# 仅允许手动 now / compact 额外融合；失败或预算不足时保留机械拼接。
+# 手动 now / compact 可额外付费融合；失败或预算不足时使用拼接结果。
 fuseRangeSummary = true
 
 # 失败调用的参数清理；正文和恢复证据另行保护。
@@ -286,29 +286,29 @@ minArgChars = 500
 # 最低收益 G = max(minGainTokens, ceil(minGainFraction × B))。
 # 完整消息限额 R = min(maxProxyTokens, B - K - G)，包含引用和消息包装。
 # 软目标 Q = min(maxProxyTokens, targetBaseTokens + targetPerCallTokens × N)。
-# 预算不足时保留原文和 pending，处理位置不越过未完成部分。
+# 预算空间不足时保留原文和 pending，处理位置停在未完成部分之前。
 [contextPrune.summaryBudget]
 
 # --- 自动压力：provider 上下文 tokens -----------------------------------------
-# 付费压力线的绝对上限，也是单轮增长比例的窗口上限；正安全整数，不是总上下文目标。
+# 付费压力线的绝对上限，也是单轮增长比例的窗口上限；正安全整数。
 maxBudgetWindowTokens = 300000
 # 付费压力线为 min(autoBudgetThreshold × 模型窗口, 上项, Pi有效容量 − 此余量)。
-# 0 不额外预留。达到 Pi 有效容量的 90% 后停止新增自动改写，等待原生压缩。
+# 0 表示直接使用有效容量。达到 Pi 有效容量的 90% 后，新增改写交由原生压缩接管。
 growthHeadroomTokens = 16384
 
 # --- 净收益与完整消息：本地 proxy tokens --------------------------------------
 # 最低绝对收益（正安全整数）及最低比例 [0,1]；两者取较大值。
 minGainTokens = 2048
 minGainFraction = 0.4
-# 整个渲染摘要消息的硬上限，不只是正文；正安全整数。
+# 完整摘要消息的硬上限，含恢复引用和包装；正安全整数。
 maxProxyTokens = 6144
-# 软目标的基数及每调用增量；允许 0，仍保留必要包装和正文余地。
+# 软目标的基数及每调用增量；允许 0，并保留必要包装和正文空间。
 targetBaseTokens = 512
 targetPerCallTokens = 96
 
 # --- OCC：输出文本 tokens 的软目标 --------------------------------------------
 # 仅 OCC 通过受支持的自定义指令请求；0 不附加目标。
-# 不降低 Pi/provider 硬 cap，也不自动注入普通 Pi 原生压缩路径。
+# Pi/provider 硬上限与普通 Pi 原生压缩请求保持各自设置。
 nativeTargetTokens = 16384
 
 
