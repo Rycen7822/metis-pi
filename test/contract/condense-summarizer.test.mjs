@@ -42,6 +42,7 @@ async function fixture(t) {
     return model;
   };
   const ctx = model => ({ model, modelRegistry: new ModelRegistry(runtime),
+    sessionManager: { getSessionId: () => "summary-session" },
     ui: { notify: (message, kind) => notices.push({ message, kind }) } });
   return { add, ctx, calls, notices };
 }
@@ -61,6 +62,7 @@ test("batch and range summaries use the configured private native provider", asy
   assert.ok(JSON.stringify(f.calls[0].context).includes("Observed source"));
   assert.ok(JSON.stringify(f.calls[1].context).includes("Archived summary"));
   assert.ok(f.calls.every(call => call.options.reasoning === "high" && call.options.maxTokens === 1000));
+  assert.ok(f.calls.every(call => call.options.sessionId === "summary-session"), "route summaries in the owning conversation");
   assert.deepEqual(reports, [usage, usage]);
   assert.equal(attempts.length, 2);
   assert.deepEqual(f.notices, []);

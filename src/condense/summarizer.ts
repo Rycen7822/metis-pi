@@ -193,6 +193,7 @@ async function runOnce(
       { messages: [message] },
       {
         signal: combineSignals(options.signal, timeoutController.signal),
+        sessionId: ctx.sessionManager.getSessionId(),
         // Provider output includes model-specific tokenization/reasoning.
         // Keep its existing ceiling; enforce proxy limits on the rendered reply.
         maxTokens,
