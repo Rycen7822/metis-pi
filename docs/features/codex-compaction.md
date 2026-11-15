@@ -1,45 +1,66 @@
 # OpenAI / Codex 远端压缩
 
-`extensions/codex-compaction.ts` 处理 provider 为 `openai` / `openai-codex`、API 为 `openai-responses` / `openai-codex-responses` 的 `/compact`、阈值压缩和 context-overflow 恢复。其他 API 走 Pi/Condense/OCC；切带检查点的会话时按下文迁移。
+`extensions/codex-compaction.ts` 接管以下模型的 `/compact`、阈值压缩和上下文溢出恢复：provider 为 `openai` / `openai-codex`，API 为 `openai-responses` / `openai-codex-responses`。其他 API 使用 Pi 的普通文字压缩；Condense 的工具历史整理是独立功能。
 
-登录、退出、device ID、刷新、凭据存储归 Pi。Metis 只消费解析好的认证；Codex CLI 兼容路径只读 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的 ChatGPT 登录。OAuth 流程和个人认证文件保持 Pi 原生。
+## 认证由谁负责
 
-## 协议与会话
+登录、退出、device ID、OAuth 刷新和凭据存储都由 Pi 管理。Metis 使用 Pi 解析好的认证，不另建登录流程，也不修改个人认证文件。
 
-| 请求路径 | 压缩方式 |
+需要兼容 Codex CLI 登录时，只读 `$CODEX_HOME/auth.json`，默认 `~/.codex/auth.json`，且只使用其中的 ChatGPT 登录。
+
+## 三种请求路径
+
+| 路径 | 压缩协议 |
 | --- | --- |
-| `openai` + ChatGPT OAuth | 日常推理走 Responses API，压缩走 Codex Remote V2，再把检查点接回推理路径。优先 Pi `openai-codex` OAuth，否则只读上表的 Codex CLI 登录；凭据只发官方 Codex 后端。两边登录须同一账户和工作区，缺失时运行 `codex login`。 |
-| `openai-responses` + API key | 调 [`POST /responses/compact`](https://developers.openai.com/api/docs/guides/compaction)，按序保存并回放完整 `output` 窗口。 |
-| `openai-codex-responses` | SSE `/responses` 请求带 `compaction_trigger` 和 `remote_compaction_v2` beta header；要求成功终止事件和恰好一个完整加密 item，保留约 64k token 预算的最新真实用户消息。 |
+| `openai` + ChatGPT OAuth | 推理使用 Responses API，压缩使用 Codex Remote V2。优先取 Pi 的 `openai-codex` OAuth，否则读取 Codex CLI 登录；凭据只发官方 Codex 后端。两边必须登录同一账户、工作区，缺少 CLI 登录时执行 `codex login`。 |
+| `openai-responses` + API key | 调用 [`POST /responses/compact`](https://developers.openai.com/api/docs/guides/compaction)，按原顺序保存、回放完整 `output` 窗口。 |
+| `openai-codex-responses` | 向 SSE `/responses` 发送 `compaction_trigger`，带 `remote_compaction_v2` beta header。只接受成功终止且恰好包含一个完整加密 item 的结果，并保留约 64k token 预算的最新真实用户消息。 |
 
-所有路径先用 Goal/Condense 的有效投影，只压缩 canonical prefix，保留 Pi 的 `firstKeptEntryId` 和近期尾部。system/tool 增量、模型、thinking、session cache key 用原生编码；自定义压缩指令附在历史尾。
+请求先应用 Goal、Condense 的有效上下文，再压缩 Pi 选定的历史前缀。`firstKeptEntryId` 之后的近期尾部保留；system/tool 增量、thinking 和 session cache key 使用原生编码，自定义压缩指令附在历史尾。
 
-检查点存 `CompactionEntry.details.metisCodexRemoteCompaction`。界面只打标记，请求准备好后在 provider payload 阶段恢复原生结构，普通正文中的相同字符串按原文处理。重载、分支、再压缩都从会话记录恢复，原始条目保留。
+本地只检查可见输入及压缩指令是否放得下，不按普通生成请求预留模型最大输出。密文的实际 token 数未知，后端仍可能拒绝。Condense 的 `compactionSummaryMaxTokens` 不为远端加密检查点设置输出 token 上限。
 
-压缩卡片的 `estimated context` 是本地估计；有有效用量时另显示 `Summary request input (provider-reported)`，即 `input + cacheRead + cacheWrite`。后续普通响应继续更新 provider 用量；密文字节数与 token 数之间没有换算关系。
+## 检查点的保存与显示
 
-## 认证范围与跨模型使用
+结果写入 `CompactionEntry.details.metisCodexRemoteCompaction`。界面显示标记，真正发送请求时恢复 provider 原生结构；普通正文里恰好相同的标记字符串不会被当成检查点。重载、分支和再次压缩都从会话记录恢复，原始条目保留。
 
-检查点记录模型、provider、地址、凭据类型、可见账户。API key 用单向摘要隔离不同 key，OAuth 与当前 token 解耦。已知账户不匹配或账户证据可见性变化时拒绝回放；信息始终不透明的，由原后端用 Pi 当前认证验密文。
+压缩卡片有两种数值，不能混用：
 
-**不透明账户在本地没有跨账户隔离。** 检查点带保留的明文用户消息，Responses 窗口也可能含明文，它们和会话尾部一起发给当前账户，后端验证只覆盖密文。换账户且需隔离历史时请使用新会话。
+- `estimated context`：本地上下文估计。
+- `Summary request input (provider-reported)`：有有效回执时，显示 `input + cacheRead + cacheWrite`。
 
-同一路由、账户范围未变的 OAuth 检查点，Pi 刷新或重登后继续使用。执行中的压缩和文字摘要另查登录归属：安装 [Pi OAuth 连续性补丁](../../sdk-patches/pi-1.5.2/README.md)后，原生刷新保留登录标识，即使账户信息不透明也可发布结果；重新登录、外部替换凭据或范围变化则取消并保留历史。API key 变化同样取消。
+密文字节数不能换算成 token 数。后续普通响应继续提供实际用量；本地准备记录中的 `projectedInputTokensEstimate`、`inputWindow`、`outputReserve`、`hasOpaqueCheckpoint` 也不代表后端已接受请求。
 
-补丁由 Pi 认证层生成和维护登录标识，随认证来源、key 和 headers 一次解析后交给 Metis。旧凭据读取保持原样，首次原生刷新沿用原归属；其他进程通过同一补丁刷新也能保持连续性。原版 Pi 1.5.2 按可见账户证据判断，缺少连续性证据时取消并提示原因。官方 managed Pi 1.5.2 的普通 Metis 安装/更新会自动交付补丁版 SDK，重启后生效；扩展 `/reload` 只更新 Metis。
+## OAuth 刷新与账户范围
 
-首次跨模型/provider 使用时，经原模型和范围检查，用 Pi 当前认证把加密 prefix 压成文字摘要交给目标模型，目标 provider 只收到明文摘要。这一步额外产生一次 low-reasoning、最多 8,192 输出 token 的请求，结果存 `metisCodexPortableSummary`。有效摘要在重启、分支、丢失原登录后可复用；编辑覆盖源会使摘要失效，目标模型仍需有效认证。
+检查点记录原模型、provider、地址、凭据类型和可见账户。API key 用单向摘要区分，OAuth 不绑定会轮换的 access token。已知账户不匹配、或账户信息的可见性发生变化时拒绝回放；账户始终不透明时，由原后端用 Pi 当前认证验证密文。
 
-## 失败与边界
+**账户不透明时，本地无法保证跨账户隔离。** 检查点保留的用户消息、Responses 窗口和会话尾部可能含明文，会发给当前账户；后端的解密检查只保护密文。换账户且需要隔离历史时，应另开会话。
 
-- 模型不可用、范围验不过、摘要生成失败、源被编辑：暂停请求并保留账本，原文保留，密文标记单独保存。
-- 生成、发布、发送前检查会话、分支、模型、认证、provider 和取消状态。取消记录分别说明历史、会话、生命周期、认证或压缩提供者的变化。目录包装对象重建属于正常恢复；压缩所有权由 Condense maintenance 协商。
-- 本地容量只检查投影后的可见输入（含自定义指令）；模型最大输出上限由 Pi/provider 管。加密内容的实际 token 数未知，本地通过只是必要条件，后端仍可能拒绝。
-- 远端拒绝、断流、无效结果、过期源：取消本次压缩并保留历史，摘要走显式的文字总结路径。压缩沿用原生 HTTP 重试，最多两次；后端必须支持对应协议。
-- 压缩卡片和失败记录区分本地估计与 provider 用量；`projectedInputTokensEstimate`、`inputWindow`、`outputReserve`、`hasOpaqueCheckpoint` 是准备状态，后端拒绝原因以实际响应为准。
+同一路由、账户范围未变的 OAuth 检查点可以在刷新或重新登录后继续使用。但执行中的压缩和迁移摘要还要核对这一次登录：
 
-## 恢复与停用
+- [Pi OAuth 连续性补丁](../../sdk-patches/pi-1.5.2/README.md)让正常刷新保留登录标识，账户信息不透明时也能确认同一次登录。其他进程经相同补丁刷新也可保持连续。
+- 重新登录、外部替换凭据、API key 或账户范围变化，会取消正在执行的请求并保留历史。
+- 未安装补丁的 Pi 1.5.2 只能使用可见账户证据；证据不足时取消并说明原因。
 
-先检查 Pi 当前认证、原模型和请求路由。有效文字摘要优先复用；只有**原模型、原请求路由**显式 `/compact` 时才从保存的 canonical 原文重建。重建同样经过 Goal/Condense 投影和容量检查；失败时用 `/tree` 回更早位置，原分支保留。
+官方 managed Pi 1.5.2 的正常 Metis 安装、更新会交付补丁版 SDK。磁盘安装后需重启 Pi；扩展 `/reload` 只更新 Metis，不能替换当前进程已加载的 SDK。
 
-接管 `/compact` 的扩展同时只能启用一个。检查点是 provider 私有数据；停用此入口前，先在其他 provider 上 `/compact` 一次，把可迁移内容写成普通文字摘要，或保留回放入口。
+## 跨模型或 provider 使用
+
+加密检查点不能直接交给其他 provider。首次迁移时，经原模型及账户范围检查，用 Pi 当前认证生成一份普通文字摘要，目标 provider 只收到这份明文摘要。
+
+迁移额外产生一次 low-reasoning 请求，输出最多 8,192 tokens，结果保存为 `metisCodexPortableSummary`。有效摘要可在重启、分支或丢失原登录后复用；编辑其来源会使它失效，目标 provider 仍需要自己的有效认证。
+
+## 取消、失败与恢复
+
+生成、发布和发送前都会检查会话、分支、来源、模型、认证、provider 与取消状态。目录包装对象重建不算来源变化；与 Condense 的后台维护通过同一请求的所有权协调。
+
+模型不可用、认证范围不符、源被编辑、断流或结果不合格时，暂停相应请求或取消本次压缩，保留历史和检查点。不会悄悄把失败的远端结果换成另一份普通摘要。HTTP 沿用原生重试，最多重试 2 次；后端必须支持对应协议。
+
+恢复顺序：
+
+1. 检查 Pi 当前认证、原模型与请求路由，已有有效迁移摘要时优先复用。
+2. 需要从原文重建时，回到**原模型、原请求路由**，显式执行 `/compact`。重建仍经过 Goal/Condense 投影和容量检查。
+3. 仍无法恢复时，用 `/tree` 回到更早位置；原分支保留。
+
+接管 `/compact` 的扩展同时只能启用一个。停用远端压缩入口前，应先在其他 provider 上执行 `/compact`，把可迁移内容保存为普通文字摘要；否则需保留能回放私有检查点的入口。

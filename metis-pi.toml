@@ -193,7 +193,7 @@ groups = []
 # =============================================================================
 # 5. 历史精简 / Condense 与 OCC
 # =============================================================================
-# 默认关闭自动精简和 OCC；机械处理、付费摘要、原生容量恢复有各自的准入。
+# 自动历史整理与空闲整段压缩（OCC）默认关闭；完整说明见 docs/features/condense.md。
 [contextPrune]
 enabled = false
 opportunisticCompaction = false
@@ -212,20 +212,20 @@ summarizerIdleTimeoutMs = 20000
 summarizerMaxTimeoutMs = 180000
 
 # --- 自动触发与分批 -----------------------------------------------------------
-# pruneOn: "agent-message" 在完整可见文本检查点评估，含text+toolCall；"on-demand" 在工具轮次按压力/增长评估。
+# "agent-message" 在完整可见文本回复后评估；"on-demand" 在工具轮次按压力/增长/积压评估，也可手动执行。
 pruneOn = "agent-message"
-# batchingMode: "turn" 按主请求；"agent-message" 只合并同一文本小chain内的请求，预算chunk不改变语义分组。
+# "turn" 保持主请求独立；"agent-message" 合并同一文本小 chain 内的相邻请求。输入超预算时仍会拆分。
 batchingMode = "turn"
 # 付费摘要的窗口占比，范围 (0,1]；false 禁用自动付费摘要。
 # 手动请求、确定性处理和 Pi 原生容量恢复不受此关闭开关影响。
 autoBudgetThreshold = 0.7
-# 语义候选的字符保护；0 仅取消此保护，仍须满足压力和净收益预算。
+# 待付费摘要的剩余内容低于此字符数时保留原文；0 只取消字符保护。
 minBatchChars = 5000
-# 静默字符门槛/过大跳过通知，不改变实际处理和保护逻辑。
+# 隐藏字符门槛和过大跳过通知，不改变处理规则。
 quietOversizedSkips = false
-# 可选增长触发：(0,1] 的窗口比例；false 关闭，触发后仍要过准入。
+# 可选单轮增长触发：(0,1] 的窗口比例；false 关闭。仍须通过付费压力与收益检查。
 budgetTurnDelta = false
-# 可选尾部 gap 触发，单位 tokens，须 >0；false 关闭。
+# 可选尾部未整理内容触发量，单位 tokens，须 >0；false 关闭。
 frontierGapThresholdTokens = false
 
 # --- 原文保护与恢复 -----------------------------------------------------------
@@ -233,13 +233,13 @@ frontierGapThresholdTokens = false
 protectedTools = []
 # 对 args.path 的 glob；空数组关闭路径保护。
 protectedPaths = ["**/skills/**/*.md", "**/gauntlet-overrides.md"]
-# 回读原文保护的大任务边界数：真实用户或typed goal continuation，不计文本检查点/派生user；0关闭宽限。
+# 原文回读后的保护期，按用户输入或 Goal 续推的大任务边界计数；文本回复不计数，0 关闭。
 recoveryGraceTurns = 3
 # 精确正文哈希去重；保留每次执行的参数/状态/ref，且实际 stub 必须更小。
 dedupByContentHash = true
 
 # --- 大输出落盘与图片 ---------------------------------------------------------
-# 单结果落 sidecar 的字符门槛，须 >0；预览大小单位 bytes，允许 0。
+# 单结果归档并留下预览的字符门槛，须 >0；预览大小单位 bytes，允许 0。
 spillThreshold = 65536
 spillPreviewBytes = 2048
 # 每请求保留最新 N 张图片（整数 >=1）；false 使用 API 默认，不是禁用图片。
@@ -247,29 +247,25 @@ spillPreviewBytes = 2048
 maxImagesPerRequest = false
 
 # --- Pi 原生压缩输出 ----------------------------------------------------------
-# 额外输出硬上限，单位 provider tokens；0 沿用 Pi 默认。
-# 不改 reserve/容量触发线，不等同下方的 OCC 文本软目标。
+# Pi 普通文字压缩的额外输出硬上限，单位 provider tokens；0 沿用 Pi/模型限制。
+# 不改变容量触发线，不限制远端加密检查点；与 OCC 文字软目标分开设置。
 compactionSummaryMaxTokens = 0
 
-# 闭合文本小chain整理；开放大任务中的旧小组也可选，自动维护不发起二次付费融合。
+# 整理已闭合的文本小 chain；大任务尚未结束时也可整理其中旧段。自动整理不额外付费融合摘要。
 [contextPrune.chainCompression]
 enabled = true
-# 近期闭合文本小chain参考数；开放小组也消耗同一原文参考预算，不因大任务开放锁死旧小组。
-# 0只关闭链数参考，任何值均使用完整工作集/批量/经济策略。
+# 在 minRecentTokens 预算内参考的近期闭合小 chain 数；开放组也占用该预算。
+# 0 只关闭链数参考，其他值同样使用近期原文、有效工作和费用保护。
 rollingWindow = 3
-# 自动工具批次与chain共同保留近期有效工作及原文尾部；均允许0。未闭合小chain不做整组整理，未消费结果不替换。
+# 自动工具摘要与 chain 整理共同保留的工作轮数和原文 tokens，取保护并集；均允许 0。
+# 未消费结果不自动替换；开放小 chain 不做整组整理。
 minWorkTurns = 4
 minRecentTokens = 32768
-# 较大候选/共享组的绝对与总量比例收益门；minGainTokens也是改写发布后的新工作增长下限。
-# 独立2k–64k候选按自身比例收益，绝对底线不超过2048；显式更低的minGainTokens仍生效。
+# 大候选/共享 chain 的绝对、总量比例收益门槛；minGainTokens 也是发布后的新工作增长下限。
+# 独立 2,048–65,536 token 候选按自身比例检查，绝对底线为 min(2048, minGainTokens)。
 minGainTokens = 8192
 minGainFraction = 0.1
-# 工具摘要、packing与chain共用账本；通常预测三轮，有界闭合小组/独立请求chunk最多32轮，语义小chain不按大小定义。
-# 独立候选在256k之后限于最后192k范围，近期原文/有效工作保护不降低；256k不是总上下文硬上限。
-# 两侧每轮同增2000tokens、目标98%缓存。
-# 计入冷重建/摘要费后须严格更便宜，不另留10%余量；新增长不能算作已缓存。
-# 实际回执门仍为冷请求之后连续三次≥90%缓存；未知价按缓存:普通输入=1:10估算。
-# 费用/分词只是估算，不保证实际账单；缺价时SDK的零费用不代表免费。
+# 去掉已整理边界的 thinking，保留可见文本，不处理下一组的右边界。
 stripFinalAssistantThinking = true
 # 仅允许手动 now / compact 额外融合；失败或预算不足时保留机械拼接。
 fuseRangeSummary = true
@@ -283,21 +279,21 @@ minArgChars = 500
 
 
 # =============================================================================
-# 5a. 高级摘要预算 / 通常保持默认
+# 5a. 高级摘要预算
 # =============================================================================
-# local proxy 是归一化模型消息的 o200k 计量，不等同 provider 输出 tokens 或账单。
+# 本地 token 预算使用归一化消息的 o200k 计数，与 provider 输出上限和账单分开。
 # B = 实际被替换结果，K = 真实 stub/预览/路径，N = 本批调用数。
 # 最低收益 G = max(minGainTokens, ceil(minGainFraction × B))。
 # 完整消息限额 R = min(maxProxyTokens, B - K - G)，包含引用和消息包装。
 # 软目标 Q = min(maxProxyTokens, targetBaseTokens + targetPerCallTokens × N)。
-# 预算不足保留原文和 pending，frontier 不跨缺口；不盲目截断来凑预算。
+# 预算不足时保留原文和 pending，处理位置不越过未完成部分。
 [contextPrune.summaryBudget]
 
 # --- 自动压力：provider 上下文 tokens -----------------------------------------
-# 绝对压力 ceiling，也是 delta 窗口分母 ceiling；正安全整数。
+# 付费压力线的绝对上限，也是单轮增长比例的窗口上限；正安全整数，不是总上下文目标。
 maxBudgetWindowTokens = 300000
-# 可解析 Pi 原生容量线前的增长余量；0 不额外预留。
-# 自动pending接近Pi有效容量减去此余量时保留原文，交原生压缩处理；不借救急绕过费用和近期保护。
+# 付费压力线为 min(autoBudgetThreshold × 模型窗口, 上项, Pi有效容量 − 此余量)。
+# 0 不额外预留。达到 Pi 有效容量的 90% 后停止新增自动改写，等待原生压缩。
 growthHeadroomTokens = 16384
 
 # --- 净收益与完整消息：本地 proxy tokens --------------------------------------

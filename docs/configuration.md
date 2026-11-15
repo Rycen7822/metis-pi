@@ -141,6 +141,6 @@ Pi package entry filters 控制扩展加载。在 `settings.json` 的 packages �
 | 远端压缩 | `-extensions/codex-compaction.ts`；含检查点的会话先按[恢复说明](features/codex-compaction.md)写成普通摘要。 |
 | 网页访问 / 会话回忆 | `-extensions/web-access.ts` / `-extensions/session-recall.ts`。 |
 
-移除排除项恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示，`/pruner off` 只停自动精简、保留历史回读。
+移除排除项恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示；`/pruner off` 关闭本地历史整理，已归档内容仍可回读。
 
 网关分类把 `workspace_billing_scope_unavailable` 交给 Pi 原生 retry 策略处理。Pi 文档指引位于 `<agentDir>/PI_Documentation_Guide.md`；带 Metis 首行标记的文件按当前 SDK 路径更新，其余内容保持用户手写。

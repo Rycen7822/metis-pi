@@ -244,16 +244,7 @@ export interface ContextPruneConfig {
   maxImagesPerRequest: number | null;
 }
 
-/**
- * Detected (pre-decision) shape emitted by chain-detector.
- * Distinct from ChainCompressionEntry (the persisted post-decision shape).
- *
- * NOTE: AgentMessage has no `.id` field, so chains are identified by
- * `timestamp` (for user/final-assistant boundaries) and `toolCallId` sets
- * (for middle tool-using turns). The chain-compressor promotes ChainRange
- * into a ChainCompressionEntry by adding blockId, toolRefs, and compressedAt.
- */
-/** Historical wire names are retained so committed single/shared records remain readable. */
+/** Historical field names keep persisted user/custom → final-assistant ranges readable. */
 export interface ChainBounds {
   startUserTimestamp: number;
   finalAssistantTimestamp: number | null;
@@ -261,6 +252,10 @@ export interface ChainBounds {
   checkpointBoundary?: { startRole: "user" | "assistant" | "custom"; endRole: "user" | "assistant" | "custom" };
 }
 
+/**
+ * Closed text-group candidate identified by boundary timestamps and occurrence keys.
+ * Compression adds the persistent block ID, refs and commit time.
+ */
 export interface ChainRange extends ChainBounds {
   /**
    * All toolCallIds in the chain's middle (deduplicated). Collected from both

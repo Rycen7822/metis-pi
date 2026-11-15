@@ -110,99 +110,80 @@ function parseModelAndThinkingArg(
   return { model, thinking: thinking as ContextPruneConfig["summarizerThinking"] };
 }
 
-const HELP_TEXT = `pruner — automatically summarizes tool-call outputs to keep context lean.
+const HELP_TEXT = `pruner — shorten tool history and recover archived originals.
 
 Usage:
   /pruner settings                         Interactive settings overlay
-  /pruner on                               Enable context pruning
-  /pruner off                              Disable context pruning
-  /pruner status                           Show status, model, prune trigger, batching mode, and stats
-  /pruner model                            Show the current summarizer model
-  /pruner model <id>                       Set summarizer model (e.g. anthropic/claude-haiku-3-5)
-  /pruner model <id>:<thinking>            Set summarizer model and thinking together (e.g. openai/gpt-5-mini:low)
-  /pruner thinking                         Show the current summarizer thinking level
-  /pruner thinking <level>                 Set summarizer thinking: default, off, minimal, low, medium, high, xhigh
-  /pruner prune-on                         Show or interactively pick the trigger
-  /pruner prune-on on-demand               Only summarize when /pruner now runs
-  /pruner prune-on agent-message           Summarize after the agent's final text reply (default; safest for cache stability)
-  /pruner batching                         Show or interactively pick the batching granularity
-  /pruner batching turn                    One summary per assistant turn (default)
-  /pruner batching agent-message           One summary per user→final-agent-message span (merges all turns in a span)
-  /pruner stats                            Show cumulative summarizer token stats
-  /pruner now                              Flush pending tool calls immediately (shows live footer progress)
-  /pruner protected-tools                  Interactively edit the never-pruned tool allowlist
-  /pruner protected-tools <names>          Set the allowlist (comma- or space-separated; 'none' clears)
-  /pruner protected-paths                  Interactively edit the never-pruned path globs
-  /pruner protected-paths <globs>          Set the globs (comma- or space-separated; 'none' clears)
-  /pruner min-batch-chars                  Show the current pre-flush trivial-batch threshold
-  /pruner min-batch-chars <n>              Set the threshold (non-negative integer; 0 disables)
-  /pruner compaction-summary-limit [n]    Show/set native summary token ceiling (0 keeps Pi's limit)
-  /pruner recovery-grace                   Show the current recovery grace window (user-turn-groups)
-  /pruner recovery-grace <n>               Set the window (non-negative integer; 0 disables)
-  /pruner compact                          Retroactively compress all closed chains (ignores rollingWindow; force-compresses every eligible chain)
-  /pruner dedup                            Show the current pre-flush content-hash dedup state
-  /pruner dedup on|off                     Enable or disable content-hash dedup
+  /pruner on|off                           Enable/disable local history pruning; archive recall remains available
+  /pruner status                           Show configuration, pending work and stats
+  /pruner model                            Show the summarizer model
+  /pruner model <provider/model-id>        Set the summarizer model
+  /pruner model <provider/model-id>:<level> Set model and thinking level together
+  /pruner thinking [level]                 Show/set thinking: default, off, minimal, low, medium, high, xhigh
+  /pruner prune-on                         Show or choose the trigger
+  /pruner prune-on on-demand               Evaluate pressure/growth at tool rounds; also allows manual now
+  /pruner prune-on agent-message           Evaluate at complete visible text replies (default)
+  /pruner batching                         Show or choose batching mode
+  /pruner batching turn                    Keep model requests separate (default)
+  /pruner batching agent-message           Merge adjacent requests within one text chain
+  /pruner stats                            Show extra summarizer token usage
+  /pruner now                              Process pending work now; pruning must be enabled
+  /pruner compact                          Compress eligible closed text chains, ignoring rollingWindow
+  /pruner protected-tools [names]          Show/edit protected tool names; comma/space-separated, 'none' clears
+  /pruner protected-paths [globs]          Show/edit protected path globs; comma/space-separated, 'none' clears
+  /pruner min-batch-chars [n]              Show/set the semantic-batch character guard; 0 disables this guard
+  /pruner compaction-summary-limit [n]    Show/set Pi text-summary output ceiling; 0 keeps Pi/model limits
+  /pruner recovery-grace [n]              Show/set recall protection in user/Goal task boundaries; 0 disables
+  /pruner dedup [on|off]                   Show/set exact content deduplication
   /pruner help                             Show this help
 
-Paid summary admission:
-  Default pressure: 70% of the window, 300k tokens, or native capacity minus
-  16384 growth headroom, whichever comes first. Final-reply mode obeys this
-  gate too; manual now bypasses pressure, not net-benefit/output budgets.
-  Remaining semantic batches below minBatchChars (default 5000) make no
-  model call. Set 0 to disable ONLY this character guard. Mechanical work
-  is measured separately and needs no paid summary.
-  Paid replacements must save max(2048, ceil(40% of replaced proxy tokens)).
-  The complete summary, including recovery refs/wrapping, is limited to
-  min(6144, source - retained stubs - required gain) local o200k proxy tokens.
-  Budget rejection retains raw evidence and pending work; the frontier
-  never jumps its gap. Quiet non-error notices with quietOversizedSkips.
-  These proxy budgets are not provider billing/output tokens.
+Grouping:
+  A batch contains one main-model request's tool calls and results. A text
+  chain starts at a complete visible reply and ends before the next reply
+  or user/Goal boundary. A task starts at a user/Goal boundary. Thinking,
+  streaming deltas and derived messages do not start text chains.
+  Batching may split large inputs; it does not change these boundaries.
 
-Protected tools:
-  Some tools' outputs must stay verbatim across turns — typically planning tools
-  like todowrite / todoread that carry state the agent re-reads later. List
-  those tool names in 'protectedTools' (settings) or via /pruner protected-tools.
-  Protected calls bypass the summarizer/index entirely: their raw
-  ToolResultMessage stays in context. Names that don't match any captured
-  tool call are silently ignored.
+Automatic work:
+  Tool summaries and chains retain the latest 32768 estimated raw tokens
+  and 4 useful work rounds by default. Automatic replacements require a
+  later successful main response to confirm consumption. Spill has separate
+  large-output rules. Protected results remain verbatim and may be archived;
+  path globs match args.path, not arbitrary shell command text.
+  Paid summaries also require pressure: by default, the earliest of 70% of
+  the model window, 300000 tokens, or Pi's effective capacity minus 16384.
+  Unknown usage does not permit automatic paid summaries. on-demand is not
+  manual-only; text-reply mode obeys pressure too.
+  A remaining semantic batch below minBatchChars (default 5000) makes no
+  model call. Paid replacements must save max(2048, 40% of replaced tokens).
+  The complete summary, including refs and wrapping, must fit its local
+  o200k budget (at most 6144 tokens by default). These are not billing tokens.
 
-Content-hash dedup (dedupByContentHash):
-  When ON (default), exact (toolName, resultText) SHA-256 identities are
-  compared with previously covered records. Allocate the duplicate's own
-  recovery ref and verify its actual stub shrinks the local proxy before
-  authorizing hiding. No model call is needed; recall preserves each
-  occurrence's arguments, status and timestamp. Whitespace is not normalized.
-  Intra-flush dedup is not used; archiving alone never authorizes pruning.
+Cache and costs:
+  Summaries, packing and chains share cost and reuse checks. Forecasts count
+  a cold request, summary fees, and later requests growing by 2000 tokens
+  each at 98% cache hits. The rewrite must be strictly cheaper; bounded
+  independent candidates may forecast 32 requests, ordinary candidates 3.
+  Further automatic rewrites wait for estimated debt repayment and useful
+  growth; discounted-cache models also need 3 successful requests with at
+  least 90% actual hits after the cold request. Forecasts are not a savings
+  guarantee if work ends early or provider caching changes.
+  At 90% of Pi's effective compaction capacity, new automatic rewrites pause
+  for natural compaction. Existing valid views and archive recall still work.
+  Manual now/compact bypass automatic timing and forecast gates, not source,
+  protection, archive or summary-budget checks; they may reduce cache hits.
 
-Batching mode:
-  - turn (default): each assistant turn that used tools gets its own summary block. Small, granular.
-  - agent-message: all assistant turns between two consecutive user messages are merged into one summary.
-    Use this when a single user request triggers many back-to-back tool rounds that belong together.
+Recovery and failures:
+  Exact dedup keeps each execution's arguments, status, timestamp and ref.
+  Use context_tree_query to read archived output/arguments and nested calls;
+  follow nextCursor with the same selection. eof is page progress, not proof
+  that original capture was complete. Missing archives are explicit errors.
+  Failed or rejected summaries retain raw evidence. Fault fallbacks do not
+  retry empty, truncated or over-budget output on another paid model.
 
-Mode guidance:
-  - on-demand: maximum manual control. Best when you want to decide exactly when to trade cache stability for shorter context.
-${
-  "  - agent-message: recommended default. Batches a whole tool-using run, then " +
-  "prunes once after the final text reply so future requests become cacheable " +
-  "again."
-}
-
-Why this matters:
-${
-  "  Frequent edits to earlier context can reduce prompt/prefix cache hits on " +
-  "providers that cache identical prefixes. Batched pruning is usually cheaper and " +
-  "faster than pruning every turn."
-}
-
-Related:
-  - Anthropic prompt caching docs: https://docs.claude.com/en/docs/build-with-claude/prompt-caching
-
-${
-  "Settings are saved in [contextPrune] of global <agent-dir>/metis-pi.toml " +
-  "(PI_CODING_AGENT_DIR or ~/.pi/agent). /metis-config init imports legacy " +
-  "settings and installs metis-pi-config.md. Advanced gain/output/pressure " +
-  "constants are configurable in [contextPrune.summaryBudget]."
-}`;
+Settings are saved in [contextPrune] of global <agentDir>/metis-pi.toml
+(PI_CODING_AGENT_DIR or ~/.pi/agent). Manual file edits need /reload.
+See docs/features/condense.md and metis-pi-config.md for full rules and units.`;
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const SPINNER_INTERVAL_MS = 120;

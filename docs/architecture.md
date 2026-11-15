@@ -57,7 +57,7 @@ flowchart LR
 | 边界 | 所有权 |
 | --- | --- |
 | 执行 | helper 持有进程输出、退出和关闭，TS manager 管等待、交付、显示。归档缺失部分时保留原因和真实退出码。 |
-| 精简 | 原文、候选、发布表示分开存；保护、错误、未完成、归档失败都会拦下不安全的替换。OCC 和远端压缩协商同一次请求，见 [condense](features/condense.md)、[远端压缩](features/codex-compaction.md)。 |
+| 精简 | 原文、待整理内容和已发布结果分开保存；替换前检查来源、指定保护、消费状态、归档完整性和收益。同一次压缩只由一个入口负责，避免 OCC 与远端入口重复生成摘要，见 [condense](features/condense.md)、[远端压缩](features/codex-compaction.md)。 |
 | MCP | 每个服务器一个会话 owner；缓存只做目录，调用照样走 Pi 事件和权限。 |
 | 网页 | adapter 管协议和计费，transport 把代理限定在 Web 请求并校验 DNS/SSRF；读 Cookie 要授权，Curator 管审阅 UI 和会话。 |
 | 子代理 | Runtime 推任务，worker 跑 run；账本、结果、接收票据管恢复和确认。前端断开只是显示中断，任务照常运行，见[生命周期](subagents/lifecycle.md)。 |

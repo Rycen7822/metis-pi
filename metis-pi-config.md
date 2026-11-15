@@ -166,83 +166,93 @@ exclude = []
 
 只替换已知全局指令来源，项目指令、会话消息、认证、provider 路由保持原样。
 
-## `[contextPrune]`（condense / OCC）
+## `[contextPrune]`（Condense / OCC）
+
+自动历史整理与空闲整段压缩默认关闭。使用方式、分组和费用规则见 [Condense 指南](docs/features/condense.md)。
 
 | 字段 | 默认值 | 含义 / 单位 |
 | --- | --- | --- |
-| `enabled` | `false` | 自动工具结果精简总开关；历史回读仍可用。 |
-| `opportunisticCompaction` | `false` | OCC 提前整段压缩；复用 Pi 模型/认证与容量恢复。 |
-| `showPruneStatusLine` / `showOccStatusLine` | 均 `true` | 精简、OCC 状态栏和通知。 |
-| `compactionSummaryMaxTokens` | `0` | 原生压缩额外输出硬上限，0 使用 Pi 默认；安全整数 ≥0，reserve/触发线另由 Pi 管。 |
-| `summarizerModel` | `"default"` | 当前模型；或已注册的 `provider/model-id`。 |
-| `summarizerFallbackModels` | `[]` | 有序故障备用模型，去重；当前会话模型总在最后。 |
+| `enabled` | `false` | 本地历史整理开关；关闭后仍可读取归档。 |
+| `opportunisticCompaction` | `false` | 空闲时使用 Pi 文字摘要提前整段压缩；还需 `enabled=true`。 |
+| `showPruneStatusLine` / `showOccStatusLine` | 均 `true` | 显示整理、OCC 状态栏和通知。 |
+| `compactionSummaryMaxTokens` | `0` | 普通文字压缩的额外输出硬上限，单位为 provider tokens；0 沿用 Pi/模型限制。不改变触发线，也不限制远端加密检查点。 |
+| `summarizerModel` | `"default"` | 跟随会话模型；也可填已注册的 `provider/model-id`。 |
+| `summarizerFallbackModels` | `[]` | 按顺序尝试的故障备用模型；去重后将尚未列出的会话模型放在最后。 |
 | `summarizerThinking` | `"default"` | `default` / `off` / `minimal` / `low` / `medium` / `high` / `xhigh`。 |
-| `pruneOn` | `"agent-message"` | 完整可见文本检查点评估，含text+toolCall；`"on-demand"` 在工具轮次按配置的压力/增长触发。 |
-| `batchingMode` | `"turn"` | `turn` 保持主请求独立；`agent-message` 只合并同一文本小chain内的请求，均按输入预算拆chunk。 |
-| `quietOversizedSkips` | `false` | 静默字符门槛/过大跳过通知；处理与保护逻辑保持原样。 |
-| `minBatchChars` | `5000` | 剩余语义候选字符保护；0 只关闭此保护，仍须压力与净收益准入。 |
-| `recoveryGraceTurns` | `3` | 回读原文保护的大任务边界数，含真实用户/goal continuation，不计文本检查点或派生user；0关闭宽限。 |
-| `summarizerIdleTimeoutMs` | `20000` | 事件间无进展超时，含首 token；0 关闭。 |
-| `summarizerMaxTimeoutMs` | `180000` | 单次请求总时长上限；0 关闭。 |
-| `protectedTools` | `[]` | 精确工具名；结果原样保留，拼写以工具名为准。 |
-| `protectedPaths` | `["**/skills/**/*.md", "**/gauntlet-overrides.md"]` | 对 args.path 的 glob；空数组关闭路径保护。 |
-| `dedupByContentHash` | `true` | 精确正文哈希去重，每次执行仍保留独立参数/状态/恢复 ref；实际 stub 必须缩小。 |
-| `autoBudgetThreshold` | `0.7` | (0,1] 窗口占比准入；`false` 禁用自动付费摘要，不禁用手动/机械/原生容量恢复。 |
-| `spillThreshold` | `65536` | 单结果落 sidecar 的字符门槛，正数。 |
-| `spillPreviewBytes` | `2048` | 落盘后头部预览字节数，≥0。 |
-| `budgetTurnDelta` | `false` | 可选 (0,1] 轮次增长触发，仍受压力/收益约束；false 关闭。 |
-| `frontierGapThresholdTokens` | `false` | 可选正数尾部 token-gap 触发，仍受压力/收益约束；false 关闭。 |
-| `maxImagesPerRequest` | `false` | 保留最新 N 张，整数 ≥1；false 使用 API 默认（Anthropic 100，其他不额外限制）。精简关闭时仍生效。 |
+| `pruneOn` | `"agent-message"` | 在完整可见文本回复后评估；`"on-demand"` 在工具轮次按压力、增长或积压设置评估，也支持手动执行。 |
+| `batchingMode` | `"turn"` | 保持主请求独立；`"agent-message"` 合并同一文本小 chain 内的相邻请求。两者均按摘要输入预算拆分。 |
+| `quietOversizedSkips` | `false` | 隐藏字符门槛和过大跳过通知，不改变处理规则。 |
+| `minBatchChars` | `5000` | 待付费摘要的剩余内容低于此字符数时保留原文；0 只取消字符保护。 |
+| `recoveryGraceTurns` | `3` | 原文回读后的保护期，按用户输入或 Goal 续推的大任务边界计数；0 关闭。文本回复和派生 user 消息不计数。 |
+| `summarizerIdleTimeoutMs` | `20000` | 摘要请求事件间无进展超时，含首 token 等待，单位毫秒；0 关闭。 |
+| `summarizerMaxTimeoutMs` | `180000` | 单次摘要请求总超时，单位毫秒；0 关闭。 |
+| `protectedTools` | `[]` | 结果原样保留的精确工具名。 |
+| `protectedPaths` | `["**/skills/**/*.md", "**/gauntlet-overrides.md"]` | 匹配工具参数 `path` 的 glob；空数组关闭。不会解析任意 shell 命令中的路径。 |
+| `dedupByContentHash` | `true` | 对工具名、结果正文完全相同的记录去重，仍保留每次执行的参数、状态和恢复引用；替换必须更小。 |
+| `autoBudgetThreshold` | `0.7` | 自动付费摘要的窗口比例，范围 (0,1]；`false` 关闭自动付费摘要，手动整理、无模型处理和 Pi 原生压缩不受影响。 |
+| `spillThreshold` | `65536` | 单结果归档并留下预览的字符门槛，正整数。 |
+| `spillPreviewBytes` | `2048` | 大结果落盘后保留的头部预览字节数，整数 ≥0。 |
+| `budgetTurnDelta` | `false` | 可选的单轮增长触发，范围 (0,1]；`false` 关闭。仍须通过付费压力与收益检查。 |
+| `frontierGapThresholdTokens` | `false` | 可选的尾部未整理内容触发量，正整数 tokens；`false` 关闭。仍须通过付费压力与收益检查。 |
+| `maxImagesPerRequest` | `false` | 保留最新 N 张图片，整数 ≥1；`false` 使用 API 默认（Anthropic 100，其他不额外限制）。历史整理关闭时仍生效。 |
 
 ### `[contextPrune.chainCompression]`
 
-`enabled=true` 整理闭合文本小chain，包括开放用户大任务内的旧小组；只复用现成摘要/归档事实，不额外请求模型。
-小batch是一次主请求的增量工具轮，小chain是完整可见文本到下一文本前，大chain是用户/typed goal到下一任务边界前；详见[分组定义](docs/features/condense.md#三层分组)。
+整理已经闭合的文本小 chain，包括尚未结束的大任务内的旧段。自动整理复用现成摘要，不额外请求融合摘要。分组按消息边界定义，见[三层分组](docs/features/condense.md#三层分组)。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `rollingWindow` | `3` | 近期闭合文本小chain参考数，≥0；与开放小组共用`minRecentTokens`预算，不无条件锁定N条链。 |
-| `minWorkTurns` | `4` | 自动工具批次与chain共同保留的最近有效工作轮次，≥0；失败、轮询、回读不让资料变旧。 |
-| `minRecentTokens` | `32768` | 自动工具批次与chain共同保留的近期原文尾部，与工作轮次取并集；≥0。 |
-| `minGainTokens` | `8192` | 自动chain最低净释放量；也是工具批次/chain发布后的最低新工作增长量，正安全整数。 |
-| `minGainFraction` | `0.1` | 自动chain净释放量还须达到有效上下文的此比例，[0,1]；工具摘要沿用summaryBudget局部门槛。 |
-| `stripFinalAssistantThinking` | `true` | 保留可见文本、去掉已压边界thinking；新半开范围不处理下一组的右边界。 |
-| `fuseRangeSummary` | `true` | 允许手动now/compact额外付费融合；失败/预算不足保留机械拼接。 |
+| `enabled` | `true` | 自动 chain 整理开关；仍需总开关 `contextPrune.enabled=true`。 |
+| `rollingWindow` | `3` | 在近期原文 token 预算内参考的闭合小 chain 数量，整数 ≥0；不是无条件保留 N 整组。 |
+| `minWorkTurns` | `4` | 自动工具摘要和 chain 共同保留的最近有效工具工作轮数，整数 ≥0；失败、轮询、等待和回读不算。 |
+| `minRecentTokens` | `32768` | 保留的近期原文尾部，按 Pi 估算 tokens 计，与工作轮次保护取并集；整数 ≥0。 |
+| `minGainTokens` | `8192` | 大候选/共享 chain 的最低净节省量，也是发布后所需的新工作增长下限；正安全整数。 |
+| `minGainFraction` | `0.1` | 大候选/共享 chain 按总上下文检查的净节省比例，有界独立候选按自身大小检查；范围 [0,1]。工具摘要另受 `summaryBudget` 约束。 |
+| `stripFinalAssistantThinking` | `true` | 去掉已整理边界的 thinking，保留可见文本；不处理属于下一组的右边界。 |
+| `fuseRangeSummary` | `true` | 允许手动 `now` / `compact` 额外付费融合已有摘要；失败或预算不足则保留拼接结果。 |
 
-开放小chain、近期原文、最近有效轮次、保护输出和回读宽限继续保留；开放大任务不再锁死其中所有闭合小组。
-参考从新到旧计入，放不下最近一组就停止；引用软预算跟随`minRecentTokens`（默认32k），不是工作集上限。0只关闭链数参考，无需改0才采用新策略。
-显式`minRecentTokens=0`同时取消原文最低量与引用的token限额；手动now仍使用配置的引用窗口，compact整理全部安全闭合组。
+开放组也占用 `rollingWindow` 的原文预算，从近到远选择，下一整组放不下就停止。设 `rollingWindow=0` 只取消链数参考；显式 `minRecentTokens=0` 同时取消原文最低量和引用组 token 限额。手动 `now` 使用配置的引用窗口，`compact` 忽略该窗口。
 
-2k–64k估算正文为有界经济档，不是“小chain”的定义；按候选自身收益评估最多32轮，绝对净收益底线不超过2048。
-闭合且已消费的旧请求chunk可独立走此档，仍须局部proxy预算及摘要费；不得借其他候选收益。更大候选/共享组保留三轮预测与总量收益门。
-过256k的局部候选只选最后192k内的旧内容，不减少近期保护；256k不是上下文硬上限。
-工具摘要、packing与chain共享冷请求、摘要费和债务；预测双方后续同增2000tokens、98%缓存，计费后压缩侧必须严格更便宜。
-发布后须债务清零、新增至少`max(minGainTokens, 上次净收益/4)`有效工作tokens；有缓存折扣时还须冷请求后连续三次真实命中≥90%。
-价格优先Pi模型目录，再models.dev本地缓存；两处未知才用缓存:普通输入=1:10，不把SDK零价误当免费。旧`maxCostOverhead`已不控制准入。
-这些是估算，不保证任务提前结束、缓存失效或路由变化时仍能回本；完整报价/刷新规则见功能文档。
-达到Pi有效原生容量90%后暂停新增自动改写，保留前缀等待Native；手动now/compact、已发布视图重验与恢复不受此暂停影响。
-`enabled`只开关自动chain；OCC、spill、Native各保留职责边界，未改变其触发算法。
+2,048–65,536 个估算 tokens 的闭合独立候选使用局部费用评估，绝对收益底线为 `min(2048, minGainTokens)`，比例按候选自身计算，最多预测后续 32 次请求；普通大候选/共享组预测 3 次。两侧每次新增 2,000 tokens、目标缓存命中 98%，冷请求和摘要费计入后须严格更便宜。发布后的实际复用、工作增长与费用等待见[缓存与费用](docs/features/condense.md#缓存与费用)。旧 `maxCostOverhead` 不再控制此规则。
+
+超过 256,000 个估算 tokens 后，有界独立候选仅修改最后 192,000 范围内的旧内容，近期保护不降低。Pi 自动压缩容量可解析时，达到其有效容量的 90% 后暂停所有新增自动改写，保留前缀等待原生压缩；手动操作和已发布结果的重验不受暂停限制。
 
 ### `[contextPrune.purgeErrors]`
 
-`enabled=true`；`cooldownTurns=2` 是失败后等待轮次数；`minArgChars=500` 是允许精简失败调用参数的字符门槛。数值 ≥0；正文与恢复证据另行保护。
-
-### `[contextPrune.summaryBudget]`（高级校准参数）
+仅清理失败工具调用的过长参数，不等同于删除错误结果或恢复证据。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `maxBudgetWindowTokens` | `300000` | 压力绝对 ceiling，同时是 delta 窗口分母 ceiling；正安全整数。 |
-| `minGainTokens` | `2048` | 单次付费替换最低本地 proxy 净收益；正安全整数。 |
-| `minGainFraction` | `0.4` | 最低收益占被替换结果 B 的比例，[0,1]；与绝对门槛取较大值。 |
-| `maxProxyTokens` | `6144` | **整个渲染摘要消息**的本地 proxy 上限，含引用/包装；正安全整数。 |
-| `targetBaseTokens` | `512` | 软目标基数，安全整数 ≥0。 |
-| `targetPerCallTokens` | `96` | 每个本批调用增加的目标量，安全整数 ≥0。 |
-| `growthHeadroomTokens` | `16384` | 可解析原生容量线前的增长余量，≥0；0 不额外预留。 |
-| `nativeTargetTokens` | `16384` | **仅 OCC** 的原生摘要输出文本软目标，≥0；0 不附加目标。不改变 Pi/provider 硬 cap，不自动注入普通原生路径。 |
+| `enabled` | `true` | 开启失败调用参数清理。 |
+| `cooldownTurns` | `2` | 失败后等待的轮数，整数 ≥0。 |
+| `minArgChars` | `500` | 参数达到此字符数才允许清理，整数 ≥0。 |
 
-`G=max(minGainTokens,ceil(minGainFraction×B))`，`R=min(maxProxyTokens,B-K-G)`，`Q=min(maxProxyTokens,targetBaseTokens+targetPerCallTokens×N)`。B 仅为实际被替换结果，K 为真实 stub/预览/路径；目标至少保留空包装加 256 tokens 的正文余地。不足时保留原文/pending，frontier 不跨缺口。手动请求绕过自动调度门，不绕过输出/收益预算。机械去重须实测正收益；自动packing还须通过共同近期保护、增长和缓存经济门。
+### `[contextPrune.summaryBudget]`（摘要预算）
 
-这些是用户可调策略，覆盖范围限于这里列出的参数。局部 o200k proxy、provider `maxTokens`、native 容量信用和账单是相互独立的口径；语义质量与经济回本以实际输出为准。所有备用模型受同一最终消息校验，输出预算拒绝后改用机械整理。完整行为与恢复边界见包内 `docs/features/condense.md`。
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `maxBudgetWindowTokens` | `300000` | 付费摘要压力线的绝对上限，也是单轮增长比例的窗口上限；正安全整数，不是压缩后总上下文目标。 |
+| `minGainTokens` | `2048` | 单次付费替换最低本地净节省量，正安全整数。 |
+| `minGainFraction` | `0.4` | 最低节省占被替换结果的比例，范围 [0,1]；与绝对门槛取较大值。 |
+| `maxProxyTokens` | `6144` | 完整摘要消息的本地 token 上限，含恢复引用和包装；正安全整数。 |
+| `targetBaseTokens` | `512` | 摘要软目标的基数，安全整数 ≥0。 |
+| `targetPerCallTokens` | `96` | 每个调用增加的软目标量，安全整数 ≥0。 |
+| `growthHeadroomTokens` | `16384` | 计算付费压力线时在 Pi 有效容量前预留的增长量，整数 ≥0；0 不额外预留。 |
+| `nativeTargetTokens` | `16384` | 仅 OCC 的文字摘要软目标，整数 ≥0；0 不附加目标。不改变 Pi/provider 硬上限，也不注入普通原生压缩请求。 |
+
+设模型窗口为 `W`，Pi 自动压缩有效容量为 `T`。付费压力线为 `min(autoBudgetThreshold × W, maxBudgetWindowTokens, max(0, T − growthHeadroomTokens))`；无法解析 T 时忽略最后一项。单轮增长触发使用 `budgetTurnDelta × min(W, maxBudgetWindowTokens)`，不是累计增长。
+
+摘要预算按本地 o200k 计数：B 为实际被替换结果，K 为保留的引用、预览和路径，N 为本批工具调用数。
+
+```text
+最低净节省 G = max(minGainTokens, ceil(minGainFraction × B))
+完整消息限额 R = min(maxProxyTokens, floor(B − K − G))
+软目标基数 Q = min(maxProxyTokens, targetBaseTokens + targetPerCallTokens × N)
+```
+
+发送前还要为必要包装和至少 256 tokens 正文留空间，最终消息仍须满足 R。预算不足时保留原文和 pending，处理位置不越过未完成部分。手动请求绕过自动时机和费用预测，不绕过摘要输入输出预算、指定保护或实际缩小检查。
+
+本地计数用于比较替换前后大小，provider `maxTokens` 限制输出，Pi 容量线决定原生压缩；这三者与实际账单需分别看待。
 
 ## `[subagents]`（native Pi）
 

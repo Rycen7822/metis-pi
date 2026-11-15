@@ -1,94 +1,93 @@
-# Condense TLA+ 核心模型
+# Condense TLA+ 模型
 
-保留长期有维护价值的机制与反例，不收录一次性压力探针、现场数据、运行日志或历史调查报告。
-模型不执行TypeScript，也不是整个实现的形式化证明；应与现有行为测试一起维护。
+本目录保留需要长期维护的状态机约束和反例。现场数据、调参扫描、运行日志、TLC JAR 与一次性探针放在 `.work/`，不随测试发布。
+
+TLC 检查有限状态模型，**不执行 TypeScript，也不证明整个实现正确**。修改相关行为时，需要同时核对模型及实际 TS/SDK 测试。
 
 ## 运行
 
-需要Node及Java17+；已验证Java21、TLC2.19（官方TLA+1.7.4的`tla2tools.jar`）。
-从[官方release](https://github.com/tlaplus/tlaplus/releases/tag/v1.7.4)自行取得JAR；不自动下载、不把JAR加入仓库。
+需要 Node 和 Java 17+。已验证环境为 Java 21、TLC 2.19，JAR 来自官方 TLA+ 1.7.4。
+从[官方 release](https://github.com/tlaplus/tlaplus/releases/tag/v1.7.4)取得 `tla2tools.jar`；runner 不自动下载。
 
 ```sh
 TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal
-# 定向执行，可列出多个模型名
+# 可指定一个或多个模型
 TLA2TOOLS_JAR=/absolute/path/tla2tools.jar npm run test:formal -- AsyncReaders PublicationTxn
 ```
 
-每个配置单worker、最多1GiB heap/90秒；配置、完整日志和结果放独立`.work/formal-*`目录。
-缺Java/JAR、解析失败、超时、未完成检查或未命中指定性质均失败，不会自动跳过报绿。
-独立命令不加入默认`npm test`/`npm run verify`、插件安装或发布依赖；npm发布文件不包含`test/`。
+每个配置使用一个 worker，最多 1 GiB heap、90 秒。生成的配置、完整日志和结果存入独立 `.work/formal-*` 目录。
+缺 Java/JAR、解析失败、超时、未完成检查或未命中指定性质均算失败，不能以跳过代替通过。
 
-## 保留范围与源码责任
+此命令独立于默认 `npm test`、`npm run verify` 和安装流程；npm 发布文件不包含 `test/`。
+配置与预期集中在 `condense/cases.mjs`，runner 生成 `.cfg`，不维护重复配置文件。
+预期反例必须同时匹配退出码和指定性质；它们可能是故意移除保护、错误期待或成功路径见证，不等于已知产品缺陷。
 
-|模型|持续保护的契约|源码owner|
-|---|---|---|
-|PressureGrid|300K至1M每100K一档，675组profile；level/headroom、未饱和delta、native严格容量线|`src/condense/budget.ts`；Pi原生compaction|
-|OccScheduler|60/52/72%、请求内耗尽/重入、work/hold、near接管与复用次数取整|`src/condense/occ.ts`|
-|ChainEconomics|微小整理费用反例；冷请求＋三轮98%/2k增长预测、摘要费不提前抵扣、实际90%复用、增量滞回、容量救急/交接|`rewrite-policy.ts`、`runtime.ts`|
-|ColdBoundary|冷许可绑定请求与来源；计划/取消、上次低命中、准备后变热不能冒充当前已冷|chain经济准入的参考约束；`runtime.ts`|
-|PublicationTxn|等待前捕获；来源正文/策略/生命周期完整校验与发布原子边界；无收益延期|`src/condense/runtime.ts`|
-|RetryLifecycle|恢复/修复后的稳定ref、无重复归档；候选级负向准入缓存、手动及生成后拒绝重试|`src/condense/indexer.ts`、`runtime.ts`|
-|DeferredGuards|无收益重试不按批次重复复核完整来源；前沿不越过缺口，实际发布仍原子校验|`src/condense/runtime.ts`|
-|AsyncReaders|双reader独占buffer、rewrite/store/leaf失效、取消、I/O失败与fd关闭|SDK补丁0010的store/manager|
-|WindowAdmission|按选中分支路径尾窗口准入；LRU有界、不丢记录/顺序、热窗口不被全扫逐出|SDK补丁0010|
-|EncoderMemo|排队快照、mode/after缓存键、仅复用计数、元数据/预算重新判断、有界LRU|`src/condense/token-estimator.ts`|
-|LayeredCycles|多代参数/工具/shared层的24种顺序；派生形状、源/保护/owned摘要变更及Native截半成员|`runtime.ts`、`argument-history.ts`、`pruner.ts`|
-|RecoveryCycles|重复ID仍有自己的参数/ref；多代持久化失败/恢复；Native退休旧缺口而不删回读记录|`indexer.ts`、`runtime.ts`、`frontier.ts`|
-|RenderAdmission|容量等待不能阻止重验已发布视图，也不能放开新的压缩工作|`runtime.ts`、`occ.ts`|
-|SharedRetryWork|无收益候选重用结论、不做发布级复核；历史成员先按当前锚点筛选；有收益仍须最终源校验| `runtime.ts` |
-|NativeAuthorization|Native完成/取消后的首次请求等待本地视图就绪；只排后台任务不足以保证就绪| `runtime.ts` |
-|ActiveRanges|活动范围按当前投影一次建索引；锚点唯一性、内容证明和最终源复核不能省略| `chain-range-prune.ts`、`runtime.ts` |
-|BodyCoverage|同一合成块ID不代表覆盖了新增成员；派生输入重放保留未被表示的原文| `chain-range-prune.ts` |
-|VerdictEpoch|收益正负翻转；策略、来源、owned摘要、保护和模型变化使旧结论失效；失败不作负向缓存| `runtime.ts` |
-|NativeFragments|参数调用组中途裁剪、重复ID仍保留各自参数/输出；不完整组不能授权替换| `argument-history.ts`、`indexer.ts` |
-|BranchAuthority|共同前缀与分支私有引用；目录重建和分页选择身份各自阻止跨分支串读| `indexer.ts`、`query-tool.ts` |
+## 模型对应的实现
 
-TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避免维护大量重复配置。
-预期反例包括故意移除保护、错误期待和成功路径可达性见证；须同时命中退出码与指定不变量。
-无公平性的reader对照须命中时间性质失败，不是产品死循环。
+下表中未写完整路径的 TS 文件均位于 `src/condense/`；SDK 补丁位于 `sdk-patches/pi-1.5.2/`。
 
-## 维护与边界
+| 模型 | 检查内容 | 对应实现 |
+| --- | --- | --- |
+| PressureGrid | 300k–1M 每 100k 一档的 675 组压力参数；容量余量、未饱和增长触发、原生容量线 | `budget.ts`、Pi 原生压缩 |
+| OccScheduler | 60%/52%/72% 调度，等待耗尽、重入、保持期和复用次数取整 | `occ.ts` |
+| ChainEconomics | 体积变小却更贵的反例；冷请求、三轮增长预测、摘要费、实际复用和发布间隔 | `rewrite-policy.ts`、`runtime.ts` |
+| ColdBoundary | 冷请求许可绑定当前请求与来源，不能拿计划、取消或旧低命中冒充当前已冷 | `runtime.ts` 的费用检查参考约束 |
+| PublicationTxn | 等待前捕获来源，发布时校验正文、策略和生命周期；无收益则保留原文 | `runtime.ts` |
+| RetryLifecycle | 稳定引用、避免重复归档、候选拒绝结果的缓存与重试 | `indexer.ts`、`runtime.ts` |
+| DeferredGuards | 延期重试不逐批重复完整校验，处理位置不越过缺口 | `runtime.ts` |
+| AsyncReaders | 两个读取者不共用可变 buffer；来源失效、取消、I/O 失败和文件关闭 | SDK 补丁 0010 |
+| WindowAdmission | 选中分支的尾窗口、有界 LRU、记录顺序与热窗口保留 | SDK 补丁 0010 |
+| EncoderMemo | 排队快照、编码模式缓存键、仅复用计数、预算重算及有界 LRU | `token-estimator.ts` |
+| LayeredCycles | 多代参数、工具、共享摘要和 Native 裁剪交错；来源、保护和摘要变化 | `runtime.ts`、`argument-history.ts`、`pruner.ts` |
+| RecoveryCycles | 重复 ID 的独立参数和引用；持久化失败、恢复与旧缺口退出活动窗口 | `indexer.ts`、`runtime.ts`、`frontier.ts` |
+| RenderAdmission | 容量等待不妨碍重验已有视图，也不允许新压缩绕过等待 | `runtime.ts`、`occ.ts` |
+| SharedRetryWork | 同一无收益候选复用判断；有收益时仍做最终来源校验 | `runtime.ts` |
+| NativeAuthorization | Native 完成或取消后的首次请求须等本地视图就绪 | `runtime.ts` |
+| ActiveRanges | 同一投影的范围索引、唯一锚点、内容证明与最终来源校验 | `chain-range-prune.ts`、`runtime.ts` |
+| BodyCoverage | 合成块 ID 相同不代表新成员已被摘要覆盖，未覆盖原文必须保留 | `chain-range-prune.ts` |
+| VerdictEpoch | 来源、策略、保护、摘要或模型变化后重新判断收益；失败不缓存成拒绝 | `runtime.ts` |
+| NativeFragments | 调用组被中途裁剪、重复 ID 与不完整参数/结果组 | `argument-history.ts`、`indexer.ts` |
+| BranchAuthority | 共同前缀、分支私有引用及分页身份，防止跨分支串读 | `indexer.ts`、`query-tool.ts` |
 
-- 修改owner源码的契约时，先核对模型映射、场景预期和对应现有TS/SDK行为测试；不要只改模型让它变绿。
-  模型自身通过不能证明实际实现仍满足它；本目录不与源码自动生成/绑定。
-- PressureGrid的threshold=0只刻画helper失效输入，不代表TOML的关闭值。配置关闭使用false；用量未知不授权自动付费。
-  maxBudget是软门槛，不保证压缩后总上下文低于它；provider用量、proxy tokens和底账字节不能互相替代。
-- OCC的ready是瞬时布尔值，不是持久phase；取整后的剩余复用次数须至少11，不能用大于10的未取整值代替。
-- ChainEconomics的`funded`保留即时回本参考，`gain-only`保留体积下降却更贵的反例；`payback`验证冷请求＋三轮基准费用比较。
-  实现的有界局部候选可用32轮，语义分组与该经济档分离；文本/请求边界、32轮与实际SDK行为由TS用例覆盖，本模型不声称验证这些解析规则。
-  两侧后续同增2k/4k/6ktokens、目标98%缓存，缓存量不超过上一轮长度；包含冷重建/摘要费，严格更便宜才放行，不另留10%余量。
-  摘要费在提交时立即入账；预计冷请求盈利只能在该请求发生后抵扣，且首冷请求不同时抵扣暖请求收益或参与三次复用。
-  之后仍须债务清零、连续三次90%实际命中和有效增长；旁路复用期会击穿StableBeforeRewrite。
-  精确2k/98%profile检查ColdAndThreeRequestDebt及真正放行；变动增长保留CostDebtBound，不宣称任意增长四次必回本。
-  模型冷请求作为无额外增长的单独步骤，后面三轮才增加2k；不承诺提前结束时回本。冷启动预热/错误usage另由TS用例覆盖。
-  大旧链在同一场景检查成本/债务安全与弱公平下最终放行，不能靠始终拒绝压缩来通过。
-  两组从相同缓存状态开始、支付相同新增工作，按符号token与固定读/冷价记账；费用放大100倍，均价还款向下量化，保守避免TLC整数溢出。
-  不验证实际工作分类、价格可信度、投影估算误差或实机账单；这些profile不是对任意服务端缓存行为的证明。
-  模型minGain与fraction通过整数参数缩放；产品另取Pi/proxy较小收益，只用共享消息对象前缀作保守估计，不声明provider精确账单。
-  真正容量救急及原对照超出容量后不承诺费用不增；Native交接不建模其账单。1M输入配置用1.5M抽象容量隔离经济问题。
-  不验证provider分词、写缓存费用、过期/路由或真实延迟；不把低cache百分比直接等同账单上涨。
-- ColdBoundary刻画一次实际共同前缀失效，不是所有Native完成都必冷。请求/来源代次是ghost身份，不要求新增持久版本框架。
-  已发布视图不因新工作延期而撤销的保护复用RenderAdmission；没有重复引入布局探针、调参扫描或独立临时runner。
-- Reader活性依赖弱公平调度、有限干扰和close成功；同步回退抽象为原子快照。缓存大小按小单位缩放，pinned不计入LRU。
-- Encoder用确定性符号计数函数，不验证tokenizer；记录中的source/metadata是用于比较的ghost字段，不要求运行时缓存这些字段。
-- RetryLifecycle区分候选/策略事实与无关tail/journal变化；只缓存请求前结构性拒绝，不缓存生成后失败。
-  三轮内的符号集合不验证实际64项缓存淘汰；归档修复发生在发布前，不涵盖外部删除已发布证据。
-- DeferredGuards只计算完整来源复核次数，不是毫秒或整个flush的I/O上界；允许共享准备视图和真正推进前沿的校验。
-  按序结果抽象不代替真实三请求并发测试；冷恢复、JSON处理、模型窗口与全部压缩交错仍须实现侧验证。
-- LayeredCycles最多6代、每代两个逻辑成员，假定归档成功；四层顺序是状态探索，不声称实际pipeline执行所有排列。
-  source/summary是版本ghost字段，gain为符号profile，不验证tokenizer或自然语言摘要事实。
-- RecoveryCycles独立探索archive/summary/frontier失败与4个崩溃边界；目录不是隐藏授权，退出活动窗口的缺口不永久阻塞前沿。
-  `obsolete-gap-need-not-block`的反例拒绝错误期待，不是已知产品缺陷，也不覆盖外部删除已发布归档。
-- RenderAdmission从有效的持久共享视图开始，区分容量线两侧和重算行为；Native运行/源变化的互斥由其他模型保护。
-  SharedRetryWork只刻画同一候选的负向memo、最终检查次数及来源行比较，不证明跨候选失效；允许遍历历史元数据，
-  不能解读为恒定CPU/内存或UI帧延迟。活动来源与策略变化仍须实现侧回归验证。
-- NativeAuthorization假设存活成员仍有收益且本地计数可用；Native信号结束是本地重验边界，不授权新的付费工作。
-  取消保留当前形状仍成立的见证，变化窗口须再验；恢复阶段不额外模拟一次session_start掩盖真实Native事件缺口。
-- ActiveRanges只计符号行查找，不预测CPU/毫秒；索引仅限同一同步来源视图，不是leaf级内容缓存。
-  BodyCoverage保留原文而不自动合并旧摘要；主SDK通常传新鲜来源，派生输入约束独立于主流程可达性。
-- VerdictEpoch中的epoch是ghost身份，不要求新增运行时全局版本；模型身份不计入shape，模型切换必须清空旧结论，与源码一致。
-  NativeFragments允许对抗性中途切点和更宽窗口再现；孤儿结果仍遵守provider结构清理，不承诺保持其模型可见性。
-  BranchAuthority只抽象单类引用和有限分页，不含字节、bN格式或任意分支图；历史sourceEntryIds也是选中分支范围。
-- 发布校验与写入被建模为同一同步动作；原生存储/文件系统所有错误、任意长历史和所有调度顺序不在有限边界内。
-- 未收录人为时间单位的UI成本模型、重复纯公式模型、数百份临时cfg、TS探针、JAR及运行产物。
-  本套件不提供真实终端帧延迟、Windows、多模态provider或无限规模证明。
+## 压力与费用模型的边界
+
+### PressureGrid 与 OCC
+
+- PressureGrid 的 `threshold=0` 是 helper 非法输入对照；TOML 关闭值为 `false`。用量未知不允许自动付费。
+- `maxBudget` 是触发评估的软门槛，不是整理后的总上下文目标。provider tokens、本地计数和归档字节不能互换。
+- OCC 的 `ready` 是即时判断，不是持久阶段。剩余复用次数取整后须至少 11，不能用大于 10 的小数代替。
+
+### ChainEconomics
+
+- `funded` 检查即时回本参考策略；`gain-only` 展示只看体积的费用反例；`payback` 检查冷请求与后续三轮的总费用。
+- 实现中的有界独立候选最多预测 32 次请求；本模型仍是三轮参考。文本/请求边界、32 轮策略和 SDK 行为由 TS 用例覆盖。
+- 两侧起始缓存相同，后续各增长 2k/4k/6k tokens，目标命中率 98%，缓存量不超过上一轮长度。冷请求单列且不额外增长，压缩侧含摘要费后须严格更便宜。
+- 摘要费立即记账；预计冷请求盈利只有收到有效回执后才能抵扣。首冷请求不能同时抵扣暖请求收益，也不计入之后三次 90% 实际命中。
+- 再次发布仍须还清估算费用并有足够新工作。移除实际复用等待的对照应触发 `StableBeforeRewrite` 反例。
+- 精确 2k/98% 场景检查 `ColdAndThreeRequestDebt` 和真正放行；变动增长场景检查 `CostDebtBound`，不要求任意增长都四次回本。大旧链还检查弱公平下最终放行，不能靠始终拒绝通过。
+- token 数与收益比例使用整数缩放，费用放大 100 倍，还款向下取整以避免 TLC 溢出。实现另取 Pi 估算与本地计数的较小收益，模型不验证两者误差。
+- 必要容量救急、原对照超容量和 Native 交接不保证费用下降。1M 输入场景用 1.5M 抽象容量把经济问题与容量问题分开。
+
+不验证真实分词、价格可信度、工作分类、摘要事实、缓存写入费、TTL、路由变化、provider 账单或延迟。低缓存百分比本身不等于账单上涨，预测通过也不保证任务提前结束时回本。
+
+### ColdBoundary
+
+只刻画一次实际共同前缀失效，不假设所有 Native 完成都必然冷。请求与来源代次是模型辅助身份（ghost），不要求实现新增持久版本字段。已有视图在新工作延期时仍应保留，相关约束复用 RenderAdmission。
+
+## 读取、缓存与发布模型的边界
+
+| 模型 | 限制与假设 |
+| --- | --- |
+| AsyncReaders / WindowAdmission | 活性依赖弱公平、有限干扰和成功关闭。同步回退视为原子快照，缓存大小缩放，pinned 数据不计入 LRU；无公平性对照须出现时间性质失败。 |
+| EncoderMemo | 使用确定性的符号计数，不验证 tokenizer。source/metadata 为模型辅助字段，不要求运行时缓存。 |
+| RetryLifecycle | 区分候选事实与无关尾部变化，只缓存请求前的结构性拒绝。三轮符号集合不验证实际 64 项淘汰；归档修复在发布前，不覆盖外部删除已发布归档。 |
+| DeferredGuards | 只计算完整来源复核次数，不代表毫秒或整个 flush 的 I/O 上限。按序结果不代替实际三请求并发测试。 |
+| LayeredCycles | 最多六代、每代两个成员，假定归档成功。四层的 24 种顺序用于状态探索，不表示实际 pipeline 执行所有排列；gain、source、summary 均有抽象。 |
+| RecoveryCycles | 分开探索归档、摘要、处理位置的失败及四个崩溃点。目录不允许隐藏原文；`obsolete-gap-need-not-block` 拒绝错误期待，不是产品缺陷，也不覆盖归档被外部删除。 |
+| RenderAdmission / SharedRetryWork | 从有效共享视图或同一候选开始。Native 互斥由其他模型检查；允许遍历历史元数据，不代表恒定 CPU、内存或 UI 帧延迟。 |
+| NativeAuthorization | 假定存活成员仍有收益且计数可用。Native 结束只是重验边界；取消后保留仍成立的证明，不额外模拟 `session_start` 掩盖事件缺口。 |
+| ActiveRanges / BodyCoverage | 只计符号行查找；范围索引只在同一同步视图有效，不是 leaf 缓存。未覆盖原文保留但不自动合并旧摘要；派生输入重放约束独立检查。 |
+| VerdictEpoch | epoch 是模型辅助身份，不要求全局运行时版本。模型不在 shape 内，切换模型时须清空旧判断。 |
+| NativeFragments / BranchAuthority | 允许中途裁剪和更宽窗口再现；孤儿结果仍受 provider 结构清理，不保证模型可见。分支只抽象一种引用及有限分页，不含实际字节、bN 格式或任意分支图；`sourceEntryIds` 仍限选中分支。 |
+
+发布校验与写入被抽象为一个同步动作。文件系统全部错误、任意长历史、无限调度组合、真实终端帧延迟、Windows 和多模态 provider 行为仍需实现侧验证。

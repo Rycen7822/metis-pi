@@ -14,7 +14,7 @@
 | 委派与恢复 | [子代理](subagents/native.md) · [生命周期](subagents/lifecycle.md) |
 | 持久目标与续跑 | [goal](features/goal.md) |
 | `/compact`、检查点和模型切换 | [远端压缩](features/codex-compaction.md) |
-| 工具历史精简、原文回读、OCC | [condense](features/condense.md) |
+| 工具历史整理、原文回读与空闲压缩 | [Condense](features/condense.md) |
 | 模型对应的全局规则 | [动态指令](features/dynamic-agents.md) |
 | 修改后执行命令 | [Action Fusion](features/action-fusion.md) |
 | PTY 会话和图片 | [执行工具](execution.md) |
