@@ -170,20 +170,16 @@ class IpcHarness:
             'cwd':str(self.workspace), 'task':task, 'access':'read'})
 
     async def finished_runs(self, run_ids, scope=None, timeout_seconds=8):
-        remaining = list(run_ids)
-        finished = {}
-        async with asyncio.timeout(timeout_seconds + 1):
-            while remaining:
-                args = {'run_ids':remaining, 'timeout_seconds':timeout_seconds}
-                if scope:
-                    args['scope'] = scope
-                page = await self.call('wait', args)
-                self.assertFalse(page['timed_out'], page)
-                self.assertFalse(page['questions'], page)
-                ready = [row for row in page['runs'] if row['state'] in TERMINAL]
-                self.assertTrue(ready, page)
-                finished.update((row['id'], row) for row in ready)
-                remaining = [rid for rid in remaining if rid not in finished]
+        # The daemon owns the run deadline; IPC separately bounds delivery receipts.
+        args = {'run_ids':run_ids, 'timeout_seconds':timeout_seconds, 'mode':'all'}
+        if scope:
+            args['scope'] = scope
+        page = await self.call('wait', args)
+        self.assertFalse(page['timed_out'], page)
+        self.assertFalse(page['questions'], page)
+        finished = {row['id']:row for row in page['runs']}
+        self.assertEqual(set(finished), set(run_ids), page)
+        self.assertTrue(all(row['state'] in TERMINAL for row in finished.values()), page)
         return {**page, 'runs':[finished[rid] for rid in run_ids]}
 
 
