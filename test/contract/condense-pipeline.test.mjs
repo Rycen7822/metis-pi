@@ -75,9 +75,11 @@ function addClosedChains(f, thinking = "Independent intermediate reasoning. ".re
   }
 }
 
-async function independentTasks(t, { total, sizes, price, perTurn = 18000 }) {
+async function independentTasks(t, {
+  total, sizes, price, perTurn = 18000, minRecentTokens = DEFAULT_CONFIG.chainCompression.minRecentTokens,
+}) {
   const f = await fixture(t, { pruneOn: "on-demand", autoBudgetThreshold: null,
-    chainCompression: { ...DEFAULT_CONFIG.chainCompression, rollingWindow: 1 } });
+    chainCompression: { ...DEFAULT_CONFIG.chainCompression, rollingWindow: 1, minRecentTokens } });
   Object.assign(f.ctx.model, { contextWindow: 2000000, cost: { input: price, output: 0, cacheRead: 1, cacheWrite: price } });
   const line = "value_0123456789 = 0xabcdef123456;\n";
   const text = tokens => line.repeat(Math.ceil(tokens * 4 / line.length)).slice(0, tokens * 4);
@@ -545,7 +547,8 @@ test("independent small chains publish without paid summaries while preserving t
     { total: 1000000, sizes: [32000], price: 10, publish: true },
     { total: 1000000, sizes: [6000], price: 2, publish: true },
     { total: 1000000, sizes: [32000], price: 2, perTurn: 240000, publish: false },
-    { total: 128000, sizes: [32000], price: 10, perTurn: 14000, publish: false },
+    { total: 128000, sizes: [32000], price: 10, perTurn: 14000, publish: true },
+    { total: 128000, sizes: [32000], price: 10, perTurn: 14000, minRecentTokens: 65536, publish: false },
   ]) await t.test(JSON.stringify(scenario), async t => {
     const f = await independentTasks(t, scenario);
     await f.emit("agent_settled"); await f.waitMaintenance();

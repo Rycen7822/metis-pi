@@ -259,7 +259,7 @@ enabled = true
 rollingWindow = 3
 # 自动工具批次与chain共同保留近期有效工作及原文尾部；均允许0。未闭合小chain不做整组整理，未消费结果不替换。
 minWorkTurns = 4
-minRecentTokens = 65536
+minRecentTokens = 32768
 # 较大候选/共享组的绝对与总量比例收益门；minGainTokens也是改写发布后的新工作增长下限。
 # 独立2k–64k候选按自身比例收益，绝对底线不超过2048；显式更低的minGainTokens仍生效。
 minGainTokens = 8192

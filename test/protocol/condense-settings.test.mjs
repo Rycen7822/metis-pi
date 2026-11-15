@@ -18,11 +18,12 @@ test("partial chain settings keep defaults, accept zero window and reject invali
   process.env.PI_CODING_AGENT_DIR = dir;
   try {
     assert.deepEqual(DEFAULT_CONFIG.chainCompression, {
-      enabled: true, rollingWindow: 3, minWorkTurns: 4, minRecentTokens: 65536,
+      enabled: true, rollingWindow: 3, minWorkTurns: 4, minRecentTokens: 32768,
       minGainTokens: 8192, minGainFraction: 0.1,
       stripFinalAssistantThinking: true, fuseRangeSummary: true,
     });
     for (const [given, expected] of [[{ enabled: true, minRecentTokens: 2000 }, { enabled: true, minRecentTokens: 2000 }],
+      [{ minRecentTokens: 65536 }, { minRecentTokens: 65536 }],
       [{ rollingWindow: 0, fuseRangeSummary: false }, { rollingWindow: 0, fuseRangeSummary: false }],
       [{ enabled: "yes", rollingWindow: -1 }, {}],
       [{ minWorkTurns: 0, minRecentTokens: 0, minGainTokens: 17, minGainFraction: 0 },

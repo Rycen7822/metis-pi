@@ -203,14 +203,14 @@ exclude = []
 | --- | --- | --- |
 | `rollingWindow` | `3` | 近期闭合文本小chain参考数，≥0；与开放小组共用`minRecentTokens`预算，不无条件锁定N条链。 |
 | `minWorkTurns` | `4` | 自动工具批次与chain共同保留的最近有效工作轮次，≥0；失败、轮询、回读不让资料变旧。 |
-| `minRecentTokens` | `65536` | 自动工具批次与chain共同保留的近期原文尾部，与工作轮次取并集；≥0。 |
+| `minRecentTokens` | `32768` | 自动工具批次与chain共同保留的近期原文尾部，与工作轮次取并集；≥0。 |
 | `minGainTokens` | `8192` | 自动chain最低净释放量；也是工具批次/chain发布后的最低新工作增长量，正安全整数。 |
 | `minGainFraction` | `0.1` | 自动chain净释放量还须达到有效上下文的此比例，[0,1]；工具摘要沿用summaryBudget局部门槛。 |
 | `stripFinalAssistantThinking` | `true` | 保留可见文本、去掉已压边界thinking；新半开范围不处理下一组的右边界。 |
 | `fuseRangeSummary` | `true` | 允许手动now/compact额外付费融合；失败/预算不足保留机械拼接。 |
 
 开放小chain、近期原文、最近有效轮次、保护输出和回读宽限继续保留；开放大任务不再锁死其中所有闭合小组。
-参考从新到旧计入，放不下最近一组就停止；64k也是引用的软预算，不是工作集上限。0只关闭链数参考，无需改0才采用新策略。
+参考从新到旧计入，放不下最近一组就停止；引用软预算跟随`minRecentTokens`（默认32k），不是工作集上限。0只关闭链数参考，无需改0才采用新策略。
 显式`minRecentTokens=0`同时取消原文最低量与引用的token限额；手动now仍使用配置的引用窗口，compact整理全部安全闭合组。
 
 2k–64k估算正文为有界经济档，不是“小chain”的定义；按候选自身收益评估最多32轮，绝对净收益底线不超过2048。
