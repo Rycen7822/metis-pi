@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  RewriteBudget, batchRewriteAdmission, protectBatchWorkingSet, protectChainWorkingSet, isUsefulWork, summaryRequestCost,
+  RewriteBudget, batchRewriteAdmission, independentChainPolicy, protectBatchWorkingSet, protectChainWorkingSet,
+  isUsefulWork, summaryRequestCost,
 } from "../../src/condense/rewrite-policy.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { detectChains } from "../../src/condense/chain-detector.ts";
@@ -129,6 +130,21 @@ test("summary fees reserve before work, settle from receipts, and remain charged
   assert.equal(admits(0), false, "three warm requests alone do not repay a capacity rescue with large debt");
 });
 
+test("independent chains use candidate-sized gain and a per-plan forecast without changing the default gate", () => {
+  const policy = independentChainPolicy(DEFAULT_CONFIG.chainCompression, 32008), budget = new RewriteBudget();
+  warm(budget);
+  assert.equal(budget.admits(1000089, 31917, 896026, DEFAULT_CONFIG.chainCompression, model, false), false);
+  assert.ok(policy);
+  assert.equal(budget.admits(1000089, 31917, 896026, { ...policy, forecastRequests: 3 }, model, false), false);
+  assert.equal(budget.admits(1000089, 31917, 896026, policy, model, false), true);
+  const cheap = { ...model, cost: { input: 2, cacheRead: 1 } }, smaller = new RewriteBudget();
+  warm(smaller, cheap);
+  assert.equal(smaller.admits(1000089, 5917, 922026, DEFAULT_CONFIG.chainCompression, cheap, false), false);
+  const small = independentChainPolicy(DEFAULT_CONFIG.chainCompression, 6008);
+  assert.ok(small);
+  assert.equal(smaller.admits(1000089, 5917, 922026, small, cheap, false), true);
+});
+
 test("unknown prices use a 1:10 cache/input ratio, while no-discount inputs still honor batch policy", () => {
   for (const cost of [undefined, { input: 0, cacheRead: 0 }]) {
     const unknown = { ...model, cost }, budget = new RewriteBudget();
@@ -209,15 +225,18 @@ test("one flush groups admitted chunks, then batch and chain share the same refi
   assert.equal(budget.ready(10000, 5000, config, false), true, "no-discount inputs do not acquire a cache-only wait");
 });
 
-test("recent small closed tasks fit the reference budget without pinning a large old task", () => {
+test("a long open task spends the same reference budget as a closed task without releasing its own evidence", () => {
   const raw = history([40000, 200, 200, 200, 40000], true);
   const chains = detectChains(raw);
   const policy = { ...config, rollingWindow: 3, minWorkTurns: 1, minRecentTokens: 2000 };
-  assert.deepEqual(protectChainWorkingSet(chains, raw, raw, policy).map(c => c.startUserTimestamp), [0]);
+  const older = [0, 4, 8, 12];
+  assert.deepEqual(protectChainWorkingSet(chains, raw, raw, policy).map(c => c.startUserTimestamp), older);
   assert.deepEqual(protectChainWorkingSet(chains, raw, raw, { ...policy, rollingWindow: 5 })
-    .map(c => c.startUserTimestamp), [0], "increasing the reference count still cannot pin the oversized old task");
-  assert.deepEqual(protectChainWorkingSet(chains, raw, raw, { ...policy, rollingWindow: 0 })
-    .map(c => c.startUserTimestamp), [0, 4, 8, 12]);
+    .map(c => c.startUserTimestamp), older, "a larger reference count does not pin old tasks behind the active one");
+  const closed = history([40000, 200, 200, 200, 40000]);
+  assert.deepEqual(protectChainWorkingSet(detectChains(closed), closed, closed, policy).map(c => c.startUserTimestamp), older);
+  assert.deepEqual(protectChainWorkingSet(chains, raw, raw, { ...policy, minRecentTokens: 100000 }), [],
+    "spending the reference budget never bypasses the effective token tail");
 });
 
 test("polling and failures do not age evidence, including incomplete command executions", () => {

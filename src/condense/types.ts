@@ -371,14 +371,14 @@ export type ChainCompressionEntry = SingleChainCompressionEntry | SharedChainCom
 
 export interface ChainCompressionConfig {
   enabled: boolean;
-  /** Recent closed-task references within minRecentTokens' raw-span budget, alongside work/tail protection. Default 3. */
+  /** Recent closed-task references share minRecentTokens' finite raw budget with the open task. Default 3. */
   rollingWindow: number;
   /** Useful rounds and effective raw-tail tokens retained by automatic tool batches and chains; their union is protected. */
   minWorkTurns: number;
   minRecentTokens: number;
-  /** Automatic chain gain floor; also the shared post-publication useful-work growth floor. */
+  /** Large/shared-chain gain floor; also the shared useful-work growth floor. Independent candidates cap this floor at 2k. */
   minGainTokens: number;
-  /** Chain-wide fractional gain floor; tool summaries retain their own local proxy gain budget. */
+  /** Total-context gain fraction for large/shared chains, candidate fraction for independent ones; separate from batch proxy policy. */
   minGainFraction: number;
   /** Strip thinking blocks from the kept final text-only assistant. Default true. */
   stripFinalAssistantThinking: boolean;

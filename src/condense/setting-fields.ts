@@ -210,7 +210,7 @@ function dedupByContentHashDescription(config: ContextPruneConfig): string {
 
 function chainCompressionEnabledDescription(config: ContextPruneConfig): string {
   return (
-    "Batch old closed chains outside the combined working set (task references=" +
+    "Compact independent small closed tasks or larger groups outside the working set (task references=" +
     `${config.chainCompression.rollingWindow}` +
     "). Drops middle assistant turns + tool results, injects a synthetic summary. " +
     "Currently " +
@@ -220,7 +220,7 @@ function chainCompressionEnabledDescription(config: ContextPruneConfig): string 
 }
 
 function chainWindowDescription(config: ContextPruneConfig): string {
-  return "Recent closed-task references within the raw-tail budget, combined with work/token protection. " +
+  return "Closed-task references share the raw-tail budget with the open task; work/token protection still applies. " +
     `Currently ${config.chainCompression.rollingWindow}.`;
 }
 

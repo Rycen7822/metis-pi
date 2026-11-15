@@ -8,7 +8,8 @@ import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import {
-  RewriteBudget, batchRewriteAdmission, isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, summaryRequestCost, type RewriteGain,
+  RewriteBudget, batchRewriteAdmission, independentChainPolicy, independentChainPrefixAllowed,
+  isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, summaryRequestCost, type RewriteGain,
 } from "./rewrite-policy.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
@@ -488,20 +489,27 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return capacity !== undefined && tokens <= capacity
       && tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
   };
-  const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number) => {
+  const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number, candidateTokens?: number) => {
+    const config = currentConfig.value.chainCompression;
+    const independent = candidateTokens === undefined ? undefined : independentChainPolicy(config, candidateTokens);
+    if (candidateTokens !== undefined && !independent) return false;
+    const emergency = chainEmergency(ctx, counts.piBefore);
+    if (independent && !emergency && !independentChainPrefixAllowed(counts.piBefore, prefix)) return false;
     const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
-    return rewriteBudget.admits(counts.piBefore, gain, prefix,
-      currentConfig.value.chainCompression, economicModel(ctx), chainEmergency(ctx, counts.piBefore));
+    return rewriteBudget.admits(counts.piBefore, gain, prefix, independent ?? config, economicModel(ctx), emergency);
   };
   const compressChains = async (ctx: any, rollingWindow: number,
     appendEntry: (type: string, data: unknown) => void,
-    options: { closingMessage?: any; signal?: AbortSignal; automatic?: boolean; chains?: import("./types.ts").ChainRange[];
-      onPublished?: () => void } = {}) => {
+    options: {
+      closingMessage?: any; signal?: AbortSignal; automatic?: boolean; chains?: import("./types.ts").ChainRange[];
+      candidate?: import("./types.ts").ChainRange; onPublished?: () => void;
+    } = {}) => {
     const { closingMessage, signal, automatic = false, onPublished } = options;
     const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
     const messages = withClosingMessage(ctx.sessionManager.buildSessionProjection().messages, closingMessage);
-    const chains = options.chains ?? detectChains(messages, protectionPredicate).filter(chain => findCompressibleRange(chain, messages));
+    const chains = options.candidate ? [options.candidate]
+      : options.chains ?? detectChains(messages, protectionPredicate).filter(chain => findCompressibleRange(chain, messages));
     const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
     const append = (type: string, data: unknown) => {
       assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
@@ -538,8 +546,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertCurrent(version); signal?.throwIfAborted();
         if (!counts && automatic) lastMaintenanceSource = undefined;
         const prefix = unchangedPrefixTokens(before, after);
+        let candidateTokens: number | undefined;
+        if (options.candidate) {
+          const span = resolveRange(entry, before);
+          if (!span) return false;
+          candidateTokens = before.slice(span.startIndex + 1, span.endIndex).reduce((sum, message) => sum + estimateTokens(message), 0);
+        }
         const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
-          && (!automatic || admitAutomaticChain(ctx, counts, prefix))
+          && (!automatic || admitAutomaticChain(ctx, counts, prefix, candidateTokens))
           && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
           && config === policyFingerprint(currentConfig.value);
         if (accepted && counts) measurements.set(entry.blockId, { counts, prefix });
@@ -2340,13 +2354,25 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         !chainMatchesGrace(chain, grace) && chain.finalAssistantTimestamp !== deferredFinal?.timestamp
         && !chain.middleToolCallIds.some(id => edited.has(id)) && findCompressibleRange(chain, raw, rawResolve));
       if (eligible.length === 0) return;
-      const beforeTokens = before.reduce((sum, message) => sum + estimateTokens(message), 0);
+      const prefixTokens = [0];
+      for (const message of before) prefixTokens.push(prefixTokens[prefixTokens.length - 1] + estimateTokens(message));
+      const beforeTokens = prefixTokens[prefixTokens.length - 1];
+      const chainConfig = currentConfig.value.chainCompression;
+      const emergency = chainEmergency(ctx, beforeTokens);
       const resolve = createRangeResolver(before);
-      const upperGain = eligible.reduce((sum, chain) => {
+      const plans = eligible.map(chain => {
         const range = resolve(chain);
-        return sum + (range ? before.slice(range.startIndex + 1, range.endIndex).reduce((n, m) => n + estimateTokens(m), 0) : 0);
-      }, 0);
-      if (!rewriteBudget.ready(beforeTokens, upperGain, currentConfig.value.chainCompression, chainEmergency(ctx, beforeTokens))) return;
+        const tokens = range ? prefixTokens[range.endIndex] - prefixTokens[range.startIndex + 1] : 0;
+        const policy = emergency ? undefined : independentChainPolicy(chainConfig, tokens);
+        return { chain, tokens, prefix: range ? prefixTokens[range.startIndex + 1] : 0, policy };
+      }).filter(plan => !plan.policy || independentChainPrefixAllowed(beforeTokens, plan.prefix));
+      const independent = plans.filter(plan => plan.policy).slice(-3).reverse()
+        .filter(plan => plan.policy && rewriteBudget.ready(beforeTokens, plan.tokens, plan.policy, false));
+      const upperGain = plans.reduce((sum, plan) => sum + plan.tokens, 0);
+      // A lone scoped candidate already has the more permissive forecast; only groups need a fresh fallback decision.
+      const fallbackReady = (plans.length !== 1 || !plans[0].policy)
+        && rewriteBudget.ready(beforeTokens, upperGain, chainConfig, emergency);
+      if (independent.length === 0 && !fallbackReady) return;
       const source = projectionFingerprint(raw);
       const attempt = source + config + [...known].join(",");
       if (attempt === lastMaintenanceSource) return;
@@ -2358,17 +2384,23 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           throw new Error("Chain archive was not persisted on the current branch");
         if (type === CUSTOM_TYPE_CHAIN) publishedChains += chainMembers(data as SingleChainCompressionEntry | SharedChainCompressionEntry).length;
       };
-      if (eligible.length === 1) {
-        await compressChains(ctx, 0, appendEntry, { signal, automatic: true, chains: eligible });
+      for (const plan of independent) {
+        const result = await compressChains(ctx, 0, appendEntry, { signal, automatic: true, candidate: plan.chain });
+        if (result.compressedEntries.length > 0) return;
+      }
+      if (!fallbackReady) return;
+      const fallback = plans.map(plan => plan.chain);
+      if (fallback.length === 1) {
+        await compressChains(ctx, 0, appendEntry, { signal, automatic: true, chains: fallback });
         return;
       }
-      const backlogChars = eligible.reduce((sum, chain) => {
+      const backlogChars = fallback.reduce((sum, chain) => {
         const range = resolve(chain);
         return sum + (range ? JSON.stringify(before.slice(range.startIndex + 1, range.endIndex)).length : 0);
       }, 0);
       if (backlogChars < currentConfig.value.minBatchChars) return;
       const anchors = indexAnchorIds(sourceView.projection.entries);
-      const entry = await prepareSharedChain(eligible, 0, { indexer, blockRefs, messages: raw,
+      const entry = await prepareSharedChain(fallback, 0, { indexer, blockRefs, messages: raw,
         now: Date.now, appendEntry, diagnostics,
         backfill: { ...archiveOptions(manager), assertValid: assertNewWork } },
         anchors, grace, signal);

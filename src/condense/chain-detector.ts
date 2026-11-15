@@ -6,7 +6,7 @@ function isSyntheticChainMessage(msg: any): boolean {
   return msg.metisDerived?.kind === "condense-chain";
 }
 
-function hasToolCalls(msg: any): boolean {
+export function hasToolCalls(msg: any): boolean {
   return Array.isArray(msg.content) && msg.content.some((b: any) => b.type === "toolCall");
 }
 

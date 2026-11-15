@@ -1,14 +1,19 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createRangeResolver } from "./chain-range-prune.ts";
+import { hasToolCalls, isChainAnchorCustom } from "./chain-detector.ts";
 import { occKey } from "./occurrence-key.ts";
 import type { CapturedBatch, ChainCompressionConfig, ChainRange } from "./types.ts";
 
 type Prices = { input: number; cacheRead: number; cacheWrite?: number };
 export type Model = { id: string; provider: string; api: string; baseUrl?: string;
   cost?: Prices & { output?: number }; pricing?: "pi" | "models.dev" | "pending" };
-type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & { minimumGain?: number };
-const PAYBACK_REQUESTS = 3;
+type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & {
+  minimumGain?: number;
+  forecastRequests?: number;
+};
+const WARM_REQUESTS = 3;
+const DEFAULT_FORECAST_REQUESTS = 3;
 const MIN_CACHE_HIT = 0.9;
 const FORECAST_CACHE_HIT = 0.98;
 const FORECAST_GROWTH_TOKENS = 2000;
@@ -32,12 +37,12 @@ function requestSavings(after: number, gain: number, previous: number, price: Pr
   return requestCost(after + gain, previous + gain, price) - requestCost(after, previous, price);
 }
 
-function forecastRewrite(before: number, gain: number, prefix: number, price: Prices) {
+function forecastRewrite(before: number, gain: number, prefix: number, price: Prices, requests = DEFAULT_FORECAST_REQUESTS) {
   const after = before - gain;
   const write = finite(price.cacheWrite) ? price.cacheWrite : price.input;
   const cold = requestCost(after, prefix, price, Math.max(price.input, write)) - requestCost(before, before, price);
   let savings = 0;
-  for (let request = 1; request <= PAYBACK_REQUESTS; request++) {
+  for (let request = 1; request <= requests; request++) {
     savings += requestSavings(after + request * FORECAST_GROWTH_TOKENS, gain,
       after + (request - 1) * FORECAST_GROWTH_TOKENS, price);
   }
@@ -133,6 +138,19 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
   let boundary = recentWorkBoundary(raw, visible, config);
   // Chain count is a bounded reference signal, not an unconditional second retention window.
   let referenceBudget = config.minRecentTokens > 0 ? config.minRecentTokens : Infinity;
+  if (Number.isFinite(referenceBudget)) {
+    // The detector omits the active chain; it still owns part of the same reference budget.
+    let openTokens = 0;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      const message = visible[i];
+      if (message.role === "assistant" && !hasToolCalls(message)) break;
+      openTokens += estimateTokens(message);
+      if ((message.role === "user" && message.metisDerived?.kind !== "condense-chain") || isChainAnchorCustom(message)) {
+        referenceBudget = Math.max(0, referenceBudget - openTokens);
+        break;
+      }
+    }
+  }
   for (let i = chains.length - 1, kept = 0; i >= 0 && kept < config.rollingWindow; i--) {
     const range = resolve(chains[i]);
     if (!range) continue;
@@ -149,6 +167,18 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
     const range = resolve(chain);
     return range !== null && range.endIndex < boundary;
   });
+}
+
+/** Only independently measured small chains use the candidate floor and longer forecast; the wallet remains shared. */
+export function independentChainPolicy(config: ChainCompressionConfig, tokens: number) {
+  if (tokens < 2048 || tokens > 65536) return undefined;
+  return { minGainTokens: config.minGainTokens, minGainFraction: config.minGainFraction,
+    minimumGain: Math.max(Math.min(2048, config.minGainTokens), tokens * config.minGainFraction), forecastRequests: 32 };
+}
+
+/** This is a selection boundary, not a hard context limit; the recent working set is protected separately. */
+export function independentChainPrefixAllowed(before: number, prefix: number): boolean {
+  return before <= 256000 || prefix >= before - 192000;
 }
 
 export interface RewriteGain { pi: number; proxy: number }
@@ -252,7 +282,7 @@ export class RewriteBudget {
     }
     if (!validInput) { this.warmRequests = 0; return; }
     const warm = usage.cacheRead / input >= MIN_CACHE_HIT;
-    this.warmRequests = warm ? Math.min(PAYBACK_REQUESTS, this.warmRequests + 1) : 0;
+    this.warmRequests = warm ? Math.min(WARM_REQUESTS, this.warmRequests + 1) : 0;
     if (!repayment) return;
     if (warm || !this.discounted) {
       const write = finite(price.cacheWrite) ? price.cacheWrite : price.input;
@@ -294,7 +324,7 @@ export class RewriteBudget {
   }
 
   waitingForWork(config: RewritePolicy): boolean {
-    return this.debt > 0 || (this.discounted && this.warmRequests < PAYBACK_REQUESTS)
+    return this.debt > 0 || (this.discounted && this.warmRequests < WARM_REQUESTS)
       || (this.lastGain > 0 && this.growth < Math.max(config.minGainTokens, this.lastGain / 4));
   }
 
@@ -310,7 +340,7 @@ export class RewriteBudget {
     if (!this.ready(before, gain, config, emergency) || gain > before || !finite(prefix) || prefix > before) return false;
     if (emergency) return true;
     if (model?.pricing === "pending" || !finite(fee) || this.unknownFees > 0) return false;
-    const forecast = forecastRewrite(before, gain, prefix, prices);
+    const forecast = forecastRewrite(before, gain, prefix, prices, config.forecastRequests);
     return forecast.cold + this.fees + fee < forecast.savings;
   }
 

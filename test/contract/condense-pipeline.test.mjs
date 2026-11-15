@@ -75,6 +75,33 @@ function addClosedChains(f, thinking = "Independent intermediate reasoning. ".re
   }
 }
 
+async function independentTasks(t, { total, sizes, price, perTurn = 18000 }) {
+  const f = await fixture(t, { pruneOn: "on-demand", autoBudgetThreshold: null,
+    chainCompression: { ...DEFAULT_CONFIG.chainCompression, rollingWindow: 1 } });
+  Object.assign(f.ctx.model, { contextWindow: 2000000, cost: { input: price, output: 0, cacheRead: 1, cacheWrite: price } });
+  const line = "value_0123456789 = 0xabcdef123456;\n";
+  const text = tokens => line.repeat(Math.ceil(tokens * 4 / line.length)).slice(0, tokens * 4);
+  f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: text(total - sizes.reduce((a, b) => a + b, 0) - 4 * perTurn) }],
+    stopReason: "stop", timestamp: f.nextTimestamp() });
+  for (let i = 0; i < 3; i++) {
+    const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+      content: [{ type: "text", text: "Earlier main request" }], stopReason: "stop", timestamp: f.nextTimestamp(),
+      usage: { ...usage, input: total * 0.02, cacheRead: total * 0.98 } };
+    await f.emit("message_end", { message }); f.sm.appendMessage(message);
+  }
+  const tasks = sizes.map((size, i) => {
+    const user = `independent request ${i}`, final = `independent result ${i}`;
+    f.sm.appendMessage({ role: "user", content: user, timestamp: f.nextTimestamp() });
+    const call = f.add(text(size), "inspect-source", `independent-${i}`);
+    f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: final }],
+      stopReason: "stop", timestamp: f.nextTimestamp() });
+    return { ...call, user, final };
+  });
+  f.sm.appendMessage({ role: "user", content: "Continue the active investigation", timestamp: f.nextTimestamp() });
+  const active = Array.from({ length: 4 }, (_, i) => f.add(text(perTurn), "inspect-source", `active-${i}`));
+  return { ...f, tasks, active };
+}
+
 async function fixture(
   t,
   {
@@ -502,6 +529,75 @@ test("default chain policy releases old evidence but retains a long active multi
   await f.emit("agent_settled"); await f.waitMaintenance();
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
   assert.equal(f.notices.length, notices, "unchanged boundaries cannot trigger a second rewrite");
+});
+
+test("independent small chains publish without paid summaries while preserving the active tail and exact recovery", async t => {
+  for (const scenario of [
+    { total: 128000, sizes: [32000], price: 10, publish: true },
+    { total: 1000000, sizes: [32000], price: 10, publish: true },
+    { total: 1000000, sizes: [6000], price: 2, publish: true },
+    { total: 1000000, sizes: [32000], price: 2, perTurn: 240000, publish: false },
+    { total: 128000, sizes: [32000], price: 10, perTurn: 14000, publish: false },
+  ]) await t.test(JSON.stringify(scenario), async t => {
+    const f = await independentTasks(t, scenario);
+    await f.emit("agent_settled"); await f.waitMaintenance();
+    const entries = f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
+    assert.equal(entries.length, Number(scenario.publish));
+    const raw = f.sm.buildSessionProjection().messages;
+    const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    for (const call of f.active) assert.deepEqual(projected.find(m => m.toolCallId === call.id), call.result);
+    for (const task of f.tasks) {
+      assert.ok(projected.some(m => m.role === "user" && m.content === task.user));
+      assert.ok(projected.some(m => m.role === "assistant" && m.content?.some(b => b.text === task.final)));
+    }
+    assert.equal(f.calls.length, 0);
+    if (!scenario.publish) {
+      assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[0].id), f.tasks[0].result);
+      return;
+    }
+    assert.notEqual(entries[0].data.kind, "shared-v1");
+    assert.deepEqual(entries[0].data.droppedToolCallIds, [f.tasks[0].id]);
+    let cursor, recovered = "", pages = 0, eof = false;
+    do {
+      const page = await f.tools.get("context_tree_query").execute("recall",
+        { toolCallIds: [entries[0].data.blockId], cursor }, undefined, undefined, f.ctx);
+      assert.equal(page.isError, false);
+      for (const result of page.details.results) {
+        assert.equal(result.offsetBytes, Buffer.byteLength(recovered));
+        recovered += result.text;
+      }
+      cursor = page.details.nextCursor; eof = page.details.eof;
+      assert.ok(++pages <= 16);
+    } while (cursor);
+    assert.equal(eof, true);
+    assert.ok(recovered === f.tasks[0].result.content[0].text, "all recall pages reconstruct the exact original result");
+    await f.emit("agent_settled"); await f.waitMaintenance();
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
+  });
+});
+
+test("independent selection and shared fallback keep distinct admission contracts", async t => {
+  for (const scenario of [
+    { total: 1000000, sizes: [32000, 6000], price: 10, shared: false },
+    { total: 1000000, sizes: [300000, 6000], price: 10, shared: true },
+    { total: 300000, sizes: Array(30).fill(5000), price: 5, shared: true },
+  ]) await t.test(`${scenario.sizes.length} chains at ${scenario.price}:1`, async t => {
+    const f = await independentTasks(t, scenario);
+    await f.emit("agent_settled"); await f.waitMaintenance();
+    const entries = f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].data.kind === "shared-v1", scenario.shared);
+    if (scenario.shared) {
+      const dropped = entries[0].data.members.flatMap(member => member.droppedToolCallIds);
+      assert.ok(dropped.length > 1);
+      assert.ok(dropped.includes(f.tasks.at(-1).id), "legacy sharing still includes the independently refused candidate");
+    } else {
+      assert.deepEqual(entries[0].data.droppedToolCallIds, [f.tasks[0].id]);
+      const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+      assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[1].id), f.tasks[1].result);
+    }
+    assert.equal(f.calls.length, 0);
+  });
 });
 
 test("automatic chain payback waits for three matching high-cache main requests, not historical spending", async t => {
