@@ -2,144 +2,94 @@ import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { hasProtectedNestedResults } from "./protected.ts";
 import type { ChainRange } from "./types.ts";
 
-function isSyntheticChainMessage(msg: any): boolean {
-  return msg.metisDerived?.kind === "condense-chain";
-}
-
 export function hasToolCalls(msg: any): boolean {
   return Array.isArray(msg.content) && msg.content.some((b: any) => b.type === "toolCall");
 }
 
-function collectToolCalls(msg: any): { id: string; name: string; args: unknown }[] {
-  if (!Array.isArray(msg.content)) return [];
-  return msg.content
-    .filter((b: any) => b.type === "toolCall" && b.id && b.name)
-    .map((b: any) => ({ id: b.id as string, name: b.name as string, args: b.input ?? b.args ?? b.arguments }));
-}
-
-/**
- * A non-pruner custom message: eligible to open a chain (while the detector is
- * idle) and to act as a resolveRange start anchor. The `context-prune-`
- * namespace prefix excludes every pruner-emitted custom message — today
- * context-prune-summary; by construction any future pruner customType.
- */
+/** Legacy persisted ranges may start at third-party custom messages. New tasks do not. */
 export function isChainAnchorCustom(msg: any): boolean {
   return msg?.role === "custom" && !String(msg.customType ?? "").startsWith("context-prune-");
 }
 
-type State = "idle" | "inChain";
+export function isTaskBoundary(msg: any): boolean {
+  if (msg?.metisDerived) return false;
+  return msg?.role === "user" || msg?.role === "custom" && msg.customType === "goal-continuation"
+    && typeof msg.details?.goalId === "string";
+}
 
-/**
- * Walks an AgentMessage array and emits ChainRange records for each detectable chain.
- *
- * A chain is: [user message or eligible custom message] → [assistant+toolResult turns...] → [text-only assistant].
- * Synthetic chain messages (injected by chain-range-prune) are treated as passthroughs —
- * not chain starts. This is defensive; the detector normally runs pre-compression.
- *
- * NOTE: Message identity uses `timestamp` (for user / final text-only assistant) and
- * `toolCallId` sets (for middle tool-using turns). AgentMessage has no `.id` field.
- *
- * @param isProtected  Predicate over (toolName, args); matching calls are never pruned
- *                     and their outputs are relocated verbatim into compressed chains.
- */
-export function detectChains(
-  messages: any[],
-  isProtected: (toolName: string, args: unknown) => boolean = () => false,
-): ChainRange[] {
-  const ranges: ChainRange[] = [];
-  let state: State = "idle";
-  let chainStart: { timestamp: number } | null = null;
-  let middleIds = new Set<string>();
-  let middleKeys = new Set<string>();
-  let protectedIds = new Set<string>();
+/** Whole visible messages, never streaming deltas, thinking or tool output. */
+export function isTextCheckpoint(msg: any): boolean {
+  return msg?.role === "assistant" && !msg.metisDerived && Array.isArray(msg.content)
+    && msg.content.some((block: any) => block.type === "text" && typeof block.text === "string" && block.text.trim());
+}
 
-  const resetChain = () => {
-    middleIds = new Set();
-    middleKeys = new Set();
-    protectedIds = new Set();
-  };
+export function isConversationBoundary(msg: any): boolean {
+  return isTaskBoundary(msg) || isTextCheckpoint(msg);
+}
 
-  const emitInterrupted = () => {
-    if (state === "inChain" && chainStart) {
-      ranges.push({
-        startUserTimestamp: chainStart.timestamp,
-        middleToolCallIds: [...middleIds],
-        middleOccurrenceKeys: [...middleKeys],
-        protectedToolCallIds: [...protectedIds],
-        finalAssistantTimestamp: null,
-      });
-    }
-  };
+export function isCompletedAssistant(msg: any): boolean {
+  return msg?.role === "assistant" && !msg.metisDerived && !["error", "aborted", "length"].includes(msg.stopReason);
+}
 
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      if (isSyntheticChainMessage(msg)) continue; // passthrough — not a chain start
-      emitInterrupted();
-      chainStart = { timestamp: msg.timestamp };
-      resetChain();
-      state = "inChain";
-      continue;
-    }
+/** A task boundary closes a group, but only a later successful main response proves consumption. */
+export function consumedToolResults(messages: any[]): Set<string> {
+  const consumed = new Set<string>();
+  let receipt = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (isCompletedAssistant(message)) receipt = true;
+    else if (receipt && message.role === "toolResult") consumed.add(occKey(message.toolCallId, resultTimestampOf(message.timestamp)));
+  }
+  return consumed;
+}
 
-    if (state === "idle" && isChainAnchorCustom(msg)) {
-      chainStart = { timestamp: msg.timestamp };
-      resetChain();
-      state = "inChain";
-      continue;
-    }
+/** Half-open semantic intervals; Native fragments can restart at their first retained text checkpoint. */
+export function conversationSegments(messages: any[]) {
+  const segments: { startIndex: number; endIndex: number; closed: boolean }[] = [];
+  let startIndex = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (!isConversationBoundary(messages[i])) continue;
+    if (startIndex >= 0) segments.push({ startIndex, endIndex: i, closed: true });
+    startIndex = i;
+  }
+  if (startIndex >= 0) segments.push({ startIndex, endIndex: messages.length, closed: false });
+  return segments;
+}
 
-    if (state !== "inChain") continue;
-
-    if (msg.role === "assistant" && hasToolCalls(msg)) {
-      for (const { id, name, args } of collectToolCalls(msg)) {
-        middleIds.add(id);
-        if (isProtected(name, args)) protectedIds.add(id);
+/** Shared facts for new candidates and revalidation of already-committed legacy ranges. */
+export function chainContents(messages: any[], isProtected: (name: string, args: unknown) => boolean = () => false) {
+  const ids = new Set<string>(), keys = new Set<string>(), protectedIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      for (const block of message.content ?? []) {
+        if (block.type !== "toolCall" || !block.id || !block.name) continue;
+        ids.add(block.id);
+        if (isProtected(block.name, block.input ?? block.args ?? block.arguments)) protectedIds.add(block.id);
       }
-      continue;
-    }
-
-    if (msg.role === "toolResult") {
-      if (msg.toolCallId) {
-        middleIds.add(msg.toolCallId);
-        middleKeys.add(occKey(msg.toolCallId, resultTimestampOf(msg.timestamp)));
-        // toolResult fallback — results carry no args; name-only by design,
-        // the assistant block always precedes its result so no protection is lost
-        if (isProtected(msg.toolName, undefined) || hasProtectedNestedResults(msg.details)) protectedIds.add(msg.toolCallId);
-      }
-      continue;
-    }
-
-    if (msg.role === "assistant" && !hasToolCalls(msg)) {
-      ranges.push({
-        startUserTimestamp: chainStart!.timestamp,
-        middleToolCallIds: [...middleIds],
-        middleOccurrenceKeys: [...middleKeys],
-        protectedToolCallIds: [...protectedIds],
-        finalAssistantTimestamp: msg.timestamp,
-      });
-      chainStart = null;
-      resetChain();
-      state = "idle";
+    } else if (message.role === "toolResult" && message.toolCallId) {
+      ids.add(message.toolCallId);
+      keys.add(occKey(message.toolCallId, resultTimestampOf(message.timestamp)));
+      if (isProtected(message.toolName, undefined) || hasProtectedNestedResults(message.details)) protectedIds.add(message.toolCallId);
     }
   }
+  return { middleToolCallIds: [...ids], middleOccurrenceKeys: [...keys], protectedToolCallIds: [...protectedIds] };
+}
 
-  // Open chain at end of input is intentionally dropped (in-flight).
-
+/** Closed text groups, not token-size classes; safety and economic admission remain separate. */
+export function detectChains(messages: any[], isProtected: (name: string, args: unknown) => boolean = () => false): ChainRange[] {
+  const ranges: ChainRange[] = [];
+  for (const segment of conversationSegments(messages)) {
+    if (!segment.closed) continue;
+    const start = messages[segment.startIndex], end = messages[segment.endIndex];
+    const contents = chainContents(messages.slice(segment.startIndex, segment.endIndex), isProtected);
+    if (!contents.middleToolCallIds.length) continue;
+    ranges.push({ startUserTimestamp: start.timestamp, finalAssistantTimestamp: end.timestamp,
+      checkpointBoundary: { startRole: start.role, endRole: end.role }, ...contents });
+  }
   return ranges;
 }
 
-/**
- * Appends `closing` to a copy of `branchMessages` unless the array already ends with it.
- *
- * pi emits `message_end` to extensions BEFORE persisting the message to the session
- * (agent-session.js `_processAgentEvent` runs `_emitExtensionEvent` ahead of
- * `sessionManager.appendMessage`). At the agent-message flush boundary the just-closed
- * final assistant is therefore still missing from `getBranch()`; without threading it
- * in, the newest chain reads as open and the rolling window over-retains by one
- * (effective K+1 instead of K). Identity is role+timestamp (AgentMessage has no id,
- * matching the detector's own identity model), so a future pi that persists before
- * emitting keeps this a no-op.
- */
+/** message_end precedes persistence; carry its complete receipt without duplicating a persisted message. */
 export function withClosingMessage(branchMessages: any[], closing: any): any[] {
   if (!closing) return branchMessages;
   const last = branchMessages[branchMessages.length - 1];

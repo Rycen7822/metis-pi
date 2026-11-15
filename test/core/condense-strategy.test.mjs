@@ -3,6 +3,9 @@ import test from "node:test";
 import { purgeErroredArgs } from "../../src/condense/error-purge.ts";
 import { applyChainCompressions, buildSyntheticChainMessage } from "../../src/condense/chain-range-prune.ts";
 import { detectChains } from "../../src/condense/chain-detector.ts";
+import { captureUnindexedBatchesFromSession, groupBatchesByMode } from "../../src/condense/batch-capture.ts";
+import { extractChainRecords, findCompressibleRange } from "../../src/condense/chain-compressor.ts";
+import { inGraceRecoveryToolCallIds } from "../../src/condense/recovery-grace.ts";
 
 const purge = { enabled: true, cooldownTurns: 1, minArgChars: 100 };
 const args = label => ({ path: `${label}.txt`, content: label.repeat(200) });
@@ -107,9 +110,67 @@ test("range lookup preserves role-specific uniqueness and rejects newly ambiguou
   const summary = { role: "custom", customType: "context-prune-summary", timestamp: 1, content: "unrelated" };
   const messages = [...chainMessages(), summary, { ...result("other", 1, false) }];
   assert.ok(applyChainCompressions(messages, [chain], () => "summary", false).some(m => m.metisDerived));
+  const changedFinal = { ...final(4), content: [...final(4).content, ...call("new", 4, "new").content] };
+  assert.equal(findCompressibleRange(chain, [...chainMessages().slice(0, -1), changedFinal]), null,
+    "legacy final anchors must remain completed tool-free responses after source edits");
   // A new synchronous view must see mutation at the same timestamp/leaf.
   messages.push({ role: "user", timestamp: 1, content: "new ambiguity" });
   assert.equal(applyChainCompressions(messages, [chain], () => "summary", false), messages);
+});
+
+test("text checkpoints partition an open task without absorbing the next response's tool results", () => {
+  const first = { ...call("a", 2, "a"), content: [
+    { type: "thinking", thinking: "private" }, { type: "text", text: "First checkpoint" },
+    { type: "text", text: "same message" }, ...call("a", 2, "a").content,
+  ] };
+  const next = { ...call("c", 6, "c"), content: [{ type: "text", text: "Next checkpoint" }, ...call("c", 6, "c").content] };
+  const messages = [{ role: "user", timestamp: 1, content: "Long task" }, first, result("a", 3, false),
+    call("b", 4, "b"), result("b", 5, false), next, result("c", 7, false), final(8)];
+  const groups = detectChains(messages);
+  assert.deepEqual(groups.map(group => [group.startUserTimestamp, group.finalAssistantTimestamp, group.middleToolCallIds]),
+    [[2, 6, ["a", "b"]], [6, 8, ["c"]]]);
+  const branch = messages.map((message, i) => ({ type: "message", id: `entry-${i}`, message }));
+  const batches = captureUnindexedBatchesFromSession(branch, { isSummarized: () => false });
+  assert.deepEqual(groupBatchesByMode(batches, "turn").map(batch => batch.toolCalls.map(tool => tool.toolCallId)),
+    [["a"], ["b"], ["c"]]);
+  assert.deepEqual(groupBatchesByMode(batches, "agent-message").map(batch => batch.toolCalls.map(tool => tool.toolCallId)),
+    [["a", "b"], ["c"]]);
+  const group = groups[0];
+  assert.deepEqual(extractChainRecords(messages, group, () => false).map(record => record.toolCallId), ["a", "b"]);
+  const entry = { ...group, blockId: "b1", droppedToolCallIds: group.middleToolCallIds,
+    droppedOccurrenceKeys: group.middleOccurrenceKeys, toolRefs: ["t1", "t2"], compressedAt: 100 };
+  const projected = applyChainCompressions(messages, [entry], () => "Finished the first work group", true);
+  assert.deepEqual(projected.find(message => message.timestamp === 2).content,
+    first.content.filter(block => block.type === "text"));
+  assert.deepEqual(projected.find(message => message.timestamp === 6), next, "right boundary belongs entirely to the next group");
+  assert.deepEqual(projected.filter(message => message.role === "toolResult").map(message => message.toolCallId), ["c"]);
+  assert.deepEqual(messages[1], first, "projection must not mutate the source");
+  for (const stopReason of ["error", "aborted", "length"]) {
+    const failedBoundary = [...messages.slice(0, 5), { ...final(6), stopReason }];
+    assert.equal(findCompressibleRange(group, failedBoundary), null, "a failed response does not prove consumption");
+    assert.ok(findCompressibleRange(group, [...failedBoundary, final(8)]),
+      "a later successful receipt can admit the old group without altering the failed next checkpoint");
+  }
+});
+
+test("typed goal and user boundaries close implicit work groups but do not prove unread results were consumed", () => {
+  const goal = { role: "custom", customType: "goal-continuation", timestamp: 1, details: { goalId: "g1" }, content: "Continue" };
+  const messages = [goal, call("a", 2, "a"), result("a", 3, false),
+    { role: "user", timestamp: 4, content: "goal continue is just quoted text here" }];
+  const groups = detectChains(messages);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].finalAssistantTimestamp, 4);
+  assert.equal(findCompressibleRange(groups[0], messages), null, "a new user is not a successful model receipt");
+  assert.ok(findCompressibleRange(groups[0], [...messages, final(5)]));
+  assert.deepEqual(detectChains([{ ...goal, customType: "other-extension" }, ...messages.slice(1), final(5)]), [],
+    "an arbitrary extension message is not a user or a goal continuation");
+  const recallCall = { role: "assistant", timestamp: 2, stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "recall", name: "context_tree_query", arguments: { toolCallIds: ["source"] } }] };
+  const recall = { ...result("recall", 3, false), toolName: "context_tree_query" };
+  const recovered = [goal, recallCall, recall, final(4), buildSyntheticChainMessage(chain, "derived"), { ...goal, timestamp: 6 }];
+  assert.ok(inGraceRecoveryToolCallIds(recovered, 1).has("recall@3"), "text and derived users do not consume task grace");
+  assert.equal(inGraceRecoveryToolCallIds([...recovered, { ...goal, timestamp: 7 }], 1).has("recall@3"), false,
+    "typed goal continuations age recovery by the same real-task rule");
 });
 
 test("chain detection distinguishes real user quotes from program-derived messages", () => {

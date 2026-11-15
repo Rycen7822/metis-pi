@@ -3,7 +3,7 @@ import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-a
 import { branchEntryReferences, readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
-import { isChainAnchorCustom } from "./chain-detector.ts";
+import { isConversationBoundary } from "./chain-detector.ts";
 import { hasProtectedNestedResults } from "./protected.ts";
 import { prepareBatch } from "./packing.ts";
 
@@ -45,21 +45,26 @@ export function readMessageBranch(manager: ExtensionContext["sessionManager"]): 
 
 /** Native selection plus raw assistant dependencies; ordinal/group facts need metadata, not old message bodies. */
 export function activeCaptureSource(manager: ExtensionContext["sessionManager"],
-  entries: ReadonlyArray<{ sourceEntry: SessionEntry; messages: readonly unknown[] }>) {
+  entries: Readonly<ReturnType<ExtensionContext["sessionManager"]["buildSessionProjection"]>["entries"]>) {
   const selected = new Map(entries.filter(entry => entry.messages.length && isProjectableEntry(entry.sourceEntry))
     .map(entry => [entry.sourceEntry.id, entry.sourceEntry]));
   const wanted = new Set(selected.keys());
   const references = branchEntryReferences(manager);
-  const turnIndices = new Map<string, number>(), userGroups = new Map<string, number>();
-  let assistant: string | undefined, turn = 0, group = 0;
+  const turnIndices = new Map<string, number>(), chainGroups = new Map<string, string>();
+  let assistant: string | undefined, turn = 0;
   for (const entry of references) {
     if (entry.type === "message" && entry.message.role === "assistant") {
-      assistant = entry.id; turnIndices.set(entry.id, turn++); userGroups.set(entry.id, group);
-    } else if (entry.type === "message" && entry.message.role === "user"
-      || entry.type === "custom_message" && isChainAnchorCustom({ role: "custom", customType: entry.customType })) group++;
+      assistant = entry.id; turnIndices.set(entry.id, turn++);
+    }
     if (wanted.has(entry.id) && entry.type === "message" && entry.message.role === "toolResult" && assistant) wanted.add(assistant);
   }
-  return { turnIndices, userGroups, readBranch: () => {
+  // Only active projected bodies establish text checkpoints; never load old payloads for grouping.
+  let group = "truncated";
+  for (const entry of entries) for (const message of entry.messages) {
+    if (isConversationBoundary(message)) group = entry.sourceEntry.id;
+    if (message.role === "assistant") chainGroups.set(entry.sourceEntry.id, group);
+  }
+  return { turnIndices, chainGroups, readBranch: () => {
     for (const entry of readHistoryEntries(manager, "branch", entry => wanted.has(entry.id) && !selected.has(entry.id),
       { cacheAdmission: "bypass" })) selected.set(entry.id, entry);
     return references.filter(entry => wanted.has(entry.id)).map(entry => {
@@ -165,19 +170,18 @@ export function captureUnindexedBatchesFromSession(
   branch: Iterable<any>,
   indexer: { isSummarized(id: string): boolean },
   exclude?: (toolName: string, args: unknown) => boolean,
-  source?: { turnIndices: ReadonlyMap<string, number>; userGroups?: ReadonlyMap<string, number> },
+  source?: { turnIndices: ReadonlyMap<string, number>; chainGroups?: ReadonlyMap<string, string> },
 ): CapturedBatch[] {
   const batches: CapturedBatch[] = [];
   // Every assistant counts, including text-only: this is the persisted frontier's numbering domain.
   let turnCounter = 0;
-  // Shared by agent-message grouping; custom chain anchors advance it just like user messages.
-  let userTurnGroup = 0;
-  let currentTurn: { entry: any; msg: any; turnIndex: number; userTurnGroup: number } | undefined;
+  let boundaryIndex = 0, chainGroup = "implicit";
+  let currentTurn: { entry: any; msg: any; turnIndex: number; chainGroup: string } | undefined;
   const turnResults = new Map<string, any>();
 
   const finishTurn = () => {
     if (!currentTurn) return;
-    const { entry, msg, turnIndex, userTurnGroup } = currentTurn;
+    const { entry, msg, turnIndex, chainGroup } = currentTurn;
     const content = Array.isArray(msg.content) ? msg.content : [];
     const ready = content.filter((call: any) => {
       if (call.type !== "toolCall" || !call.id) return false;
@@ -192,12 +196,13 @@ export function captureUnindexedBatchesFromSession(
     const readyIds = new Set(ready.map((call: any) => call.id));
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : (msg.timestamp ?? Date.now());
     const batch = captureBatch(msg, results, turnIndex, timestamp);
-    batches.push({ ...batch, toolCalls: batch.toolCalls.filter(call => readyIds.has(call.toolCallId)), userTurnGroup });
+    batches.push({ ...batch, toolCalls: batch.toolCalls.filter(call => readyIds.has(call.toolCallId)), chainGroup });
   };
 
   for (const entry of branch) {
     if (!isProjectableEntry(entry)) continue;
     const msg = entry.type === "custom_message" ? projectCustomMessageEntry(entry) : entry.message;
+    if (isConversationBoundary(msg)) chainGroup = `boundary:${++boundaryIndex}`;
     // A result belongs to the preceding assistant until the next assistant,
     // even when a user/custom anchor appears between them. Save that turn's group.
     if (msg.role === "assistant") {
@@ -206,9 +211,9 @@ export function captureUnindexedBatchesFromSession(
       const fallback = turnCounter++;
       const turnIndex = source ? source.turnIndices.get(entry.id) : fallback;
       if (turnIndex === undefined) throw new Error(`Assistant source position unavailable: ${entry.id}`);
-      currentTurn = { entry, msg, turnIndex, userTurnGroup: source?.userGroups?.get(entry.id) ?? userTurnGroup };
+      currentTurn = { entry, msg, turnIndex,
+        chainGroup: source?.chainGroups ? source.chainGroups.get(entry.id) ?? `source:${entry.id}` : chainGroup };
     } else {
-      if (msg.role === "user" || isChainAnchorCustom(msg)) userTurnGroup++;
       if (currentTurn && msg.role === "toolResult" && msg.toolCallId && !turnResults.has(msg.toolCallId)) {
         turnResults.set(msg.toolCallId, msg);
       }
@@ -267,7 +272,7 @@ export function serializeBatchForSummarizer(batch: CapturedBatch, inputChars = S
 }
 
 /**
- * Plan budget-bounded chunks; only agent-message merges adjacent user-group turns.
+ * Plan summary chunks; only agent-message merges adjacent requests within the same text group.
  * Preserve occurrence order and each chunk's last source turn, including retries.
  * A single call that cannot fit is retained for an explicit local budget failure.
  */
@@ -284,14 +289,14 @@ export function groupBatchesByMode(batches: CapturedBatch[], mode: BatchingMode,
       const tc = { ...call, sourceTurn };
       const current = out.at(-1);
       const sameTurn = current?.turnIndex === sourceTurn.turnIndex && current.timestamp === sourceTurn.timestamp;
-      const sameGroup = mode === "agent-message" && batch.userTurnGroup !== undefined
-        && current?.userTurnGroup === batch.userTurnGroup;
+      const sameGroup = mode === "agent-message" && batch.chainGroup !== undefined
+        && current?.chainGroup === batch.chainGroup;
       const candidate = current && current.toolCalls.length && (sameTurn || sameGroup) ? {
         ...batch, ...sourceTurn,
         assistantText: sameTurn ? current.assistantText : [current.assistantText, batch.assistantText].filter(Boolean).join("\n\n"),
         toolCalls: [...current.toolCalls, tc],
       } : undefined;
-      // A full user request can contain dozens of tool steps. Limit one model's
+      // A text group can contain dozens of tool steps. Limit one model's
       // work so the three-request window can actually shorten final-reply waits.
       if (candidate && candidate.toolCalls.length <= 24 && serializeBatchForSummarizer(prepareBatch(candidate).candidate, inputChars) !== undefined) {
         out[out.length - 1] = candidate;

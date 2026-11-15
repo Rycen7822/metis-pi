@@ -66,9 +66,8 @@ export const PROGRESS_WIDGET_ID = "context-prune-progress";
 
 /**
  * When summarization (and context pruning) is triggered.
- * - "agent-message" : batches up turns and flushes when the agent sends a final text response
- *                     (a turn with no tool calls), or when the agent loop ends (default)
- * - "on-demand"     : only when the user runs /pruner now
+ * - "agent-message" : evaluate closed work when a complete visible assistant text message ends
+ * - "on-demand"     : manual or configured pressure/delta triggers
  */
 export const PRUNE_ON_VALUES = ["on-demand", "agent-message"] as const;
 export type PruneOn = (typeof PRUNE_ON_VALUES)[number];
@@ -76,7 +75,7 @@ export type PruneOn = (typeof PRUNE_ON_VALUES)[number];
 /**
  * Granularity of pruning batches.
  * - "turn"          : keep assistant turns separate (default)
- * - "agent-message" : merge turns within one user task up to the input budget
+ * - "agent-message" : merge request batches within one text-checkpoint chain up to the input budget
  * Both modes split oversized turns into budget-bounded chunks.
  */
 export const BATCHING_MODE_VALUES = ["turn", "agent-message"] as const;
@@ -110,7 +109,7 @@ export interface ContextPruneConfig {
   /**
    * Granularity of each pruning batch.
    * - "turn"          : keep assistant turns separate (default)
-   * - "agent-message" : merge within one user task up to the input budget
+   * - "agent-message" : merge requests between genuine text/task checkpoints up to the input budget
    * Both modes split oversized turns.
    */
   batchingMode: BatchingMode;
@@ -254,12 +253,15 @@ export interface ContextPruneConfig {
  * (for middle tool-using turns). The chain-compressor promotes ChainRange
  * into a ChainCompressionEntry by adding blockId, toolRefs, and compressedAt.
  */
-export interface ChainRange {
-  /**
-   * Start anchor timestamp — a user message or an eligible (non-pruner)
-   * custom message. Field name kept for persisted-entry compatibility.
-   */
+/** Historical wire names are retained so committed single/shared records remain readable. */
+export interface ChainBounds {
   startUserTimestamp: number;
+  finalAssistantTimestamp: number | null;
+  /** Present for half-open text groups; absent means the legacy user/custom → final-assistant middle. */
+  checkpointBoundary?: { startRole: "user" | "assistant" | "custom"; endRole: "user" | "assistant" | "custom" };
+}
+
+export interface ChainRange extends ChainBounds {
   /**
    * All toolCallIds in the chain's middle (deduplicated). Collected from both
    * AssistantMessage ToolCall blocks AND matching ToolResultMessages.
@@ -283,8 +285,6 @@ export interface ChainRange {
    * so hand-built ChainRange fixtures need not set it.
    */
   protectedToolCallIds?: string[];
-  /** Timestamp of the final text-only assistant message, or null if truncated/open. */
-  finalAssistantTimestamp: number | null;
 }
 
 /**
@@ -292,17 +292,11 @@ export interface ChainRange {
  * Written via pi.appendEntry(CUSTOM_TYPE_CHAIN, entry).
  * Rebuilt into the chain registry on session_start.
  */
-export interface SingleChainCompressionEntry {
+export interface SingleChainCompressionEntry extends ChainBounds {
   /** Semantic bodies used to build this entry; later summaries invalidate it. */
   summaryFingerprint?: string;
   /** Stable block ID, monotonic per session: "b1", "b2", ... */
   blockId: string;
-  /**
-   * Start anchor timestamp — a user message or an eligible (non-pruner)
-   * custom message. Field name kept for persisted-entry compatibility.
-   * Keep raw; synthetic inserted after.
-   */
-  startUserTimestamp: number;
   /**
    * All toolCallIds in the chain's middle. **Diagnostic only** since the
    * positional-range change: drops are decided by index range (see
@@ -325,12 +319,6 @@ export interface SingleChainCompressionEntry {
    * of being dropped. Absent/empty ⇒ no protected outputs (identical to pre-feature render).
    */
   protectedToolCallIds?: string[];
-  /**
-   * Timestamp of the final text-only assistant in the chain.
-   * Kept in context but with thinking blocks stripped.
-   * Null when the chain was truncated (no text-only close found).
-   */
-  finalAssistantTimestamp: number | null;
   /** Short t<N> refs for the tool calls in this chain, surfaced in the synthetic message's `tools="..."` attribute. */
   toolRefs: string[];
   /** Epoch ms when the compression decision was recorded. */
@@ -371,16 +359,16 @@ export type ChainCompressionEntry = SingleChainCompressionEntry | SharedChainCom
 
 export interface ChainCompressionConfig {
   enabled: boolean;
-  /** Recent closed-task references share minRecentTokens' finite raw budget with the open task. Default 3. */
+  /** Recent closed text-group references share minRecentTokens' finite raw budget with the open group. Default 3. */
   rollingWindow: number;
   /** Useful rounds and effective raw-tail tokens retained by automatic tool batches and chains; their union is protected. */
   minWorkTurns: number;
   minRecentTokens: number;
-  /** Large/shared-chain gain floor; also the shared useful-work growth floor. Independent candidates cap this floor at 2k. */
+  /** Large/shared-candidate gain floor; also the shared useful-work growth floor. Bounded candidates cap this floor at 2k. */
   minGainTokens: number;
   /** Total-context gain fraction for large/shared chains, candidate fraction for independent ones; separate from batch proxy policy. */
   minGainFraction: number;
-  /** Strip thinking blocks from the kept final text-only assistant. Default true. */
+  /** Strip kept boundary thinking, never the next half-open group. Default true. */
   stripFinalAssistantThinking: boolean;
   /**
    * Fuse a compressed chain's per-batch summaries into one cohesive LLM range
@@ -448,15 +436,8 @@ export interface CapturedBatch {
   timestamp: number;
   assistantText: string;
   toolCalls: CapturedToolCall[];
-  /**
-   * Grouping key assigned by `captureUnindexedBatchesFromSession`.
-   * Increments for each user message seen while walking the branch.
-   * Batches from the live `turn_end` path do NOT have this field set
-   * (they are always emitted one-per-turn regardless of batchingMode).
-   * Used by `groupBatchesByMode` to merge turns within the same
-   * user → agent-message span when batchingMode === "agent-message".
-   */
-  userTurnGroup?: number;
+  /** Text-checkpoint/task anchor identity. Live captures remain one request until a source rescan. */
+  chainGroup?: string;
 }
 
 
@@ -724,7 +705,7 @@ export interface FlushOptions {
   /** Which trigger initiated this flush. Defaults to "manual" when absent. */
   trigger?: FlushTrigger;
   /**
-   * The final text-only assistant message that triggered an agent-message flush.
+   * The complete visible assistant message that triggered a checkpoint flush; it may also contain tool calls.
    * pi emits `message_end` to extensions before persisting it to the session, so it
    * is threaded in here to close the newest chain for compression (see
    * `withClosingMessage`). Only set on the message_end path.

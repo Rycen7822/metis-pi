@@ -314,6 +314,59 @@ for (const enabled of [false, true]) {
   });
 }
 
+test("real SDK compacts consumed text groups inside one open task while preserving recent evidence and recovery", async t => {
+  const h = await host(t, {
+    workTurns: 12, localSummary: true, pruneOn: "on-demand",
+    pruneOverrides: { opportunisticCompaction: false, autoBudgetThreshold: null,
+      chainCompression: DEFAULT_CONFIG.chainCompression },
+    beforeLoad(_sm, model) { model.contextWindow = 1000000; },
+    onWork({ sm, toolUse, index }) {
+      if (!toolUse) return;
+      const path = join(sm.getCwd(), "work.txt");
+      writeFileSync(path, Array.from({ length: 3000 }, (_, i) => `const value_${i} = ${i};`).join("\n"));
+      return { content: [
+        ...(index % 3 === 1 ? [{ type: "text", text: `Work checkpoint ${index}` }] : []),
+        { type: "toolCall", id: `work-${index}`, name: "read", arguments: { path } },
+      ] };
+    },
+  });
+  await h.session.prompt("Continue this single long inspection task without another user input.");
+  await h.session.waitForIdle();
+  for (;;) {
+    const status = {};
+    h.eventBus.emit("metis:condense-maintenance", status);
+    if (!status.pending) break;
+    await status.pending;
+  }
+  const branch = h.sm.getBranch(), raw = h.sm.buildSessionProjection().messages;
+  const block = branch.filter(entry => entry.customType === "context-prune-chain").map(entry => entry.data)
+    .find(entry => entry.checkpointBoundary?.startRole === "assistant"
+      && raw.find(message => message.role === "assistant" && message.timestamp === entry.startUserTimestamp)
+        ?.content.some(part => part.type === "text" && part.text.startsWith("Work checkpoint")));
+  assert.ok(block, "old text groups become eligible without closing the active user task");
+  const request = { sessionId: h.sm.getSessionId(), api: h.session.model.api, messages: raw };
+  h.eventBus.emit("metis:condense-project", request);
+  for (const message of raw.filter(message => message.role === "assistant"
+    && message.content.some(part => part.type === "text" && part.text.startsWith("Work checkpoint")))) {
+    assert.ok(request.messages.some(projected => projected.role === "assistant"
+      && projected.content.some(part => part.type === "text" && part.text === message.content.find(part => part.type === "text").text)));
+  }
+  const recent = raw.filter(message => message.role === "toolResult").slice(-4);
+  for (const result of recent) assert.deepEqual(request.messages.find(message => message.toolCallId === result.toolCallId), result);
+  const key = block.droppedOccurrenceKeys[0], original = raw.find(message => `${message.toolCallId}@${message.timestamp}` === key);
+  const query = h.session.extensionRunner.getAllRegisteredTools().find(tool => tool.definition.name === "context_tree_query").definition;
+  const ctx = { sessionManager: h.sm };
+  let page = (await query.execute("q", { toolCallIds: [key] }, undefined, undefined, ctx)).details;
+  let recalled = page.results[0].text;
+  while (page.nextCursor) {
+    page = (await query.execute("q", { toolCallIds: [key], cursor: page.nextCursor }, undefined, undefined, ctx)).details;
+    recalled += page.results[0].text;
+  }
+  assert.equal(recalled, original.content.filter(part => part.type === "text").map(part => part.text).join("\n"));
+  assert.equal(h.calls.filter(call => call.summarizing).length, 0, "automatic maintenance uses archived facts, not extra model calls");
+  assert.deepEqual(h.errors, []);
+});
+
 for (const [limit, expected] of [[0, undefined], [64, 64], [512, 512], [2048, 1000]]) {
   test(`native manual summary ceiling ${limit} preserves Pi limits, previous summary and ordinary requests`, async t => {
     const h = await host(t, { pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: limit } });

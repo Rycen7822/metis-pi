@@ -1,9 +1,9 @@
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { CUSTOM_TYPE_SUMMARY } from "./types.ts";
-import type { SingleChainCompressionEntry } from "./types.ts";
+import type { ChainBounds, SingleChainCompressionEntry } from "./types.ts";
 import { substituteBlockRefs } from "./nested-placeholders.ts";
 import { extractToolResultText } from "./batch-capture.ts";
-import { isChainAnchorCustom } from "./chain-detector.ts";
+import { consumedToolResults, isChainAnchorCustom, isConversationBoundary } from "./chain-detector.ts";
 import { bareToolCallId, occKey, resultTimestampOf } from "./occurrence-key.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";
 import { isSubagentControl } from "./protected.ts";
@@ -67,38 +67,42 @@ export function buildSyntheticChainMessage(
   };
 }
 
-type RangeEntry = Pick<SingleChainCompressionEntry, "startUserTimestamp" | "finalAssistantTimestamp">;
-
 /**
  * Builds a source-local resolver for persisted chain index ranges.
  *
- * Role-gated and unique-match-or-nothing: exactly one start anchor (user
- * message or eligible non-pruner custom, isChainAnchorCustom) at
- * startUserTimestamp, exactly one assistant at finalAssistantTimestamp, and
- * startIndex < endIndex. Otherwise null - the entry drops nothing. Fail-closed
- * is the whole point: an id-set or timestamp-window fallback is what deleted
- * live turns (doc/specs/2026-08-12-toolcall-id-collisions.md).
+ * New half-open groups use explicit checkpoint roles; committed legacy ranges
+ * retain their user/custom → final-assistant anchors. Each anchor must be unique.
+ * bodyStart includes an assistant checkpoint only when its calls belong to the
+ * group; user/custom anchors remain outside the replacement body. Never infer a
+ * drop from bare tool IDs or a timestamp window when an anchor is missing.
  */
 // One synchronous source view only. Positions are not authority across an await
 // or evidence of unchanged content; duplicates remain ambiguous, even at one leaf.
 export function createRangeResolver(messages: any[]) {
-  const starts = new Map<number, number>(), finals = new Map<number, number>();
+  const starts = new Map<number, number>(), finals = new Map<number, number>(), checkpoints = new Map<string, number>();
+  const consumed = consumedToolResults(messages);
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
-    if (Number.isNaN(message.timestamp)) continue; // Preserve strict timestamp equality.
+    if (Number.isNaN(message.timestamp)) continue;
     const anchors = message.role === "user" || isChainAnchorCustom(message) ? starts
       : message.role === "assistant" ? finals : undefined;
     if (anchors) anchors.set(message.timestamp, anchors.has(message.timestamp) ? -1 : i);
+    if (isConversationBoundary(message)) {
+      const key = `${message.role}:${message.timestamp}`;
+      checkpoints.set(key, checkpoints.has(key) ? -1 : i);
+    }
   }
-  return (entry: RangeEntry): { startIndex: number; endIndex: number } | null => {
+  return (entry: ChainBounds) => {
     if (entry.finalAssistantTimestamp === null) return null;
-    const startIndex = starts.get(entry.startUserTimestamp), endIndex = finals.get(entry.finalAssistantTimestamp);
-    return startIndex !== undefined && endIndex !== undefined && startIndex >= 0 && startIndex < endIndex
-      ? { startIndex, endIndex } : null;
+    const bounds = entry.checkpointBoundary;
+    const startIndex = bounds ? checkpoints.get(`${bounds.startRole}:${entry.startUserTimestamp}`) : starts.get(entry.startUserTimestamp);
+    const endIndex = bounds ? checkpoints.get(`${bounds.endRole}:${entry.finalAssistantTimestamp}`) : finals.get(entry.finalAssistantTimestamp);
+    if (startIndex === undefined || endIndex === undefined || startIndex < 0 || startIndex >= endIndex) return null;
+    return { startIndex, endIndex, bodyStart: bounds?.startRole === "assistant" ? startIndex : startIndex + 1, consumed };
   };
 }
 
-export function resolveRange(entry: RangeEntry, messages: any[]) {
+export function resolveRange(entry: ChainBounds, messages: any[]) {
   return entry.finalAssistantTimestamp === null ? null : createRangeResolver(messages)(entry);
 }
 
@@ -163,6 +167,7 @@ export function applyChainCompressions(
 
   const dropIndices = new Set<number>();
   const stripAtIndex = new Set<number>();
+  const checkpointAtIndex = new Set<number>();
   const insertAfterIndex = new Map<number, ReturnType<typeof buildSyntheticChainMessage>>();
   const droppedBareIds = new Set<string>();
   const droppedOccKeys = new Set<string>();
@@ -173,14 +178,16 @@ export function applyChainCompressions(
     // An existing body proves only its original coverage. Never hide additional
     // members when reapplying a shared ID to an already-derived input.
     if (existingSyntheticBlockIds.has(entry.blockId)) {
-      if (stripFinalThinking) stripAtIndex.add(endIndex);
+      if (stripFinalThinking && !entry.checkpointBoundary) stripAtIndex.add(endIndex);
       continue;
     }
     const protectedIds = new Set(entry.protectedToolCallIds ?? []);
     const actual = new Set<string>();
-    for (let i = startIndex + 1; i < endIndex; i++) {
+    const startAssistant = entry.checkpointBoundary?.startRole === "assistant";
+    for (let i = startAssistant ? startIndex : startIndex + 1; i < endIndex; i++) {
       const msg = messages[i];
-      dropIndices.add(i);
+      if (startAssistant && i === startIndex) checkpointAtIndex.add(i);
+      else dropIndices.add(i);
       if (msg.role === "toolResult") {
         actual.add(msg.toolCallId);
         droppedBareIds.add(msg.toolCallId);
@@ -208,7 +215,7 @@ export function applyChainCompressions(
         `blockId=${entry.blockId} recorded=${recorded.size} actual=${actual.size}`,
       );
     }
-    if (stripFinalThinking) stripAtIndex.add(endIndex);
+    if (stripFinalThinking && !entry.checkpointBoundary) stripAtIndex.add(endIndex);
     const group = groups.get(entry.blockId);
     if (group) {
       group.bodies.push(summaryTextForChain(entry));
@@ -238,7 +245,9 @@ export function applyChainCompressions(
     // summary is appended AFTER finalAssistantTimestamp, outside the range.
     if (isSummary && perBatchSummaryOverlapsDropped(msg, droppedOccKeys, droppedBareIds)) continue;
 
-    if (msg.role === "assistant" && stripAtIndex.has(i)) out.push(withoutThinkingBlocks(msg));
+    if (checkpointAtIndex.has(i)) out.push({ ...msg, content: msg.content.filter((block: any) =>
+      block.type !== "toolCall" && (!stripFinalThinking || block.type !== "thinking")) });
+    else if (msg.role === "assistant" && stripAtIndex.has(i)) out.push(withoutThinkingBlocks(msg));
     else out.push(msg);
 
     const synthetic = insertAfterIndex.get(i);

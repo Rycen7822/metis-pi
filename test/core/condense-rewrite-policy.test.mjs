@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  RewriteBudget, batchRewriteAdmission, independentChainPolicy, protectBatchWorkingSet, protectChainWorkingSet,
+  RewriteBudget, batchRewriteAdmission, boundedRewritePolicy, protectBatchWorkingSet, protectChainWorkingSet,
   isUsefulWork, summaryRequestCost,
 } from "../../src/condense/rewrite-policy.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
@@ -130,8 +130,9 @@ test("summary fees reserve before work, settle from receipts, and remain charged
   assert.equal(admits(0), false, "three warm requests alone do not repay a capacity rescue with large debt");
 });
 
-test("independent chains use candidate-sized gain and a per-plan forecast without changing the default gate", () => {
-  const policy = independentChainPolicy(DEFAULT_CONFIG.chainCompression, 32008), budget = new RewriteBudget();
+test("bounded candidates use size-specific gain and forecast without redefining semantic text groups", () => {
+  assert.equal(boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 80000), undefined, "a large semantic text group keeps the default gate");
+  const policy = boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 32008), budget = new RewriteBudget();
   warm(budget);
   assert.equal(budget.admits(1000089, 31917, 896026, DEFAULT_CONFIG.chainCompression, model, false), false);
   assert.ok(policy);
@@ -140,9 +141,27 @@ test("independent chains use candidate-sized gain and a per-plan forecast withou
   const cheap = { ...model, cost: { input: 2, cacheRead: 1 } }, smaller = new RewriteBudget();
   warm(smaller, cheap);
   assert.equal(smaller.admits(1000089, 5917, 922026, DEFAULT_CONFIG.chainCompression, cheap, false), false);
-  const small = independentChainPolicy(DEFAULT_CONFIG.chainCompression, 6008);
+  const small = boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 6008);
   assert.ok(small);
   assert.equal(smaller.admits(1000089, 5917, 922026, small, cheap, false), true);
+});
+
+test("closed request chunks earn local payback without borrowing profit or consuming unread results", () => {
+  const quote = { ...model, cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } }, budget = new RewriteBudget();
+  warm(budget, quote);
+  const raw = history([240000, 256000]);
+  const gain = { pi: 58000, proxy: 58000 };
+  const frame = batchRewriteAdmission(budget, raw, config, quote);
+  assert.equal(frame.accepts(["t0@2"].values(), gain), true, "a profitable closed chunk can use its own 32-request horizon");
+  assert.equal(frame.accepts(["t0@2"], gain, 1000000), false, "paid summary fees remain part of the same forecast");
+  assert.equal(frame.accepts(["t0@2"], { pi: 1000, proxy: 1000 }), false, "small savings cannot borrow another candidate gain");
+  const open = raw.filter(message => message.role !== "user" || message.timestamp === 0)
+    .filter(message => !message.content?.some?.(block => block.type === "text" && block.text === "Complete"));
+  assert.equal(batchRewriteAdmission(budget, open, config, quote).accepts(["t0@2"], gain), false,
+    "a tool-only successor proves consumption, not closure of the text group");
+  const unread = [...raw.slice(0, 3), { role: "user", timestamp: 3, content: "pending ".repeat(32000) }];
+  assert.equal(batchRewriteAdmission(budget, unread, config, quote).accepts(["t0@2"], gain), false,
+    "a new task cannot authorize the previous unread tool output");
 });
 
 test("unknown prices use a 1:10 cache/input ratio, while no-discount inputs still honor batch policy", () => {
@@ -203,6 +222,11 @@ test("recent work and token tail are a union; open tasks never authorize arbitra
   assert.deepEqual(protectBatchWorkingSet(batches, raw, raw, work).flatMap(b => b.toolCalls.map(c => c.toolCallId)),
     ["t0", "t1", "t2"], "ordinary batches retain the same recent useful rounds");
   assert.deepEqual(protectChainWorkingSet(chains, raw, raw, work).map(c => c.startUserTimestamp), [0, 4, 8]);
+  const oneTask = raw.filter(message => message.role !== "user" || message.timestamp === 0);
+  assert.deepEqual(protectChainWorkingSet(detectChains(oneTask), oneTask, oneTask, work)
+    .map(chain => chain.startUserTimestamp), [0, 3, 7], "an open big task does not pin its closed text groups");
+  assert.deepEqual(protectBatchWorkingSet(batches, raw, raw, { ...work, minWorkTurns: 0 })
+    .flatMap(batch => batch.toolCalls.map(call => call.toolCallId)), ["t0", "t1", "t2", "t3"], "unread output stays raw even with zero retention");
   assert.deepEqual(protectChainWorkingSet(chains, raw, raw, { ...work, minRecentTokens: 100000 }), []);
   const visible = raw.map(message => message.role === "toolResult" ? { ...message, content: [{ type: "text", text: "stub" }] } : message);
   assert.deepEqual(protectChainWorkingSet(chains, raw, visible, { ...work, minRecentTokens: 2000 }), []);

@@ -1,15 +1,9 @@
-import { detectChains, isChainAnchorCustom } from "./chain-detector.ts";
+import { conversationSegments } from "./chain-detector.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import type { ContextMetricsSnapshot, PruneFrontier } from "./types.ts";
 
 function charsOf(msg: any): number {
   return JSON.stringify(msg).length;
-}
-
-function isTextOnlyAssistant(msg: any): boolean {
-  if (msg.role !== "assistant") return false;
-  if (!Array.isArray(msg.content)) return true;
-  return !msg.content.some((b: any) => b.type === "toolCall");
 }
 
 function toolCallBlocksOf(msg: any): { id: string; input?: unknown; arguments?: unknown }[] {
@@ -43,62 +37,22 @@ export function computeContextMetrics(
     return { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
   }
 
-  let lastTextOnlyIdx = -1;
-  for (let i = 0; i < branch.length; i++) {
-    if (isTextOnlyAssistant(branch[i])) lastTextOnlyIdx = i;
-  }
-  const openStart = lastTextOnlyIdx + 1;
-
+  const segments = conversationSegments(branch);
+  const openStart = segments.at(-1)?.startIndex ?? 0;
   let thinkingChars = 0;
   for (let i = openStart; i < branch.length; i++) {
-    const m = branch[i];
-    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
-    for (const block of m.content) {
-      if (block.type === "thinking") thinkingChars += measureChars(block);
-    }
+    const message = branch[i];
+    if (message.role !== "assistant") continue;
+    for (const block of message.content ?? []) if (block.type === "thinking") thinkingChars += measureChars(block);
   }
   const openCycleThinkingTokens = Math.round(thinkingChars / 4);
-
-  const branchChars = branch.map(message => measureChars(message));
-  const sumChars = (start: number, end: number): number => {
-    let sum = 0;
-    for (let i = start; i <= end; i++) sum += branchChars[i];
-    return sum;
-  };
-  const totalChars = branchChars.reduce((a, b) => a + b, 0);
-
-  const chains = detectChains(branch, isProtected);
-  let largestClosedChainChars = 0;
-  for (const range of chains) {
-    const startIdx = branch.findIndex(
-      (m) => (m.role === "user" || isChainAnchorCustom(m)) && m.timestamp === range.startUserTimestamp,
-    );
-    if (startIdx === -1) continue;
-    let endIdx: number;
-    if (range.finalAssistantTimestamp !== null) {
-      endIdx = branch.findIndex(
-        (m, i) => i >= startIdx && m.role === "assistant" && m.timestamp === range.finalAssistantTimestamp,
-      );
-      if (endIdx === -1) continue;
-    } else {
-      let nextUserIdx = -1;
-      // User-only: under idle-only semantics only a user message interrupts an open chain.
-      for (let i = startIdx + 1; i < branch.length; i++) {
-        if (branch[i].role === "user") {
-          nextUserIdx = i;
-          break;
-        }
-      }
-      endIdx = nextUserIdx === -1 ? branch.length - 1 : nextUserIdx - 1;
-    }
-    if (endIdx < startIdx) continue;
-    const chainChars = sumChars(startIdx, endIdx);
-    if (chainChars > largestClosedChainChars) largestClosedChainChars = chainChars;
-  }
-
-  const openSegmentChars = openStart < branch.length ? sumChars(openStart, branch.length - 1) : 0;
-  const numerator = Math.max(largestClosedChainChars, openSegmentChars);
-  const largestChainSharePct = totalChars === 0 ? 0 : Math.round((100 * numerator) / totalChars);
+  const prefixChars = [0];
+  for (const message of branch) prefixChars.push(prefixChars[prefixChars.length - 1] + measureChars(message));
+  const totalChars = prefixChars[prefixChars.length - 1];
+  const unanchoredPrefix = prefixChars[segments[0]?.startIndex ?? branch.length];
+  const largest = segments.reduce((max, segment) => Math.max(max,
+    prefixChars[segment.endIndex] - prefixChars[segment.startIndex]), unanchoredPrefix);
+  const largestChainSharePct = totalChars === 0 ? 0 : Math.round(100 * largest / totalChars);
 
   // Exclusion is positional: only toolResults belonging to the boundary turn's
   // own calls (up to and including the last-attempted call) are excluded.
@@ -142,7 +96,7 @@ export function computeContextMetrics(
     if (isSummarized(key)) continue;
     const args = findArgsForToolCallId(branch, i, m.toolCallId);
     if (isProtected(m.toolName, args)) continue;
-    frontierGapTokens += Math.round(branchChars[i] / 4);
+    frontierGapTokens += Math.round((prefixChars[i + 1] - prefixChars[i]) / 4);
   }
 
   return { openCycleThinkingTokens, largestChainSharePct, frontierGapTokens };

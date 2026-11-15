@@ -1,5 +1,6 @@
 import { QUERY_TOOL_NAME } from "./types.ts";
 import { occKey } from "./occurrence-key.ts";
+import { isTaskBoundary } from "./chain-detector.ts";
 
 /**
  * Set of `context_tree_query` occurrence keys (or bare ids when the message
@@ -12,9 +13,8 @@ import { occKey } from "./occurrence-key.ts";
  * protection onto a different, later occurrence that happens to reuse the
  * same provider id.
  *
- * A recovery output's "user-turn-group" is the count of `role === "user"`
- * messages at or before its position; its age is `nowUTG - that count`, where
- * `nowUTG` is the total user messages in the array. It is in grace while
+ * Age counts real user/goal task boundaries, not text checkpoints or synthetic
+ * user summaries. Its age is `nowUTG - that count`. It is in grace while
  * `age <= graceTurns`. Works uniformly for render-context and session-branch
  * arrays, so pruner Phase 1 and chain-compressor eligibility share one rule.
  *
@@ -25,11 +25,11 @@ export function inGraceRecoveryToolCallIds(messages: any[], graceTurns: number):
   if (!(graceTurns > 0)) return result;
 
   let nowUTG = 0;
-  for (const m of messages) if (m?.role === "user") nowUTG++;
+  for (const m of messages) if (isTaskBoundary(m)) nowUTG++;
 
   let seen = 0;
   for (const m of messages) {
-    if (m?.role === "user") {
+    if (isTaskBoundary(m)) {
       seen++;
       continue;
     }

@@ -1,7 +1,7 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createRangeResolver } from "./chain-range-prune.ts";
-import { hasToolCalls, isChainAnchorCustom } from "./chain-detector.ts";
+import { consumedToolResults, conversationSegments } from "./chain-detector.ts";
 import { occKey } from "./occurrence-key.ts";
 import type { CapturedBatch, ChainCompressionConfig, ChainRange } from "./types.ts";
 
@@ -123,10 +123,11 @@ function recentWorkBoundary(raw: any[], visible: any[], config: ChainCompression
 
 export function protectBatchWorkingSet(batches: CapturedBatch[], raw: any[], visible: any[], config: ChainCompressionConfig) {
   const boundary = recentWorkBoundary(raw, visible, config);
-  const older = new Set<string>();
+  const older = new Set<string>(), consumed = consumedToolResults(raw);
   for (let i = 0; i < boundary; i++) {
     const message = raw[i];
-    if (message.role === "toolResult") older.add(occKey(message.toolCallId, message.timestamp));
+    const key = message.role === "toolResult" ? occKey(message.toolCallId, message.timestamp) : undefined;
+    if (key && consumed.has(key)) older.add(key);
   }
   return batches.map(batch => ({ ...batch,
     toolCalls: batch.toolCalls.filter(call => older.has(occKey(call.toolCallId, call.resultTimestamp))),
@@ -139,16 +140,11 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
   // Chain count is a bounded reference signal, not an unconditional second retention window.
   let referenceBudget = config.minRecentTokens > 0 ? config.minRecentTokens : Infinity;
   if (Number.isFinite(referenceBudget)) {
-    // The detector omits the active chain; it still owns part of the same reference budget.
-    let openTokens = 0;
-    for (let i = visible.length - 1; i >= 0; i--) {
-      const message = visible[i];
-      if (message.role === "assistant" && !hasToolCalls(message)) break;
-      openTokens += estimateTokens(message);
-      if ((message.role === "user" && message.metisDerived?.kind !== "condense-chain") || isChainAnchorCustom(message)) {
-        referenceBudget = Math.max(0, referenceBudget - openTokens);
-        break;
-      }
+    // The open text group owns the same finite budget as the closed reference groups.
+    const open = conversationSegments(visible).at(-1);
+    if (open) for (let i = open.startIndex; i < visible.length; i++) {
+      referenceBudget = Math.max(0, referenceBudget - estimateTokens(visible[i]));
+      if (referenceBudget === 0) break;
     }
   }
   for (let i = chains.length - 1, kept = 0; i >= 0 && kept < config.rollingWindow; i--) {
@@ -156,7 +152,7 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
     if (!range) continue;
     let tokens = 0;
     if (Number.isFinite(referenceBudget)) {
-      for (let j = range.startIndex; j <= range.endIndex && tokens <= referenceBudget; j++) tokens += estimateTokens(raw[j]);
+      for (let j = range.startIndex; j < range.endIndex && tokens <= referenceBudget; j++) tokens += estimateTokens(raw[j]);
     }
     if (tokens > referenceBudget) break;
     referenceBudget -= tokens;
@@ -165,53 +161,65 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
   }
   return chains.filter(chain => {
     const range = resolve(chain);
-    return range !== null && range.endIndex < boundary;
+    return range !== null && (chain.checkpointBoundary ? range.endIndex <= boundary : range.endIndex < boundary);
   });
 }
 
-/** Only independently measured small chains use the candidate floor and longer forecast; the wallet remains shared. */
-export function independentChainPolicy(config: ChainCompressionConfig, tokens: number) {
+/** Size-based economic tier, independent of whether a semantic unit is a request or a text group. */
+export function boundedRewritePolicy(config: ChainCompressionConfig, tokens: number) {
   if (tokens < 2048 || tokens > 65536) return undefined;
   return { minGainTokens: config.minGainTokens, minGainFraction: config.minGainFraction,
     minimumGain: Math.max(Math.min(2048, config.minGainTokens), tokens * config.minGainFraction), forecastRequests: 32 };
 }
 
 /** This is a selection boundary, not a hard context limit; the recent working set is protected separately. */
-export function independentChainPrefixAllowed(before: number, prefix: number): boolean {
+export function localRewritePrefixAllowed(before: number, prefix: number): boolean {
   return before <= 256000 || prefix >= before - 192000;
 }
 
 export interface RewriteGain { pi: number; proxy: number }
 
-/** One flush measures its prefix once; every published prefix must independently satisfy the aggregate payback gate. */
+/** Aggregate or independently profitable closed chunks settle one flush in the same shared wallet. */
 export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], config: ChainCompressionConfig, model: Model | undefined) {
-  const prefixes = new Map<string, number>();
+  const outputs = new Map<string, { prefix: number; tokens: number; closed: boolean }>();
+  const consumed = consumedToolResults(messages), segments = conversationSegments(messages);
+  // Closed segments are contiguous before the open one; a Native orphan prefix is not a closed group.
+  const closedStart = segments[0]?.startIndex ?? 0, closedEnd = segments.at(-1)?.startIndex ?? 0;
   let before = 0;
-  for (const message of messages) {
-    if (message.role === "toolResult") prefixes.set(occKey(message.toolCallId, message.timestamp), before);
-    before += estimateTokens(message);
+  for (const [index, message] of messages.entries()) {
+    const tokens = estimateTokens(message);
+    if (message.role === "toolResult") {
+      const key = occKey(message.toolCallId, message.timestamp);
+      outputs.set(key, { prefix: before, tokens, closed: index >= closedStart && index < closedEnd && consumed.has(key) });
+    }
+    before += tokens;
   }
   let prefix = before, pi = 0, proxy = 0;
-  const changedPrefix = (keys: Iterable<string>) => {
-    let next = prefix;
+  const selection = (keys: Iterable<string>) => {
+    let localPrefix = before, tokens = 0, allClosed = true, count = 0;
     for (const key of keys) {
-      const position = prefixes.get(key);
-      if (position === undefined) return undefined;
-      next = Math.min(next, position);
+      const output = outputs.get(key);
+      if (!output) return undefined;
+      localPrefix = Math.min(localPrefix, output.prefix);
+      tokens += output.tokens; allClosed &&= output.closed; count++;
     }
-    return next;
+    return count ? { localPrefix, tokens, allClosed, prefix: Math.min(prefix, localPrefix) } : undefined;
   };
   return {
     accepts(keys: Iterable<string>, gain: RewriteGain, fee = 0) {
-      const next = changedPrefix(keys);
-      return next !== undefined && budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), next,
-        // The batch plan already enforces its proxy gain floor; do not compare that floor to Pi-estimated tokens.
-        { ...config, minimumGain: 0 }, model, false, fee);
+      const plan = selection(keys);
+      if (!plan) return false;
+      // Ordinary aggregate admission keeps its own proxy gain floor and three-request forecast.
+      if (budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), plan.prefix,
+        { ...config, minimumGain: 0 }, model, false, fee)) return true;
+      const policy = plan.allClosed ? boundedRewritePolicy(config, plan.tokens) : undefined;
+      return !!policy && localRewritePrefixAllowed(before, plan.localPrefix)
+        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.localPrefix, policy, model, false, fee);
     },
     published(keys: Iterable<string>, gain: RewriteGain) {
-      const next = changedPrefix(keys);
-      if (next === undefined) throw new Error("Published batch lost its original source position");
-      prefix = next; pi += gain.pi; proxy += gain.proxy;
+      const plan = selection(keys);
+      if (!plan) throw new Error("Published batch lost its original source position");
+      prefix = plan.prefix; pi += gain.pi; proxy += gain.proxy;
     },
     finish() {
       if (pi > 0 && proxy > 0) budget.published(before, Math.min(pi, proxy), prefix, model);

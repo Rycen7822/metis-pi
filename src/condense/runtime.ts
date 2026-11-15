@@ -8,7 +8,7 @@ import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import {
-  RewriteBudget, batchRewriteAdmission, independentChainPolicy, independentChainPrefixAllowed,
+  RewriteBudget, batchRewriteAdmission, boundedRewritePolicy, localRewritePrefixAllowed,
   isUsefulWork, protectBatchWorkingSet, protectChainWorkingSet, summaryRequestCost, type RewriteGain,
 } from "./rewrite-policy.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
@@ -41,6 +41,7 @@ import type {
   FlushMetricsEntry,
   FlushTrigger,
   DeferredReason,
+  ChainBounds,
   ChainCompressionEntry,
   SingleChainCompressionEntry,
   SharedChainCompressionEntry,
@@ -68,7 +69,7 @@ import {
   type CompressEligibleDeps,
 } from "./chain-compressor.ts";
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
-import { detectChains, withClosingMessage } from "./chain-detector.ts";
+import { chainContents, detectChains, isCompletedAssistant, isTextCheckpoint, withClosingMessage } from "./chain-detector.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
 import {
   shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction, summaryBudget, shouldDeferToNative,
@@ -176,7 +177,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const queuedDetail = (count: number, prefix = "") => () =>
     `${prefix}${count} turn${count === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${
-      currentConfig.value.pruneOn === "agent-message" ? "agent's next final text response" : "/pruner now"
+      currentConfig.value.pruneOn === "agent-message" ? "agent's next text checkpoint" : "/pruner now"
     }`;
 
   // Newest-protected-read-wins state (spec 2026-09-07). In-memory only: on
@@ -326,14 +327,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (parts.length) safeNotify(ctx, `pruner: ${parts.join("; ")}`, "info");
   };
 
-  const assistantMessageHasToolCalls = (message: any) =>
-    message?.role === "assistant" &&
-    Array.isArray(message.content) &&
-    message.content.some((block: any) => block?.type === "toolCall");
-
-  const isFinalAssistantMessage = (message: any) => message?.role === "assistant"
-    && message.stopReason !== "error" && message.stopReason !== "aborted" && !assistantMessageHasToolCalls(message);
-
   const trimBatchToPendingRange = (batch: CapturedBatch): CapturedBatch | null => {
     const currentFrontier = frontier.get();
     let toolCalls = batch.toolCalls;
@@ -392,7 +385,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         branch,
         { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },
         protectionPredicate,
-        { turnIndices: source.turnIndices, userGroups: projectedCapture ? undefined : source.userGroups },
+        { turnIndices: source.turnIndices, chainGroups: projectedCapture ? undefined : source.chainGroups },
       );
     } catch (err) {
       if (opts?.rethrow) throw err;
@@ -496,10 +489,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number, candidateTokens?: number) => {
     if (deferToNative(ctx, undefined, counts.piBefore)) return false;
     const config = currentConfig.value.chainCompression;
-    const independent = candidateTokens === undefined ? undefined : independentChainPolicy(config, candidateTokens);
+    const independent = candidateTokens === undefined ? undefined : boundedRewritePolicy(config, candidateTokens);
     if (candidateTokens !== undefined && !independent) return false;
     const emergency = chainEmergency(ctx, counts.piBefore);
-    if (independent && !emergency && !independentChainPrefixAllowed(counts.piBefore, prefix)) return false;
+    if (independent && !emergency && !localRewritePrefixAllowed(counts.piBefore, prefix)) return false;
     const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
     return rewriteBudget.admits(counts.piBefore, gain, prefix, independent ?? config, economicModel(ctx), emergency);
   };
@@ -555,7 +548,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (options.candidate) {
           const span = resolveRange(entry, before);
           if (!span) return false;
-          candidateTokens = before.slice(span.startIndex + 1, span.endIndex).reduce((sum, message) => sum + estimateTokens(message), 0);
+          candidateTokens = before.slice(span.bodyStart, span.endIndex).reduce((sum, message) => sum + estimateTokens(message), 0);
         }
         const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
           && (!automatic || admitAutomaticChain(ctx, counts, prefix, candidateTokens))
@@ -745,6 +738,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // (session delivery); until then (empty/aborted/pre-capture-failure exits)
     // the emitter falls back to pi.appendEntry.
     let capturedBatches = 0;
+    let retainedWorkingSet = false;
     let processedCount = 0;
     let stubCount = 0;
     let publishedAliasesOrArchives = false;
@@ -861,7 +855,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           { ctx, source: readSourceEdits(ctx, source), probe: true }).messages;
         const estimated = visible.reduce((sum, message) => sum + estimateTokens(message), 0);
         assertPendingOwnership(estimated);
-        batches = protectBatchWorkingSet(batches, source.messages, visible, currentConfig.value.chainCompression);
+        const hadPending = batches.length > 0;
+        batches = protectBatchWorkingSet(batches, withClosingMessage(source.messages, options.closingMessage),
+          withClosingMessage(visible, options.closingMessage), currentConfig.value.chainCompression);
+        retainedWorkingSet = hadPending && batches.length === 0;
         rewriteBudget.observeWork(source.messages, economicModel(ctx));
       }
       // Do not retain older, non-projected history while waiting for providers.
@@ -923,7 +920,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       if (batches.length === 0) {
         outcome = "empty";
-        updatePruneStatus(ctx, argumentCharsSaved > 0 ? "Pruned tool arguments; no pending turns" : "No pending turns");
+        const detail = retainedWorkingSet ? "Recent or unread batches retained" : "No pending turns";
+        updatePruneStatus(ctx, argumentCharsSaved > 0 ? `Pruned tool arguments; ${detail}` : detail);
         return { ok: false, reason: "empty" };
       }
 
@@ -1162,7 +1160,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const admitBatch = (record: BatchRecord, gain: RewriteGain, fee = 0) => {
         assertPendingOwnership();
         if (trigger === "manual") return true;
-        batchAdmission ??= batchRewriteAdmission(rewriteBudget, visibleForPlanning(), config.chainCompression, economicModel(ctx));
+        batchAdmission ??= batchRewriteAdmission(rewriteBudget, withClosingMessage(visibleForPlanning(), options.closingMessage),
+          config.chainCompression, economicModel(ctx));
         const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee);
         if (!allowed) record.deferredReason = "economics";
         return allowed;
@@ -1972,14 +1971,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     lastMaintenanceSource = undefined;
   });
 
-  // A final assistant message is the earliest reliable boundary where the agent has
-  // finished using the raw tool results. flushPending captures the SessionManager
+  // A complete visible assistant message closes the preceding text group, even
+  // when it starts a new tool round. flushPending captures the SessionManager
   // before awaiting summarization so print-mode shutdown cannot invalidate the
   // persistence path while the summarizer model is running.
   pi.on("message_end", async (event, ctx) => {
     if (!currentConfig.value.enabled) return;
     if (currentConfig.value.pruneOn !== "agent-message") return;
-    if (!isFinalAssistantMessage(event.message)) return;
+    if (!isTextCheckpoint(event.message) || !isCompletedAssistant(event.message)) return;
     const version = lifecycle;
     await awaitRecovery();
     if (version !== lifecycle) return;
@@ -2097,44 +2096,49 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   function indexAnchorIds(entries: ReturnType<typeof readSourceEdits>["projection"]["entries"]) {
     type Anchor = { id: string; ordinal: number };
     const starts = new Map<number, Anchor | undefined>(), finals = new Map<number, Anchor | undefined>();
+    const roles = new Map<string, Anchor | undefined>();
     for (const [ordinal, entry] of entries.entries()) for (const message of entry.messages) {
       if (Number.isNaN(message.timestamp)) continue;
+      const key = `${message.role}:${message.timestamp}`;
+      if (!roles.has(key)) roles.set(key, { id: entry.sourceEntry.id, ordinal });
+      else if (roles.get(key)?.ordinal !== ordinal) roles.set(key, undefined);
       const anchors = message.role === "assistant" ? finals : message.role === "user" || message.role === "custom" ? starts : undefined;
       if (!anchors) continue;
       if (anchors.has(message.timestamp)) {
         if (anchors.get(message.timestamp)?.ordinal !== ordinal) anchors.set(message.timestamp, undefined);
       } else anchors.set(message.timestamp, { id: entry.sourceEntry.id, ordinal });
     }
-    return (role: "start" | "final", timestamp: number) => (role === "start" ? starts : finals).get(timestamp)?.id;
+    return (role: "start" | "final", timestamp: number, messageRole?: string) =>
+      (messageRole ? roles.get(`${messageRole}:${timestamp}`) : (role === "start" ? starts : finals).get(timestamp))?.id;
   }
 
   // Request-local only: index anchors before consulting old recovery records. Do
   // not cache source validity by leaf; active members still need content checks.
   function analyzeChains(raw: any[], source?: ReturnType<typeof readSourceEdits>) {
-    const byStart = new Map<number, ReturnType<typeof detectChains>>();
-    for (const chain of detectChains(raw, protectionPredicate)) {
-      const matches = byStart.get(chain.startUserTimestamp);
-      if (matches) matches.push(chain);
-      else byStart.set(chain.startUserTimestamp, [chain]);
-    }
-    return { byStart, resolve: createRangeResolver(raw), anchors: source && indexAnchorIds(source.projection.entries),
+    const resolve = createRangeResolver(raw);
+    const inspect = (entry: ChainBounds) => {
+      const range = findCompressibleRange(entry, raw, resolve);
+      return range ? chainContents(raw.slice(range.bodyStart, range.endIndex), protectionPredicate) : undefined;
+    };
+    return { inspect, resolve, anchors: source && indexAnchorIds(source.projection.entries),
       grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns), source };
   }
 
   function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext,
     analysis: ReturnType<typeof analyzeChains>): SingleChainCompressionEntry[] {
-    const { grace, byStart } = analysis;
+    const { grace, inspect } = analysis;
     const source = analysis.source ?? readSourceEdits(ctx);
     const edited = source.changedToolIds;
     const anchors = analysis.anchors ?? indexAnchorIds(source.projection.entries);
     return chainMembers(entry).filter((view, i) => {
       const member = entry.members[i]!;
-      const chain = byStart.get(view.startUserTimestamp)?.[0];
+      const contents = inspect(view);
+      const chain = contents && { ...view, ...contents };
       if (!chain || view.droppedToolCallIds.some(id => edited.has(id)) || chainMatchesGrace(chain, grace)) return false;
       const range = analysis.resolve(view);
       if (!range) return false;
-      if (member.startEntryId !== anchors("start", member.startUserTimestamp)
-        || member.finalEntryId !== anchors("final", member.finalAssistantTimestamp!)) return false;
+      if (member.startEntryId !== anchors("start", member.startUserTimestamp, member.checkpointBoundary?.startRole)
+        || member.finalEntryId !== anchors("final", member.finalAssistantTimestamp!, member.checkpointBoundary?.endRole)) return false;
       if (member.sourceFingerprint !== projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))) return false;
       view.protectedToolCallIds = chain.protectedToolCallIds;
       const owned = indexer.getOwnedSummaryText(view.droppedOccurrenceKeys ?? []);
@@ -2211,8 +2215,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     ctx?: ExtensionContext): SingleChainCompressionEntry[] {
     return entries.flatMap(entry => {
       if (isSharedChain(entry)) return [];
-      const chain = analysis.byStart.get(entry.startUserTimestamp)
-        ?.find(chain => chain.finalAssistantTimestamp === entry.finalAssistantTimestamp);
+      const contents = analysis.inspect(entry);
+      const chain = contents && { ...entry, ...contents };
       if (!chain || chainMatchesGrace(chain, analysis.grace) || !singleSummaryCurrent(entry, ctx)) return [];
       return [{ ...entry, protectedToolCallIds: chain.protectedToolCallIds }];
     });
@@ -2391,10 +2395,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const resolve = createRangeResolver(before);
       const plans = eligible.map(chain => {
         const range = resolve(chain);
-        const tokens = range ? prefixTokens[range.endIndex] - prefixTokens[range.startIndex + 1] : 0;
-        const policy = emergency ? undefined : independentChainPolicy(chainConfig, tokens);
-        return { chain, tokens, prefix: range ? prefixTokens[range.startIndex + 1] : 0, policy };
-      }).filter(plan => !plan.policy || independentChainPrefixAllowed(beforeTokens, plan.prefix));
+        const tokens = range ? prefixTokens[range.endIndex] - prefixTokens[range.bodyStart] : 0;
+        const policy = emergency ? undefined : boundedRewritePolicy(chainConfig, tokens);
+        return { chain, tokens, prefix: range ? prefixTokens[range.bodyStart] : 0, policy };
+      }).filter(plan => !plan.policy || localRewritePrefixAllowed(beforeTokens, plan.prefix));
       const independent = plans.filter(plan => plan.policy).slice(-3).reverse()
         .filter(plan => plan.policy && rewriteBudget.ready(beforeTokens, plan.tokens, plan.policy, false));
       const upperGain = plans.reduce((sum, plan) => sum + plan.tokens, 0);
@@ -2425,7 +2429,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
       const backlogChars = fallback.reduce((sum, chain) => {
         const range = resolve(chain);
-        return sum + (range ? JSON.stringify(before.slice(range.startIndex + 1, range.endIndex)).length : 0);
+        return sum + (range ? JSON.stringify(before.slice(range.bodyStart, range.endIndex)).length : 0);
       }, 0);
       if (backlogChars < currentConfig.value.minBatchChars) return;
       const anchors = indexAnchorIds(sourceView.projection.entries);

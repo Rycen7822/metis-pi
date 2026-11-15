@@ -54,7 +54,8 @@ TLC输入和检查性质集中在`condense/cases.mjs`，runner生成`.cfg`，避
 - PressureGrid的threshold=0只刻画helper失效输入，不代表TOML的关闭值。配置关闭使用false；用量未知不授权自动付费。
   maxBudget是软门槛，不保证压缩后总上下文低于它；provider用量、proxy tokens和底账字节不能互相替代。
 - OCC的ready是瞬时布尔值，不是持久phase；取整后的剩余复用次数须至少11，不能用大于10的未取整值代替。
-- ChainEconomics的`funded`保留即时回本参考，`gain-only`保留体积下降却更贵的反例；产品使用`payback`冷请求＋三轮费用比较。
+- ChainEconomics的`funded`保留即时回本参考，`gain-only`保留体积下降却更贵的反例；`payback`验证冷请求＋三轮基准费用比较。
+  实现的有界局部候选可用32轮，语义分组与该经济档分离；文本/请求边界、32轮与实际SDK行为由TS用例覆盖，本模型不声称验证这些解析规则。
   两侧后续同增2k/4k/6ktokens、目标98%缓存，缓存量不超过上一轮长度；包含冷重建/摘要费，严格更便宜才放行，不另留10%余量。
   摘要费在提交时立即入账；预计冷请求盈利只能在该请求发生后抵扣，且首冷请求不同时抵扣暖请求收益或参与三次复用。
   之后仍须债务清零、连续三次90%实际命中和有效增长；旁路复用期会击穿StableBeforeRewrite。

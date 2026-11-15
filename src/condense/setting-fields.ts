@@ -43,7 +43,7 @@ export interface ScalarRow {
 
 const PRUNE_MODE_GUIDANCE: Record<ContextPruneConfig["pruneOn"], string> = {
   "agent-message":
-    "Recommended default. Evaluate mechanical pruning after the final text reply; " +
+    "Recommended default. Evaluate closed work at each complete visible text message, including text with tool calls; " +
     "paid summaries also require pressure and a complete-message net-benefit budget. " +
     "Deferred work retries on a later request.",
   "on-demand":
@@ -78,9 +78,9 @@ function summarizerThinkingDescription(config: ContextPruneConfig): string {
 
 function batchingModeDescription(config: ContextPruneConfig): string {
   if (config.batchingMode === "turn") {
-    return "Per turn (default): keep assistant turns separate; split oversized turns to fit the input budget.";
+    return "Per request (default): keep main-model tool rounds separate; split oversized requests to fit the input budget.";
   }
-  return "Per agent message: merge assistant turns within one user task up to the input budget; split larger tasks automatically.";
+  return "Per text group: merge requests between visible assistant checkpoints; user/goal boundaries also split groups.";
 }
 
 function pruneStatusLineDescription(config: ContextPruneConfig): string {
@@ -210,7 +210,7 @@ function dedupByContentHashDescription(config: ContextPruneConfig): string {
 
 function chainCompressionEnabledDescription(config: ContextPruneConfig): string {
   return (
-    "Compact independent small closed tasks or larger groups outside the working set (task references=" +
+    "Compact closed text groups outside the working set, including groups within an open user task (references=" +
     `${config.chainCompression.rollingWindow}` +
     "). Drops middle assistant turns + tool results, injects a synthetic summary. " +
     "Currently " +
@@ -220,14 +220,14 @@ function chainCompressionEnabledDescription(config: ContextPruneConfig): string 
 }
 
 function chainWindowDescription(config: ContextPruneConfig): string {
-  return "Closed-task references share the raw-tail budget with the open task; work/token protection still applies. " +
+  return "Closed text-group references share the raw-tail budget with the open group; work/token protection still applies. " +
     `Currently ${config.chainCompression.rollingWindow}.`;
 }
 
 function stripThinkingDescription(config: ContextPruneConfig): string {
   return (
-    "Strip thinking blocks from the kept final text-only assistant message when " +
-    "compressing a chain. Currently " +
+    "Strip thinking at the retained compression boundary, preserving visible text. " +
+    "Leave the next group untouched. Currently " +
     `${config.chainCompression.stripFinalAssistantThinking ? "ON" : "OFF"}` +
     "."
   );

@@ -1,6 +1,7 @@
 import { CUSTOM_TYPE_CHAIN } from "./types.ts";
 import { chainMembers } from "./chain-model.ts";
-import type { ChainRange, ChainCompressionEntry, SingleChainCompressionEntry, ToolCallRecord } from "./types.ts";
+import type { ChainBounds, ChainRange, ChainCompressionEntry, SingleChainCompressionEntry, ToolCallRecord } from "./types.ts";
+import { hasToolCalls, isCompletedAssistant, isConversationBoundary } from "./chain-detector.ts";
 import type { BlockRefIssuer } from "./block-refs.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";
 import { bareToolCallId, occKey, parseOccKey, resultTimestampOf } from "./occurrence-key.ts";
@@ -11,12 +12,20 @@ import type { SharedChainCompressionEntry, SharedChainMember } from "./types.ts"
 import { extractToolResultText } from "./batch-capture.ts";
 
 /** Text archives cannot replace incomplete replies or recover tool attachments. */
-export function findCompressibleRange(chain: ChainRange, messages: any[], resolve = createRangeResolver(messages)) {
+export function findCompressibleRange(chain: ChainBounds, messages: any[], resolve = createRangeResolver(messages)) {
   const range = resolve(chain);
-  if (!range || ["error", "aborted", "length"].includes(messages[range.endIndex]?.stopReason)) return null;
+  if (!range) return null;
+  const legacy = !chain.checkpointBoundary;
+  if (legacy && (!isCompletedAssistant(messages[range.endIndex]) || hasToolCalls(messages[range.endIndex]))) return null;
   const open = new Set<string>();
-  for (const message of messages.slice(range.startIndex + 1, range.endIndex)) {
+  for (let i = range.bodyStart; i < range.endIndex; i++) {
+    const message = messages[i];
+    if (chain.checkpointBoundary && i > range.startIndex && isConversationBoundary(message)) return null;
+    if (chain.checkpointBoundary && message.role === "assistant" && !isCompletedAssistant(message)) return null;
+    // Committed legacy ranges still require their original user → first tool-free reply grammar.
+    if (legacy && message.role === "user" && message.metisDerived?.kind !== "condense-chain") return null;
     if (message.role === "assistant") {
+      if (legacy && !hasToolCalls(message)) return null;
       if (open.size) return null;
       for (const block of message.content ?? []) if (block.type === "toolCall") {
         if (open.has(block.id)) return null;
@@ -24,6 +33,7 @@ export function findCompressibleRange(chain: ChainRange, messages: any[], resolv
       }
     } else if (message.role === "toolResult") {
       if (!open.delete(message.toolCallId) || message.content?.some((block: any) => block.type !== "text")) return null;
+      if (chain.checkpointBoundary && !range.consumed.has(occKey(message.toolCallId, resultTimestampOf(message.timestamp)))) return null;
     } else if (open.size) return null;
   }
   if (open.size) return null;
@@ -147,7 +157,7 @@ export interface CompressEligibleDeps {
  */
 export function extractChainRecords(
   messages: any[],
-  chain: Pick<ChainRange, "startUserTimestamp" | "finalAssistantTimestamp" | "protectedToolCallIds">,
+  chain: ChainBounds & Pick<ChainRange, "protectedToolCallIds">,
   isIndexed: (occurrenceKey: string) => boolean,
 ): ToolCallRecord[] {
   const range = resolveRange(chain, messages);
@@ -155,7 +165,7 @@ export function extractChainRecords(
   const protectedIds = new Set(chain.protectedToolCallIds ?? []);
   const open = new Map<string, { toolName: string; args: unknown }>();
   const records: ToolCallRecord[] = [];
-  for (let i = range.startIndex + 1; i < range.endIndex; i++) {
+  for (let i = range.bodyStart; i < range.endIndex; i++) {
     const msg = messages[i];
     if (msg.role === "assistant" && Array.isArray(msg.content)) {
       for (const block of msg.content) {
@@ -302,6 +312,7 @@ export async function compressEligible(
         summaryFingerprint: projectionFingerprint([[]]),
         blockId: deps.blockRefs.issue(),
         startUserTimestamp: chain.startUserTimestamp,
+        checkpointBoundary: chain.checkpointBoundary,
         droppedToolCallIds: chain.middleToolCallIds,
         finalAssistantTimestamp: chain.finalAssistantTimestamp,
         toolRefs,
@@ -342,6 +353,7 @@ export async function compressEligible(
       summaryFingerprint,
       blockId,
       startUserTimestamp: chain.startUserTimestamp,
+      checkpointBoundary: chain.checkpointBoundary,
       droppedToolCallIds: chain.middleToolCallIds,
       finalAssistantTimestamp: chain.finalAssistantTimestamp,
       toolRefs,
@@ -372,7 +384,7 @@ export async function compressEligible(
 export async function prepareSharedChain(
   chains: ChainRange[], rollingWindow: number,
   deps: CompressEligibleDeps & { indexer: ChainCompressorIndexerDeps & { getOwnedSummaryText(keys: string[]): string | null } },
-  anchorId: (role: "start" | "final", timestamp: number) => string | undefined,
+  anchorId: (role: "start" | "final", timestamp: number, messageRole?: string) => string | undefined,
   inGrace: Set<string>, signal: AbortSignal,
 ): Promise<SharedChainCompressionEntry | null> {
   const compressed = new Set(deps.indexer.getChainEntries().flatMap(chainMembers).map(member => member.startUserTimestamp));
@@ -384,13 +396,14 @@ export async function prepareSharedChain(
     await setImmediate(); signal.throwIfAborted();
     const range = findCompressibleRange(chain, deps.messages, resolve);
     if (!range || chain.finalAssistantTimestamp === null) continue;
-    const startEntryId = anchorId("start", chain.startUserTimestamp);
-    const finalEntryId = anchorId("final", chain.finalAssistantTimestamp);
+    const startEntryId = anchorId("start", chain.startUserTimestamp, chain.checkpointBoundary?.startRole);
+    const finalEntryId = anchorId("final", chain.finalAssistantTimestamp, chain.checkpointBoundary?.endRole);
     if (!startEntryId || !finalEntryId) continue;
     const source = deps.messages.slice(range.startIndex, range.endIndex + 1);
+    const bodyMessages = deps.messages.slice(range.bodyStart, range.endIndex);
     const keys = chain.middleOccurrenceKeys ?? [];
-    if (!keys.length || keys.length !== source.filter(m => m.role === "toolResult").length) continue;
-    const calls = source.flatMap(m => m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall") : []);
+    if (!keys.length || keys.length !== bodyMessages.filter(m => m.role === "toolResult").length) continue;
+    const calls = bodyMessages.flatMap(m => m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall") : []);
     if (calls.length !== keys.length) continue;
     const owned = deps.indexer.getOwnedSummaryText(keys);
     if (owned === null) continue;
@@ -411,6 +424,7 @@ export async function prepareSharedChain(
     bodyText += body;
     members.push({ startEntryId, finalEntryId, sourceFingerprint: projectionFingerprint(source),
       startUserTimestamp: chain.startUserTimestamp, finalAssistantTimestamp: chain.finalAssistantTimestamp,
+      checkpointBoundary: chain.checkpointBoundary,
       droppedToolCallIds: chain.middleToolCallIds, droppedOccurrenceKeys: keys,
       protectedToolCallIds: chain.protectedToolCallIds, toolRefs: deps.indexer.getToolRefsForToolCallIds(keys),
       bodyStart, bodyEnd: bodyText.length });

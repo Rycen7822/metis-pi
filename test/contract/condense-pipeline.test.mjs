@@ -415,7 +415,7 @@ test("queued TUI details retain reclaim metrics without notices; RPC keeps notif
     }
     const status = f.statuses.get("context-prune");
     assert.equal(status.split("\n")[0], summary, "queue updates must not replace reclaim or usage");
-    assert.match(status, /\n7 turns queued — will evaluate packing and summary budget on agent's next final text response$/);
+    assert.match(status, /\n7 turns queued — will evaluate packing and summary budget on agent's next text checkpoint$/);
     assert.equal(f.notices.some(([message]) => /turns? queued/.test(message)), mode !== "tui");
     await f.emit("agent_end");
     assert.equal(f.statuses.get("context-prune"), status, "agent_end must not discard the latest detail");
@@ -423,7 +423,7 @@ test("queued TUI details retain reclaim metrics without notices; RPC keeps notif
       await f.commands.get("pruner").handler(`prune-on ${trigger}`, f.ctx);
       const refreshed = f.statuses.get("context-prune");
       assert.equal(refreshed.split("\n")[0], summary, "changing the trigger preserves reclaim and usage");
-      assert.ok(refreshed.endsWith(trigger === "on-demand" ? "/pruner now" : "agent's next final text response"),
+      assert.ok(refreshed.endsWith(trigger === "on-demand" ? "/pruner now" : "agent's next text checkpoint"),
         "queued instructions follow the current trigger, not the mode at capture time");
       await f.emit("agent_end");
       assert.equal(f.statuses.get("context-prune"), refreshed);
@@ -442,7 +442,7 @@ test("recovered queue instructions follow the current prune trigger", async t =>
   await f.emit("session_tree");
   assert.match(f.statuses.get("context-prune"), /pending batch\(es\) recovered.*\/pruner now$/);
   await f.commands.get("pruner").handler("prune-on agent-message", f.ctx);
-  assert.match(f.statuses.get("context-prune"), /pending batch\(es\) recovered.*agent's next final text response$/);
+  assert.match(f.statuses.get("context-prune"), /pending batch\(es\) recovered.*agent's next text checkpoint$/);
   assert.equal(f.calls.length, 0, "changing trigger instructions does not initiate model work");
 });
 
@@ -609,12 +609,12 @@ test("independent selection and shared fallback keep distinct admission contract
 });
 
 test("pending publication yields to Native pressure even after generation and remains manually recoverable", async t => {
-  const f = await fixture(t, { pruneOn: "on-demand", capacity: true, defer: true });
+  const f = await fixture(t, { capacity: true, defer: true });
   f.ctx.model.contextWindow = 1000000;
   let tokens = 750000;
   f.ctx.getContextUsage = () => ({ tokens, contextWindow: f.ctx.model.contextWindow });
-  const call = f.add("semantic source ".repeat(2000), "unknown-command");
-  const pending = f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
+  f.add("semantic source ".repeat(2000), "unknown-command");
+  const pending = f.finish(false);
   await waitForSummarizer(f);
   tokens = 899550; // 90% of the effective 999500-token Native threshold.
   f.release();
@@ -865,8 +865,9 @@ test("session restore drops the previous queue while a tree switch keeps its own
   assert.match(f.statuses.get("context-prune"), /prune: ON/);
   assert.match(f.statuses.get("context-prune"), /\n.*recovered.*current branch/i);
 
-  // The reload re-armed this branch's unindexed work: the gate flushes the
-  // recaptured batch, never a stale queue entry.
+  // The reload re-armed this branch; a successful response must consume the
+  // restored output before its budget-triggered summary can replace the raw body.
+  await f.finish(false);
   await f.emit("turn_end", {});
   assert.equal(f.calls.length, 1);
   assert.ok(!f.notices.some(([message]) => /compacting work recovered after reload/.test(message)),
@@ -891,6 +892,7 @@ test("session restore drops the previous queue while a tree switch keeps its own
   f.add(afterBody, "inspect-after-tree");
   await f.emit("session_tree");
   assert.match(f.statuses.get("context-prune"), /\n.*recovered.*current branch/i);
+  await f.finish(false);
   await f.emit("turn_end", {});
   assert.equal(f.calls.length, 2, "the tree probe re-arms only this branch's unindexed work");
   assert.equal(f.widgets.filter(([id]) => id === "pruner-boot").length, 1);
@@ -1388,11 +1390,14 @@ test("a local rewrite holds through two steps and only releases after real reuse
   await f.finish();
   assert.equal(f.calls.length, 1);
   for (let i = 0; i < 4; i++) {
-    const next = f.add(`NEW_${i} ` + "observation ".repeat(1600), "custom inspection");
+    // Each text group must independently fit the real tokenizer summary budget.
+    const next = f.add(`NEW_${i} ` + "observation ".repeat(4000), "custom inspection");
     await f.emit("turn_end", { message: next.assistant, toolResults: [next.result], turnIndex: i });
     await f.finish();
-    assert.equal(f.calls.length, i < 3 ? 1 : 2);
+    if (i < 3) assert.equal(f.calls.length, 1, "new text groups do not bypass the hold");
+    else assert.ok(f.calls.length > 1, "real reuse and growth release eligible closed text groups");
   }
+  for (let i = 0; i < 4; i++) assert.match(JSON.stringify(f.calls.slice(1)), new RegExp(`NEW_${i}`));
 });
 
 
@@ -2338,19 +2343,22 @@ test("dedup totals exclude unrelated trivial results", async t => {
   assert.equal(f.notices.length, 1, "the explicit manual reply does not gain a duplicate action notice");
   f.notices.length = 0;
   const duplicate = f.add(body, "unknown-command", "copy-again");
-  await f.emit("turn_end", { message: duplicate.assistant, toolResults: [duplicate.result], turnIndex: 3 });
+  const witness = f.add("Still needed by the next request", "another-unknown-command", "dedup-unread");
+  await f.emit("turn_end", { message: witness.assistant, toolResults: [witness.result], turnIndex: 4 });
   assert.equal(f.notices.length, 1, "automatic dedup has one confirmed-action notice, not a pre-flush hint plus success");
   assert.match(f.notices[0][0], /pruner: deduplicated 1 tool call/);
   assert.equal(f.notices[0][1], "info");
   const raw = f.sm.buildSessionProjection().messages;
   const projected = (await f.emit("context", { messages: raw })).messages;
   assert.notEqual(projected.find(m => m.toolCallId === duplicate.id).content[0].text, body);
+  assert.deepEqual(projected.find(m => m.toolCallId === witness.id), witness.result, "new unread output is not deduplicated");
   assert.equal(f.calls.length, 1);
   f.notices.length = 0;
   f.add(body, "unknown-command", "mixed-duplicate");
   f.add(buildLog, "npm run build", "mixed-packed");
-  const semantic = f.add("distinct new semantic source ".repeat(2000), "unknown-command", "mixed-semantic");
-  await f.emit("turn_end", { message: semantic.assistant, toolResults: [semantic.result], turnIndex: 6 });
+  f.add("distinct new semantic source ".repeat(2000), "unknown-command", "mixed-semantic");
+  const next = f.add("Newest unread evidence", "another-unknown-command", "mixed-unread");
+  await f.emit("turn_end", { message: next.assistant, toolResults: [next.result], turnIndex: 8 });
   assert.equal(f.notices.length, 1, "multiple committed action kinds are combined in one automatic-flush notice");
   assert.match(f.notices[0][0], /pruned 2 tool batches.*deduplicated 1 tool call/);
   assert.equal(f.calls.length, 2);

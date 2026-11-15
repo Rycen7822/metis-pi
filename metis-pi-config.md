@@ -177,11 +177,11 @@ exclude = []
 | `summarizerModel` | `"default"` | 当前模型；或已注册的 `provider/model-id`。 |
 | `summarizerFallbackModels` | `[]` | 有序故障备用模型，去重；当前会话模型总在最后。 |
 | `summarizerThinking` | `"default"` | `default` / `off` / `minimal` / `low` / `medium` / `high` / `xhigh`。 |
-| `pruneOn` | `"agent-message"` | 最终回复评估；`"on-demand"` 在工具轮次触发评估。 |
-| `batchingMode` | `"turn"` | `turn` 分轮次；`agent-message` 同任务合并，均按输入预算拆分。 |
+| `pruneOn` | `"agent-message"` | 完整可见文本检查点评估，含text+toolCall；`"on-demand"` 在工具轮次按配置的压力/增长触发。 |
+| `batchingMode` | `"turn"` | `turn` 保持主请求独立；`agent-message` 只合并同一文本小chain内的请求，均按输入预算拆chunk。 |
 | `quietOversizedSkips` | `false` | 静默字符门槛/过大跳过通知；处理与保护逻辑保持原样。 |
 | `minBatchChars` | `5000` | 剩余语义候选字符保护；0 只关闭此保护，仍须压力与净收益准入。 |
-| `recoveryGraceTurns` | `3` | 回读结果保留原文的用户任务组数；0 立即允许恢复成 stub。 |
+| `recoveryGraceTurns` | `3` | 回读原文保护的大任务边界数，含真实用户/goal continuation，不计文本检查点或派生user；0关闭宽限。 |
 | `summarizerIdleTimeoutMs` | `20000` | 事件间无进展超时，含首 token；0 关闭。 |
 | `summarizerMaxTimeoutMs` | `180000` | 单次请求总时长上限；0 关闭。 |
 | `protectedTools` | `[]` | 精确工具名；结果原样保留，拼写以工具名为准。 |
@@ -196,34 +196,32 @@ exclude = []
 
 ### `[contextPrune.chainCompression]`
 
-`enabled=true` 开启旧闭合任务链整理。自动维护按旧到新成批发布，只用现成摘要/归档事实，不额外请求模型。
+`enabled=true` 整理闭合文本小chain，包括开放用户大任务内的旧小组；只复用现成摘要/归档事实，不额外请求模型。
+小batch是一次主请求的增量工具轮，小chain是完整可见文本到下一文本前，大chain是用户/typed goal到下一任务边界前；详见[分组定义](docs/features/condense.md#三层分组)。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `rollingWindow` | `3` | 综合工作集中的近期闭合任务参考数，≥0；参考原文累计受`minRecentTokens`预算限制，不无条件锁定N条链。 |
+| `rollingWindow` | `3` | 近期闭合文本小chain参考数，≥0；与开放小组共用`minRecentTokens`预算，不无条件锁定N条链。 |
 | `minWorkTurns` | `4` | 自动工具批次与chain共同保留的最近有效工作轮次，≥0；失败、轮询、回读不让资料变旧。 |
 | `minRecentTokens` | `65536` | 自动工具批次与chain共同保留的近期原文尾部，与工作轮次取并集；≥0。 |
 | `minGainTokens` | `8192` | 自动chain最低净释放量；也是工具批次/chain发布后的最低新工作增长量，正安全整数。 |
 | `minGainFraction` | `0.1` | 自动chain净释放量还须达到有效上下文的此比例，[0,1]；工具摘要沿用summaryBudget局部门槛。 |
-| `maxCostOverhead` | `0.1` | 用已观测cache-read支出的此比例支付估算额外重建成本，[0,1]；0只允许即时回本。 |
-| `stripFinalAssistantThinking` | `true` | 去掉已压链最终回复的thinking，保留正文。 |
+| `stripFinalAssistantThinking` | `true` | 保留可见文本、去掉已压边界thinking；新半开范围不处理下一组的右边界。 |
 | `fuseRangeSummary` | `true` | 允许手动now/compact额外付费融合；失败/预算不足保留机械拼接。 |
 
-活跃任务链、保护输出和回读宽限继续保留；工作集跨整链边界时会多保留，不把工具轮次结束当任务结束。
-链数、工作轮次与原文尾部在同一个工作集内计算；任意`rollingWindow`值都使用批量/增量/经济策略，无需改成0启用。
-闭合任务参考从新到旧计入，按原始链正文估算；放不下最新一条就停止扩展，不能跳过它去额外保护更老的任务。
-64k是近期原文的最低保护量，也是闭合任务参考的软预算，不是整个工作集上限；活跃链/工作轮次/显式保护仍可保留更多。
-`rollingWindow=0`只关闭链数参考；显式`minRecentTokens=0`同时取消原文最低量与链参考的token限额，其他保护照常。
-旧配置中的3等数值直接参加新综合规则，不再维持一套自动硬锁链数策略；手动now沿用原链数窗口，compact仍整理全部合格闭合链。
-工具摘要、机械packing与chain共享成本额度及增长间隔，一轮flush只按实际发布的合计收益消费一次。
-成功发布后须新增至少`max(minGainTokens, 上次净收益/4)`有效工作tokens才允许下一普通改写。
-`enabled`只开关自动chain，以上近期保护/成本/增长参数同时约束自动工具批次；手动`now`不受自动调度门限制。
-当前模型价格与usage均可信才积累费用额度，发布后清零；模型/配置/分支/Native边界重置，不预支未来请求。
-价格未知或零价登记视为未知，不赚额度；按输入/缓存读10:1的保守参考仅允许即时回本。
-这些是本地估算约束，不保证真实账单增加不超过10%；provider缓存/计数/路由差异仍以实际费用为准。
-近Pi有效容量时可跳过普通批量/费用/间隔门，但不跳过工作集或归档保护；已经超线仍由Native接管。
-显式手动now/compact和已有single/shared视图重验不受新自动调度门限制；frontier两侧独立。
-此策略只管chain，不改变per-batch、spill、OCC或Native的各自规则。
+开放小chain、近期原文、最近有效轮次、保护输出和回读宽限继续保留；开放大任务不再锁死其中所有闭合小组。
+参考从新到旧计入，放不下最近一组就停止；64k也是引用的软预算，不是工作集上限。0只关闭链数参考，无需改0才采用新策略。
+显式`minRecentTokens=0`同时取消原文最低量与引用的token限额；手动now仍使用配置的引用窗口，compact整理全部安全闭合组。
+
+2k–64k估算正文为有界经济档，不是“小chain”的定义；按候选自身收益评估最多32轮，绝对净收益底线不超过2048。
+闭合且已消费的旧请求chunk可独立走此档，仍须局部proxy预算及摘要费；不得借其他候选收益。更大候选/共享组保留三轮预测与总量收益门。
+过256k的局部候选只选最后192k内的旧内容，不减少近期保护；256k不是上下文硬上限。
+工具摘要、packing与chain共享冷请求、摘要费和债务；预测双方后续同增2000tokens、98%缓存，计费后压缩侧必须严格更便宜。
+发布后须债务清零、新增至少`max(minGainTokens, 上次净收益/4)`有效工作tokens；有缓存折扣时还须冷请求后连续三次真实命中≥90%。
+价格优先Pi模型目录，再models.dev本地缓存；两处未知才用缓存:普通输入=1:10，不把SDK零价误当免费。旧`maxCostOverhead`已不控制准入。
+这些是估算，不保证任务提前结束、缓存失效或路由变化时仍能回本；完整报价/刷新规则见功能文档。
+达到Pi有效原生容量90%后暂停新增自动改写，保留前缀等待Native；手动now/compact、已发布视图重验与恢复不受此暂停影响。
+`enabled`只开关自动chain；OCC、spill、Native各保留职责边界，未改变其触发算法。
 
 ### `[contextPrune.purgeErrors]`
 
