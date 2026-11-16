@@ -191,13 +191,17 @@ test("summary fees reserve before work, settle from receipts, and remain charged
 });
 
 test("bounded candidates use size-specific gain and forecast without redefining semantic text groups", () => {
-  assert.equal(boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 80000), undefined, "a large semantic text group keeps the default gate");
+  assert.equal(boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 80000), undefined,
+    "a large semantic text group stays outside the independent tier");
   const policy = boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 32008), budget = new RewriteBudget();
   warm(budget);
   assert.equal(budget.admits(1000089, 31917, 896026, DEFAULT_CONFIG.chainCompression, model, false), false);
   assert.ok(policy);
   assert.equal(budget.admits(1000089, 31917, 896026, { ...policy, forecastRequests: 3 }, model, false), false);
   assert.equal(budget.admits(1000089, 31917, 896026, policy, model, false), true);
+  const longer = boundedRewritePolicy(DEFAULT_CONFIG.chainCompression, 16000);
+  assert.equal(budget.admits(320000, 12000, 256000, { ...longer, forecastRequests: 24 }, model, false), false);
+  assert.equal(budget.admits(320000, 12000, 256000, longer, model, false), true, "independent payback retains its 32-request scope");
   const cheap = { ...model, cost: { input: 2, cacheRead: 1 } }, smaller = new RewriteBudget();
   warm(smaller, cheap);
   assert.equal(smaller.admits(1000089, 5917, 922026, DEFAULT_CONFIG.chainCompression, cheap, false), false);

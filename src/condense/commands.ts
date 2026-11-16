@@ -166,7 +166,8 @@ Cache and costs:
   zero-cache first request; visible history uses its unchanged prefix. Later
   requests grow by 2000 tokens each at 98% hits, priced at each path's tier.
   Publication includes summary fees and requires strictly lower estimated cost;
-  bounded independent candidates forecast up to 32 requests, ordinary ones 3.
+  bounded independent candidates forecast up to 32 requests. Automatic large
+  chains and shared mechanical groups forecast 24; ordinary batch aggregates 3.
   The first receipt corrects cold debt, including larger cache losses;
   missing usage keeps a full cold reserve. Further rewrites wait for debt
   repayment and useful growth;

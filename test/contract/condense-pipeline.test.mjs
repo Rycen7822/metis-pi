@@ -614,6 +614,7 @@ test("independent selection and shared fallback keep distinct admission contract
     { total: 1000000, sizes: [32000, 6000], price: 10, shared: false },
     { total: 1000000, sizes: [300000, 6000], price: 10, shared: true },
     { total: 300000, sizes: Array(30).fill(5000), price: 5, shared: true },
+    { total: 110000, sizes: Array(4).fill(10000), perTurn: 12000, price: 20, shared: true },
   ]) await t.test(`${scenario.sizes.length} chains at ${scenario.price}:1`, async t => {
     const f = await independentTasks(t, scenario);
     await f.emit("agent_settled"); await f.waitMaintenance();
@@ -679,7 +680,7 @@ test("automatic chain payback waits for three matching high-cache main requests,
     await f.emit("agent_settled"); await f.waitMaintenance();
     assert.equal(blocks().length, i === 2 ? 1 : 0, "only the third qualifying main request completes warmup");
   }
-  assert.equal(blocks().length, 1, "a large mechanically retained group passes the three-request payback gate");
+  assert.equal(blocks().length, 1, "a large mechanically retained group passes payback after cache warmup");
   assert.equal(blocks()[0].data.kind, "shared-v1");
   assert.equal(f.calls.length, 0);
 });

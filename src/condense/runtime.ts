@@ -502,7 +502,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const emergency = chainEmergency(ctx, counts.piBefore);
     if (independent && !emergency && !localRewritePrefixAllowed(counts.piBefore, prefix)) return false;
     const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
-    return rewriteBudget.admits(counts.piBefore, gain, prefix, independent ?? config, economicModel(ctx), emergency, 0, context);
+    const policy = independent ?? { ...config, forecastRequests: 24 };
+    return rewriteBudget.admits(counts.piBefore, gain, prefix, policy, economicModel(ctx), emergency, 0, context);
   };
   const compressChains = async (ctx: any, rollingWindow: number,
     appendEntry: (type: string, data: unknown) => void,
