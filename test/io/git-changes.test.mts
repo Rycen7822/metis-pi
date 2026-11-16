@@ -7,6 +7,21 @@ import { temporaryDirectory as tempDir } from "../helpers/temp-dir.mjs";
 import { git, committedRepository, trackedRepo, refreshAndExpectSample } from "../helpers/git.mts";
 import { createLineCountCache, MAX_UNTRACKED_BYTES, readLineCount, resolveHead } from "../../src/appearance/git-changes.ts";
 
+test("disposing a pending Git refresh isolates it from a restarted tracker", async t => {
+  const dir = committedRepository(t, { "tracked.txt": "base\n" });
+  const tracker = trackedRepo(t, dir);
+  const pending = tracker.refresh();
+  await tracker.dispose();
+  await pending;
+  assert.equal(tracker.snapshot(), undefined);
+  appendFileSync(join(dir, "tracked.txt"), "new work\n");
+  await refreshAndExpectSample(tracker, 1, 0, 1);
+  const again = tracker.refresh();
+  await tracker.dispose();
+  await again;
+  assert.equal(tracker.snapshot(), undefined);
+});
+
 test("readLineCount streams: text, no trailing newline, binary, oversized, missing", async (t) => {
   const dir = tempDir(t, "metis-pi-lines-");
   for (const [name, text, lines] of [

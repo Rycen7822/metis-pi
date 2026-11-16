@@ -139,7 +139,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   }
 
   // Working-tree change counts for the footer: display-only git reads on a 2s
-  // poll plus activity-driven refreshes (agent ticks, tool work), armed only
+  // poll plus activity-driven refreshes (completed tool work), armed only
   // while a TUI footer actually displays them (see git-changes.ts).
   const gitChanges = createGitChangesTracker({
     getCwd: () => hostData.getCwd(),
@@ -167,10 +167,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     {
       onTick: (snapshot) => {
         if (!chromeEnabled) return;
-        // Activity signal for the footer's change counts: refresh while the
-        // agent works, so an edit lands in the footer in ~debounce time
-        // instead of waiting for the next poll.
-        gitChanges.touch();
+        // The display clock does not imply filesystem changes.
         // Working and live thinking headings share this 1s frame request,
         // including when the Working widget itself is disabled.
         fullscreenLayout?.invalidateStreaming();
@@ -266,11 +263,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (enabled && !userTimestamps && bindings.interactivePrototype) {
       userTimestamps = installUserTimestamps(bindings.interactivePrototype, () => enabled);
     }
-    gitChanges.dispose();
-    installation = Promise.resolve();
+    installation = gitChanges.dispose();
     if (chromeEnabled) {
       const generation = chrome.state.generation;
-      installation = chrome.install(available, generation).then(() => {
+      installation = installation.then(() => chrome.install(available, generation)).then(() => {
         // Wait for a successful footer install; neither a hidden changes
         // segment nor a late install from a disposed session needs a poller.
         if (
@@ -463,7 +459,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // A tool error is a DIAGNOSTIC count only — it never sets the verdict.
     if (event.isError === true && chromeEnabled) outcome.toolError();
     surface.observe(event, ctx.cwd);
-    if (chromeEnabled) metrics.toolEnd(event.toolCallId);
+    if (chromeEnabled) { metrics.toolEnd(event.toolCallId); gitChanges.touch(); }
   });
 
   // Keep the original message object as the state machine's identity anchor.
@@ -573,7 +569,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     }
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     enabled = false;
     chromeEnabled = false;
     chrome.invalidate();
@@ -591,7 +587,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // Chrome restore checks the selected editor's identity and resets the
     // public footer/header/widget slots installed during this session.
     chrome.restore();
-    gitChanges.dispose();
+    const gitStopped = gitChanges.dispose();
     surface.reset();
     metrics.reset();
     outcome.reset();
@@ -600,6 +596,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     turnSummary.forgetSession();
     replyEndedAt = undefined;
     hostData.bind(undefined);
+    await gitStopped;
   });
   return { whenReady: () => installation };
 }

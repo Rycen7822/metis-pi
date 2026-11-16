@@ -31,6 +31,7 @@
 // clears the stat without spawning git at all.
 
 import { execFile } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import { existsSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -232,6 +233,56 @@ async function defaultExec(args: readonly string[], cwd: string, env?: Record<st
   });
 }
 
+/** One lazily owned worker keeps fork/exec and its bounded wait off the UI thread. */
+function createGitWorker(): { exec: GitExec; dispose(): Promise<void> } {
+  let worker: Worker | undefined, next = 0, generation = 0;
+  let retiring = Promise.resolve();
+  const pending = new Map<number, (result: GitExecResult) => void>();
+  const failPending = () => {
+    for (const resolve of pending.values()) resolve({ ok: false, stdout: "", code: null });
+    pending.clear();
+  };
+  return {
+    async exec(args, cwd, env) {
+      const version = generation;
+      await retiring;
+      if (version !== generation) return { ok: false, stdout: "", code: null };
+      if (!worker) {
+        const current = new Worker(new URL("./git-worker.mjs", import.meta.url), {
+          execArgv: [], workerData: { timeout: GIT_EXEC_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+        });
+        worker = current;
+        current.on("message", ({ id, result }: { id: number; result: GitExecResult }) => {
+          if (worker !== current) return;
+          pending.get(id)?.(result); pending.delete(id);
+          if (!pending.size) current.unref();
+        });
+        current.on("error", error => {
+          if (worker !== current) return;
+          console.warn("Metis Git change worker failed:", error.message);
+          worker = undefined; failPending();
+        });
+        current.on("exit", () => {
+          if (worker === current) { worker = undefined; failPending(); }
+        });
+      }
+      const current = worker, id = ++next;
+      current.ref();
+      return new Promise(resolve => {
+        pending.set(id, resolve);
+        current.postMessage({ id, args, cwd, env: { ...process.env, ...env } });
+      });
+    },
+    dispose() {
+      generation++;
+      const current = worker;
+      worker = undefined; failPending();
+      if (current) retiring = current.terminate().then(() => {});
+      return retiring;
+    },
+  };
+}
+
 export type ChangeReadResult =
   | { readonly kind: "sample"; readonly sample: ChangeSample }
   /** No git metadata in cwd: nothing to show. */
@@ -340,8 +391,8 @@ export interface GitChangesTracker {
   touch(): void;
   /** Arm the interval (idempotent; TUI sessions only). */
   start(): void;
-  /** Disarm and forget the sample. */
-  dispose(): void;
+  /** Disarm, forget the sample and wait for the owned Git worker to exit. */
+  dispose(): Promise<void>;
   session(): GitChangesSession;
   readonly running: boolean;
 }
@@ -375,7 +426,8 @@ export function createGitChangesTracker(deps: {
   const debounceMs = deps.debounceMs ?? GIT_CHANGES_DEBOUNCE_MS;
   const now = deps.now ?? (() => Date.now());
   const lineCounts = deps.lineCounts ?? createLineCountCache();
-  const exec = deps.exec ?? defaultExec;
+  const gitWorker = createGitWorker();
+  const exec = deps.exec ?? gitWorker.exec;
 
   let timer: ReturnType<typeof setInterval> | undefined;
   let pending: ReturnType<typeof setTimeout> | undefined;
@@ -504,6 +556,7 @@ export function createGitChangesTracker(deps: {
       revCwd = undefined;
       observations = 0;
       lineCounts.clear();
+      return gitWorker.dispose();
     },
     session: () => ({ rev, observations }),
     get running() {
