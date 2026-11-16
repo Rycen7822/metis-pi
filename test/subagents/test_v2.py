@@ -75,10 +75,16 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
 
     async def test_native_followup_joins_current_run(self):
-        a=await self.spawn('delay=1|first')
+        # Keep the input window open independently of CI process scheduling.
+        gate=self.root/'release-native-followup'
+        a=await self.spawn(f'gate={gate}|first')
         b=await self.mutation('followup',a['agent_id'],message='native message')
         self.assertEqual(a['run_id'],b['run_id'])
-        await self.wait(a['run_id'])
+        gate.touch()
+        await self.until(lambda: self.rt.store.one('SELECT state FROM receipts WHERE id=?',(b['receipt_id'],))['state']=='consumed')
+        terminal=await self.wait(a['run_id'])
+        self.assertFalse(terminal['timed_out'])
+        self.assertEqual(terminal['runs'][0]['state'],'completed')
         messages=[json.loads(e['payload']) for e in self.events(a['agent_id'],'message')]
         self.assertTrue(any(e['role']=='user' and e['text']=='native message' for e in messages))
         self.assertEqual(self.rt.store.one('SELECT COUNT(*) n FROM runs')['n'],1)
