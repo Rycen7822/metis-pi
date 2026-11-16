@@ -151,6 +151,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           typeof group.text === "string",
       );
   };
+  const retainArguments = (projection: NativeProjection) => {
+    const sources = new Set(projection.entries.map(entry => entry.sourceEntry.id));
+    argumentHistory = argumentHistory.filter(group => group.sourceIds.some(id => sources.has(id)));
+  };
 
   const statsAccum = new StatsAccumulator();
 
@@ -187,6 +191,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   const pendingBatches: CapturedBatch[] = [];
   let lifecycle = 0;
+  let nativeWindowEpoch = 0;
   let recoveryTask: Promise<void> | undefined;
   const awaitRecovery = async () => { while (recoveryTask) await recoveryTask; };
   const tokenEstimator = new TokenEstimator();
@@ -750,7 +755,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const assertPendingOwnership = (estimated = 0) => {
       if (trigger !== "manual" && deferToNative(ctx, options.closingMessage, estimated)) throw new NativePendingDeferral();
     };
-    const version = lifecycle;
+    const version = lifecycle, nativeEpoch = nativeWindowEpoch;
     const abort = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
     const yieldToUi = ctx.mode === "tui";
@@ -825,7 +830,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let batches: CapturedBatch[] = [];
     let unprocessed = () => batches.slice(processedCount);
     let restored = false;
-    const restoreUnprocessed = () => { if (!restored) { restoreBatches(unprocessed()); restored = true; } };
+    const restoreUnprocessed = () => {
+      if (restored) return;
+      if (version === lifecycle) {
+        if (nativeEpoch === nativeWindowEpoch) restoreBatches(unprocessed());
+        else rearmedPending = true; // Native owns the new window; recover its surviving work from persisted source.
+      }
+      restored = true;
+    };
     let sessionManager: SessionAppender | undefined;
     try {
       isFlushing = true;
@@ -1700,6 +1712,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     } catch { /* Optional warming must leave session setup intact on a read or serialization failure. */ }
   };
   const prepareRecoveryProjection = async (ctx: ExtensionContext, version: number, projection: NativeProjection) => {
+    retainArguments(projection);
     const capture = indexer.getChainEntries().some(isSharedChain) ? createSourceSnapshotter() : undefined;
     const prepared: PreparedProjection = { projection, leaf: ctx.sessionManager.getLeafId(),
       source: capture ? { capture, snapshot: capture(projection.messages) } : undefined };
@@ -1824,7 +1837,37 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // A recovery waiting for Native already owns readiness; do not race it.
     return recoveryTask ?? trackRecovery(revalidateSharedChains(ctx, lifecycle));
   };
-  pi.on("session_compact", finishNativeCompaction);
+  pi.on("session_compact", async (event, ctx) => {
+    const version = lifecycle, nativeEpoch = ++nativeWindowEpoch;
+    activeFlushAbort?.abort();
+    // These are payload caches, not recovery evidence. Late flushes must not restore the discarded window.
+    pendingBatches.length = 0;
+    indexer.retainForContext([]);
+    jsonSizes.clear();
+    queuedSummaryKeys.clear();
+    budgetAdmissions.clear();
+    deferredFinal = undefined;
+    rearmedPending = true;
+    await finishNativeCompaction(event, ctx);
+    if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
+    try {
+      // Cleanup belongs to the completed Native operation, not the preceding model request's abort signal.
+      const leaf = ctx.sessionManager.getLeafId();
+      const projection = await readProjection(ctx, new AbortController().signal);
+      if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
+      if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("Native cleanup window changed");
+      indexer.retainForContext(projection.messages);
+      retainArguments(projection);
+      const count = capturePendingBatches(ctx, { projection, rethrow: true }).length;
+      rearmedPending = count > 0;
+      updatePruneStatus(ctx, count ? queuedDetail(count) : "No pending turns");
+    } catch (error) {
+      // Compaction is already committed; cache maintenance failure must not misreport it as failed or lose its source.
+      if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
+      console.error("pi-condense: Native pending-turn inspection failed", error);
+      updatePruneStatus(ctx, "Pending-turn inspection unavailable");
+    }
+  });
   pi.on("session_compact_failed", finishNativeCompaction);
   pi.on("thinking_level_select", async () => {
     supersede.floor = 0;
@@ -2019,15 +2062,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!currentConfig.value.enabled) return;
     if (currentConfig.value.pruneOn !== "agent-message") return;
     if (!isTextCheckpoint(event.message) || !isCompletedAssistant(event.message)) return;
-    const version = lifecycle;
+    const version = lifecycle, nativeEpoch = nativeWindowEpoch;
     await awaitRecovery();
-    if (version !== lifecycle) return;
+    if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
     const batches = capturePendingBatches(ctx);
     const keys = new Set(batches.flatMap(batch => batch.toolCalls.map(call => occKey(call.toolCallId, call.resultTimestamp))));
     const result = await flushPending(ctx, { delivery: "session", closingMessage: event.message, trigger: "message-end",
       preparedBatches: batches, closedKeys: keys });
-    if (version === lifecycle) deferredFinal = (!result.ok && result.reason !== "empty") || (result.ok && result.reason === "partial")
-      ? { timestamp: event.message.timestamp, keys } : undefined;
+    if (version === lifecycle && nativeEpoch === nativeWindowEpoch)
+      deferredFinal = (!result.ok && result.reason !== "empty") || (result.ok && result.reason === "partial")
+        ? { timestamp: event.message.timestamp, keys } : undefined;
   });
 
   // agent-message normally flushes on message_end. By agent_end, print-mode Pi may

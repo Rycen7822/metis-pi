@@ -2042,6 +2042,63 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
 });
 
+test("Native completion drops the stale queue while retaining pending work in its new window", async t => {
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", showPruneStatusLine: true,
+    autoBudgetThreshold: null, budgetTurnDelta: 0, frontierGapThresholdTokens: 0 });
+  const start = f.sm.appendMessage({ role: "user", content: "old task", timestamp: 1000 });
+  const call = f.add("pending evidence ".repeat(500), "unknown-command", "queued");
+  await f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
+  assert.match(f.statuses.get("context-prune"), /\n1 turn queued/);
+  const event = { signal: new AbortController().signal, reason: "manual", willRetry: false,
+    branchEntries: f.sm.getBranch(), preparation: { firstKeptEntryId: start, tokensBefore: 10000 } };
+  await f.emit("session_before_compact", event);
+  await f.emit("session_compact_failed", { reason: "manual", aborted: false, error: "offline" });
+  assert.match(f.statuses.get("context-prune"), /\n1 turn queued/, "failure cannot discard live work");
+  await f.emit("session_before_compact", { ...event, signal: new AbortController().signal });
+  const next = f.sm.appendMessage({ role: "user", content: "next window", timestamp: 2000 });
+  const compacted = f.sm.appendCompaction("old work compacted", next, 10000);
+  await f.emit("session_compact", { compactionEntry: f.sm.getEntry(compacted), reason: "manual", willRetry: false });
+  assert.match(f.statuses.get("context-prune"), /\nNo pending turns$/);
+  assert.equal(f.calls.length, 0);
+  const kept = f.sm.appendMessage({ role: "user", content: "surviving task", timestamp: 3000 });
+  const survivor = f.add("surviving evidence ".repeat(2000), "unknown-command", "survivor");
+  await f.emit("turn_end", { message: survivor.assistant, toolResults: [survivor.result], turnIndex: 1 });
+  const id = f.sm.appendCompaction("only earlier work compacted", kept, 10000);
+  await f.emit("session_compact", { compactionEntry: f.sm.getEntry(id), reason: "manual", willRetry: false });
+  assert.match(f.statuses.get("context-prune"), /\n1 turn queued/);
+  await f.commands.get("pruner").handler("now", { ...f.ctx, mode: "print", hasUI: false });
+  assert.equal(f.calls.length, 1, "surviving queued work is recovered from persisted source without another tool turn");
+  const final = f.sm.appendMessage({ role: "user", content: "empty window", timestamp: 4000 });
+  const committed = f.sm.appendCompaction("all earlier work compacted", final, 10000);
+  const read = t.mock.method(f.sm, "buildSessionProjectionAsync", async () => { throw new Error("fixture read failed"); });
+  const log = t.mock.method(console, "error", () => {});
+  await assert.doesNotReject(f.emit("session_compact", { compactionEntry: f.sm.getEntry(committed), reason: "manual" }));
+  assert.match(f.statuses.get("context-prune"), /Pending-turn inspection unavailable$/);
+  read.mock.restore(); log.mock.restore();
+});
+
+test("a flush finishing after Native compaction cannot restore the old window's queued payloads", async t => {
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", showPruneStatusLine: true, defer: true,
+    autoBudgetThreshold: null, budgetTurnDelta: 0, frontierGapThresholdTokens: 0 });
+  const call = f.add("semantic evidence ".repeat(2000), "unknown-command", "old-window");
+  await f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
+  const pending = f.commands.get("pruner").handler("now", { ...f.ctx, mode: "print", hasUI: false });
+  await waitForSummarizer(f);
+  try {
+    await f.emit("session_before_compact", { signal: new AbortController().signal,
+      branchEntries: f.sm.getBranch(), preparation: { tokensBefore: 10000 } });
+    const kept = f.sm.appendMessage({ role: "user", content: "new task", timestamp: 1000 });
+    const id = f.sm.appendCompaction("old task compacted", kept, 10000);
+    await f.emit("session_compact", { compactionEntry: f.sm.getEntry(id), reason: "manual" });
+    assert.equal(f.requests[0].signal.aborted, true, "Native completion cancels obsolete provider work");
+  } finally { f.releaseAll(); await pending; }
+  const fresh = f.add("fresh pending evidence ".repeat(500), "unknown-command", "new-window");
+  await f.emit("turn_end", { message: fresh.assistant, toolResults: [fresh.result], turnIndex: 1 });
+  assert.match(f.statuses.get("context-prune"), /\n1 turn queued/);
+  assert.equal(f.calls.length, 1, "no new automatic model request is admitted");
+  assert.equal(f.sm.getBranch().filter(entry => entry.customType === "context-prune-summary").length, 0);
+});
+
 test("Native completion, cancellation and failure preserve published views before the next request", async t => {
   for (const occ of [false, true]) for (const outcome of ["completed", "cancelled", "failed"]) {
     await t.test(`${occ ? "OCC" : "Native"} ${outcome}`, async t => {
