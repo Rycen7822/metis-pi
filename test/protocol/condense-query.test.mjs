@@ -150,7 +150,7 @@ test("recall pages original arguments and branch-owned summaries with content-bo
         { toolCallId: "write", toolName: "write", args, resultText: "done", isError: false, resultTimestamp: 3 },
       ],
     },
-    () => {},
+    (type, data) => ctx.sessionManager.appendCustomEntry(type, data),
   );
   const query = (params) => run(params).then((r) => r.details);
   const params = { toolCallIds: ["write@3"], component: "arguments", maxBytes: 2048 };

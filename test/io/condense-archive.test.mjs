@@ -98,6 +98,40 @@ test("cold directory preserves historical refs without retaining or loading payl
   assert.equal(f.indexer.getRecord("reused@5").resultText, second.resultText);
 });
 
+test("live archives release payloads outside the Native window without losing any publication path's recall", async t => {
+  const dir = temporaryDirectory(t, "condense-live-retention-");
+  const sm = SessionManager.create(dir, dir), f = queryFixture([], sm);
+  const appendEntry = (type, data) => sm.appendCustomEntry(type, data);
+  const batch = call => ({ turnIndex: 1, timestamp: 2, assistantText: "", toolCalls: [call] });
+  const options = { indexer: f.indexer, sessionDir: dir, sessionId: sm.getSessionId(), appendEntry,
+    spillThreshold: 100000, spillPreviewBytes: 64 };
+  const originalRead = sm.getEntryForScan.bind(sm), reads = [];
+  t.mock.method(sm, "getEntryForScan", id => { reads.push(id); return originalRead(id); });
+  for (let generation = 0; generation < 3; generation++) {
+    const call = record(`live-${generation}`, "durable output ".repeat(200), generation + 3,
+      { args: { code: `script ${generation}\n` + "x".repeat(32000) } });
+    if (generation === 0) await archiveBatches([batch(call)], options);
+    else if (generation === 1) f.indexer.addBatch(batch(call), appendEntry);
+    else f.indexer.registerDuplicate("live-2@5", "live-0@3", appendEntry, call);
+    const key = `${call.toolCallId}@${call.resultTimestamp}`;
+    const active = [{ role: "toolResult", toolCallId: call.toolCallId, timestamp: call.resultTimestamp }];
+    f.indexer.retainForContext(active);
+    assert.deepEqual(f.indexer.getRecord(key).args, call.args);
+    const warmReads = reads.length;
+    f.indexer.getRecord(key);
+    assert.equal(reads.length, warmReads, "current-window planning must reuse its payload cache");
+    const kept = sm.appendMessage({ role: "user", content: "new window", timestamp: 100 + generation });
+    sm.appendCompaction("old work compacted", kept, 10000);
+    await f.indexer.prepareContext(sm.buildSessionProjection().messages, () => {});
+    reads.length = 0;
+    assert.deepEqual(f.indexer.getRecord(key).args, call.args);
+    assert.equal(reads.length, 1, "out-of-window recall must load the archived record, not hold its old payload");
+    assert.equal(f.indexer.getRecord(key).resultText, call.resultText);
+    assert.equal(reads.length, 2, "historical recall remains transient after a query");
+    assert.equal([...f.indexer.directory()].length, generation + 1);
+  }
+});
+
 test("cancelled cold reconstruction cannot publish a partial directory and remains retryable", async () => {
   const f = queryFixture([record("existing", "EXISTING")]);
   f.ctx.sessionManager.appendCustomEntry("context-prune-index", { toolCalls: [record("new", "NEW")] });
@@ -250,7 +284,7 @@ test("execution archives survive display eviction, and recall pins append-only s
     config: DEFAULT_CONFIG,
     sessionDir: dir,
     sessionId: sm.getSessionId(),
-    appendEntry() {},
+    appendEntry: (type, data) => sm.appendCustomEntry(type, data),
   });
   rmSync(temporary);
   assert.equal((await run({ toolCallIds: ["bash-native"] })).details.results[0].text, "native full output");
@@ -286,7 +320,7 @@ test("archive failure is explicit and incomplete captured prefixes are not repor
     config: DEFAULT_CONFIG,
     sessionDir: dir,
     sessionId: ctx.sessionManager.getSessionId(),
-    appendEntry() {},
+    appendEntry: (type, data) => ctx.sessionManager.appendCustomEntry(type, data),
   });
   const result = (await run({ toolCallIds: ["partial"] })).details.results[0];
   assert.equal(result.text, "captured prefix");
@@ -300,4 +334,6 @@ test("archive failure is explicit and incomplete captured prefixes are not repor
     /disk write failed/,
   );
   assert.equal(indexer.getRecord("rejected"), undefined, "failed persistence cannot authorize pruning");
+  assert.throws(() => indexer.addBatch({ ...batch, toolCalls: [record("unwritten", "not persisted")] }, () => {}), /not persisted/);
+  assert.equal(indexer.getRecord("unwritten"), undefined);
 });

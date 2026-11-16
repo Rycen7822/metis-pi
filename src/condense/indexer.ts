@@ -14,7 +14,7 @@ import {
 } from "./types.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { customEntries } from "./custom-entries.ts";
-import { readHistoryEntries } from "../session-history.ts";
+import { readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,
@@ -50,7 +50,7 @@ type IndexedRecord = { record: ToolCallRecord } | StoredRecord;
 type RecordReader = ExtensionContext["sessionManager"] & { getEntryForScan?(id: string): SessionEntry | undefined };
 
 export class ToolCallIndexer {
-  /** Historical payloads stay in the session store; only newly published records are retained here. */
+  /** Persisted payloads stay in the session store; only legacy aliases without index entries need full fallback records. */
   private index = new Map<string, IndexedRecord>();
   private sourceReader?: RecordReader;
   private activeKeys = new Set<string>();
@@ -122,12 +122,9 @@ export class ToolCallIndexer {
       if (entry.customType === CUSTOM_TYPE_INDEX) {
         const data = entry.data as IndexEntryData;
         if (Array.isArray(data?.toolCalls)) for (const [position, record] of data.toolCalls.entries()) {
-          const hash = record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined);
-          const key = this.indexRecord(record);
-          this.index.set(key, { ...directoryMetadata(record), entryId: entry.id, position, contentHash: hash,
-            argsPreview: argumentPreview(record.args) });
+          const key = this.indexRecord(record, { entryId: entry.id, position });
           if (!data.backfilled) {
-            const originalHash = hash ?? hashToolResult(record.toolName, record.resultText);
+            const originalHash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
             if (!this.contentHashToOriginal.has(originalHash)) this.contentHashToOriginal.set(originalHash, key);
           }
         }
@@ -177,14 +174,28 @@ export class ToolCallIndexer {
    * bare-id reverse index + legacy-shape tracking. Shared by `addBatch` and
    * `reconstructFromSession` so both paths key identically.
    */
-  private indexRecord(record: ToolCallRecord): string {
+  private indexRecord(record: ToolCallRecord, source?: Pick<StoredRecord, "entryId" | "position">): string {
     const key = occKey(record.toolCallId, record.resultTimestamp);
-    this.index.set(key, { record });
-    this.activeBodies.delete(key);
+    this.index.set(key, source ? { ...directoryMetadata(record), ...source, argsPreview: argumentPreview(record.args),
+      contentHash: record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined) } : { record });
+    if (source && this.activeKeys.has(key)) this.activeBodies.set(key, record);
+    else this.activeBodies.delete(key);
     const keys = this.bareIdToKeys.get(record.toolCallId) ?? [];
     if (!keys.includes(key)) keys.push(key);
     this.bareIdToKeys.set(record.toolCallId, keys);
     return key;
+  }
+
+  /** Writers append one index entry synchronously to the bound session; retain its identity, never its payload. */
+  private appendIndex(data: IndexEntryData, appendEntry: (customType: string, data?: unknown) => void): string {
+    const reader = this.sourceReader;
+    if (!reader) throw new Error("Execution archive reader is not ready");
+    const previous = reader.getLeafId();
+    appendEntry(CUSTOM_TYPE_INDEX, data);
+    const entry = reverseBranchEntryReferences(reader).next().value;
+    if (!entry || entry.id === previous || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE_INDEX)
+      throw new Error("Execution archive was not persisted on the bound session");
+    return entry.id;
   }
 
   /**
@@ -214,8 +225,8 @@ export class ToolCallIndexer {
     for (const message of messages) {
       if (message.role !== "toolResult") continue;
       const key = occKey(message.toolCallId, message.timestamp);
-      if (this.index.has(key)) keys.add(key);
-      else if (this.hasLegacyBareRecord(message.toolCallId)) keys.add(message.toolCallId);
+      keys.add(key); // Newly persisted archives in this window must use the same bounded payload cache.
+      if (this.hasLegacyBareRecord(message.toolCallId)) keys.add(message.toolCallId);
     }
     this.activeKeys = keys;
     for (const key of this.activeBodies.keys()) if (!keys.has(key)) this.activeBodies.delete(key);
@@ -417,9 +428,9 @@ export class ToolCallIndexer {
     const { refs, nextIndex } = existingRef
       ? { refs: [{ shortId: existingRef, toolCallId: own.toolCallId, resultTimestamp: own.resultTimestamp }], nextIndex: this.nextShortAliasNumber }
       : buildShortToolCallRefs([own], this.nextShortAliasNumber);
-    appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: [own], backfilled: true, refs } satisfies IndexEntryData);
+    const entryId = this.appendIndex({ toolCalls: [own], backfilled: true, refs }, appendEntry);
     this.nextShortAliasNumber = nextIndex;
-    this.indexRecord(own);
+    this.indexRecord(own, { entryId, position: 0 });
     this.registerSummaryRefs(refs);
   }
 
@@ -570,9 +581,9 @@ export class ToolCallIndexer {
       records.push(record);
     }
 
-    appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: records, ...(archiveOnly ? { backfilled: true } : {}) } as IndexEntryData);
-    for (const record of records) {
-      const key = this.indexRecord(record);
+    const entryId = this.appendIndex({ toolCalls: records, ...(archiveOnly ? { backfilled: true } : {}) }, appendEntry);
+    for (const [position, record] of records.entries()) {
+      const key = this.indexRecord(record, { entryId, position });
       const hash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
       if (!archiveOnly && !this.contentHashToOriginal.has(hash)) this.contentHashToOriginal.set(hash, key);
     }
@@ -648,8 +659,8 @@ export class ToolCallIndexer {
     }
     opts.assertValid?.();
     if (changed.length) {
-      opts.appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: changed, backfilled: true, refs: changedRefs } satisfies IndexEntryData);
-      for (const r of changed) this.indexRecord(r);
+      const entryId = this.appendIndex({ toolCalls: changed, backfilled: true, refs: changedRefs }, opts.appendEntry);
+      for (const [position, record] of changed.entries()) this.indexRecord(record, { entryId, position });
       this.registerSummaryRefs(changedRefs);
     }
     return refs;
