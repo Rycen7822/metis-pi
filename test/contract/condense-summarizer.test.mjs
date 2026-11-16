@@ -36,7 +36,7 @@ async function fixture(t) {
             ...(stopReason === "error" ? { errorMessage: text } : {}) };
           out.push({ type: "done", reason: stopReason, message }); out.end(message);
         };
-        queueMicrotask(() => respond ? respond({ complete, options }) : complete());
+        queueMicrotask(() => respond ? respond({ complete, options, model: m, context }) : complete());
         return out;
       } });
     return model;
@@ -78,6 +78,36 @@ test("summary budgets consume refreshed native model limits", async t => {
   assert.equal((await summarizeRange("Evidence", selected, ctx))?.summaryText, "Native summary");
   assert.equal(f.calls[0].model.contextWindow, 8000);
   assert.ok(f.calls[0].options.maxTokens > 0 && f.calls[0].options.maxTokens <= 600);
+});
+
+test("summary requests reserve the enforced output cap with room for configured reasoning", async t => {
+  const { streamSimple } = await import("@earendil-works/pi-ai/api/anthropic-messages");
+  const caps = [];
+  for (const reasoning of ["off", "low", "high"]) await t.test(reasoning, async t => {
+    const f = await fixture(t);
+    let payload, reserved;
+    const model = f.add("legacy-thinking", ({ complete, options, model, context }) => {
+      const capture = streamSimple({ ...model, api: "anthropic-messages" }, context, {
+        ...options, apiKey: "offline-summary-capture",
+        onPayload: body => { payload = body; throw new Error("OFFLINE_CAPTURE_COMPLETE"); },
+      });
+      void capture.result().then(message => complete(payload ? "Native summary" : message.errorMessage,
+        payload ? "stop" : "error"));
+    }, { contextWindow: 1048576, maxTokens: 393216 });
+    const result = await summarizeRange("Evidence", { ...config, summarizerThinking: reasoning }, f.ctx(model), {
+      outputBudget: { minimumGain: 2048, limit: 1024, target: 512 },
+      acceptRequest: async (_model, _message, maxTokens) => { reserved = maxTokens; return true; },
+    });
+    assert.equal(result?.summaryText, "Native summary");
+    assert.ok(reserved >= 2048 && reserved < 32768, "a short summary must not reserve the model's whole output capacity");
+    assert.equal(f.calls[0].options.maxTokens, reserved, "admission and dispatch share one output ceiling");
+    assert.equal(f.calls[0].options.reasoning, reasoning === "off" ? undefined : reasoning);
+    assert.equal(model.maxTokens, 393216, "summary limits must not change the registered model");
+    assert.ok(payload.max_tokens <= reserved, "the SDK's additive thinking budget must stay inside the reservation");
+    if (reasoning !== "off") assert.ok(payload.thinking.budget_tokens > 0 && payload.thinking.budget_tokens < payload.max_tokens);
+    caps.push(reserved);
+  });
+  assert.ok(caps[0] < caps[1] && caps[1] < caps[2], "reasoning has a separate allowance from visible summary text");
 });
 
 test("native provider failure advances the fallback and retains its session route", async t => {

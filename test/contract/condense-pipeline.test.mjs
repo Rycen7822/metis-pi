@@ -101,14 +101,15 @@ function addClosedChains(f, thinking = "Independent intermediate reasoning. ".re
 }
 
 async function independentTasks(t, {
-  total, sizes, price, perTurn = 18000, minRecentTokens = DEFAULT_CONFIG.chainCompression.minRecentTokens,
+  total, sizes, price, perTurn = 18000, gaps = [], minRecentTokens = DEFAULT_CONFIG.chainCompression.minRecentTokens,
 }) {
   const f = await fixture(t, { pruneOn: "on-demand", autoBudgetThreshold: null,
-    chainCompression: { ...DEFAULT_CONFIG.chainCompression, rollingWindow: 1, minRecentTokens } });
+    chainCompression: { ...DEFAULT_CONFIG.chainCompression, rollingWindow: 1, minRecentTokens, fuseRangeSummary: false } });
   Object.assign(f.ctx.model, { contextWindow: 2000000, cost: { input: price, output: 0, cacheRead: 1, cacheWrite: price } });
   const line = "value_0123456789 = 0xabcdef123456;\n";
   const text = tokens => line.repeat(Math.ceil(tokens * 4 / line.length)).slice(0, tokens * 4);
-  f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: text(total - sizes.reduce((a, b) => a + b, 0) - 4 * perTurn) }],
+  const header = total - sizes.reduce((a, b) => a + b, 0) - gaps.reduce((a, b) => a + b, 0) - 4 * perTurn;
+  f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: text(header) }],
     stopReason: "stop", timestamp: f.nextTimestamp() });
   for (let i = 0; i < 3; i++) {
     const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
@@ -117,6 +118,8 @@ async function independentTasks(t, {
     await f.emit("message_end", { message }); f.sm.appendMessage(message);
   }
   const tasks = sizes.map((size, i) => {
+    if (gaps[i]) f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: text(gaps[i]) }],
+      stopReason: "stop", timestamp: f.nextTimestamp() });
     const user = `independent request ${i}`, final = `independent result ${i}`;
     f.sm.appendMessage({ role: "user", content: user, timestamp: f.nextTimestamp() });
     const call = f.add(text(size), "inspect-source", `independent-${i}`);
@@ -577,6 +580,8 @@ test("independent small chains publish without paid summaries while preserving t
     { total: 1000000, sizes: [32000], price: 2, perTurn: 240000, publish: false },
     { total: 128000, sizes: [32000], price: 10, perTurn: 14000, publish: true },
     { total: 128000, sizes: [32000], price: 10, perTurn: 14000, minRecentTokens: 65536, publish: false },
+    { total: 190000, sizes: [1000, 32000, 5000, 5000, 5000, 5000], gaps: [0, 60000],
+      price: 20, perTurn: 12000, publish: true, selected: 1 },
   ]) await t.test(JSON.stringify(scenario), async t => {
     const f = await independentTasks(t, scenario);
     if (scenario.providerTokens) f.ctx.getContextUsage = () => ({ tokens: scenario.providerTokens, contextWindow: 2000000 });
@@ -595,8 +600,11 @@ test("independent small chains publish without paid summaries while preserving t
       assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[0].id), f.tasks[0].result);
       return;
     }
+    const selected = f.tasks[scenario.selected ?? 0];
     assert.notEqual(entries[0].data.kind, "shared-v1");
-    assert.deepEqual(entries[0].data.droppedToolCallIds, [f.tasks[0].id]);
+    assert.deepEqual(entries[0].data.droppedToolCallIds, [selected.id]);
+    for (const task of f.tasks.filter(task => task !== selected))
+      assert.deepEqual(projected.find(message => message.toolCallId === task.id), task.result);
     let cursor, recovered = "", pages = 0, eof = false;
     do {
       const page = await f.tools.get("context_tree_query").execute("recall",
@@ -610,7 +618,7 @@ test("independent small chains publish without paid summaries while preserving t
       assert.ok(++pages <= 16);
     } while (cursor);
     assert.equal(eof, true);
-    assert.ok(recovered === f.tasks[0].result.content[0].text, "all recall pages reconstruct the exact original result");
+    assert.ok(recovered === selected.result.content[0].text, "all recall pages reconstruct the exact original result");
     await f.emit("agent_settled"); await f.waitMaintenance();
     assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
   });
@@ -1264,6 +1272,33 @@ test("complete-message budgets include refs, reject without hiding and charge re
   assert.match(f.statuses.get("context-prune"), /usage: 40 tokens/);
   assert.equal(f.notices.length, 1);
   assert.match(f.notices[0][0], /pruner: pruned 1 tool batch/);
+});
+
+test("short summaries can shrink the soft target without relaxing net gain or the minimum useful body", async t => {
+  const encoder = new TokenEstimator();
+  t.after(() => encoder.clear());
+  for (const [chars, accepted] of [[2600, true], [2300, false]]) await t.test(String(chars), async t => {
+    const f = await fixture(t, { minBatchChars: 2000, reply: "Inspection complete." });
+    const call = f.add("界".repeat(chars), "unknown-command", `short-budget-${chars}`);
+    const counts = await encoder.measure([call.result], [toolResultStub(call.result, undefined, "t1")]);
+    const budget = summaryBudget(counts.before, counts.after, 1);
+    assert.ok(budget.limit < DEFAULT_CONFIG.summaryBudget.targetBaseTokens + DEFAULT_CONFIG.summaryBudget.targetPerCallTokens);
+    await f.finish();
+    assert.equal(f.calls.length, Number(accepted));
+    const raw = f.sm.buildSessionProjection().messages;
+    const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    if (!accepted) {
+      assert.deepEqual(projected.find(message => message.toolCallId === call.id), call.result);
+      assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "deferred-budget");
+      return;
+    }
+    const summary = projected.find(message => message.customType === "context-prune-summary");
+    const stub = projected.find(message => message.toolCallId === call.id);
+    assert.ok(summary);
+    const rendered = await encoder.measure([call.result], [stub, summary]);
+    assert.ok(rendered.before - rendered.after >= budget.minimumGain);
+    assert.ok((await encoder.measure([summary], [])).before <= budget.limit);
+  });
 });
 
 test("global TOML policy governs actual paid summary admission and full-message rejection", async (t) => {

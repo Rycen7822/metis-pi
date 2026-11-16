@@ -285,7 +285,7 @@ minArgChars = 500
 # B = 实际被替换结果，K = 真实 stub/预览/路径，N = 本批调用数。
 # 最低收益 G = max(minGainTokens, ceil(minGainFraction × B))。
 # 完整消息限额 R = min(maxProxyTokens, B - K - G)，包含引用和消息包装。
-# 软目标 Q = min(maxProxyTokens, targetBaseTokens + targetPerCallTokens × N)。
+# 软目标 Q = min(R, targetBaseTokens + targetPerCallTokens × N)，并预留必要包装和至少 256 token 正文空间。
 # 预算空间不足时保留原文和 pending，处理位置停在未完成部分之前。
 [contextPrune.summaryBudget]
 

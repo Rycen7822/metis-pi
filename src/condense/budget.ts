@@ -18,10 +18,11 @@ export const SUMMARY_POLICY = (isMetisConfigTable(bundledDefaults) ? bundledDefa
 
 export function summaryBudget(before: number, fixed: number, calls: number, policy = SUMMARY_POLICY) {
   const minimumGain = Math.max(policy.minGainTokens, Math.ceil(policy.minGainFraction * before));
+  const limit = Math.min(policy.maxProxyTokens, Math.floor(before - fixed - minimumGain));
   return {
     minimumGain,
-    limit: Math.min(policy.maxProxyTokens, Math.floor(before - fixed - minimumGain)),
-    target: Math.min(policy.maxProxyTokens, policy.targetBaseTokens + policy.targetPerCallTokens * calls),
+    limit,
+    target: Math.min(limit, policy.targetBaseTokens + policy.targetPerCallTokens * calls),
   };
 }
 

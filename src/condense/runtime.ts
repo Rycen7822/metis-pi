@@ -2483,8 +2483,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const policy = emergency ? undefined : boundedRewritePolicy(chainConfig, tokens);
         return { chain, tokens, prefix: range ? prefixTokens[range.bodyStart] : 0, policy };
       }).filter(plan => !plan.policy || localRewritePrefixAllowed(beforeTokens, plan.prefix));
-      const independent = plans.filter(plan => plan.policy).slice(-3).reverse()
-        .filter(plan => plan.policy && rewriteBudget.ready(beforeTokens, plan.tokens, plan.policy, false));
+      const bounded = plans.filter(plan => plan.policy);
+      const ready = (plan: typeof plans[number]) => plan.policy && rewriteBudget.ready(beforeTokens, plan.tokens, plan.policy, false);
+      const independent = bounded.slice(-3).reverse().filter(ready);
+      // A shared group can start too early to repay its cold suffix. Keep one older independent opportunity.
+      let older: typeof plans[number] | undefined;
+      for (let i = 0; i < bounded.length - 3; i++) {
+        const plan = bounded[i];
+        if (!ready(plan)) continue;
+        if (!older || plan.tokens > older.tokens || plan.tokens === older.tokens && plan.prefix > older.prefix) older = plan;
+      }
+      if (older) independent.push(older);
       const upperGain = plans.reduce((sum, plan) => sum + plan.tokens, 0);
       // A lone scoped candidate already has the more permissive forecast; only groups need a fresh fallback decision.
       const fallbackReady = (plans.length !== 1 || !plans[0].policy)

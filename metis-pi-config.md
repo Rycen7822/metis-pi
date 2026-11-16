@@ -247,10 +247,12 @@ exclude = []
 ```text
 最低净节省 G = max(minGainTokens, ceil(minGainFraction × B))
 完整消息限额 R = min(maxProxyTokens, floor(B − K − G))
-软目标基数 Q = min(maxProxyTokens, targetBaseTokens + targetPerCallTokens × N)
+软目标基数 Q = min(R, targetBaseTokens + targetPerCallTokens × N)
 ```
 
-发送前为必要包装和至少 256 tokens 正文留空间，最终消息仍须满足 R。预算空间不足时，视图继续使用原文，pending 留待后续处理。手动请求跳过自动时机和费用预测，继续执行摘要输入输出预算、指定保护和实际缩小检查。
+软目标在 R 内收缩，并至少覆盖必要包装和 256 tokens 正文空间。R 无法容纳这一下限时保留原文，pending 留待后续处理；最终完整消息仍须满足 R。手动请求跳过自动时机和费用预测，继续执行摘要输入输出预算、指定保护和实际缩小检查。
+
+provider 请求按 `max(1024, ceil(2 × R))` 预留文本输出空间；思考模型额外预留 minimal 1,024、low 2,048、medium/default 8,192、high/xhigh 16,384 token。预留只分配响应空间，不改变实际思考档位；`off` 或非思考模型不加这一项。总上限不超过模型能力及原有窗口四分之一的限制。该上限同时约束请求和费用预留，包含原生适配器追加的思考空间。两倍余量不是分词器换算，完整摘要仍按 o200k 检查，截断或超限时保留原文。
 
 本地计数用于比较替换前后的大小，provider `maxTokens` 限制输出，Pi 容量线决定原生压缩，实际费用以 provider 账单为准。
 
