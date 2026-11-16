@@ -55,6 +55,31 @@ async function changeSetting(f, id, selectedValue) {
   await f.commands.get("pruner").handler("settings", f.ctx);
 }
 
+test("Native usage reads coalesce within a source slice and refresh after an await", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", capacity: true });
+  let epoch = 0, tokens = 75000;
+  const reads = [], duplicates = [], seen = new Set();
+  f.ctx.getContextUsage = () => {
+    const key = `${epoch}:${f.sm.getLeafId()}`;
+    if (seen.has(key)) duplicates.push(key);
+    seen.add(key); reads.push(tokens);
+    queueMicrotask(() => { epoch++; });
+    return { tokens, contextWindow: 100000 };
+  };
+  const batch = f.add(buildLog);
+  await f.emit("turn_end", { message: batch.assistant, toolResults: [batch.result], turnIndex: 0 });
+  assert.ok(reads.length > 0);
+  const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+    content: [{ type: "toolCall", id: "later", name: "bash", arguments: {} }], timestamp: f.nextTimestamp() };
+  const leaf = f.sm.getLeafId();
+  tokens = 20000; await f.emit("message_end", { message });
+  assert.equal(reads.at(-1), 20000);
+  tokens = 30000; await f.emit("message_end", { message: { ...message, timestamp: f.nextTimestamp() } });
+  assert.equal(f.sm.getLeafId(), leaf);
+  assert.equal(reads.at(-1), 30000, "fresh usage is required even when an await did not append a source");
+  assert.deepEqual(duplicates, [], "an unchanged synchronous source must not rebuild Native usage twice");
+});
+
 test("settings Off suppresses automatic paid summaries while explicit manual summaries remain available", async t => {
   const f = await fixture(t);
   await changeSetting(f, "autoBudgetThreshold", "0");

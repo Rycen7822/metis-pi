@@ -10,9 +10,8 @@ import { prepareBatch } from "./packing.ts";
 /**
  * Unwraps a SessionEntry[] branch into AgentMessage-like objects, including
  * persisted custom_message entries (extension steers) projected as
- * role "custom". Shared by computeMetricsSnapshot, flushPending chain detection,
- * compactChains, and the rescan below so chain anchor timestamps are identical
- * at every site. Projected inline (rather than importing pi-coding-agent's
+ * role "custom". Raw archive readers, active capture and metrics use the same
+ * projection so custom-message identities and timestamps agree at every site. Projected inline (rather than importing pi-coding-agent's
  * createCustomMessage) because that helper isn't re-exported from the
  * package's "." export map.
  */

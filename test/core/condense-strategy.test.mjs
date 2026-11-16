@@ -6,6 +6,42 @@ import { detectChains } from "../../src/condense/chain-detector.ts";
 import { captureUnindexedBatchesFromSession, groupBatchesByMode } from "../../src/condense/batch-capture.ts";
 import { extractChainRecords, findCompressibleRange } from "../../src/condense/chain-compressor.ts";
 import { inGraceRecoveryToolCallIds } from "../../src/condense/recovery-grace.ts";
+import { ContextMetricsReader } from "../../src/condense/context-metrics.ts";
+
+test("cached full-branch metrics preserve frontier, protection and branch changes without rereading old bodies", async () => {
+  const firstThinking = { type: "thinking", thinking: "old reasoning" }, lastThinking = { type: "thinking", thinking: "current reasoning" };
+  const messages = [{ role: "user", content: "task", timestamp: 1 },
+    { role: "assistant", timestamp: 2, content: [firstThinking, { type: "text", text: "checkpoint" },
+      { type: "toolCall", id: "same", name: "read", arguments: { path: "private.md", code: "original script" } }] },
+    { role: "toolResult", toolCallId: "same", toolName: "read", timestamp: 3, content: [{ type: "text", text: "old" }] },
+    { role: "assistant", timestamp: 4, content: [{ type: "text", text: "next" },
+      { type: "toolCall", id: "same", name: "read", arguments: { path: "public.txt" } }] },
+    { role: "toolResult", toolCallId: "same", toolName: "read", timestamp: 5, content: [{ type: "text", text: "new" }] },
+    { role: "assistant", timestamp: 6, content: [lastThinking] }];
+  const entries = messages.map((message, i) => ({ id: `e${i}`, type: "message", message }));
+  const metadata = entries.map(entry => ({ ...entry, message: { role: entry.message.role } }));
+  let branch = metadata, reads = 0;
+  const manager = { getLeafId: () => branch.at(-1).id, getBranchMetadata: () => branch,
+    getEntryForScan: id => { reads++; return entries.find(entry => entry.id === id); } };
+  const reader = new ContextMetricsReader(), protection = { protectedTools: [], protectedPaths: ["**/*.md"] };
+  const summed = () => false, size = message => JSON.stringify(message).length;
+  const expectedGap = Math.round(size(messages[4]) / 4);
+  const value = await reader.read(manager, null, summed, protection);
+  assert.equal(value.frontierGapTokens, expectedGap);
+  assert.equal(value.openCycleThinkingTokens, Math.round(size(lastThinking) / 4));
+  assert.equal(reads, entries.length);
+  const frontier = { lastAttemptedTurnIndex: 0, lastAttemptedToolCallId: "same" };
+  assert.equal((await reader.read(manager, frontier, summed, protection)).frontierGapTokens, expectedGap);
+  assert.equal((await reader.read(manager, null, key => key === "same@5", protection)).frontierGapTokens, 0);
+  assert.equal((await reader.read(manager, null, summed, { ...protection, protectedPaths: [] })).frontierGapTokens,
+    expectedGap + Math.round(size(messages[2]) / 4));
+  assert.equal(reads, entries.length, "frontier/index/protection changes reuse immutable source facts, not old policy verdicts");
+  branch = metadata.slice(0, 3);
+  assert.equal((await reader.read(manager, null, summed, protection)).openCycleThinkingTokens, Math.round(size(firstThinking) / 4));
+  assert.equal(reads, entries.length);
+  const abort = new AbortController(); abort.abort();
+  await assert.rejects(reader.read(manager, null, summed, protection, abort.signal), { name: "AbortError" });
+});
 
 const purge = { enabled: true, cooldownTurns: 1, minArgChars: 100 };
 const args = label => ({ path: `${label}.txt`, content: label.repeat(200) });

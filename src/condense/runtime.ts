@@ -16,7 +16,7 @@ import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
 import {
   activeCaptureSource, captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex,
-  groupBatchesByMode, projectBranchMessages, readMessageBranch,
+  groupBatchesByMode, projectBranchMessages,
 } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
 import { prepareBatch, splitPackingRuns } from "./packing.ts";
@@ -54,7 +54,7 @@ import {
   CUSTOM_TYPE_FRONTIER,
   CUSTOM_TYPE_FLUSH_METRICS,
 } from "./types.ts";
-import { computeContextMetrics } from "./context-metrics.ts";
+import { ContextMetricsReader } from "./context-metrics.ts";
 import { StatsAccumulator } from "./stats.ts";
 import { PruneFrontierTracker } from "./frontier.ts";
 import { BlockRefIssuer } from "./block-refs.ts";
@@ -121,6 +121,7 @@ function policyFingerprint(config: ContextPruneConfig): string {
 
 export function createCondenseRuntime(pi: ExtensionAPI) {
   const jsonSizes = createJsonSizeMeasurer();
+  const contextMetrics = new ContextMetricsReader();
   // Shared mutable config reference — updated by /pruner commands
   const currentConfig: { value: ContextPruneConfig } = {
     value: { ...DEFAULT_CONFIG },
@@ -190,8 +191,25 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const awaitRecovery = async () => { while (recoveryTask) await recoveryTask; };
   const tokenEstimator = new TokenEstimator();
   const rewriteBudget = new RewriteBudget();
+  const modelWindowKey = (model: ExtensionContext["model"]) => JSON.stringify([
+    model?.provider, model?.id, model?.api, model?.baseUrl, model?.contextWindow, model?.maxTokens,
+  ]);
+  let usageSnapshot: { manager: ExtensionContext["sessionManager"]; leaf: string | null; model: string;
+    read: ExtensionContext["getContextUsage"]; native: typeof nativeCompaction; value: ReturnType<ExtensionContext["getContextUsage"]> } | undefined;
+  const contextUsage = (ctx: ExtensionContext) => {
+    const manager = ctx.sessionManager, leaf = manager.getLeafId(), model = modelWindowKey(ctx.model), read = ctx.getContextUsage;
+    if (!usageSnapshot || usageSnapshot.manager !== manager || usageSnapshot.leaf !== leaf || usageSnapshot.model !== model
+      || usageSnapshot.read !== read || usageSnapshot.native !== nativeCompaction) {
+      const snapshot = { manager, leaf, model, read, native: nativeCompaction, value: read.call(ctx) };
+      usageSnapshot = snapshot;
+      // Reuse only this synchronous work slice; awaits must see fresh pressure and provider receipts.
+      queueMicrotask(() => { if (usageSnapshot === snapshot) usageSnapshot = undefined; });
+    }
+    return usageSnapshot.value;
+  };
   let preparedCacheRequest: { session: string; leaf: string | null; source: string; messages: any[] } | undefined;
   const resetRewriteState = () => {
+    usageSnapshot = undefined;
     rewriteBudget.reset();
     preparedCacheRequest = undefined;
   };
@@ -212,7 +230,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       else console.warn(message);
     },
   });
-  const economicModel = (ctx: ExtensionContext, model = ctx.model, tokens = ctx.getContextUsage()?.tokens ?? 0) => pricing.get(model, tokens);
+  const economicModel = (ctx: ExtensionContext, model = ctx.model, tokens = contextUsage(ctx)?.tokens ?? 0) => pricing.get(model, tokens);
   let deferredFinal: { timestamp: number; keys: ReadonlySet<string> } | undefined;
   const assertCurrent = (version: number) => {
     if (version !== lifecycle) throw new CondenseContextChangedError("condense lifecycle changed");
@@ -271,29 +289,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Cleared on every non-concurrent flushPending invocation.
   let rearmedPending = false;
 
-  const computeMetricsSnapshot = (ctx: any, rawBranch?: ReturnType<typeof readMessageBranch>): ContextMetricsSnapshot | undefined => {
+  const computeMetricsSnapshot = async (ctx: ExtensionContext, signal?: AbortSignal): Promise<ContextMetricsSnapshot | undefined> => {
     try {
-      // Includes persisted custom_message entries (e.g. this extension's own
-      // summary messages) alongside plain "message" entries: both are retained
-      // LLM context, so both belong in the largest-chain-share denominator.
-      // Shared projection (src/batch-capture.ts projectBranchMessages) so this
-      // matches the chain-detection feed sites exactly.
-      const entries = rawBranch ?? readMessageBranch(ctx.sessionManager);
-      const branch = projectBranchMessages(entries);
-      const sources = new WeakMap<object, object>();
-      for (let i = 0; i < branch.length; i++) sources.set(branch[i], sourceEntryReference(ctx.sessionManager, entries[i]));
-      return computeContextMetrics(
-        branch,
-        frontier.get(),
-        (k: string) => indexer.isSummarized(k),
-        protectionPredicate,
-        value => {
-          const source = sources.get(value);
-          return source ? jsonSizes.measureSource(source, value) : jsonSizes.measure(value);
-        },
-      );
+      return await contextMetrics.read(ctx.sessionManager, frontier.get(), key => indexer.isSummarized(key), effectiveProtection(), signal);
     } catch (err) {
-      console.error("pi-condense: context metrics computation failed", err);
+      if (!signal?.aborted && !isStaleContextError(err)) console.error("pi-condense: context metrics computation failed", err);
       return undefined;
     }
   };
@@ -615,7 +615,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   const pressureUsage = (ctx: ExtensionContext, closingMessage?: any) => {
-    const usage = ctx.getContextUsage();
+    const usage = contextUsage(ctx);
     // message_end precedes persistence: ctx may still report the previous tool
     // request. Admit against the just-finished main response when available.
     const boundary = closingMessage?.usage;
@@ -764,8 +764,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // Pre-flush pressure snapshot — recorded once at flush entry so the
     // observability entry reflects what triggered this attempt, not what's
     // left after it ran.
-    let entryMetrics: ContextMetricsSnapshot = yieldToUi ? EMPTY_METRICS_SNAPSHOT
-      : computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT;
+    let entryMetrics = EMPTY_METRICS_SNAPSHOT;
     const delivery = options.delivery ?? "runtime";
 
     // One-entry-per-attempt tracking, emitted once from the outer `finally`
@@ -849,29 +848,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
       } else appendEntry = (type, data) => { assertCurrent(version); pi.appendEntry(type, data); };
 
+      const metricsLeaf = ctx.sessionManager.getLeafId();
+      entryMetrics = await computeMetricsSnapshot(ctx, signal) ?? EMPTY_METRICS_SNAPSHOT;
+      assertCurrent(version); signal.throwIfAborted();
+      if (metricsLeaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("source changed during metrics");
       const snapshotSource = createSourceSnapshotter();
-      let preparedProjection: NativeProjection | undefined, preparedSource: string | undefined;
-      let rawBranch: ReturnType<typeof readMessageBranch> | undefined, preparedVisible: any[] | undefined;
+      let preparedProjection: NativeProjection | undefined, preparedSource: string | undefined, preparedVisible: any[] | undefined;
       if (yieldToUi) {
         indexer.syncSummaryEntries(ctx);
-        // Freeze the model source before yielding through raw-history preparation.
         preparedProjection = await readProjection(ctx, signal);
         preparedSource = snapshotSource(preparedProjection.messages);
         const leaf = ctx.sessionManager.getLeafId();
-        const cooperate = async () => {
-          await setImmediate(undefined, { signal });
-          assertCurrent(version); signal.throwIfAborted();
-          if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("source changed during preparation");
-          sliceStartedAt = performance.now();
-        };
-        rawBranch = [];
-        for (const entry of readHistoryEntries(ctx.sessionManager, "branch",
-          entry => entry.type === "message" || entry.type === "custom_message", { cacheAdmission: "bypass" })) {
-          rawBranch.push(entry);
-          if (performance.now() - sliceStartedAt >= 8) await cooperate();
-        }
-        entryMetrics = computeMetricsSnapshot(ctx, rawBranch) ?? EMPTY_METRICS_SNAPSHOT;
-        await cooperate();
+        await setImmediate(undefined, { signal });
+        assertCurrent(version); signal.throwIfAborted();
+        if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("source changed during preparation");
+        sliceStartedAt = performance.now();
         preparedVisible = projectContext(preparedProjection.messages, ctx.model?.api,
           { ctx, source: readSourceEdits(ctx, preparedProjection) }).messages;
         beforeRewrite = occ.measure(ctx, preparedVisible);
@@ -896,8 +887,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         retainedWorkingSet = hadPending && batches.length === 0;
         rewriteBudget.observeWork(source.messages, economicModel(ctx));
       }
-      // Do not retain older, non-projected history while waiting for providers.
-      rawBranch = undefined; preparedVisible = undefined;
+      preparedVisible = undefined;
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
         const before = projectContext(base.messages, ctx.model?.api, { ctx, source: readSourceEdits(ctx, base) }).messages;
@@ -1969,14 +1959,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // usage crosses autoBudgetThreshold, compact the queued batches now instead of
     // waiting for this mode's flush boundary. The pendingBatches.length-or-rearmed
     // guard makes an already-drained, non-rearmed queue a no-op.
-    const usage = ctx.getContextUsage?.();
+    const usage = contextUsage(ctx);
     const budgetHit = shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx), currentConfig.value.summaryBudget);
     const deltaHit = shouldDeltaFlush(usage, previousFraction, currentConfig.value.budgetTurnDelta, currentConfig.value.summaryBudget);
     // Frontier-gap auto-flush (opt-in): absolute un-pruned tail size, for huge
     // windows where fractional thresholds never trip. Threshold null (default)
     // skips the metrics snapshot entirely; a failed snapshot fails closed.
-    const gapThreshold = currentConfig.value.frontierGapThresholdTokens;
-    const gapHit = gapThreshold != null && shouldFrontierGapFlush(computeMetricsSnapshot(ctx), gapThreshold);
+    const config = currentConfig.value, leaf = ctx.sessionManager.getLeafId(), policy = policyFingerprint(config);
+    const model = modelWindowKey(ctx.model), native = nativeCompaction;
+    const gapThreshold = config.frontierGapThresholdTokens;
+    const gapHit = !budgetHit && !deltaHit && gapThreshold != null
+      && shouldFrontierGapFlush(await computeMetricsSnapshot(ctx), gapThreshold);
+    if (version !== lifecycle || policy !== policyFingerprint(currentConfig.value) || leaf !== ctx.sessionManager.getLeafId()
+      || model !== modelWindowKey(ctx.model) || native !== nativeCompaction) return;
     // Update the per-turn baseline; leave it unchanged when tokens is null (e.g.
     // right after a compaction) so the next real reading compares to the last known.
     const f = usageFraction(usage, currentConfig.value.summaryBudget);
@@ -2713,7 +2708,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     () => statsAccum.getLiveReclaim(),
     compactChains,
     () => diagnostics.counts(),
-    (ctx: any) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT,
+    async (ctx: ExtensionContext) => await computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT,
     () => rearmedPending,
     saveConfig,
     (ctx) => occ.refreshStatus(ctx),
@@ -2726,6 +2721,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       lifecycle++;
       resetRewriteState();
       nativeCompaction?.finish();
+      contextMetrics.clear();
       jsonSizes.clear();
       maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear();
       activeFlushAbort?.abort();

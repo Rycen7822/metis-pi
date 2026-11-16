@@ -321,7 +321,7 @@ export function registerCommands(
   getLiveReclaim: () => LiveReclaim | undefined,
   compactChains: (ctx: ExtensionCommandContext) => Promise<{ compressedEntries: ChainCompressionEntry[]; skipped: number; reclaimedTokens?: number }>,
   getDiagnosticCounts?: () => Record<DiagnosticKind, number>,
-  getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot,
+  getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot | Promise<ContextMetricsSnapshot>,
   getRearmed?: () => boolean,
   save: (config: ContextPruneConfig) => Promise<void> = saveConfig,
   refreshOccStatus?: (ctx: ExtensionCommandContext) => void,
@@ -387,7 +387,7 @@ export function registerCommands(
                 " tokens"
               : "\n  (no completed summarizer usage yet)";
           const fmtTimeout = (ms: number) => (ms === 0 ? "disabled" : ms < 1000 ? `${ms}ms` : `${ms / 1000}s`);
-          const m = getContextMetrics?.(ctx);
+          const m = await getContextMetrics?.(ctx);
           const contextLine = m
             ? "\n  --- context ---\n  thinking:     " +
               `${formatTokens(m.openCycleThinkingTokens)}` +

@@ -1,103 +1,104 @@
-import { conversationSegments } from "./chain-detector.ts";
+import { setImmediate } from "node:timers/promises";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { branchEntryReferences } from "../session-history.ts";
+import { projectBranchMessages } from "./batch-capture.ts";
+import { isConversationBoundary } from "./chain-detector.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
+import { isProtected, type ProtectionConfig } from "./protected.ts";
 import type { ContextMetricsSnapshot, PruneFrontier } from "./types.ts";
 
-function charsOf(msg: any): number {
-  return JSON.stringify(msg).length;
+type MetricFact = {
+  assistant: boolean;
+  boundary: boolean;
+  chars: number;
+  thinkingChars: number;
+  calls: { id: string; path: string | undefined }[];
+  result?: { id: string; key: string; name: string };
+};
+
+const charsOf = (value: unknown): number => JSON.stringify(value).length;
+
+function messageFact(message: any): MetricFact {
+  const blocks = Array.isArray(message.content) ? message.content : [];
+  return {
+    assistant: message.role === "assistant",
+    boundary: isConversationBoundary(message),
+    chars: charsOf(message),
+    thinkingChars: message.role === "assistant"
+      ? blocks.reduce((sum: number, block: any) => sum + (block.type === "thinking" ? charsOf(block) : 0), 0) : 0,
+    calls: message.role === "assistant" ? blocks.filter((block: any) => block.type === "toolCall").map((block: any) => {
+      const path = (block.input ?? block.arguments)?.path;
+      return { id: block.id, path: typeof path === "string" ? path : undefined };
+    }) : [],
+    ...(message.role === "toolResult" ? { result: {
+      id: message.toolCallId, key: occKey(message.toolCallId, resultTimestampOf(message.timestamp)), name: message.toolName,
+    } } : {}),
+  };
 }
 
-function toolCallBlocksOf(msg: any): { id: string; input?: unknown; arguments?: unknown }[] {
-  if (!Array.isArray(msg.content)) return [];
-  return msg.content.filter((b: any) => b.type === "toolCall");
+function metricsFromFacts(facts: MetricFact[], frontier: PruneFrontier | null,
+  isSummarized: (key: string) => boolean, protection: ProtectionConfig): ContextMetricsSnapshot {
+  let total = 0, segment = 0, largest = 0, thinking = 0, gap = 0;
+  let boundary = -1, boundaryEnd = facts.length, turn = 0;
+  const paths = new Map<string, string | undefined>(), excluded = new Set<string>();
+  if (frontier) for (let i = 0; i < facts.length; i++) {
+    if (!facts[i].assistant || turn++ !== frontier.lastAttemptedTurnIndex) continue;
+    const call = facts[i].calls.findIndex(call => call.id === frontier.lastAttemptedToolCallId);
+    if (call >= 0) {
+      boundary = i;
+      for (const item of facts[i].calls.slice(0, call + 1)) excluded.add(item.id);
+      for (let j = i + 1; j < facts.length; j++) if (facts[j].assistant) { boundaryEnd = j; break; }
+    }
+    break; // An unmatched frontier keeps the full gap.
+  }
+  for (let i = 0; i < facts.length; i++) {
+    const fact = facts[i];
+    if (fact.boundary) { largest = Math.max(largest, segment); segment = thinking = 0; }
+    segment += fact.chars; total += fact.chars; thinking += fact.thinkingChars;
+    // A duplicate ID within one message follows the same first-match rule as backward argument lookup.
+    for (let j = fact.calls.length - 1; j >= 0; j--) paths.set(fact.calls[j].id, fact.calls[j].path);
+    const result = fact.result;
+    if (i > boundary && result && !(i < boundaryEnd && excluded.has(result.id))
+      && !isSummarized(result.key) && !isProtected(result.name, { path: paths.get(result.id) }, protection)) gap += Math.round(fact.chars / 4);
+  }
+  return { openCycleThinkingTokens: Math.round(thinking / 4),
+    largestChainSharePct: total ? Math.round(100 * Math.max(largest, segment) / total) : 0, frontierGapTokens: gap };
 }
 
-function findArgsForToolCallId(branch: any[], resultIdx: number, toolCallId: string): unknown {
-  for (let i = resultIdx - 1; i >= 0; i--) {
-    const m = branch[i];
-    if (m.role !== "assistant") continue;
-    const call = toolCallBlocksOf(m).find((c) => c.id === toolCallId);
-    if (call) return (call as any).input ?? (call as any).arguments;
-  }
-  return undefined;
-}
+/** Immutable source facts retain numbers, call IDs and protection paths, never message bodies or scripts. */
+export class ContextMetricsReader {
+  private facts = new WeakMap<object, MetricFact>();
 
-/**
- * Pure snapshot of what the pruner cannot (yet) reclaim: thinking tokens
- * trapped in the trailing open cycle, the largest single chain's share of
- * the branch, and unsummarized toolResult tokens past the prune frontier.
- */
-export function computeContextMetrics(
-  branch: any[],
-  frontier: PruneFrontier | null,
-  isSummarized: (occurrenceKey: string) => boolean,
-  isProtected: (toolName: string, args: unknown) => boolean,
-  measureChars: (value: any) => number = charsOf,
-): ContextMetricsSnapshot {
-  if (branch.length === 0) {
-    return { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
-  }
+  clear() { this.facts = new WeakMap(); }
 
-  const segments = conversationSegments(branch);
-  const openStart = segments.at(-1)?.startIndex ?? 0;
-  let thinkingChars = 0;
-  for (let i = openStart; i < branch.length; i++) {
-    const message = branch[i];
-    if (message.role !== "assistant") continue;
-    for (const block of message.content ?? []) if (block.type === "thinking") thinkingChars += measureChars(block);
-  }
-  const openCycleThinkingTokens = Math.round(thinkingChars / 4);
-  const prefixChars = [0];
-  for (const message of branch) prefixChars.push(prefixChars[prefixChars.length - 1] + measureChars(message));
-  const totalChars = prefixChars[prefixChars.length - 1];
-  const unanchoredPrefix = prefixChars[segments[0]?.startIndex ?? branch.length];
-  const largest = segments.reduce((max, segment) => Math.max(max,
-    prefixChars[segment.endIndex] - prefixChars[segment.startIndex]), unanchoredPrefix);
-  const largestChainSharePct = totalChars === 0 ? 0 : Math.round(100 * largest / totalChars);
-
-  // Exclusion is positional: only toolResults belonging to the boundary turn's
-  // own calls (up to and including the last-attempted call) are excluded.
-  // Ids are only unique per turn (see occurrence-key.ts), so a later turn may
-  // legally reuse a bare id — its result must still count toward the gap.
-  let boundaryIdx = -1;
-  let boundaryTurnEndIdx = branch.length;
-  const boundaryExcludedIds = new Set<string>();
-  if (frontier) {
-    let counter = 0;
-    for (let i = 0; i < branch.length; i++) {
-      const m = branch[i];
-      if (m.role !== "assistant") continue;
-      const turnIdx = counter;
-      counter++;
-      if (turnIdx === frontier.lastAttemptedTurnIndex) {
-        const calls = toolCallBlocksOf(m);
-        const k = calls.findIndex((c) => c.id === frontier.lastAttemptedToolCallId);
-        if (k !== -1) {
-          boundaryIdx = i;
-          for (let j = 0; j <= k; j++) boundaryExcludedIds.add(calls[j].id);
-          for (let j = i + 1; j < branch.length; j++) {
-            if (branch[j].role === "assistant") {
-              boundaryTurnEndIdx = j;
-              break;
-            }
-          }
+  async read(manager: ExtensionContext["sessionManager"], frontier: PruneFrontier | null,
+    isSummarized: (key: string) => boolean, protection: ProtectionConfig, signal?: AbortSignal): Promise<ContextMetricsSnapshot> {
+    const cache = this.facts, facts: MetricFact[] = [], leaf = manager.getLeafId();
+    const reader: typeof manager & { getEntryForScan?: typeof manager.getEntry } = manager;
+    const read = reader.getEntryForScan ?? reader.getEntry;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (leaf !== manager.getLeafId()) throw new Error("This extension ctx is stale: metrics branch changed");
+    };
+    assertCurrent();
+    let slice = performance.now();
+    for (const source of branchEntryReferences(manager)) {
+      if (source.type === "message" || source.type === "custom_message") {
+        let fact = cache.get(source);
+        if (!fact) {
+          const entry = read.call(reader, source.id);
+          if (!entry) throw new Error(`Session entry not found: ${source.id}`);
+          const [message] = projectBranchMessages([entry]);
+          fact = messageFact(message);
+          cache.set(source, fact);
         }
-        break;
+        facts.push(fact);
+      }
+      if (performance.now() - slice >= 8) {
+        await setImmediate(undefined, { signal }); assertCurrent(); slice = performance.now();
       }
     }
+    assertCurrent();
+    return metricsFromFacts(facts, frontier, isSummarized, protection);
   }
-
-  let frontierGapTokens = 0;
-  const scanStart = boundaryIdx === -1 ? 0 : boundaryIdx + 1;
-  for (let i = scanStart; i < branch.length; i++) {
-    const m = branch[i];
-    if (m.role !== "toolResult") continue;
-    if (i < boundaryTurnEndIdx && boundaryExcludedIds.has(m.toolCallId)) continue;
-    const key = occKey(m.toolCallId, resultTimestampOf(m.timestamp));
-    if (isSummarized(key)) continue;
-    const args = findArgsForToolCallId(branch, i, m.toolCallId);
-    if (isProtected(m.toolName, args)) continue;
-    frontierGapTokens += Math.round((prefixChars[i + 1] - prefixChars[i]) / 4);
-  }
-
-  return { openCycleThinkingTokens, largestChainSharePct, frontierGapTokens };
 }
