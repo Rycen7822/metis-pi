@@ -1,51 +1,51 @@
-# Subagent lifecycle
+# 子代理生命周期
 
-Python Runtime owns scheduling and the ledger; the JS worker owns a child Pi session. Parent coordination lives in `src/subagents/host`, presentation in `ui`. Each parent session has a scope; frontend reload reconnects it, and closing the frontend does not silently kill work.
+Python Runtime 负责调度与账本，JS worker 负责子 Pi 会话。父端协调位于 `src/subagents/host`，展示位于 `ui`。每个父会话有一个 scope。前端重载后会重新连接。关闭前端不会悄悄终止工作。
 
-## Idle shutdown and cleanup
+## 空闲关闭与清理
 
-After **30 consecutive idle seconds** without active, queued or input-waiting runs, the daemon closes admission, drains requests/notifications, parks cleanup-verified settled workers, then exits. Live owned workers with active tools or unverified cleanup block exit; historical `cleanup=unknown` records without a live resident stay quarantined but do not keep the daemon alive forever. Sessions, results and attention remain durable.
+连续 **30 秒**没有活动、排队或等待输入的 run 后，daemon 停止接收新请求，排空请求与通知，然后停驻已验证清理完成的 worker，最后退出。仍有活动工具或未验证清理的 worker 会阻止退出。没有常驻 worker 的历史 `cleanup=unknown` 记录会被隔离，但不会让 daemon 永远保活。会话、结果与注意事项持久保存。
 
-Reopening a parent session with a saved scope performs one non-consuming recovery read, restarting the daemon if needed but not its workers. Fresh sessions do not start it automatically. Subsequent watches remain passive; explicit requests can restart it on demand without automatic restart loops. The frontend can release an unused IPC helper while retaining its logical session lease; reconnect cannot replace a later owner.
+以已保存的 scope 重新打开父会话时，会执行一次不消费通知的恢复读取。必要时重启 daemon，但不重启 worker。新会话不会自动启动 daemon。之后的观察保持被动。显式请求可以按需重启 daemon，但不会形成自动重启循环。前端可以释放不再使用的 IPC helper，同时保留其逻辑会话租约。重连不能替换之后的所有者。
 
-Interrupt stops current work; close terminates its owned worker. A verified parked/closed worker resumes from its saved session without replaying old input. Per-scope capacity includes live and cleanup-unverified workers, not retained history alone.
+中断会停止当前工作。关闭会终止自有的 worker。已验证停驻或关闭的 worker 从保存的会话恢复，不会重放旧的输入。每个 scope 的容量同时计入活动 worker 和清理未验证的 worker。仅保留的历史记录不计入容量。
 
-On Linux/WSL, a worker guard adopts and reaps orphaned descendants, including detached process groups. On Windows, the guard joins a private kill-on-close Job Object before launching Pi; process creation times and job membership establish ownership. Cleanup precedes releasing the session lease. A generation-specific receipt and OS ownership prove cleanup; unknown ownership is never cleared automatically.
+在 Linux 或 WSL 上，worker guard 会收养并回收孤儿后代进程，包括分离的进程组。在 Windows 上，guard 在启动 Pi 之前加入一个私有的 kill-on-close Job Object。进程创建时间和 Job 成员关系确定归属。清理完成后才释放会话租约。generation 级别的收据与操作系统层面的归属共同证明清理完成。归属不明的对象不会被自动清除。
 
-## Notification and input delivery
+## 通知与输入投递
 
-| State | Contract |
+| 状态 | 合同 |
 | --- | --- |
-| Accepted input | May still be queued; `not_consumed` input after interruption requires explicit resend if wanted. |
-| Terminal result | Delivery consumes its notices only after receipts are saved to the active parent branch. Uncertain submission stays `unknown` until reconciled or explicitly reread. |
-| Status query | Preserves attention; default waits/outstanding lists include active and undelivered runs. |
-| Retained result | Explicit run IDs support paging and rereading after delivery. |
-| Uncertain mutation | Saved operation identity and normalized arguments are reused for identical retransmission; no automatic new work. |
+| 已接受的输入 | 可能仍在排队。中断后变为 `not_consumed` 的输入，若仍需要，必须显式重发。 |
+| 终态结果 | 只有收据保存到活动父分支之后，投递才消费其通知。提交结果不确定时，保持 `unknown`，直到核对或显式重读。 |
+| 状态查询 | 保留注意事项。默认的等待与未完成列表包含活动和未投递的 run。 |
+| 保留的结果 | 显式的 run ID 支持分页，投递之后仍可重读。 |
+| 结果不确定的变更 | 保存操作标识与规范化的参数。完全相同的请求会复用它重新发送，不会自动产生新工作。 |
 
-Name-based wait locks concrete run IDs. Answers are bound to a delivered question, run and worker generation under the agent lock. Expired UI answers return `input_not_found` without waking work; invalid local cwd returns `invalid_cwd` before launch. `send_message` stores a note, while `followup_task` starts work.
+按名称等待会锁定具体的 run ID。回答与已投递的问题、run 及 worker generation 绑定，并在 agent 锁下校验。过期的界面回答返回 `input_not_found`，且不会唤醒工作。本地 cwd 无效时，在启动前返回 `invalid_cwd`。`send_message` 只保存备注，`followup_task` 会启动工作。
 
-Saved results recovered on reopening are displayed without waking the model. Ordinary results ready during a tool turn enter the next request before the final reply; later completions wake an idle parent. Unconfirmed delivery is shown separately and is not acknowledged by opening the saved transcript. `completed` means normal model stop, not successful acceptance. Inspection token counters are cumulative per run; `last_message_output` and `max_message_output` describe individual responses.
+重新打开会话时恢复的已保存结果会直接显示，不会唤醒模型。工具回合中已就绪的普通结果，进入最终回复之前的下一次请求。之后完成的结果会唤醒空闲的父端。未确认的投递单独显示。打开已保存的转录不会确认投递。`completed` 表示模型正常结束，不代表产物已被接受。检查输出时，inspect 的 token 计数是每个 run 的累计值。`last_message_output` 与 `max_message_output` 描述单次响应。
 
-## Streaming and maintenance
+## 流式输出与维护
 
-At provider-supported safe boundaries—completed thinking or explicitly signed commentary—the frontend can claim pending attention and cancel that provider request. The next request receives receipt-backed notifications. Emitted tool calls are not preempted or replayed; final answers, unsigned text and unsupported hooks use turn-end delivery. Genuine errors and user cancellation remain errors/cancellation.
+在 provider 支持的安全边界上，即已完成的 thinking 或明确签名的 commentary，前端可以认领待处理的注意事项，并取消该 provider 请求。下一次请求会收到有收据支撑的通知。已发出的工具调用不会被抢占或重放。最终回答、未签名的文本和不支持该钩子的情况，都使用回合结束时的投递。真正的错误和用户取消仍按错误或取消处理。
 
-This is not token-by-token interruption: long thinking blocks wait for their end, and cancellation must drain. Questions show one immediate notice per notification ID; `samplingYield` records the handoff. Closing or reloading releases only that frontend's sampling owner.
+这不是逐 token 的中断。长 thinking 块要等到结束。取消必须先排空。问题在每个通知 ID 上只显示一次即时提示，`samplingYield` 记录交接。关闭或重载只释放该前端的采样所有权。
 
-Native compaction and summarization retries share an absolute maintenance window of `max(idle_timeout_seconds, 1800)` seconds. Nested retries do not extend it; the matching final end restores the ordinary idle budget. Settlement, cancellation and the next run clear maintenance state. This does not change Pi HTTP timeout or user settings.
+原生压缩与摘要重试共享一个绝对维护窗口，长度为 `max(idle_timeout_seconds, 1800)` 秒。嵌套重试不会延长它。匹配的最终结束事件会恢复普通的空闲预算。结算、取消和下一次 run 都会清除维护状态。这不会改变 Pi 的 HTTP 超时或用户设置。
 
-## Access and environment
+## 访问与环境
 
-Managed children cannot replace, fork, reload or navigate their sessions. Read/write admission is not an OS sandbox: shell commands and extensions can write outside declared cwd. Use separate workspaces for writers when stronger isolation is needed.
+受管子代理不能替换、分叉、重载或导航自己的会话。读写准入不是操作系统沙箱。shell 命令和扩展可以写入声明 cwd 之外的位置。若需要更强的隔离，为写入者使用独立的工作区。
 
-Children inherit standard HTTP(S)/ALL/NO_PROXY variables and lowercase equivalents, even with `childEnv=[]`. Routing values remain in scope memory, not persisted base environment or launches. Other credential names require explicit `childEnv`; profile overrides win. Native authenticated requests rebind authorized environment and project trust after idle restart.
+子代理会继承标准的 HTTP(S)、ALL 与 NO_PROXY 变量，以及小写形式的等价变量，即使 `childEnv=[]` 也是如此。路由值只保留在 scope 的内存中，不写入持久的基础环境或启动参数。其他凭据名称需要显式列在 `childEnv` 中。profile 的覆盖优先。Native 的已认证请求在空闲重启后，会重新绑定授权的环境与项目信任。
 
-SDK startup configures proxy-aware HTTP and WebSocket globals before extensions. Pi `httpProxy` supplies missing HTTP(S) variables; HTTP idle timeout applies to the dispatcher, while NO_PROXY permits direct traffic.
+SDK 启动时，会在扩展加载前配置支持代理的 HTTP 与 WebSocket 全局设置。Pi 的 `httpProxy` 提供缺失的 HTTP(S) 变量。HTTP 空闲超时作用于 dispatcher。NO_PROXY 允许直连。
 
-## Configuration and upgrades
+## 配置与升级
 
-Global TOML capacity/timeouts/profiles are read at daemon startup; reload alone cannot replace busy resident code. Every request checks runtime identity, including same-version source changes. A new bridge can negotiate idle handoff with the original PID/revision; the daemon closes admission only after checking workers and admitted operations in one event loop. Busy daemons reject it without interrupting work. Legacy daemons without this capability need a controlled transition, not new shutdown arguments.
+全局 TOML 中的容量、超时和 profiles 在 daemon 启动时读取。仅靠 reload 无法替换正在忙碌的常驻代码。每次请求都会检查运行时身份，包括同版本的源码变化。新的 bridge 可以与原 PID 和 revision 协商空闲交接。daemon 只在检查 worker 与已准入操作后，在同一个事件循环内停止接收请求。忙碌的 daemon 会拒绝交接，且不中断工作。不支持该能力的旧 daemon 需要受控的过渡，而不是新增关闭参数。
 
-`version_mismatch` reports incompatible identity. Automatic sync failure warns once and pauses that frontend's watch/boundary/settlement RPCs; explicit tools still report errors. Normal idle exit is silent, and foreground activity resumes watching. Finish work and confirm cleanup before a manual runtime/policy update.
+`version_mismatch` 表示身份不兼容。自动同步失败时会告警一次，并暂停该前端的 watch、边界与结算 RPC。显式工具仍会报错。正常的空闲退出不产生输出。前台有活动时恢复 watch。手动更新运行时或策略之前，先完成工作，并确认清理已完成。
 
-For unusable launch settings or saved sessions, inspect the failed worker and start a new agent. Verified parked workers use followup; cleanup-unverified workers require inspection before reuse.
+遇到无法使用的启动设置或已保存的会话，请检查失败的 worker，再启动新的 agent。已验证停驻的 worker 用 followup 继续。清理未验证的 worker 在复用前必须先检查。
