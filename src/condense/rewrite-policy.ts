@@ -3,6 +3,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { createRangeResolver } from "./chain-range-prune.ts";
 import { consumedToolResults, conversationSegments } from "./chain-detector.ts";
 import { occKey } from "./occurrence-key.ts";
+import { unchangedPrefixTokens } from "./token-estimator.ts";
 import type { CapturedBatch, ChainCompressionConfig, ChainRange } from "./types.ts";
 
 type Prices = { input: number; cacheRead: number; cacheWrite?: number };
@@ -10,11 +11,12 @@ export type PriceTier = { after: number; cost: Prices & { output?: number } };
 export type Model = { id: string; provider: string; api: string; baseUrl?: string;
   cost?: Prices & { output?: number; tiers?: Array<Partial<Prices> & { inputTokensAbove: number; output?: number }> };
   priceTiers?: PriceTier[]; pricing?: "pi" | "models.dev" | "pending" };
-export type RewriteContext = { tokens?: number | null; opaque?: boolean };
+export type RewriteContext = { tokens?: number | null; opaque?: boolean; cacheKey?: string; messages?: any[] };
 type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & {
   minimumGain?: number;
   forecastRequests?: number;
 };
+type CacheRequest = { key: string; envelope: string; messages: any[]; tokens: number };
 const WARM_REQUESTS = 3;
 const DEFAULT_FORECAST_REQUESTS = 3;
 const MIN_CACHE_HIT = 0.9;
@@ -199,6 +201,7 @@ export interface RewriteGain { pi: number; proxy: number }
 /** Aggregate or independently profitable closed chunks settle one flush in the same shared wallet. */
 export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], config: ChainCompressionConfig,
   model: Model | undefined, context?: RewriteContext) {
+  if (context?.opaque) context = { ...context, messages };
   const outputs = new Map<string, { prefix: number; tokens: number; closed: boolean }>();
   const consumed = consumedToolResults(messages), segments = conversationSegments(messages);
   // Closed segments are contiguous before the open one; a Native orphan prefix is not a closed group.
@@ -259,11 +262,14 @@ export class RewriteBudget {
   private lastGain = 0;
   private lastUsage = -Infinity;
   private lastWork = -Infinity;
+  private request?: CacheRequest;
+  private cached?: CacheRequest & { cacheRead: number };
 
   reset() {
     this.model = undefined;
     this.discounted = false;
     this.repayment = undefined;
+    this.request = this.cached = undefined;
     this.warmRequests = this.debt = this.fees = this.unknownFees = this.growth = this.lastGain = 0;
     this.lastUsage = this.lastWork = -Infinity;
     this.generation++;
@@ -277,6 +283,33 @@ export class RewriteBudget {
     if (identity !== this.model) { this.reset(); this.model = identity; }
     this.discounted = price.input > price.cacheRead;
     return price;
+  }
+
+  /** Retain only a Responses request whose visible input and cache namespace were observed together. */
+  observeRequest(model: Model | undefined, key: string | undefined, payload: unknown, messages: any[] = []) {
+    this.request = undefined;
+    if (!key || !messages.length || !payload || typeof payload !== "object" || !("input" in payload) || !Array.isArray(payload.input)) {
+      this.cached = undefined;
+      return;
+    }
+    this.prices(model);
+    const { input: _input, ...envelope } = payload;
+    const encoded = JSON.stringify(envelope);
+    if (this.cached?.key !== key || this.cached.envelope !== encoded) {
+      this.cached = undefined;
+      this.warmRequests = 0;
+    }
+    this.request = { key, envelope: encoded, messages: messages.slice(),
+      tokens: messages.reduce((sum, message) => sum + estimateTokens(message), 0) };
+  }
+
+  private cachedPrefix(before: number, prefix: number, context?: RewriteContext): number {
+    if (!context?.opaque) return prefix;
+    const cached = this.cached;
+    if (!cached || !context.messages || cached.key !== context.cacheKey) return 0;
+    // Charge the whole affected suffix, including changes since the observed request, against confirmed cache reads.
+    const stable = unchangedPrefixTokens(cached.messages, context.messages);
+    return Math.max(0, cached.cacheRead - Math.max(cached.tokens - stable, before - prefix));
   }
 
   observe(message: any, model: Model | undefined, workTokens = 0) {
@@ -296,6 +329,8 @@ export class RewriteBudget {
     const input = finite(usage?.input) && finite(usage?.cacheRead) && finite(usage?.cacheWrite)
       ? usage.input + usage.cacheRead + usage.cacheWrite : 0;
     const validInput = finite(input) && input > 0;
+    this.cached = !failed && validInput && this.request ? { ...this.request, cacheRead: usage.cacheRead } : undefined;
+    this.request = undefined;
     const repayment = this.repayment;
     if (repayment?.cold) {
       const cold = repayment.cold;
@@ -372,14 +407,15 @@ export class RewriteBudget {
     if (emergency) return true;
     if (context?.opaque && (!finite(context.tokens) || context.tokens === 0)) return false;
     if (model?.pricing === "pending" || !finite(fee) || this.unknownFees > 0) return false;
-    const forecast = forecastRewrite(total, gain, context?.opaque ? 0 : prefix, prices, model?.priceTiers, config.forecastRequests);
+    const forecast = forecastRewrite(total, gain, this.cachedPrefix(before, prefix, context),
+      prices, model?.priceTiers, config.forecastRequests);
     return forecast.cold + this.fees + fee < forecast.savings;
   }
 
   published(before: number, gain: number, prefix: number, model: Model | undefined, context?: RewriteContext) {
     const prices = this.prices(model);
     const total = totalInput(before, context);
-    const cold = coldCost(total, gain, context?.opaque ? 0 : prefix, prices, model?.priceTiers);
+    const cold = coldCost(total, gain, this.cachedPrefix(before, prefix, context), prices, model?.priceTiers);
     // A profitable first request cannot repay already-spent summary fees before it happens.
     const fees = this.unknownFees > 0 ? Infinity : this.fees;
     const reserve = Math.max(0, coldCost(total, gain, 0, prices, model?.priceTiers)) + fees;
@@ -387,6 +423,7 @@ export class RewriteBudget {
     this.repayment = { input: total - gain, cold: { before: total, fees, reserve } };
     this.fees = this.unknownFees = this.growth = this.warmRequests = 0;
     this.lastGain = gain;
+    this.request = this.cached = undefined;
     // Late or replayed receipts cannot settle another publication or make old work spendable again.
     this.generation++;
   }

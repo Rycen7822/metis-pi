@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import {
   RewriteBudget, batchRewriteAdmission, boundedRewritePolicy, protectBatchWorkingSet, protectChainWorkingSet,
   isUsefulWork, summaryRequestCost,
@@ -67,6 +68,44 @@ test("opaque requests use their full input and budget a cold rebuild even with a
     { tokens: 190000, opaque: true }), false, "hidden input and cold-cache risk belong to the same forecast");
   assert.equal(budget.admits(130000, 20000, 72000, policy, quote, false, 0,
     { tokens: null, opaque: true }), false, "a checkpoint without post-compaction usage has no complete cost basis");
+});
+
+test("remote cache credit follows a matching request and loses the entire affected suffix", () => {
+  const quote = { ...model, cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } }, budget = new RewriteBudget();
+  const messages = [{ role: "user", timestamp: -1, content: "x".repeat(288000) }, ...history([96000]),
+    { role: "user", timestamp: 5, content: "x".repeat(136000) }];
+  const before = messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+  const prefix = messages.slice(0, 3).reduce((sum, message) => sum + estimateTokens(message), 0);
+  const total = before + 60000, policy = boundedRewritePolicy(config, 24000);
+  const context = { tokens: total, opaque: true, cacheKey: "checkpoint-a", messages };
+  const admits = (ctx = context) => budget.admits(before, 23000, prefix, policy, quote, false, 0, ctx);
+  const payload = { model: quote.id, instructions: "Stable instructions", input: [{ role: "user", content: "Rendered input" }] };
+  const request = (timestamp, body = payload) => {
+    budget.observeRequest(quote, context.cacheKey, body, messages);
+    budget.observe({ ...completion(timestamp), usage: {
+      input: total * 0.02, cacheRead: total * 0.98, cacheWrite: 0 } }, quote);
+  };
+  warm(budget, quote);
+  assert.equal(admits(), false, "warm history without an observed request cannot certify the checkpoint cache");
+  for (let i = 4; i < 7; i++) request(i);
+  assert.equal(admits(), true);
+  assert.equal(admits({ ...context, cacheKey: "other-checkpoint" }), false);
+  const changed = structuredClone(messages);
+  changed[0].content = "y".repeat(changed[0].content.length);
+  assert.equal(admits({ ...context, messages: changed }), false);
+  request(7, { ...payload, instructions: "Changed instructions" });
+  assert.equal(admits(), false, "a changed provider envelope must establish a new reuse window");
+  request(8, { ...payload, instructions: "Changed instructions" });
+  request(9, { ...payload, instructions: "Changed instructions" });
+  assert.equal(admits(), true);
+  budget.published(before, 23000, prefix, quote, context);
+  budget.observe({ ...completion(10), usage: { input: total - 23000, cacheRead: 0, cacheWrite: 0 } }, quote);
+  budget.observe(completion(10), quote, total);
+  for (let i = 11; i < 14; i++) request(i);
+  assert.equal(admits(), false, "unexpected full-cold usage retains its debt despite a restored high hit rate");
+  budget.observeRequest(undefined, undefined, {});
+  for (let i = 14; i < 17; i++) request(i);
+  assert.equal(admits(), false, "discarding request evidence must preserve unpaid costs");
 });
 
 test("both forecast paths apply their own context tier while opaque cold costs remain funded", () => {

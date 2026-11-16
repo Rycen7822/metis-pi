@@ -190,6 +190,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const awaitRecovery = async () => { while (recoveryTask) await recoveryTask; };
   const tokenEstimator = new TokenEstimator();
   const rewriteBudget = new RewriteBudget();
+  let preparedCacheRequest: { session: string; leaf: string | null; source: string; messages: any[] } | undefined;
+  const resetRewriteState = () => {
+    rewriteBudget.reset();
+    preparedCacheRequest = undefined;
+  };
   const sharedValidations = new Map<string, { shape: string; hasGain: boolean }>();
   let maintenanceAbort: AbortController | undefined;
   let maintenanceTask: Promise<void> | undefined;
@@ -254,7 +259,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     tokenEstimator.clear();
     sharedValidations.clear();
     needsSharedValidation = true;
-    rewriteBudget.reset();
+    resetRewriteState();
     lastMaintenanceSource = undefined;
     activeFlushAbort?.abort();
   };
@@ -486,12 +491,28 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return capacity !== undefined && tokens <= capacity
       && tokens + currentConfig.value.summaryBudget.growthHeadroomTokens >= capacity;
   };
-  const rewriteContext = (ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(),
-    closingMessage?: any): RewriteContext => {
+  const remoteCacheSource = (projection: NativeProjection): string | undefined => {
     const source = projection.entries.find(entry => entry.sourceEntry.type === "compaction")?.sourceEntry;
     const details = source?.type === "compaction" ? source.details : undefined;
-    return { tokens: pressureUsage(ctx, closingMessage)?.tokens,
-      opaque: details !== null && typeof details === "object" && "metisCodexRemoteCompaction" in details };
+    if (details === null || typeof details !== "object" || !("metisCodexRemoteCompaction" in details)) return;
+    let edit: string | undefined;
+    for (let i = projection.entries.length - 1; i >= 0; i--) {
+      if (projection.entries[i].sourceEntry.type === "context_edit") { edit = projection.entries[i].sourceEntry.id; break; }
+    }
+    return JSON.stringify([source?.id, edit, projection.thinkingLevel]);
+  };
+  const requestCacheKey = (ctx: ExtensionContext, source: string) => {
+    const active = pi.getActiveTools(), names = new Set(active);
+    const tools = pi.getAllTools().filter(tool => names.has(tool.name))
+      .map(tool => [tool.name, tool.description, tool.parameters]);
+    return JSON.stringify([ctx.sessionManager.getSessionId(), source, ctx.model?.provider, ctx.model?.id,
+      ctx.model?.api, ctx.model?.baseUrl, ctx.getSystemPrompt(), active, tools]);
+  };
+  const rewriteContext = (ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(),
+    closingMessage?: any, messages?: any[]): RewriteContext => {
+    const source = remoteCacheSource(projection);
+    return { tokens: pressureUsage(ctx, closingMessage)?.tokens, opaque: source !== undefined,
+      cacheKey: source && requestCacheKey(ctx, source), messages: source ? messages : undefined };
   };
   const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number,
     context: RewriteContext, candidateTokens?: number) => {
@@ -548,6 +569,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const source = projectionFingerprint(raw);
         const config = policyFingerprint(currentConfig.value);
         const before = projectContext(raw, ctx.model?.api, { ctx, probe: true }).messages;
+        if (costContext.opaque) costContext.messages ??= before;
         const views = currentChainViews(raw, ctx).concat(entry);
         const after = projectContext(raw, ctx.model?.api,
           { ctx, chainViews: views, probe: true, chainFloor: entry.startUserTimestamp }).messages;
@@ -582,9 +604,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       prefix = Math.min(prefix, measured.prefix);
     }
     if (result.compressedEntries.length > 0) {
+      // A new single view can change the baseline that authorized existing shared views.
+      if (indexer.getChainEntries().some(isSharedChain)) needsSharedValidation = true;
       statsAccum.addChainsCompressed(result.compressedEntries.length);
       if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx), costContext);
-      else rewriteBudget.reset();
+      else resetRewriteState();
       occ.rewrite(ctx, beforeRewrite);
     }
     return { ...result, reclaimedTokens };
@@ -1704,7 +1728,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
-    rewriteBudget.reset();
+    resetRewriteState();
     deferredFinal = undefined;
     lastMaintenanceSource = undefined;
     maintenanceNext = undefined;
@@ -1742,7 +1766,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
-    rewriteBudget.reset();
+    resetRewriteState();
     deferredFinal = undefined;
     lastMaintenanceSource = undefined;
     maintenanceNext = undefined;
@@ -1796,13 +1820,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   pi.on("model_select", async (_event, ctx) => {
     pricing.start(ctx.modelRegistry.getAll());
     previousFraction = null;
-    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); rewriteBudget.reset(); lastMaintenanceSource = undefined;
+    resetRewriteState();
+    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); lastMaintenanceSource = undefined;
     needsSharedValidation = true;
     supersede.floor = 0;
     void maintainChains(ctx);
   });
   const finishNativeCompaction = async (_event: unknown, ctx: ExtensionContext) => {
-    rewriteBudget.reset();
+    resetRewriteState();
     nativeCompaction?.finish();
     supersede.floor = 0;
     needsSharedValidation = true;
@@ -1975,8 +2000,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
   });
 
+  pi.on("before_provider_request", (event, ctx) => {
+    if (!currentConfig.value.enabled) return;
+    const prepared = preparedCacheRequest;
+    const valid = prepared?.session === ctx.sessionManager.getSessionId() && prepared.leaf === ctx.sessionManager.getLeafId();
+    if (!valid) { rewriteBudget.observeRequest(undefined, undefined, event.payload); return; }
+    rewriteBudget.observeRequest(economicModel(ctx), requestCacheKey(ctx, prepared.source), event.payload, prepared.messages);
+  });
+
   // Observe the completed request BEFORE its final can publish a rewrite. It did not consume that future projection.
   pi.on("message_end", (event, ctx) => {
+    preparedCacheRequest = undefined;
     if (!currentConfig.value.enabled) return;
     rewriteBudget.observe(event.message, economicModel(ctx));
     lastMaintenanceSource = undefined;
@@ -2265,7 +2299,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       maintenanceAbort?.abort();
       tokenEstimator.clear();
       sharedValidations.clear();
-      rewriteBudget.reset();
+      resetRewriteState();
       lastMaintenanceSource = undefined;
       maintenanceNext = undefined;
       return Promise.resolve();
@@ -2458,7 +2492,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const floor = earliestChainStart(views);
       const after = projectContext(raw, ctx.model?.api,
         { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages;
-      const costContext = rewriteContext(ctx, sourceView.projection);
+      const costContext = rewriteContext(ctx, sourceView.projection, undefined, before);
       const counts = await tokenEstimator.compare(before, after, signal);
       assertNewWork();
       if (!counts) {
@@ -2498,6 +2532,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       maintenanceTask = undefined;
       const next = maintenanceNext; maintenanceNext = undefined;
       if (next?.version === lifecycle) void maintainChains(next.ctx, undefined, next.mode);
+      else if (version === lifecycle && needsSharedValidation && !signal.aborted) void maintainChains(ctx, undefined, "validate");
       if (version === lifecycle) notifyPruneActions(ctx, { chains: publishedChains });
     });
     return maintenanceTask;
@@ -2622,6 +2657,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const messages = withDurableSummaries(event.messages, ctx, ctx.model?.api, false, source);
     const result = projectContext(messages, ctx.model?.api, { ctx, source });
     if (messages !== event.messages) result.changed = true;
+    const cacheSource = remoteCacheSource(projection);
+    preparedCacheRequest = currentConfig.value.enabled && cacheSource ? {
+      session: ctx.sessionManager.getSessionId(), leaf: ctx.sessionManager.getLeafId(), source: cacheSource,
+      messages: result.messages.filter(message => message.role !== "system"),
+    } : undefined;
     occ.observeRequest(result.messages);
     const measured = result.measure?.();
     if (measured) statsAccum.setLiveReclaim(measured.beforeChars, measured.afterChars);
@@ -2684,9 +2724,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     start, tree,
     async shutdown(ctx: ExtensionContext) {
       lifecycle++;
+      resetRewriteState();
       nativeCompaction?.finish();
       jsonSizes.clear();
-      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); rewriteBudget.reset();
+      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear();
       activeFlushAbort?.abort();
       clearBoot();
       resetNested();

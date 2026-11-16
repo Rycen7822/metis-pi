@@ -337,7 +337,7 @@ async function runSummarization(
       return outcome.result;
     }
     if (outcome.kind === "economics") {
-      options.onFailure?.("Summary request cannot repay its estimated cost within three main requests", "economics");
+      options.onFailure?.("Summary request deferred by automatic cost policy", "economics");
       return null;
     }
     if (outcome.kind === "unusable") {

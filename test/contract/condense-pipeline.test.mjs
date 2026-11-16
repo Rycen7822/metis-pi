@@ -180,6 +180,7 @@ async function fixture(
     events,
     getSettings: () => JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")),
     getAllTools: () => [...tools.values()],
+    getActiveTools: () => [...tools.keys()],
     on(name, fn) {
       hooks.set(name, [...(hooks.get(name) ?? []), fn]);
     },
@@ -208,6 +209,7 @@ async function fixture(
     hasUI: mode === "tui" || mode === "rpc",
     isIdle: () => true,
     hasPendingMessages: () => false,
+    getSystemPrompt: () => "Condense test system prompt",
     getContextUsage: () => ({ tokens: capacity ? 96000 : 90000, contextWindow: 100000 }),
     modelRegistry: {
       find: () => summaryModel,
@@ -589,24 +591,40 @@ test("independent small chains publish without paid summaries while preserving t
   });
 });
 
-test("a restored remote checkpoint budgets a full cold request before modifying a small closed chain", async t => {
-  const f = await independentTasks(t, { total: 128000, sizes: [32000], price: 20 });
-  const first = f.sm.getBranch().find(entry => entry.type === "message");
-  f.sm.appendCompaction("Remote history checkpoint", first.id, 128000, { metisCodexRemoteCompaction: { version: 2 } });
-  await f.emit("session_start");
-  f.ctx.getContextUsage = () => ({ tokens: 128000, contextWindow: 2000000 });
-  for (let i = 0; i < 3; i++) {
-    const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
-      content: [{ type: "text", text: "Main request completed after recovery" }], stopReason: "stop",
-      timestamp: f.nextTimestamp(), usage: { ...usage, input: 2560, cacheRead: 125440 } };
-    await f.emit("message_end", { message }); f.sm.appendMessage(message);
-  }
-  await f.emit("agent_settled"); await f.waitMaintenance();
-  assert.equal(f.sm.getBranch().filter(entry => entry.customType === "context-prune-chain").length, 0);
-  const raw = f.sm.buildSessionProjection().messages;
-  const visible = (await f.emit("context", { messages: raw }))?.messages ?? raw;
-  assert.deepEqual(visible.find(message => message.toolCallId === f.tasks[0].id), f.tasks[0].result);
-  assert.equal(f.calls.length, 0);
+test("remote chain cache credit requires an observed request and matching namespace", async t => {
+  for (const scenario of ["no request evidence", "matching", "changed prompt", "changed tool"])
+    await t.test(scenario, async t => {
+      const f = await independentTasks(t, { total: 128000, sizes: [32000], price: 20 });
+      const first = f.sm.getBranch().find(entry => entry.type === "message");
+      f.sm.appendCompaction("Remote history checkpoint", first.id, 128000, { metisCodexRemoteCompaction: { version: 2 } });
+      await f.emit("session_start");
+      f.ctx.getContextUsage = () => ({ tokens: 128000, contextWindow: 2000000 });
+      for (let i = 0; i < 3; i++) {
+        if (scenario !== "no request evidence") {
+          const raw = f.sm.buildSessionProjection().messages;
+          const sent = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+          await f.emit("before_provider_request", { payload: { model: f.ctx.model.id, instructions: f.ctx.getSystemPrompt(),
+            input: sent.map(message => ({ role: "user", content: JSON.stringify(message) })) } });
+        }
+        const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+          content: [{ type: "text", text: "Main request completed after recovery" }], stopReason: "stop",
+          timestamp: f.nextTimestamp(), usage: { ...usage, input: 2560, cacheRead: 125440 } };
+        await f.emit("message_end", { message }); f.sm.appendMessage(message);
+      }
+      if (scenario === "changed prompt") f.ctx.getSystemPrompt = () => "New system prompt";
+      if (scenario === "changed tool") {
+        const tool = f.tools.get("context_tree_query");
+        f.pi.registerTool({ ...tool, description: tool.description + " Changed schema contract." });
+      }
+      await f.emit("agent_settled"); await f.waitMaintenance();
+      const published = scenario === "matching";
+      assert.equal(f.sm.getBranch().filter(entry => entry.customType === "context-prune-chain").length, published ? 1 : 0);
+      const raw = f.sm.buildSessionProjection().messages;
+      const visible = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+      if (published) assert.ok(!visible.some(message => message.toolCallId === f.tasks[0].id));
+      else assert.deepEqual(visible.find(message => message.toolCallId === f.tasks[0].id), f.tasks[0].result);
+      assert.equal(f.calls.length, 0);
+    });
 });
 
 test("independent selection and shared fallback keep distinct admission contracts", async t => {

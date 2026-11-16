@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { isDeepStrictEqual } from "node:util";
 import { convertToLlm, estimateTokens } from "@earendil-works/pi-coding-agent";
 
 export interface TokenComparison {
@@ -9,10 +10,13 @@ export interface TokenComparison {
   proxyBefore?: number;
   proxyAfter?: number;
 }
-/** Shared leading message objects establish a conservative unchanged-prefix estimate without reserializing history. */
+/** Shared objects are the fast path; rebuilt derived messages may preserve the same model-facing prefix. */
 export function unchangedPrefixTokens(before: any[], after: any[]): number {
   let tokens = 0;
-  for (let i = 0; i < Math.min(before.length, after.length) && before[i] === after[i]; i++) tokens += estimateTokens(before[i]);
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    if (before[i] !== after[i] && !isDeepStrictEqual(convertToLlm([before[i]]), convertToLlm([after[i]]))) break;
+    tokens += estimateTokens(before[i]);
+  }
   return tokens;
 }
 

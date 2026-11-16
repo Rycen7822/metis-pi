@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
-import { TokenEstimator } from "../../src/condense/token-estimator.ts";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
+import { buildSyntheticChainMessage } from "../../src/condense/chain-range-prune.ts";
+import { TokenEstimator, unchangedPrefixTokens } from "../../src/condense/token-estimator.ts";
 
 const messages = content => [{ role: "user", content, timestamp: 1 }];
 
@@ -27,6 +29,23 @@ function fixture(t) {
   });
   return { estimator, workers, retirements };
 }
+
+test("rebuilt chain messages preserve the cached prefix until model-facing content changes", () => {
+  const head = messages("Stable request")[0];
+  const entry = { blockId: "b1", toolRefs: ["t1"], compressedAt: 2 };
+  const old = buildSyntheticChainMessage(entry, "Saved evidence");
+  const rebuilt = buildSyntheticChainMessage(entry, "Saved evidence");
+  const end = messages("Original tail")[0];
+  const before = [head, old, end];
+  assert.equal(unchangedPrefixTokens(before, [head, rebuilt, ...messages("Changed tail")]),
+    estimateTokens(head) + estimateTokens(old));
+  assert.equal(unchangedPrefixTokens(before, [head, rebuilt, end]), before.reduce((sum, m) => sum + estimateTokens(m), 0));
+  assert.equal(unchangedPrefixTokens(before, [head, buildSyntheticChainMessage(entry, "Changed evidence"), end]), estimateTokens(head));
+  const call = { role: "assistant", timestamp: 3, content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a" } }] };
+  const changed = structuredClone(call);
+  changed.content[0].arguments.path = "b";
+  assert.equal(unchangedPrefixTokens([head, call], [head, changed]), estimateTokens(head));
+});
 
 test("idle encoder retires without discarding counts or being kept alive by cache lookups", { timeout: 15_000 }, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

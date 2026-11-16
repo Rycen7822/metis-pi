@@ -162,9 +162,11 @@ Automatic work:
 
 Cache and costs:
   Summaries, packing and chains share cost and reuse checks. The input basis
-  includes Pi's provider-backed usage estimate. Remote checkpoints budget a
-  zero-cache first request; visible history uses its unchanged prefix. Later
-  requests grow by 2000 tokens each at 98% hits, priced at each path's tier.
+  includes Pi's provider-backed usage estimate. Visible history uses its stable
+  model-message prefix. Remote checkpoints use matching request/usage evidence,
+  subtracting the whole affected suffix from observed cache reads; missing
+  evidence budgets a fully cold request. Later requests grow by 2000 tokens
+  each at 98% hits, priced at each path's tier.
   Publication includes summary fees and requires strictly lower estimated cost;
   bounded independent candidates forecast up to 32 requests. Automatic large
   chains and shared mechanical groups forecast 24; ordinary batch aggregates 3.
