@@ -22,6 +22,12 @@ export class FallbackController {
     this.now = now;
   }
 
+  /** Cost preflight must not consume a recovery probe or change the live route. */
+  peekTarget(key: string): number {
+    if (key !== this.chainKey) return 0;
+    return this.index > 0 && this.now() - this.lastProbeAt >= COOLDOWN_MS ? 0 : this.index;
+  }
+
   /** Claim a probe synchronously, before any await, so sibling calls skip it. */
   chooseTarget(key: string): TargetDecision {
     if (key !== this.chainKey) {
@@ -29,9 +35,10 @@ export class FallbackController {
       this.index = this.announcedIndex = this.lastProbeAt = 0;
       this.generation++;
     }
-    const wasProbe = this.index > 0 && this.now() - this.lastProbeAt >= COOLDOWN_MS;
+    const index = this.peekTarget(key);
+    const wasProbe = this.index > 0 && index === 0;
     if (wasProbe) this.lastProbeAt = this.now();
-    return { key, index: wasProbe ? 0 : this.index, wasProbe, generation: this.generation };
+    return { key, index, wasProbe, generation: this.generation };
   }
 
   /** An absent index means the attempted suffix of the chain was unavailable. */

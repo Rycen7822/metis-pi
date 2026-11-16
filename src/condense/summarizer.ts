@@ -1,4 +1,4 @@
-import type { AssistantMessage, ModelsSimpleStreamOptions, UserMessage } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, ModelsSimpleStreamOptions, UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   CapturedBatch,
@@ -84,7 +84,7 @@ function modelKey(model: any): string {
   return model ? `${model.provider}/${model.id}` : "unavailable";
 }
 
-function resolveModelChain(config: ContextPruneConfig, ctx: ExtensionContext): any[] {
+export function summarizerModels(config: ContextPruneConfig, ctx: ExtensionContext): (Model<Api> | undefined)[] {
   // Keep the primary slot even when unresolved; recovery probes still start here.
   const models = [resolveModel(config.summarizerModel, ctx)];
   const seen = new Set([modelKey(models[0])]);
@@ -110,7 +110,7 @@ function summarizerLimits(model: any) {
 
 export function summarizerInputBudget(config: ContextPruneConfig, ctx: ExtensionContext): number {
   // Serialize once: the same evidence must fit every resolved chain candidate.
-  return Math.min(...resolveModelChain(config, ctx).map(model => summarizerLimits(model).inputChars));
+  return Math.min(...summarizerModels(config, ctx).map(model => summarizerLimits(model).inputChars));
 }
 
 function receivedTextChars(message: AssistantMessage): number {
@@ -144,8 +144,8 @@ function combineSignals(...signals: (AbortSignal | undefined)[]): AbortSignal | 
 
 /**
  * One summarization attempt against a specific model. Returns a classified
- * outcome instead of throwing (except aborts, which propagate so flushPending
- * can restore state). The native registry owns authentication and provider
+ * outcome for provider failures. Caller admission errors and aborts propagate so
+ * flushPending can retain evidence without poisoning the route. The native registry owns
  * dispatch. `unusable` = empty or length-truncated. Everything else
  * that reaches the catch is `transient` (the outage bucket) — pi-ai surfaces
  * no structured status code on the throw, so classification is coarse by design.
@@ -181,22 +181,15 @@ async function runOnce(
       ? `summarizer ${modelLabel(model)} exceeded ${duration(maxMs)} ceiling`
       : `summarizer ${modelLabel(model)} stalled (no output for ${duration(idleMs)})`;
 
+  if (options.signal?.aborted) throw new Error("summarize: aborted before authentication");
+  if (!model) return { kind: "transient", message: "Summarizer model unavailable in registry" };
+  const { message, maxOutputTokens: maxTokens } = summaryRequest(model, userMessage, config, options.outputBudget);
+  // Admission belongs to the caller, not provider health: a source/storage failure
+  // must not be swallowed and retried on a more expensive fallback.
+  if (options.acceptRequest && !await options.acceptRequest(model, message, maxTokens)) return { kind: "economics" };
+  // Native providers may add thinking to options.maxTokens; bound the model snapshot too.
+  const requestModel = options.outputBudget ? { ...model, maxTokens } : model;
   try {
-    if (options.signal?.aborted) throw new Error("summarize: aborted before authentication");
-    if (!model) return { kind: "transient", message: "Summarizer model unavailable in registry" };
-    const message: UserMessage = {
-      role: "user", content: [{ type: "text", text: userMessage }], timestamp: Date.now(),
-    };
-    let maxTokens = summarizerLimits(model).maxTokens;
-    if (options.outputBudget) {
-      const thinkingTokens = model.reasoning ? SUMMARY_THINKING_TOKENS[config.summarizerThinking] : 0;
-      // Tokenizer slack is not a proxy/provider conversion; the complete reply is still measured separately.
-      const textTokens = Math.max(1024, Math.ceil(options.outputBudget.limit * 2));
-      maxTokens = Math.min(maxTokens, textTokens + thinkingTokens);
-    }
-    // Native providers may add thinking to options.maxTokens; bound this request's model snapshot as well.
-    const requestModel = options.outputBudget ? { ...model, maxTokens } : model;
-    if (options.acceptRequest && !await options.acceptRequest(model, message, maxTokens)) return { kind: "economics" };
     if (options.signal?.aborted) throw new Error("summarize: aborted before provider request");
     // Pass the combined signal so the underlying fetch is cancelled immediately
     // either when the user presses Esc, or when an idle/ceiling timeout fires.
@@ -303,9 +296,9 @@ async function runSummarization(
 ): Promise<SummarizeResult | null> {
   if (options.signal?.aborted) throw new Error("summarize: aborted before start");
 
-  const chain = resolveModelChain(config, ctx);
+  const chain = summarizerModels(config, ctx);
   const controller = options.controller;
-  const key = JSON.stringify([config.summarizerModel, config.summarizerFallbackModels, chain.map(modelKey)]);
+  const key = routingKey(config, chain);
   const decision = controller?.chooseTarget(key) ?? { key, index: 0, wasProbe: false, generation: 0 };
   const primaryLabel = chain[0] ? modelLabel(chain[0]) : config.summarizerModel;
 
@@ -369,25 +362,62 @@ function outputBudgetPrompt(options: SummarizeBatchOptions): string {
     + "Leave room for that overhead. Preserve essential evidence and uncertainty; do not pad or return truncated/incomplete statements." : "";
 }
 
-/**
- * Summarizes a captured batch. Returns formatted markdown string, or null on failure.
- * Shows user-visible errors via ctx.ui.notify.
- */
+export interface SummaryRequest {
+  model: Model<Api>;
+  message: UserMessage;
+  maxOutputTokens: number;
+}
+
+function routingKey(config: ContextPruneConfig, models: (Model<Api> | undefined)[]): string {
+  return JSON.stringify([config.summarizerModel, config.summarizerFallbackModels, models.map(modelKey)]);
+}
+
+function summaryRequest(
+  model: Model<Api>, prompt: string, config: ContextPruneConfig, budget?: SummarizeBatchOptions["outputBudget"],
+): SummaryRequest {
+  let maxOutputTokens = summarizerLimits(model).maxTokens;
+  if (budget) {
+    const thinking = model.reasoning ? SUMMARY_THINKING_TOKENS[config.summarizerThinking] : 0;
+    // Tokenizer slack is not a proxy/provider conversion; the complete reply is measured separately.
+    maxOutputTokens = Math.min(maxOutputTokens, Math.max(1024, Math.ceil(budget.limit * 2)) + thinking);
+  }
+  return { model, maxOutputTokens,
+    message: { role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() } };
+}
+
+function batchPrompt(
+  batch: CapturedBatch, config: ContextPruneConfig, ctx: ExtensionContext, options: SummarizeBatchOptions,
+): string | undefined {
+  const inputChars = summarizerInputBudget(config, ctx);
+  const serialized = serializeBatchForSummarizer(batch, inputChars);
+  if (serialized === undefined) {
+    options.onFailure?.(`Input budget of ${inputChars} characters cannot fit ${batch.toolCalls.length} tool calls`, "input-budget");
+    return;
+  }
+  return SYSTEM_PROMPT + outputBudgetPrompt(options) + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
+}
+
+/** Cost preflight: identical prompt/cap, without a provider call or claiming a fallback recovery probe. */
+export function planBatchSummary(
+  batch: CapturedBatch, config: ContextPruneConfig, ctx: ExtensionContext,
+  options: Pick<SummarizeBatchOptions, "outputBudget" | "controller"> & { model?: Model<Api> } = {},
+): SummaryRequest | undefined {
+  const models = summarizerModels(config, ctx);
+  const index = options.controller?.peekTarget(routingKey(config, models)) ?? 0;
+  const model = options.model ?? models.slice(index).find(candidate => candidate !== undefined);
+  const prompt = batchPrompt(batch, config, ctx, options);
+  return model && prompt !== undefined ? summaryRequest(model, prompt, config, options.outputBudget) : undefined;
+}
+
+/** Summarize one batch; native provider dispatch and user-visible failures stay in this module. */
 export async function summarizeBatch(
   batch: CapturedBatch,
   config: ContextPruneConfig,
   ctx: ExtensionContext,
   options: SummarizeBatchOptions = {}
 ): Promise<SummarizeResult | null> {
-  const inputChars = summarizerInputBudget(config, ctx);
-  const serialized = serializeBatchForSummarizer(batch, inputChars);
-  if (serialized === undefined) {
-    options.onFailure?.(`Input budget of ${inputChars} characters cannot fit ${batch.toolCalls.length} tool calls`, "input-budget");
-    return null;
-  }
-  const userMessage =
-    SYSTEM_PROMPT + outputBudgetPrompt(options) + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
-  return runSummarization(userMessage, config, ctx, options);
+  const prompt = batchPrompt(batch, config, ctx, options);
+  return prompt === undefined ? null : runSummarization(prompt, config, ctx, options);
 }
 
 /**

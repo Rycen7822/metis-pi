@@ -21,6 +21,17 @@ test("fallback announcements track real route changes and only one sibling claim
   assert.equal(controller.chooseTarget("chain").index, 0);
 });
 
+test("summary request preflight can preview a recovery probe without claiming it", () => {
+  let now = 1000;
+  const controller = new FallbackController(() => now);
+  controller.complete(controller.chooseTarget("chain"), 1);
+  assert.equal(controller.peekTarget("chain"), 1);
+  now += COOLDOWN_MS;
+  for (let i = 0; i < 3; i++) assert.equal(controller.peekTarget("chain"), 0);
+  assert.equal(controller.chooseTarget("chain").wasProbe, true);
+  assert.equal(controller.peekTarget("chain"), 1, "only the actual request claims the probe");
+});
+
 test("an older probe falling back cannot reverse a newer primary recovery", () => {
   let now = 1000;
   const controller = new FallbackController(() => now);

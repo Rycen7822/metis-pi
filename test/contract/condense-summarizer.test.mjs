@@ -68,6 +68,18 @@ test("batch and range summaries use the configured private native provider", asy
   assert.deepEqual(f.notices, []);
 });
 
+test("caller admission failures propagate without provider calls or outage fallback", async t => {
+  const f = await fixture(t), primary = f.add("primary"), fallback = f.add("fallback");
+  const selected = { ...config, summarizerModel: `${primary.provider}/${primary.id}` };
+  const controller = new FallbackController(), failure = new Error("local spending journal unavailable");
+  await assert.rejects(summarizeRange("Evidence", selected, f.ctx(fallback), {
+    controller, acceptRequest: async () => { throw failure; },
+  }), error => error === failure);
+  assert.equal(f.calls.length, 0);
+  assert.equal((await summarizeRange("Evidence", selected, f.ctx(fallback), { controller })).summaryText, "Native summary");
+  assert.equal(f.calls[0].model.id, "primary", "local failure must not poison the provider-health route");
+});
+
 test("summary budgets consume refreshed native model limits", async t => {
   const f = await fixture(t), model = f.add("primary"), ctx = f.ctx(model);
   const selected = { ...config, summarizerModel: `${model.provider}/${model.id}` };

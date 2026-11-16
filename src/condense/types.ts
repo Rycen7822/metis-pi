@@ -509,6 +509,22 @@ export interface SummaryToolCallRef {
   resultTimestamp?: number;
 }
 
+/** One independently owned summary body within a group's single content string. Offsets are UTF-16 code units. */
+export interface SummaryMember {
+  toolCallRefs: SummaryToolCallRef[];
+  bodyStart: number;
+  bodyEnd: number;
+}
+
+export interface SummaryDetails {
+  toolCallRefs: SummaryToolCallRef[];
+  toolNames: string[];
+  turnIndex: number;
+  timestamp: number;
+  representation?: "packed" | "summary";
+  members?: SummaryMember[];
+}
+
 /** Snapshot of what the pruner cannot (yet) reclaim. All token values are Math.round(JSON-chars / 4). */
 export interface ContextMetricsSnapshot {
   /** Est. tokens of thinking blocks retained in the trailing open segment. */

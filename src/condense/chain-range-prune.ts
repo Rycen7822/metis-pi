@@ -7,6 +7,7 @@ import { consumedToolResults, isChainAnchorCustom, isConversationBoundary } from
 import { bareToolCallId, occKey, resultTimestampOf } from "./occurrence-key.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";
 import { isSubagentControl } from "./protected.ts";
+import { retainSummaryGroup } from "./summary-refs.ts";
 
 export function isPerBatchSummaryMessage(msg: any): boolean {
   return msg.role === "custom" && msg.customType === CUSTOM_TYPE_SUMMARY;
@@ -237,13 +238,18 @@ export function applyChainCompressions(
   //    makes re-application a true no-op.
   const out: any[] = [];
   for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
+    let msg = messages[i];
     const isSummary = isPerBatchSummaryMessage(msg);
-    const droppable = msg.role === "assistant" || msg.role === "toolResult" || isSummary;
+    const group = isSummary ? retainSummaryGroup(msg, ref => ref.resultTimestamp !== undefined
+      ? !droppedOccKeys.has(occKey(ref.toolCallId, ref.resultTimestamp))
+      : !droppedBareIds.has(bareToolCallId(ref.toolCallId))) : undefined;
+    if (group === null) continue;
+    if (group) msg = { ...msg, ...group };
+    const droppable = msg.role === "assistant" || msg.role === "toolResult" || (isSummary && !group);
     if (dropIndices.has(i) && droppable) continue;
     // Coverage, not index membership: in agent-message batching the per-batch
     // summary is appended AFTER finalAssistantTimestamp, outside the range.
-    if (isSummary && perBatchSummaryOverlapsDropped(msg, droppedOccKeys, droppedBareIds)) continue;
+    if (isSummary && !group && perBatchSummaryOverlapsDropped(msg, droppedOccKeys, droppedBareIds)) continue;
 
     if (checkpointAtIndex.has(i)) out.push({ ...msg, content: msg.content.filter((block: any) =>
       block.type !== "toolCall" && (!stripFinalThinking || block.type !== "thinking")) });

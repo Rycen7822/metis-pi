@@ -18,6 +18,7 @@ import { readHistoryEntries, reverseBranchEntryReferences } from "../session-his
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,
+  summaryGroupMembers,
   type SummaryToolCallRef,
 } from "./summary-refs.ts";
 import { captureUnindexedBatchesFromSession } from "./batch-capture.ts";
@@ -460,7 +461,11 @@ export class ToolCallIndexer {
       this.registerSummaryRefs(refs);
       const text = typeof entry.content === "string" ? entry.content
         : entry.content.filter(block => block.type === "text").map(block => block.text).join("\n");
-      this.registerSummaryBody(refs.map(ref => occKey(ref.toolCallId, ref.resultTimestamp)), text);
+      const members = summaryGroupMembers(entry);
+      if (members) {
+        for (const member of members) this.registerSummaryBody(
+          member.toolCallRefs.map(ref => occKey(ref.toolCallId, ref.resultTimestamp)), text.slice(member.bodyStart, member.bodyEnd));
+      } else this.registerSummaryBody(refs.map(ref => occKey(ref.toolCallId, ref.resultTimestamp)), text);
       this.seenSummaryEntries.add(entry.id);
     }
   }

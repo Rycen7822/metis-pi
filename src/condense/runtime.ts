@@ -20,7 +20,9 @@ import {
 } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
 import { prepareBatch, splitPackingRuns } from "./packing.ts";
-import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summarizer.ts";
+import { planBatchSummary, summarizeBatch, summarizeRange, summarizerInputBudget, summarizerModels,
+  type SummaryRequest } from "./summarizer.ts";
+import { SummaryGroupAttempts, summaryGroupSource } from "./summary-group.ts";
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
 import { createSourceSnapshotter } from "./source-snapshot.ts";
@@ -30,7 +32,8 @@ import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { registerNestedCapture } from "./nested-capture.ts";
 import { registerQueryTool } from "./query-tool.ts";
 import { registerCommands, setPruneStatusWidget } from "./commands.ts";
-import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./summary-refs.ts";
+import { combineSummaryMessages, formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs,
+  substituteInlineRefs, type SummaryMessage } from "./summary-refs.ts";
 import type {
   ContextPruneConfig,
   CapturedBatch,
@@ -137,6 +140,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   // Shared indexer — rebuilt from session on every session_start / session_tree
   const indexer = new ToolCallIndexer();
+  const groupAttempts = new SummaryGroupAttempts();
   const resetNested = registerNestedCapture(pi, indexer, protectionPredicate);
   let argumentHistory: ArgumentHistory[] = [];
   const restoreArguments = (ctx: ExtensionContext) => {
@@ -636,7 +640,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const deferToNative = (ctx: ExtensionContext, closingMessage?: any, estimated = 0) => {
     const capacity = occ.nativeCapacity(ctx);
     if (capacity === undefined) return false;
-    return shouldDeferToNative(Math.max(estimated, pressureUsage(ctx, closingMessage)?.tokens ?? 0), capacity);
+    // A valid closing receipt must not mask a larger, newer Native usage reading.
+    const observed = [estimated, pressureUsage(ctx, closingMessage)?.tokens, contextUsage(ctx)?.tokens]
+      .filter((tokens): tokens is number => typeof tokens === "number" && Number.isFinite(tokens));
+    return shouldDeferToNative(Math.max(0, ...observed), capacity);
   };
   const nativePendingStatus = (ctx: ExtensionContext) =>
     updatePruneStatus(ctx, "Automatic pruning paused at ≥90% of Pi's compaction threshold — raw evidence retained");
@@ -683,7 +690,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       ]),
     );
     const before = visible.filter(
-      (message: any) =>
+      (message): message is Extract<NativeProjection["messages"][number], { role: "toolResult" }> =>
         message.role === "toolResult" && replacements.has(occKey(message.toolCallId, message.timestamp)),
     );
     if (
@@ -716,7 +723,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const timestamp = Date.now();
     const render = (text: string, deterministic = false) => ({ role: "custom" as const, customType: CUSTOM_TYPE_SUMMARY,
       content: substituteInlineRefs(text, refs, batch.toolCalls.map(call => call.toolName)) + formatSummaryToolCallRefs(refs),
-      display: false, details: { ...makeSummaryDetails(batch, refs), representation: deterministic ? "packed" : "summary" }, timestamp });
+      display: false, details: { ...makeSummaryDetails(batch, refs),
+        representation: deterministic ? "packed" as const : "summary" as const }, timestamp });
     const emptyMessage = render("");
     const empty = await tokenEstimator.measure([emptyMessage], [], signal);
     if (!empty) return unavailable("measurement");
@@ -1253,11 +1261,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
             signal: requestSignal, controller, outputBudget: record.plan.budget,
             acceptRequest: trigger === "manual" ? undefined : async (model, message, maxOutputTokens) => {
-              const counts = await tokenEstimator.measure([message], [], requestSignal);
-              checkActive();
-              if (!counts) { record.deferredReason = "measurement"; return false; }
-              const inputTokens = Math.max(estimateTokens(message), counts.before) + 256;
-              const fee = summaryRequestCost(economicModel(ctx), economicModel(ctx, model, inputTokens) ?? model, inputTokens, maxOutputTokens);
+              const fee = await quoteRequest({ model, message, maxOutputTokens }, requestSignal);
+              if (!fee) { record.deferredReason = "measurement"; return false; }
               if (!admitBatch(record, record.plan!.upperGain, fee.cost)) return false;
               const settle = rewriteBudget.reserveFee(fee.cost);
               record.settleCost = usage => settle(fee.actual(usage));
@@ -1283,7 +1288,144 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
       };
 
+      const quoteRequest = async (request: SummaryRequest, requestSignal = signal) => {
+        const counts = await tokenEstimator.measure([request.message], [], requestSignal);
+        checkActive();
+        if (!counts) return;
+        const input = Math.max(estimateTokens(request.message), counts.before) + 256;
+        return summaryRequestCost(economicModel(ctx), economicModel(ctx, request.model, input) ?? request.model,
+          input, request.maxOutputTokens);
+      };
+      type BatchSummary = Extract<ResultSlot, { summaryText: string }>;
+      type SummaryView = Omit<ReturnType<NonNullable<BatchRecord["plan"]>["render"]>, "details"> & SummaryMessage;
+      type Publication = {
+        items: { record: BatchRecord; result: BatchSummary; summary: SummaryView }[];
+        summary: SummaryView; keys: string[]; gain: RewriteGain; charsSaved: number; firstChanged: number;
+        attemptKey?: string;
+      };
+      const preparePublication = async (items: { record: BatchRecord; result: BatchSummary }[]): Promise<Publication | undefined> => {
+        const projection = await readProjection(ctx, signal);
+        const visible = projectContext(projection.messages, ctx.model?.api,
+          { ctx, source: readSourceEdits(ctx, projection), probe: true }).messages;
+        const rendered = items.map(item => ({ ...item,
+          summary: item.record.plan!.render(item.result.summaryText, item.result.deterministic) }));
+        const first = rendered[0]!; // Both callers supply one or three independently prepared members.
+        const summary: SummaryView = rendered.length === 1 ? first.summary
+          : { ...first.summary, ...combineSummaryMessages(rendered.map(item => item.summary)) };
+        const replacements = new Map<string, { stub: any; call: CapturedBatch["toolCalls"][number] }>();
+        for (const { record } of rendered) {
+          const plan = record.plan!;
+          const current = visible.filter(message => message.role === "toolResult"
+            && plan.replacements.has(occKey(message.toolCallId, message.timestamp)));
+          if (projectionFingerprint(current) !== projectionFingerprint(plan.before))
+            throw new CondenseContextChangedError("replacement source changed");
+          plan.before.forEach((message, i) => {
+            const key = occKey(message.toolCallId, message.timestamp);
+            replacements.set(key, { stub: plan.stubs[i], call: plan.replacements.get(key)!.call });
+          });
+        }
+        let replaced = 0, firstChanged = -1, charsSaved = -JSON.stringify(summary).length - 1;
+        const replace = (message: any, index: number) => {
+          const candidate = message.role === "toolResult" ? replacements.get(occKey(message.toolCallId, message.timestamp)) : undefined;
+          if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args)) return message;
+          const original = JSON.stringify(message), changed = JSON.stringify(candidate.stub);
+          charsSaved += original.length - changed.length;
+          if (firstChanged < 0 && original !== changed) firstChanged = index;
+          replaced++;
+          return candidate.stub;
+        };
+        let gain: RewriteGain | undefined;
+        if (rendered.length === 1) {
+          visible.forEach(replace);
+          gain = await evaluateBatch(first.record, first.result.summaryText, first.result.deterministic);
+        } else {
+          const after = visible.map(replace);
+          const counts = await tokenEstimator.compare(visible, [...after, summary], signal);
+          if (counts) {
+            const measured = { pi: counts.piBefore - counts.piAfter, proxy: counts.proxyDelta };
+            if (batchAdmission?.accepts(replacements.keys(), measured)) gain = measured;
+          } else rendered.forEach(item => { item.record.deferredReason = "measurement"; });
+        }
+        checkSource();
+        if (replaced !== rendered.reduce((sum, item) => sum + item.record.batch.toolCalls.length, 0) || !gain) {
+          rendered.forEach(item => { item.record.deferredReason ??= replaced !== replacements.size ? "replacement" : "economics"; });
+          return;
+        }
+        return { items: rendered, summary, keys: [...replacements.keys()], gain, charsSaved, firstChanged };
+      };
+      // Only the last three individually rejected, unrequested batches can share one rewrite.
+      // Stay inside the ordered commit loop: never accumulate the entire queue's uncommitted jobs.
+      const prepareGroup = async (selected: BatchRecord[]): Promise<Publication | undefined> => {
+        if (trigger === "manual" || delivery !== "session" || selected.length !== 3
+          || !selected.every(record => workKind(record) === "paid"
+          && !record.job && record.plan && record.result === "deferred" && record.deferredReason === "economics")) return;
+        const keys = selected.flatMap(record => [...record.plan!.replacements.keys()]);
+        const keyFor = () => projectionFingerprint([summaryGroupSource(ctx.sessionManager, options.closingMessage), keys,
+          policyFingerprint(currentConfig.value), [ctx.model, ...summarizerModels(config, ctx)].map(model => {
+            const quote = economicModel(ctx, model) ?? model;
+            return quote && [quote.provider, quote.id, quote.api, quote.baseUrl, quote.contextWindow, quote.maxTokens,
+              quote.reasoning, quote.cost, quote.priceTiers, quote.pricing];
+          })]);
+        const key = keyFor();
+        if (groupAttempts.has(key)) return;
+        const upper = selected.reduce((sum, record) => ({ pi: sum.pi + record.plan!.upperGain.pi,
+          proxy: sum.proxy + record.plan!.upperGain.proxy }), { pi: 0, proxy: 0 });
+        const initialFees: number[] = [];
+        for (const record of selected) {
+          const request = planBatchSummary(record.prepared.candidate, config, ctx, { controller, outputBudget: record.plan!.budget });
+          const quote = request && await quoteRequest(request);
+          if (!quote) return;
+          initialFees.push(quote.cost);
+        }
+        if (!batchAdmission?.accepts(keys, upper, initialFees.reduce((sum, fee) => sum + fee, 0))) return;
+        const items: { record: BatchRecord; result: BatchSummary }[] = [];
+        let begun = false;
+        const checkGroup = () => {
+          checkSource();
+          if (keyFor() !== key) throw new CondenseContextChangedError("group route, prices or source changed");
+        };
+        for (const [i, record] of selected.entries()) {
+          checkGroup();
+          options.onProgress?.(record.index, records.length, record.batch, "start");
+          const result = await summarizeBatch(record.prepared.candidate, config, ctx, {
+            signal, controller, outputBudget: record.plan!.budget,
+            acceptRequest: async (model, message, maxOutputTokens) => {
+              const quote = await quoteRequest({ model, message, maxOutputTokens });
+              if (!quote) return false;
+              let remaining = quote.cost;
+              for (let j = i + 1; j < selected.length; j++) {
+                const next = selected[j]!;
+                const request = planBatchSummary(next.prepared.candidate, config, ctx, { model, outputBudget: next.plan!.budget });
+                const future = request && await quoteRequest(request);
+                if (!future) return false;
+                remaining += Math.max(initialFees[j]!, future.cost);
+              }
+              checkGroup();
+              if (!batchAdmission!.accepts(keys, upper, remaining)) return false;
+              if (!begun) { groupAttempts.begin(key, appendEntry!); begun = true; }
+              const settle = rewriteBudget.reserveFee(quote.cost);
+              record.settleCost = usage => settle(quote.actual(usage));
+              return true;
+            },
+            acceptSummary: async text => !!await record.plan!.evaluate(text),
+            onUsage: usage => { record.settleCost?.(usage); if (!signal.aborted) statsAccum.add(usage); },
+            onModelAttempt: () => { modelAttempted = true; },
+            onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
+            onTextProgress: chars => options.onBatchTextProgress?.(record.index, records.length, record.batch, chars),
+          });
+          if (!result) return;
+          items.push({ record, result });
+        }
+        checkGroup();
+        const publication = await preparePublication(items);
+        checkGroup(); // The final token count can overlap a registry/price update too.
+        if (!publication) return;
+        publication.items.forEach(item => { item.record.result = item.result; });
+        return { ...publication, attemptKey: key };
+      };
+
       for (const [i, record] of records.entries()) {
+        if (record.completed) continue;
         // Resolved promises only yield microtasks; let TUI timers/input run too.
         if (yieldToUi && performance.now() - sliceStartedAt >= 16) {
           await setImmediate(undefined, { signal });
@@ -1295,6 +1437,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         await record.job;
         checkActive();
         if (record.error) throw record.error;
+        const group = i === records.length - 3 ? await prepareGroup(records.slice(i)) : undefined;
         const result = record.result;
         if (result === "deferred") {
           deferRecord(record);
@@ -1344,93 +1487,45 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           continue;
         }
 
-        const archivedBatch = batch;
-        const plan = record.plan!;
-        const projection = await readProjection(ctx, signal);
-        const visible = projectContext(projection.messages,
-          ctx.model?.api, { ctx, source: readSourceEdits(ctx, projection), probe: true }).messages;
-        const current = visible.filter(
-          (message: any) =>
-            message.role === "toolResult" && plan.replacements.has(occKey(message.toolCallId, message.timestamp)),
-        );
-        if (projectionFingerprint(current) !== projectionFingerprint(plan.before))
-          throw new CondenseContextChangedError("replacement source changed");
-        const summary = plan.render(result.summaryText, result.deterministic);
-        const summaryText = summary.content,
-          batchDetails = summary.details;
-        let replaced = 0, firstChanged = -1;
-        // Replacements keep array separators; adding the summary adds one comma.
-        let charsSaved = -JSON.stringify(summary).length - 1;
-        for (const [index, message] of visible.entries()) {
-          if (message.role !== "toolResult") continue;
-          const candidate = plan.replacements.get(occKey(message.toolCallId, message.timestamp));
-          if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args)) continue;
-          const original = JSON.stringify(message), replacement = JSON.stringify(plan.stubs[replaced++]);
-          charsSaved += original.length - replacement.length;
-          if (firstChanged < 0 && original !== replacement) firstChanged = index;
-        }
-        const gain = await evaluateBatch(record, result.summaryText, result.deterministic);
-        checkActive();
-        if (replaced !== archivedBatch.toolCalls.length || !gain) {
-          if (replaced !== archivedBatch.toolCalls.length) record.deferredReason = "replacement";
+        const publication = group ?? await preparePublication([{ record, result }]);
+        if (!publication) {
           deferRecord(record);
           options.onProgress?.(i, records.length, record.batch, "skipped");
           continue;
         }
-
-        totalRawCharCount += record.rawChars + dedupRawChars;
-        totalSummaryCharCount += summaryText.length;
-        totalToolCallCount += batch.toolCalls.length + dedupCount;
-        totalDedupedCount += dedupCount;
-
-        // Keep source validation and replacement publication in one synchronous transaction.
+        const { summary, keys, gain, charsSaved, firstChanged } = publication;
+        // One physical entry authorizes every member. Queuing a runtime message
+        // never authorizes hiding until that whole entry exists in this branch.
         checkSource();
-        try {
-          {
-            // Write one hidden summary message per turn and index its tool calls.
-            // `display: false` keeps the summary in future LLM context (convertToLlm
-            // ignores `display`) while suppressing the full markdown block from Pi's
-            // main window; rebuild keys on customType, not display.
-            const batchOccurrenceKeys = archivedBatch.toolCalls.map((tc) => occKey(tc.toolCallId, tc.resultTimestamp));
-            if (delivery === "runtime") {
-              pi.sendMessage(
-                { customType: CUSTOM_TYPE_SUMMARY, content: summaryText, display: false, details: batchDetails },
-                { deliverAs: "steer" }
-              );
-
-            } else {
-              sessionManager!.appendCustomMessageEntry(CUSTOM_TYPE_SUMMARY, summaryText, false, batchDetails);
-
-            }
-            // A runtime send can queue or fail asynchronously. Only a summary
-            // actually persisted in this branch authorizes hiding its raw records.
-            indexer.syncSummaryEntries(ctx);
-            if (!batchOccurrenceKeys.every(key => indexer.isSummarized(key))) {
-              if (ctx.isIdle()) throw new Error("Summary message was not persisted");
-              batchOccurrenceKeys.forEach(key => queuedSummaryKeys.add(key));
-              deliveryPending = true;
-              firstFailureIndex = i;
-              break;
-            }
-            actions.batches++;
-            batchAdmission?.published(plan.replacements.keys(), gain);
-            publishedCharsSaved += charsSaved;
-            firstChangedMessage = firstChangedMessage === undefined ? firstChanged : Math.min(firstChangedMessage, firstChanged);
-            stubCount += archivedBatch.toolCalls.length + dedupCount;
-            floorSources.push(...archivedBatch.toolCalls);
-          }
-        } catch (err) {
-          // Persistence error mid-loop: stop here, restore this and remaining batches.
-          if (isStaleContextError(err)) {
-            firstFailureIndex = i;
-            failureReason = "stale-context";
-            failureMessage = errorMessage(err);
-            break;
-          }
-          throw err;
+        if (delivery === "runtime") pi.sendMessage(
+          { customType: CUSTOM_TYPE_SUMMARY, content: summary.content, display: false, details: summary.details }, { deliverAs: "steer" });
+        else sessionManager!.appendCustomMessageEntry(CUSTOM_TYPE_SUMMARY, summary.content, false, summary.details);
+        indexer.syncSummaryEntries(ctx);
+        if (!keys.every(key => indexer.isSummarized(key))) {
+          if (ctx.isIdle()) throw new Error("Summary message was not persisted");
+          keys.forEach(key => queuedSummaryKeys.add(key));
+          deliveryPending = true;
+          firstFailureIndex = i;
+          break;
         }
-
-        completeRecord(record);
+        actions.batches += publication.items.length;
+        batchAdmission?.published(keys, gain);
+        publishedCharsSaved += charsSaved;
+        firstChangedMessage = firstChangedMessage === undefined ? firstChanged : Math.min(firstChangedMessage, firstChanged);
+        totalSummaryCharCount += summary.content.length;
+        for (const item of publication.items) {
+          const committed = item.record;
+          totalRawCharCount += committed.rawChars + committed.dedupedRawChars;
+          totalToolCallCount += committed.batch.toolCalls.length + committed.deduped.length;
+          totalDedupedCount += committed.deduped.length;
+          stubCount += committed.batch.toolCalls.length + committed.deduped.length;
+          floorSources.push(...committed.batch.toolCalls);
+          completeRecord(committed);
+        }
+        if (publication.attemptKey) {
+          try { groupAttempts.resolve(publication.attemptKey, appendEntry!); }
+          catch (error) { safeNotify(ctx, `pruner: group published; retry-state cleanup failed: ${errorMessage(error)}`, "warning"); }
+        }
         const committedProjection: NativeProjection = ctx.sessionManager.buildSessionProjection();
         sourceProjection = committedProjection;
         expectedSource = snapshotSource(committedProjection.messages);
@@ -1744,6 +1839,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     currentConfig.value = config;
     pricing.start(ctx.modelRegistry.getAll());
     await recoverBranchIndex(ctx, version);
+    groupAttempts.restore(ctx.sessionManager);
     const projection = await readProjection(ctx);
     assertCurrent(version);
     fallbackController = new FallbackController();
@@ -1777,6 +1873,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     activeSessionId = undefined; projectionContext = undefined;
     restore(ctx);
     await recoverBranchIndex(ctx, version);
+    groupAttempts.restore(ctx.sessionManager);
     const projection = await readProjection(ctx);
     assertCurrent(version);
     const prepared = await prepareRecoveryProjection(ctx, version, projection);
