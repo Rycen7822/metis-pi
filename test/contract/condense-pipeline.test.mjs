@@ -101,11 +101,11 @@ function addClosedChains(f, thinking = "Independent intermediate reasoning. ".re
 }
 
 async function independentTasks(t, {
-  total, sizes, price, perTurn = 18000, gaps = [], minRecentTokens = DEFAULT_CONFIG.chainCompression.minRecentTokens,
+  total, sizes, price, rates, perTurn = 18000, gaps = [], minRecentTokens = DEFAULT_CONFIG.chainCompression.minRecentTokens,
 }) {
   const f = await fixture(t, { pruneOn: "on-demand", autoBudgetThreshold: null,
     chainCompression: { ...DEFAULT_CONFIG.chainCompression, rollingWindow: 1, minRecentTokens, fuseRangeSummary: false } });
-  Object.assign(f.ctx.model, { contextWindow: 2000000, cost: { input: price, output: 0, cacheRead: 1, cacheWrite: price } });
+  Object.assign(f.ctx.model, { contextWindow: 2000000, cost: rates ?? { input: price, output: 0, cacheRead: 1, cacheWrite: price } });
   const line = "value_0123456789 = 0xabcdef123456;\n";
   const text = tokens => line.repeat(Math.ceil(tokens * 4 / line.length)).slice(0, tokens * 4);
   const header = total - sizes.reduce((a, b) => a + b, 0) - gaps.reduce((a, b) => a + b, 0) - 4 * perTurn;
@@ -582,6 +582,14 @@ test("independent small chains publish without paid summaries while preserving t
     { total: 128000, sizes: [32000], price: 10, perTurn: 14000, minRecentTokens: 65536, publish: false },
     { total: 190000, sizes: [1000, 32000, 5000, 5000, 5000, 5000], gaps: [0, 60000],
       price: 20, perTurn: 12000, publish: true, selected: 1 },
+    // The largest older body cannot repay its cold suffix; the later, smaller body can.
+    { total: 200000, sizes: [26000, 24000, 2500, 2500, 2500, 2500], gaps: [0, 80000],
+      perTurn: 8500, publish: true, selected: 1,
+      rates: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
+        tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }] } },
+    // When both repay, retain the largest body rather than maximizing the gain/cold-suffix ratio.
+    { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
+      price: 20, perTurn: 8500, publish: true, selected: 0 },
   ]) await t.test(JSON.stringify(scenario), async t => {
     const f = await independentTasks(t, scenario);
     if (scenario.providerTokens) f.ctx.getContextUsage = () => ({ tokens: scenario.providerTokens, contextWindow: 2000000 });

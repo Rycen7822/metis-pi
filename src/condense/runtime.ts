@@ -2487,10 +2487,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const ready = (plan: typeof plans[number]) => plan.policy && rewriteBudget.ready(beforeTokens, plan.tokens, plan.policy, false);
       const independent = bounded.slice(-3).reverse().filter(ready);
       // A shared group can start too early to repay its cold suffix. Keep one older independent opportunity.
+      // Do not spend that slot on a body upper bound that cannot pay for its cold suffix.
       let older: typeof plans[number] | undefined;
+      let olderContext: RewriteContext | undefined;
+      let olderModel: ReturnType<typeof economicModel> | undefined;
       for (let i = 0; i < bounded.length - 3; i++) {
         const plan = bounded[i];
-        if (!ready(plan)) continue;
+        if (!plan.policy || !ready(plan)) continue;
+        olderContext ??= rewriteContext(ctx, sourceView.projection, undefined, before);
+        olderModel ??= economicModel(ctx);
+        if (!rewriteBudget.admits(beforeTokens, plan.tokens, plan.prefix, plan.policy, olderModel, false, 0, olderContext)) continue;
         if (!older || plan.tokens > older.tokens || plan.tokens === older.tokens && plan.prefix > older.prefix) older = plan;
       }
       if (older) independent.push(older);
