@@ -41,7 +41,9 @@ export interface HistoryWindowHost {
   promptRow?: (summary: string, width: number) => string;
   promptTheme?: () => { fg(key: string, text: string): string; bg(key: string, text: string): string } | undefined;
 }
+type Edge = "start" | "end";
 type Cursor = { component: Component; row: number };
+type PageBoundary = Cursor & { direction: "backward" | "forward" };
 type RowOrigin = Cursor & { height: number; index: number };
 type CachedBlock = { rows?: string[]; offset: number; height: number; unwatch: () => void };
 type WindowPiece = { component: Component; rows: string[]; index: number; offset: number; height: number; start: number; end: number };
@@ -125,10 +127,8 @@ export class HistoryWindow {
   #pinned: Component | undefined;
   #pressedPrompt: { component: Component; dragged: boolean; x: number; y: number } | undefined;
   #promptPreview: { component: Component; width: number; summary: string } | undefined;
-  #cursor: Cursor | undefined;
-  #scrollTarget: number | undefined;
-  #jumpQueued = false;
-  #direction: "backward" | "forward" = "backward";
+  #boundary: PageBoundary | Edge | undefined;
+  #scrollTarget: number | "end" | undefined;
   #older = false;
   #newer = false;
   #renderedBlocks = 0;
@@ -204,8 +204,8 @@ export class HistoryWindow {
     walk(this.source);
     this.#structureDirty = false;
     const present = new Set(this.#items);
-    if (this.#cursor && !present.has(this.#cursor.component)) {
-      this.#cursor = undefined; this.#direction = "backward"; this.#scrollTarget = undefined;
+    if (typeof this.#boundary === "object" && !present.has(this.#boundary.component)) {
+      this.#boundary = undefined; this.#scrollTarget = undefined;
     }
     if (this.#promptPreview && !present.has(this.#promptPreview.component)) this.#promptPreview = undefined;
     for (const component of this.#blocks.keys()) if (!present.has(component)) this.#evict(component);
@@ -269,7 +269,6 @@ export class HistoryWindow {
   }
 
   render(width: number): string[] {
-    this.#jumpQueued = false;
     // Keep a selected committed window stable while new output arrives. A
     // resize is handled by Pi's normal selection reset and must still reflow.
     if (width === this.#width && this.#rows.length && this.holdSelection()) return this.#rows;
@@ -279,25 +278,30 @@ export class HistoryWindow {
     }
     this.#refreshItems();
     if (!this.#dirty) return this.#rows;
-    if (!this.#newer && this.scroll.isFollowingEnd) {
-      this.#cursor = undefined; this.#direction = "backward";
-    } else if (!this.#cursor && !this.scroll.isFollowingEnd) {
-      // While reading, keep this window's boundary stable. Appended output
-      // belongs to the next page and must not evict the viewport's first row.
-      const tail = this.#origins.at(this.#newer ? -2 : -1);
-      if (tail && this.#items.includes(tail.component)) this.#cursor = { component: tail.component, row: tail.row + 1 };
-    }
-    const anchor = this.#scrollTarget === undefined && !this.scroll.isFollowingEnd ? this.#origins[this.scroll.scrollTop] : undefined;
     const items = this.#items;
-    let index = this.#cursor ? items.indexOf(this.#cursor.component) : items.length - 1;
-    const forward = this.#cursor !== undefined && this.#direction === "forward";
+    let boundary = this.#boundary;
+    // Resolve jumps against the current source, not the blocks present at input time.
+    if (boundary === "start") {
+      const first = items[0];
+      boundary = first && { component: first, row: 0, direction: "forward" };
+    } else if (boundary === "end" || this.#scrollTarget === "end" || (!this.#newer && this.scroll.isFollowingEnd)) {
+      boundary = undefined;
+    } else if (!boundary && !this.scroll.isFollowingEnd) {
+      // Appended output must not evict the viewport's first row while reading.
+      const tail = this.#origins.at(this.#newer ? -2 : -1);
+      if (tail && items.includes(tail.component)) boundary = { component: tail.component, row: tail.row + 1, direction: "backward" };
+    }
+    this.#boundary = boundary;
+    const anchor = this.#scrollTarget === undefined && !this.scroll.isFollowingEnd ? this.#origins[this.scroll.scrollTop] : undefined;
+    let index = boundary ? items.indexOf(boundary.component) : items.length - 1;
+    const forward = boundary?.direction === "forward";
     const pieces: WindowPiece[] = [];
     // Reserve both paging notices inside the hard limit, not outside it.
     let remaining = HISTORY_ROW_BUDGET - 2;
     let first = true;
     while (index >= 0 && index < items.length && remaining > 0) {
       const component = items[index]!;
-      const piece = this.#block(component, width, remaining, first ? this.#cursor?.row : undefined, forward);
+      const piece = this.#block(component, width, remaining, first ? boundary?.row : undefined, forward);
       pieces.push({ component, index, ...piece });
       remaining -= piece.end - piece.start;
       first = false; index += forward ? 1 : -1;
@@ -347,15 +351,17 @@ export class HistoryWindow {
   }
 
   commitScroll(): void {
-    if (this.#dirty) return;
-    if (this.#scrollTarget !== undefined) {
-      const target = this.#scrollTarget;
+    const target = this.#dirty ? undefined : this.#scrollTarget;
+    if (target !== undefined) {
       this.#scrollTarget = undefined;
-      // Native layout has measured this window and the viewport, but has not
-      // positioned its child yet. Clamp against NEW sizes, not the old page.
-      this.scroll.scrollTo(target, { disableFollow: true });
+      // Native layout has measured the new page, but not yet positioned its child.
+      const row = target === "end" ? Math.max(0, this.scroll.contentHeight - this.scroll.viewportHeight) : target;
+      this.scroll.scrollTo(row, { disableFollow: target !== "end" });
+    } else if (this.#newer && this.scroll.isFollowingEnd) {
+      // Native follow means bottom of this page; keep Jump visible if there is more.
+      this.scroll.scrollTo(this.scroll.scrollTop, { disableFollow: true });
     }
-    this.#commitPrompt();
+    if (!this.#dirty) this.#commitPrompt();
   }
 
   #commitPrompt(): void {
@@ -442,44 +448,36 @@ export class HistoryWindow {
     this.#refreshItems();
     const index = this.#items.indexOf(component);
     if (index < 0) return;
-    this.#cursor = { component, row: 0 };
-    this.#direction = "forward";
-    this.#scrollTarget = index > 0 ? 1 : 0; // Skip the Earlier history notice.
+    this.#readPage({ component, row: 0, direction: "forward" }, index > 0 ? 1 : 0); // Skip the Earlier history notice.
+  }
+
+  #readPage(boundary: PageBoundary, target: number): void {
+    this.#boundary = boundary;
+    this.#scrollTarget = target;
     this.#dirty = true;
     this.scroll.scrollTo(this.scroll.scrollTop, { disableFollow: true });
   }
 
   page(direction: "older" | "newer"): boolean {
-    if (direction === "older" ? !this.#older : !this.#newer) return false;
-    const body = this.#origins.filter((origin): origin is RowOrigin => !!origin);
-    const overlap = Math.max(1, Math.min(this.scroll.viewportHeight, body.length - 1));
-    const origin = direction === "older" ? body[overlap - 1] : body[body.length - overlap];
+    const older = direction === "older";
+    if (older ? !this.#older : !this.#newer) return false;
+    // Skip the two optional paging notices without copying the entire row map.
+    const bodyStart = Number(this.#older), bodyEnd = this.#origins.length - Number(this.#newer);
+    const overlap = Math.max(1, Math.min(this.scroll.viewportHeight, bodyEnd - bodyStart - 1));
+    const origin = this.#origins[older ? bodyStart + overlap - 1 : bodyEnd - overlap];
     if (!origin) return false;
-    this.#cursor = { component: origin.component, row: origin.row + (direction === "older" ? 1 : 0) };
-    this.#direction = direction === "older" ? "backward" : "forward";
-    this.#dirty = true;
-    this.#scrollTarget = direction === "older" ? Number.MAX_SAFE_INTEGER : 0;
-    this.scroll.scrollTo(this.scroll.scrollTop, { disableFollow: true });
+    this.#readPage({ component: origin.component, row: origin.row + Number(older), direction: older ? "backward" : "forward" },
+      older ? Number.MAX_SAFE_INTEGER : 0);
     return true;
   }
 
   get hasNewer(): boolean { return this.#newer; }
 
-  jump(direction: "older" | "newer"): boolean {
-    this.#refreshItems();
-    const component = direction === "older" ? this.#items[0] : this.#items.at(-1);
-    const row = direction === "older" ? 0 : Number.MAX_SAFE_INTEGER;
-    const traversal = direction === "older" ? "forward" : "backward";
-    const target = direction === "older" ? 0 : undefined;
-    // Repeated pointer notifications before the next frame share one jump.
-    // A changed endpoint or an intervening render/page rearms navigation.
-    if (this.#jumpQueued && this.#cursor?.component === component && this.#cursor?.row === row
-      && this.#direction === traversal && this.#scrollTarget === target) return false;
-    this.#cursor = component ? { component, row } : undefined;
-    this.#direction = traversal;
-    this.#scrollTarget = target;
+  jump(edge: Edge): boolean {
+    if (this.#boundary === edge) return false;
+    this.#boundary = edge;
+    this.#scrollTarget = edge === "start" ? 0 : "end";
     this.#dirty = true;
-    this.#jumpQueued = true;
     return true;
   }
   invalidate(): void {
@@ -506,7 +504,7 @@ export class HistoryWindow {
     };
   }
   dispose(): void {
-    this.#jumpQueued = false;
+    this.#boundary = undefined;
     this.#scrollTarget = undefined;
     this.#structureRestores.forEach((restore) => restore());
     this.#structureRestores = [];
@@ -610,12 +608,14 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       };
     }
     let navigationActive = true;
-    const restoreStart = observe(scroll, ["scrollToStart"], () => {
-      if (navigationActive && scroll.child === window && window.jump("older")) tui.requestRender?.();
-    });
-    const restoreEnd = observe(scroll, ["scrollToEnd"], () => {
-      if (navigationActive && scroll.child === window && window.jump("newer")) tui.requestRender?.();
-    });
+    const jump = (edge: Edge) => {
+      if (!navigationActive || scroll.child !== window) return;
+      // Moving to the real tail is an explicit exit from transcript selection.
+      if (edge === "end" && selected()) tui.clearTextSelection?.();
+      if (window.jump(edge)) tui.requestRender?.();
+    };
+    const restoreStart = observe(scroll, ["scrollToStart"], () => jump("start"));
+    const restoreEnd = observe(scroll, ["scrollToEnd"], () => jump("end"));
     // Pi 1.5's private pointer helper supplies actual scrollbar provenance.
     // Generic scrollTo also serves prompt/search navigation and stays native.
     // An absent/locked helper disables only this optional enhancement.
@@ -630,10 +630,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
         && (!descriptor || descriptor.configurable && descriptor.writable)) {
         const pointerWrapper = function (this: object, ...args: unknown[]) {
           const result = pointer.apply(this, args);
-          if (navigationActive && args[0] === scroll
-            && scroll.child === window && !selected() && scroll.isFollowingEnd
-            && scroll.scrollTop >= Math.max(0, scroll.contentHeight - scroll.viewportHeight)
-            && window.hasNewer && window.jump("newer")) tui.requestRender?.();
+          if (navigationActive && args[0] === scroll && !selected() && scroll.isFollowingEnd && window.hasNewer) jump("end");
           return result;
         };
         Object.defineProperty(tui, pointerName, { value: pointerWrapper, writable: true, configurable: true });

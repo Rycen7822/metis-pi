@@ -20,9 +20,9 @@ export function container(...children) {
   return root;
 }
 
-export function altScreen(width = 80, rows = 24) {
+export function altScreen(width = 80, rows = 24, options) {
   const terminal = fakeTerminal(width, rows);
-  const tui = new Tui.TuiAltScreen(terminal);
+  const tui = new Tui.TuiAltScreen(terminal, undefined, undefined, options);
   assert.equal(tui.copySelection, undefined, "no system clipboard backend, even under local WSL");
   tui.requestRender = () => {};
   tui.beforeTerminalStart();

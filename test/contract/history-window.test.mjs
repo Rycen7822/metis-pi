@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { createHistoryWindowSystem } from "../../src/appearance/chrome/history-window.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
-import { altScreen, container, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
+import { sgr } from "../helpers.mjs";
+import { altScreen, container, drag, installCopyPrototypes, screenLines, select } from "../helpers/ui-fixtures.mjs";
 
 const HISTORY_ROW_BUDGET = 5000; // Independent contract, not the production constant.
 
@@ -14,7 +15,7 @@ class Block {
   render(width) { this.renders++; return Array.from({ length: this.count }, (_, i) => `${this.id}:${i}`.slice(0, width)); }
   invalidate() {}
   setText(text) { this.id = text; }
-  handleMouse(event) { if (event.type === "wheel") return; this.clicked = event.y; return { handled: true }; }
+  handleMouse(event) { if (event.type !== "click") return; this.clicked = event.y; return { handled: true }; }
 }
 const longHistory = () => Array.from({ length: 120 }, (_, i) => new Block(i));
 const renderCount = (blocks) => blocks.reduce((sum, block) => sum + block.renders, 0);
@@ -22,7 +23,8 @@ const renderCount = (blocks) => blocks.reduce((sum, block) => sum + block.render
 function setup(t, blocks = longHistory(), width = 80) {
   const source = container(...blocks);
   const scroll = new Tui.ScrollView(source, { primary: true, follow: "end" });
-  const { tui, terminal } = altScreen(width, 20);
+  const jumpLabel = "Jump to latest message";
+  const { tui, terminal } = altScreen(width, 20, { scrollToEndIndicator: () => jumpLabel, wheelScrollLines: 1 });
   tui.setLayoutRoot(scroll);
   const system = createHistoryWindowSystem(Tui);
   t.after(() => system.dispose());
@@ -48,7 +50,18 @@ function setup(t, blocks = longHistory(), width = 80) {
       start: { row, col: 0, scrollView: scroll }, end: { row, col: 1, scrollView: scroll },
     });
   };
-  return { source, scroll, tui, terminal, system, lines, render, page, wheel, selection };
+  const jumpButton = () => {
+    const screen = screenLines(tui);
+    const row = screen.findIndex(line => line.includes(jumpLabel));
+    return row === -1 ? undefined : { x: screen[row].indexOf(jumpLabel) + 1, y: row + 1 };
+  };
+  const clickLatest = () => {
+    const button = jumpButton();
+    assert.ok(button, "jump button is painted");
+    tui.handleTerminalInput(sgr(0, button.x, button.y));
+    tui.handleTerminalInput(sgr(0, button.x, button.y, true));
+  };
+  return { source, scroll, tui, terminal, system, lines, render, page, wheel, selection, jumpButton, clickLatest };
 }
 
 test("initial replay and resize stop at a 5000-row suffix; warm scroll never renders source blocks", (t) => {
@@ -121,6 +134,55 @@ test("paging and native jumps share a bounded window, preserve click coordinates
   view.scroll.scrollTo(Number.MAX_SAFE_INTEGER); view.render();
   view.source.addChild(new Block("appended", 200)); view.render();
   assert.equal(view.lines().at(-1), "appended:199", "paging back to latest resumes following new output");
+});
+
+test("reaching the current page bottom keeps the latest-message button available", (t) => {
+  const view = setup(t);
+  view.tui.scrollToTop(); view.render();
+  const bottom = view.scroll.contentHeight - view.scroll.viewportHeight;
+  view.scroll.scrollTo(bottom - 1); view.render();
+  view.wheel("newer");
+  assert.equal(view.scroll.scrollTop, bottom);
+  assert.match(view.lines().at(-1), /Later history/);
+  assert.ok(view.jumpButton(), "the page bottom is not the end of the transcript");
+  view.wheel("newer");
+  assert.notEqual(view.lines()[0], "0:0", "the next wheel event advances to another page");
+});
+
+test("dragging the native scrollbar to its end still jumps across pages and follows new output", (t) => {
+  const view = setup(t);
+  view.scroll.setScrollbar("always");
+  view.tui.scrollToTop(); view.render();
+  assert.match(view.lines().at(-1), /Later history/);
+  drag(view.tui, view.terminal.columns, 1, view.terminal.columns, view.scroll.viewportHeight);
+  view.render();
+  assert.equal(view.lines().at(-1), "119:99");
+  view.source.addChild(new Block("after drag", 1)); view.render();
+  assert.equal(view.scroll.isFollowingEnd, true);
+  assert.equal(view.lines().at(-1), "after drag:0");
+});
+
+test("clicking jump to latest releases a transcript selection and commits the real tail", (t) => {
+  const view = setup(t);
+  view.tui.scrollToTop(); view.render();
+  drag(view.tui, 1, 3, 4, 4); view.render();
+  assert.ok(view.tui.getActiveSelectionText());
+  view.clickLatest(); view.render();
+  assert.equal(view.lines().at(-1), "119:99");
+  assert.equal(view.scroll.isFollowingEnd, true);
+  assert.equal(view.tui.getActiveSelectionText(), undefined);
+});
+
+test("jump to latest includes output appended before its first frame and follows subsequent output", (t) => {
+  const view = setup(t);
+  view.tui.scrollToTop(); view.render();
+  view.clickLatest();
+  view.source.addChild(new Block("first live output", 1)); view.render();
+  assert.equal(view.lines().at(-1), "first live output:0");
+  assert.equal(view.scroll.scrollTop, view.scroll.contentHeight - view.scroll.viewportHeight);
+  view.source.addChild(new Block("next live output", 1)); view.render();
+  assert.equal(view.scroll.isFollowingEnd, true);
+  assert.equal(view.lines().at(-1), "next live output:0");
 });
 
 test("selection freezes source mutations until release; replacement and disposal preserve ownership", (t) => {
