@@ -8,6 +8,7 @@ import { layout } from "../helpers/layout.mjs";
 import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
 import { MouseRegion, Text } from "@earendil-works/pi-tui";
 import { publishedRowsOf } from "../../src/selection-copy/model.ts";
+import { copyFrame, select } from "../helpers/ui-fixtures.mjs";
 import { AnsiTracker, styledParts } from "../../src/selection-copy/wrap.ts";
 
 const result = (text) => ({ content: [{ type: "text", text }] });
@@ -25,6 +26,38 @@ test("read titles use native numeric-string and default-offset ranges", () => {
     const title = stripVTControlCharacters(call("read", { path: "file.ts", ...args }, { isPartial: false }));
     assert.ok(title.endsWith(`file.ts${suffix}`), title);
   }
+});
+
+test("exploration paths fill the Read row and wrap at its indentation without changing copied text", () => {
+  const r = makeRenderers(text => new Text(text, 0, 0), () => "expand");
+  for (const path of [
+    "/workspace/" + "long-subdirectory/".repeat(6) + "structural-simplification.md",
+    "/workspace/" + "directory with spaces/".repeat(5) + "notes.md",
+    "/workspace/" + "資料/é👩‍🔬/".repeat(8) + "notes.md",
+  ]) {
+    const args = deepFreeze({ path, offset: 1, limit: 170 });
+    const child = r.read.renderCall(args, theme, { isPartial: false });
+    for (const width of [160, 80, 40, 16, 80]) {
+      const rows = child.render(width).map(row => stripVTControlCharacters(row).trimEnd());
+      assert.ok(rows[1].startsWith("  └ Read /"), `path must begin on Read row at width ${width}`);
+      if (/^[\x20-\x7e]*$/.test(path)) assert.equal(rows[1], `  └ Read ${path}:1-170`.slice(0, width).trimEnd(),
+        "the first row uses all remaining columns instead of moving an entire path or word");
+      assert.ok(rows.every(row => layout.visibleWidth(row) <= width), "rows stay inside the viewport");
+      for (const row of rows.slice(2)) {
+        assert.ok(row.startsWith("    "), "continuations align to Read, not the path");
+        if (!path.includes(" ")) assert.equal(row.search(/\S/), 4, "continuations never indent beyond Read");
+      }
+      assert.ok(select(copyFrame(child, width)).text.includes(`Read ${path}:1-170`),
+        "visual wrapping must not add indentation or newlines to the copied path");
+    }
+  }
+  const pending = r.neural_search.renderCall({}, theme, { isPartial: true });
+  const pattern = "long-search-pattern".repeat(8);
+  const search = r.neural_search.renderCall({ action: "grep", params: { pattern } }, theme, { lastComponent: pending });
+  const rows = search.render(80).map(stripVTControlCharacters);
+  assert.ok(rows[1].startsWith('  └ Search "long-search-pattern'), "streamed action changes adopt exploration layout");
+  assert.equal(rows[2].search(/\S/), 4);
+  assert.ok(select(copyFrame(search, 80)).text.includes(`Search ${JSON.stringify(pattern)}`));
 });
 
 test("fusion display retains successful write diff while the following command fails", () => {
@@ -202,6 +235,7 @@ test("owned renderer components reuse safely and refresh diff counts without hos
   const foreign = { setText() { throw new Error("foreign component mutated"); }, render() { return ["foreign"]; } };
   const first = r.read.renderCall({ path: "a.ts" }, theme, { lastComponent: foreign });
   assert.notEqual(first, foreign);
+  first.render(80); // Populate the layout cache before updating the same component.
   const second = r.read.renderCall({ path: "b.ts" }, theme, { lastComponent: first });
   assert.equal(first, second);
   assert.match(second.render(80).join("\n"), /b\.ts/);

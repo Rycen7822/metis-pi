@@ -480,6 +480,10 @@ test("fullscreen clicks and copied text follow child geometry across wrapping an
   assert.match(plain(row, 36), /FIRST WRAPPED BODY[\s\S]*SECOND CLICK BODY/);
   const frame = copyFrame(row, 36), copied = select(frame).text;
   assert.match(copied, /Read long\/漢字-wide-/);
+  assert.ok(copied.includes(`Read ${first.path}`), "nested soft wraps copy the complete original path");
+  const readRows = plain(row, 36).split("\n"), readIndex = readRows.findIndex(line => line.includes("Read long/"));
+  assert.equal(readRows[readIndex].indexOf("Read"), 4);
+  assert.equal(readRows[readIndex + 1].search(/\S/), 4, "nested continuations align to the verb after resize");
   assert.match(copied, /FIRST WRAPPED BODY[\s\S]*SECOND CLICK BODY/);
   assert.doesNotMatch(copied, /JS_ONLY_MARKER/);
   tui.doRender();

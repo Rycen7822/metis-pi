@@ -6,7 +6,7 @@ appearance 只改变显示。参数、结果、模型正文和每次调用的展
 
 ```text
 • Explored
-  └ Read src/server.ts (lines 1–120)
+  └ Read src/server.ts:1-120
 • Ran npm test
   └ Running unit tests...
     … +24 lines (ctrl+o to expand)
@@ -20,6 +20,8 @@ appearance 只改变显示。参数、结果、模型正文和每次调用的展
 | 错误 | 红色前景，证据完整保留。 |
 | read、grep、find、ls、neural_search | 显示为 `Exploring` / `Explored`。成功结果默认折叠，各调用独立。 |
 | 本包的 exec_command | call 与 bash 共用高亮、换行与复制。结果与后台会话归执行模块。 |
+
+探索行的路径、查询紧接 `Read` 等标签显示，按终端列宽连续换行；续行仅添加最多 4 格显示缩进，对齐标签而不是路径起点。复制不会夹入显示用的续行缩进或软换行。
 
 预算按列宽和物理行计算。列宽换算与 UTF-16 长度无关。控制序列只从显示副本中清除。提示跟随宿主的键位。第三方的 Web、MCP、LSP、subagent 与同名工具保留自己的 renderer。图片沿用宿主协议与 `terminal.showImages`。禁用预览时显示图片数量。
 

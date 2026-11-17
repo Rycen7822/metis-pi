@@ -10,8 +10,8 @@ import {
 
 import type { LayoutOps } from "./shell.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
-import { AnsiTracker, styledParts, stripAnsi } from "../selection-copy/wrap.ts";
-import { cellWidth } from "./segments.ts";
+import { stripAnsi } from "../selection-copy/wrap.ts";
+import { wrapStyledContent } from "./segments.ts";
 
 export const DIFF_LEFT_INSET = 2;
 
@@ -158,37 +158,6 @@ function highlightBody(
     } catch { /* Syntax coloring is optional. */ }
   }
   return fallback(text);
-}
-
-/**
- * ANSI-aware hard wrap for diff content (Codex wrap_styled_spans equivalent):
- * Pi owns grapheme widths; the shared ANSI tracker preserves continuation
- * styling. Diff keeps source spaces rather than using prose word-wrap rules.
- */
-export function wrapStyledContent(text: string, width: number): string[] {
-  const usable = Math.max(1, Math.floor(width));
-  const lines: string[] = [];
-  const tracker = new AnsiTracker();
-  let line = "";
-  let cells = 0;
-  for (const part of styledParts(text)) {
-    if (part.ansi !== undefined) {
-      line += part.ansi;
-      tracker.process(part.ansi);
-      continue;
-    }
-    const grapheme = part.grapheme!;
-    const width = cellWidth(grapheme);
-    if (cells > 0 && cells + width > usable) {
-      lines.push(line + tracker.getLineEndReset());
-      line = tracker.getActiveCodes();
-      cells = 0;
-    }
-    line += grapheme;
-    cells += width;
-  }
-  lines.push(line);
-  return lines;
 }
 
 /** Render diff rows Codex-style from structured rows. */

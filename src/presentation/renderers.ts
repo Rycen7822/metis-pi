@@ -13,6 +13,7 @@ import {
   type ExplorationRow,
 } from "./explore.ts";
 import { summarizeShellCommand } from "../execution/shell/summary.ts";
+import { createExplorationCall } from "./components/tool-components.ts";
 import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
 import { safeText, toolOutputGutter as gutter } from "./terminal-text.ts";
 import type {
@@ -268,7 +269,7 @@ export function makeRenderers(
   session?: RendererSession,
   layoutOps?: DiffLayoutOps,
 ): Record<ToolName, Renderers> {
-  const ownComponents = new WeakSet<object>();
+  const ownComponents = new WeakMap<object, TextFactory | undefined>();
   const views = new WeakMap<object, { call?: TextComponent; stats?: DiffStats }>();
   function view(ctx: ViewContext) {
     if (!ctx.state || typeof ctx.state !== "object") return undefined;
@@ -276,18 +277,18 @@ export function makeRenderers(
     if (!state) { state = {}; views.set(ctx.state, state); }
     return state;
   }
-  function component(text: string, ctx: ViewContext): TextComponent {
+  function component(text: string, ctx: ViewContext, factory: TextFactory = makeText): TextComponent {
     const previous = ctx.lastComponent;
-    // Reuse only OUR Text components that have setText; the write-call composite
-    // is ours but setText-less (calling it threw TypeError, host silently fell back).
-    const reusable = previous && typeof previous === "object" && ownComponents.has(previous)
+    // Reuse within the same layout factory: streamed actions can change from plain text
+    // to exploration. Write-call composites have update(), not setText().
+    const reusable = previous && typeof previous === "object" && ownComponents.get(previous) === factory
       && typeof (previous as { setText?: unknown }).setText === "function";
     if (reusable) {
       (previous as TextComponent).setText(text);
       return previous as TextComponent;
     }
-    const created = makeText(text);
-    if (created && typeof created === "object") ownComponents.add(created);
+    const created = factory(text);
+    if (created && typeof created === "object") ownComponents.set(created, factory);
     return created;
   }
   function writeChangeFor(ctx: ViewContext): WriteDiff | undefined {
@@ -356,7 +357,8 @@ export function makeRenderers(
           if (SHELL.has(name)) {
             const command = string(asRecord(args).command);
             const summary = name === "bash" ? summarizeShellCommand(command) : undefined;
-            if (summary && summary.actions.length && summary.actions.every(action => action.kind === "read" || action.kind === "search" || action.kind === "find")) {
+            if (summary && summary.actions.length
+                && summary.actions.every(action => action.kind === "read" || action.kind === "search" || action.kind === "find")) {
               const rows: ExplorationRow[] = summary.actions.map(action => action.kind === "read"
                 ? { verb: "Read", target: path({ path: action.path }, merged) }
                 : {
@@ -364,8 +366,10 @@ export function makeRenderers(
                   target: action.query || action.command,
                   inPath: action.query ? action.path : undefined,
                 });
-              const title = renderExplorationLines({ running: merged.isPartial !== false, isError: merged.isError === true, rows }, colorFor(merged), theme).join("\n");
-              return component(merged.expanded ? `${title}\n${highlight(safeText(command), "bash", theme, paint)}` : title, ctx);
+              const title = renderExplorationLines({ running: merged.isPartial !== false, isError: merged.isError === true, rows },
+                colorFor(merged), theme).join("\n");
+              return component(merged.expanded ? `${title}\n${highlight(safeText(command), "bash", theme, paint)}` : title,
+                ctx, createExplorationCall);
             }
             const { bullet, title } = shellTitle(merged, theme);
             if (makeShell?.makeShellCall) {
@@ -417,7 +421,7 @@ export function makeRenderers(
               }
               const callComponent = makeWriteCall(input);
               if (callComponent && typeof callComponent === "object") {
-                ownComponents.add(callComponent);
+                ownComponents.set(callComponent, undefined);
                 return callComponent;
               }
             }
@@ -429,7 +433,7 @@ export function makeRenderers(
               session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
             return component(
               explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)),
-              ctx,
+              ctx, createExplorationCall,
             );
           }
           if (name === "neural_search") {

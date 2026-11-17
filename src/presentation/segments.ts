@@ -1,9 +1,9 @@
-// Shared segment layout primitives for the chrome blocks (footer, composer
-// metadata): tone-tagged plain-text segments and native terminal-cell layout.
-// Layout always runs on PLAIN text; painters
-// are applied afterwards so final ANSI strings are never sliced.
+// Shared terminal-cell layout for chrome metadata and tool rows. Segment
+// helpers lay out plain text before painting; hard wrapping tracks ANSI state
+// without splitting escape sequences or terminal graphemes.
 
 import { visibleWidth as cellWidth, sliceByColumn } from "@earendil-works/pi-tui";
+import { AnsiTracker, styledParts } from "../selection-copy/wrap.ts";
 export { cellWidth };
 
 export type SegmentTone = "normal" | "dim" | "accent" | "warning" | "add" | "del";
@@ -24,6 +24,35 @@ export function rowWidth(row: Segment[]): number {
 export function clipLine(line: string, width: number): string {
   if (cellWidth(line) <= width) return line;
   return sliceByColumn(line, 0, Math.max(0, width), true);
+}
+
+/** Hard-wrap one logical line without consuming spaces or splitting ANSI/graphemes.
+ * Continuation indentation is display-only and leaves room for a wide character. */
+export function wrapStyledContent(text: string, width: number, continuationIndent = 0): string[] {
+  const usable = Math.max(1, Math.floor(width));
+  const indent = " ".repeat(Math.max(0, Math.min(continuationIndent, usable - 2)));
+  const lines: string[] = [];
+  const tracker = new AnsiTracker();
+  let line = "";
+  let cells = 0;
+  for (const part of styledParts(text)) {
+    if (part.ansi !== undefined) {
+      line += part.ansi;
+      tracker.process(part.ansi);
+      continue;
+    }
+    const grapheme = part.grapheme!;
+    const graphemeWidth = cellWidth(grapheme);
+    if (cells > 0 && cells + graphemeWidth > usable) {
+      lines.push(line + tracker.getLineEndReset());
+      line = indent + tracker.getActiveCodes();
+      cells = indent.length;
+    }
+    line += grapheme;
+    cells += graphemeWidth;
+  }
+  lines.push(line);
+  return lines;
 }
 
 /** Cell-level truncation on plain text (paint afterwards). */
