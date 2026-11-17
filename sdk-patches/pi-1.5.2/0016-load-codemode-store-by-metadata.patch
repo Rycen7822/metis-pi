@@ -1,0 +1,74 @@
+diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
+index 51cc652..aeef8cb 100644
+--- a/packages/coding-agent/src/extensions/codemode/execute.ts
++++ b/packages/coding-agent/src/extensions/codemode/execute.ts
+@@ -27,5 +27,5 @@ import {
+ import { getCodemodeWorkerSpecifier, getQuickJSWasmPath } from "../../config.ts";
+ import type { ExtensionToolContext, ToolNamespace } from "../../core/extensions/types.ts";
+-import type { SessionEntry } from "../../core/session-manager.ts";
++import type { ReadonlySessionManager } from "../../core/session-manager.ts";
+ import { formatSize, sliceHead, sliceTail } from "../../core/tools/truncate.ts";
+ import { combineUsage } from "../../core/usage-totals.ts";
+@@ -299,11 +299,11 @@ function isStoreEntryData(data: unknown): data is CodemodeStoreEntryData {
+ }
+ 
+-/** Values of `load()`: the `codemode-store` entries on the branch, applied from the root. */
+-export function readCodemodeStore(branch: readonly SessionEntry[]): Record<string, unknown> {
++/** Fold `load()` values from the active branch without loading unrelated session bodies. */
++export function readCodemodeStore(session: ReadonlySessionManager): Record<string, unknown> {
+ 	const store = new Map<string, unknown>();
+-	for (const entry of branch) {
+-		if (entry.type !== "custom" || entry.customType !== CODEMODE_STORE_ENTRY_TYPE || !isStoreEntryData(entry.data)) {
+-			continue;
+-		}
++	for (const metadata of session.getBranchMetadata()) {
++		if (metadata.type !== "custom" || metadata.customType !== CODEMODE_STORE_ENTRY_TYPE) continue;
++		const entry = session.getEntryForScan(metadata.id);
++		if (entry?.type !== "custom" || !isStoreEntryData(entry.data)) continue;
+ 		for (const key of entry.data.delete) store.delete(key);
+ 		for (const [key, value] of Object.entries(entry.data.set)) store.set(key, value);
+@@ -623,5 +623,5 @@ export async function executeCodemode(
+ 			},
+ 		});
+-		const store = ctx ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
++		const store = ctx ? readCodemodeStore(ctx.sessionManager) : {};
+ 		result = await sandbox.execute(code, { signal, store, callLimits: CODEMODE_CALL_LIMITS, maxRecordedCalls: 256 });
+ 	} finally {
+diff --git a/packages/coding-agent/test/suite/agent-session-codemode.test.ts b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+index 6ddc45d..252e2c3 100644
+--- a/packages/coding-agent/test/suite/agent-session-codemode.test.ts
++++ b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+@@ -18,5 +18,5 @@ import { Type } from "typebox";
+ import { afterEach, describe, expect, it } from "vitest";
+ import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
+-import type { CustomEntry } from "../../src/core/session-manager.ts";
++import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
+ import {
+ 	createToolDefinitionFromAgentTool,
+@@ -860,20 +860,10 @@ describe("codemode options and store", () => {
+ 
+ 	it("folds store entries from the root, ignoring malformed data", () => {
+-		const entry = (data: unknown, customType = CODEMODE_STORE_ENTRY_TYPE): CustomEntry => ({
+-			type: "custom",
+-			customType,
+-			data,
+-			id: Math.random().toString(36).slice(2),
+-			parentId: null,
+-			timestamp: new Date(0).toISOString(),
+-		});
+-		expect(
+-			readCodemodeStore([
+-				entry({ set: { a: 1, b: { c: 2 } }, delete: [] }),
+-				entry({ set: { a: 3 }, delete: ["b"] }),
+-				entry({ set: { z: 1 } }),
+-				entry({ set: { other: 1 }, delete: [] }, "other-extension"),
+-			]),
+-		).toEqual({ a: 3 });
++		const session = SessionManager.inMemory();
++		session.appendCustomEntry(CODEMODE_STORE_ENTRY_TYPE, { set: { a: 1, b: { c: 2 } }, delete: [] });
++		session.appendCustomEntry(CODEMODE_STORE_ENTRY_TYPE, { set: { a: 3 }, delete: ["b"] });
++		session.appendCustomEntry(CODEMODE_STORE_ENTRY_TYPE, { set: { z: 1 } });
++		session.appendCustomEntry("other-extension", { set: { other: 1 }, delete: [] });
++		expect(readCodemodeStore(session)).toEqual({ a: 3 });
+ 	});
+ });

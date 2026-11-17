@@ -8,6 +8,7 @@ import { createHistoryWindowSystem } from "../../src/appearance/chrome/history-w
 import {
   initTheme,
   InteractiveMode,
+  SessionManager,
   ToolExecutionComponent,
   createCodemodeExtension,
   createReadToolDefinition,
@@ -90,7 +91,7 @@ test("native helper execution records actual actions, preserves output and repla
     'text(await describeNamespace(namespace));',
     'text(await Promise.all([describe("read"), searchTools("read file", {limit:2})]));',
   ].join("\n");
-  const toolContext = { tools: Object.values(definitions), sessionManager: { getBranch: () => [] }, modelRegistry: {},
+  const toolContext = { tools: Object.values(definitions), sessionManager: SessionManager.inMemory(), modelRegistry: {},
     executeTool() { assert.fail("helper metadata must not fabricate a nested tool call"); } };
   const native = await originalExecute(parent, { code: script }, undefined, undefined, toolContext);
   const updates = [];
@@ -123,7 +124,7 @@ test("concurrent native scripts isolate helper metadata and release retained exe
   const { definition, definitions, handle, originalExecute } = setup(t);
   const gate = Promise.withResolvers();
   let arrivals = 0;
-  const toolContext = { tools: Object.values(definitions), sessionManager: { getBranch: () => [] },
+  const toolContext = { tools: Object.values(definitions), sessionManager: SessionManager.inMemory(),
     modelRegistry: { async getAvailableOfType() { if (++arrivals === 2) gate.resolve(); await gate.promise; return []; } } };
   const run = (id, tool) => definition.execute(id, { code: '// @options: {"timeout_ms":10000}\n'
     + `await models.getAvailableOfType("chat"); await describeTool("${tool}"); text("done");` },
@@ -140,6 +141,33 @@ test("concurrent native scripts isolate helper metadata and release retained exe
   assert.equal(definition.execute, originalExecute, "unload restores the native definition");
   const after = await retained("after-unload", { code: 'await describeTool("read");' }, undefined, undefined, toolContext);
   assert.equal(after.details.codemodeActions, undefined, "a retained old wrapper is a native passthrough after unload");
+});
+
+test("native codemode restores the active branch store without reading unrelated bodies", async (t) => {
+  const { originalExecute } = setup(t);
+  const sessionManager = SessionManager.inMemory();
+  const root = sessionManager.appendCustomEntry("codemode-store", { set: { count: 1, deleted: true }, delete: [] });
+  const unrelated = sessionManager.appendCustomEntry("another-extension", { set: { count: 99 }, delete: [] });
+  sessionManager.appendCustomEntry("codemode-store", { set: { count: 2 }, delete: ["deleted"] });
+  sessionManager.appendCustomEntry("codemode-store", { set: { count: 99 } });
+
+  t.mock.method(sessionManager, "getBranch", () => assert.fail("Codemode must not load the full branch"));
+  for (const method of ["getEntry", "getEntryForScan"]) {
+    const read = sessionManager[method].bind(sessionManager);
+    t.mock.method(sessionManager, method, id => {
+      assert.notEqual(id, unrelated, "Codemode must not load another extension's body");
+      return read(id);
+    });
+  }
+  const run = async () => {
+    const result = await originalExecute(parent, { code: 'text([load("count"), load("deleted")]);' },
+      undefined, undefined, { tools: [], sessionManager, modelRegistry: {} });
+    assert.notEqual(result.isError, true);
+    return JSON.parse(result.content.at(-1).text.trim());
+  };
+  assert.deepEqual(await run(), [2, null]);
+  sessionManager.branch(root);
+  assert.deepEqual(await run(), [1, true]);
 });
 
 test("generation streams a bounded source preview, then folds it without overwriting explicit expansion", (t) => {

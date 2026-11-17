@@ -62,13 +62,17 @@
     {
       "file": "0015-retain-status-row-text.patch",
       "sha256": "a890dfffe5d5bffbf44f7015e57737c599261f230980a6b68cd77890d44020be"
+    },
+    {
+      "file": "0016-load-codemode-store-by-metadata.patch",
+      "sha256": "4fd0ffe5c5cc91048e00ea42e9990a0cfe76fa7080869844f0323f6624c12329"
     }
   ],
-  "patchSet": "981ffa7d8e99019dea9171bbfeff24f5d379d9f35e5a97658506772225914371",
+  "patchSet": "e06a29f0d51265d1547fcd80c9ed3ddd0988521654a57073a5f6a1b69e3783bb",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "6434b023e0006f840513289810bff9ef421a8385a85cee80ab44231fea1a2005",
-    "bytes": 6037808,
-    "unpackedBytes": 26761262
+    "sha256": "2256735f77f6df026b9ce9a3cc10873fc2ff85da979817ed1832a54f657203bd",
+    "bytes": 6038505,
+    "unpackedBytes": 26761703
   }
 }
