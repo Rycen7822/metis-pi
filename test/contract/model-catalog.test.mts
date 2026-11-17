@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { getSupportedThinkingLevels, InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { createAgentSessionServices, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -132,18 +132,25 @@ test("local Codex fills exact-slug fields without extending the account inventor
   const metadata = { slug: "fresh-model", visibility: "list", context_window: 300_000, max_output_tokens: 32_000,
     input_modalities: ["text"], supported_reasoning_levels: [{ effort: "high" }],
     cost: { input: 1, output: 2, cache_read: 0.05, cache_write: 1.2 } };
-  installFakeCodex(t, dir, { models: [metadata, { ...metadata, slug: "foreign-account-model" }] });
+  const second = { ...metadata, slug: "second-model" };
+  installFakeCodex(t, dir, { models: [metadata, second, { ...metadata, slug: "foreign-account-model" }] });
   const credentials = new InMemoryCredentialStore();
   await credentials.modify("openai", async () => oauth("public-token"));
   t.mock.method(globalThis, "fetch", async (url: URL) => {
     assert.equal(String(url), openai);
-    return Response.json({ models: [{ slug: "fresh-model", visibility: "list", context_window: 200_000 }] });
+    return Response.json({ models: [
+      { slug: metadata.slug, visibility: "list", context_window: 200_000 },
+      visibleSol,
+      { slug: second.slug, visibility: "list" },
+    ] });
   });
   const runtime = await loadExtension(dir, credentials, new InMemoryModelsStore());
   assert.deepEqual((await runtime.refresh({ providers: ["openai"] })).errors, new Map());
   const models = await runtime.getAvailable("openai");
   assert.deepEqual(models.map(model => [model.id, model.contextWindow, model.maxTokens, model.cost.cacheWrite]), [
     ["fresh-model", 200_000, 32_000, 1.2],
+    ["gpt-6.2-sol", 500_000, 128_000, 2.5],
+    ["second-model", 300_000, 32_000, 1.2],
   ]);
   assert.equal(readFileSync(join(dir, "calls"), "utf8"), "debug models\n");
 });
@@ -196,10 +203,10 @@ test("pi update --models forces an enabled Metis catalog refresh through the pac
   `);
   const cli = fileURLToPath(new URL("../../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js", import.meta.url));
   const run = promisify(execFile);
-  const update = () => run(process.execPath, ["--import", hook, cli, "update", "--models"], {
+  const update = () => run(process.execPath, ["--import", pathToFileURL(hook).href, cli, "update", "--models"], {
     cwd: dir, timeout: 20_000, windowsHide: true,
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PATHEXT: process.env.PATHEXT,
-      PI_CODING_AGENT_DIR: agentDir },
+      HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PI_CODING_AGENT_DIR: agentDir },
   });
   for (let refresh = 0; refresh < 2; refresh++) {
     const { stdout } = await update();

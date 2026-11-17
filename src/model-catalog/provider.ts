@@ -4,9 +4,8 @@ import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { isModelType, type Credential, type Model, type ModelsStoreEntry, type OAuthCredential,
   type Provider } from "@earendil-works/pi-ai";
-import { buildAccountModels, catalogRecord, isStoredModel, readManifest } from "./catalog.ts";
+import { buildAccountModels, catalogRecord, isStoredModel, readManifest, type ResponsesApi } from "./catalog.ts";
 
-type ResponsesApi = "openai-responses" | "openai-codex-responses";
 type AccountCatalog = { scope: string; models: Model<ResponsesApi>[]; checkedAt: number };
 type CatalogStore = ModelsStoreEntry & { metisAccountCatalog?: AccountCatalog };
 const REFRESH_INTERVAL_MS = 60_000;
@@ -60,7 +59,7 @@ export function withAccountCatalog(base: Provider, api: ResponsesApi): Provider 
   const fallback = () => base.getAllModels?.() ?? base.getModels();
   let codexVersion: string | undefined;
   let account: AccountCatalog | undefined;
-  const keepsAccount = (credential: Credential | undefined) => account && scopeOf(credential) === account.scope;
+  const differentAccount = (credential: Credential | undefined) => account && scopeOf(credential) !== account.scope;
 
   return {
     ...base,
@@ -68,11 +67,11 @@ export function withAccountCatalog(base: Provider, api: ResponsesApi): Provider 
     getModels: () => account?.models ?? base.getModels(),
     getAllModels: () => account ? [...account.models, ...fallback().filter(model => !isModelType(model, "chat"))] : fallback(),
     filterModels: (models, credential) => {
-      const list = account && !keepsAccount(credential) ? base.getModels() : models;
+      const list = differentAccount(credential) ? base.getModels() : models;
       return base.filterModels?.(list, credential) ?? list;
     },
     filterAllModels: (models, credential) => {
-      const list = account && !keepsAccount(credential) ? fallback() : models;
+      const list = differentAccount(credential) ? fallback() : models;
       return base.filterAllModels?.(list, credential) ?? list;
     },
     async refreshModels(context) {
@@ -80,15 +79,13 @@ export function withAccountCatalog(base: Provider, api: ResponsesApi): Provider 
       const stockRoute = context.baseUrl?.replace(/\/$/, "") === baseUrl;
       const scope = stockRoute ? scopeOf(credential) : undefined;
       const cached = catalogRecord(catalogRecord(context.stored)?.metisAccountCatalog);
+      let restored = account?.scope === scope ? account : undefined;
       if (scope && cached?.scope === scope && typeof cached.checkedAt === "number"
+          && (!restored || cached.checkedAt > restored.checkedAt)
           && Array.isArray(cached.models) && cached.models.every(model => isStoredModel(model, route))) {
-        const restored = { scope, checkedAt: cached.checkedAt, models: cached.models };
-        if (!account || account.scope !== scope || restored.checkedAt > account.checkedAt) {
-          if (!(await context.publish({ update: () => { account = restored; } }))) return;
-        }
-      } else if (account && account.scope !== scope) {
-        if (!(await context.publish({ update: () => { account = undefined; } }))) return;
+        restored = { scope, checkedAt: cached.checkedAt, models: cached.models };
       }
+      if (restored !== account && !(await context.publish({ update: () => { account = restored; } }))) return;
       if (!context.allowNetwork || !scope || credential?.type !== "oauth") {
         await base.refreshModels?.(context);
         return;

@@ -1,6 +1,7 @@
 import type { Model, ModelCost, ModelInputModality, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
-type ResponsesApi = "openai-responses" | "openai-codex-responses";
+export type ResponsesApi = "openai-responses" | "openai-codex-responses";
+type ModelRoute = Pick<Model<ResponsesApi>, "api" | "provider" | "baseUrl">;
 type RecordValue = Record<string, unknown>;
 type Manifest = RecordValue & { slug: string };
 const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ModelThinkingLevel[];
@@ -66,7 +67,7 @@ const publishedSpecs = new Map<string, { maxTokens: number; cost: ModelCost }>([
 
 function toModel(
   row: Manifest, known: Model<ResponsesApi> | undefined, extra: Manifest | undefined,
-  route: Pick<Model<ResponsesApi>, "api" | "provider" | "baseUrl">,
+  route: ModelRoute,
 ): Model<ResponsesApi> | undefined {
   const published = publishedSpecs.get(row.slug);
   const contextWindow = positive(row.context_window) ?? known?.contextWindow ?? positive(extra?.context_window);
@@ -83,8 +84,7 @@ function toModel(
   };
 }
 
-export function isStoredModel(value: unknown, route: Pick<Model<ResponsesApi>, "api" | "provider" | "baseUrl">):
-value is Model<ResponsesApi> {
+export function isStoredModel(value: unknown, route: ModelRoute): value is Model<ResponsesApi> {
   const model = catalogRecord(value);
   return model?.api === route.api && model.provider === route.provider && model.baseUrl === route.baseUrl
     && typeof model.id === "string" && typeof model.name === "string" && typeof model.reasoning === "boolean"
@@ -94,17 +94,21 @@ value is Model<ResponsesApi> {
 
 export async function buildAccountModels(
   manifest: Manifest[], knownModels: readonly Model<ResponsesApi>[],
-  route: Pick<Model<ResponsesApi>, "api" | "provider" | "baseUrl">,
+  route: ModelRoute,
   getCodexManifest: () => Promise<Manifest[] | undefined>,
 ): Promise<Model<ResponsesApi>[]> {
   const visible = new Map(manifest.filter(row => row.visibility === "list").map(row => [row.slug, row]));
   const known = new Map(knownModels.map(model => [model.id, model]));
-  const initial = [...visible.values()].map(row => toModel(row, known.get(row.slug), undefined, route));
-  if (initial.every(model => model !== undefined)) return initial;
-
-  const codex = new Map((await getCodexManifest())?.map(row => [row.slug, row]));
-  return [...visible.values()].flatMap((row, index) => {
-    const model = initial[index] ?? toModel(row, known.get(row.slug), codex.get(row.slug), route);
-    return model ? [model] : [];
-  });
+  const models: Model<ResponsesApi>[] = [];
+  let codex: Map<string, Manifest> | undefined;
+  for (const row of visible.values()) {
+    const base = known.get(row.slug);
+    let model = toModel(row, base, undefined, route);
+    if (!model) {
+      codex ??= new Map((await getCodexManifest())?.map(extra => [extra.slug, extra]));
+      model = toModel(row, base, codex.get(row.slug), route);
+    }
+    if (model) models.push(model);
+  }
+  return models;
 }

@@ -1,5 +1,28 @@
+diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
+index ff5f42b..8f2ee5b 100644
+--- a/packages/coding-agent/src/core/model-runtime.ts
++++ b/packages/coding-agent/src/core/model-runtime.ts
+@@ -925,7 +925,8 @@ export class ModelRuntime implements Models {
+ 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
+ 	}
+ 
+-	registerNativeProvider(provider: Provider): void {
++	/** Pass refresh: false when the caller owns the next refresh. */
++	registerNativeProvider(provider: Provider, options?: { refresh?: boolean }): void {
+ 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
+ 		this.extensionProviders.delete(provider.id);
+ 		this.nativeExtensionProviders.set(provider.id, provider);
+@@ -936,7 +937,7 @@ export class ModelRuntime implements Models {
+ 			configuredRequestAuthStatus(this.config.getProvider(provider.id), undefined),
+ 			provider.auth.oauth && !provider.auth.apiKey ? "oauth" : "api_key",
+ 		);
+-		void this.refresh({ allowNetwork: false });
++		if (options?.refresh !== false) void this.refresh({ allowNetwork: false });
+ 	}
+ 
+ 	/**
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index a49230a..fd13ba5 100644
+index a49230a..be32719 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
 @@ -31,6 +31,7 @@ import {
@@ -10,7 +33,7 @@ index a49230a..fd13ba5 100644
  import type { InlineExtension } from "./core/extensions/types.ts";
  import { ModelRuntime } from "./core/model-runtime.ts";
  import { DefaultPackageManager, isOfflineModeEnabled } from "./core/package-manager.ts";
-@@ -608,7 +609,46 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
+@@ -608,7 +609,47 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
  	return target.type === "all" || target.type === "extensions";
  }
  
@@ -50,7 +73,8 @@ index a49230a..fd13ba5 100644
 +		throw new Error(`Could not load Metis model catalog: ${errors.map((error) => error.error).join("; ")}`);
 +	}
 +	for (const { provider } of runtime.pendingNativeProviderRegistrations) {
-+		modelRuntime.registerNativeProvider(provider);
++		// The awaited CLI refresh must not race with a background restore.
++		modelRuntime.registerNativeProvider(provider, { refresh: false });
 +	}
 +}
 +
@@ -58,7 +82,7 @@ index a49230a..fd13ba5 100644
  	const controller = new AbortController();
  	const timeout = setTimeout(() => controller.abort(), 15_000);
  	try {
-@@ -618,6 +658,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
+@@ -618,6 +659,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
  			allowModelNetwork: false,
  			signal: controller.signal,
  		});
@@ -66,7 +90,7 @@ index a49230a..fd13ba5 100644
  		const result = await modelRuntime.refresh({
  			allowNetwork: true,
  			force: true,
-@@ -1010,7 +1051,7 @@ export async function handlePackageCommand(
+@@ -1010,7 +1052,7 @@ export async function handlePackageCommand(
  
  	if (options.command === "update" && options.updateTarget?.type === "models") {
  		try {
