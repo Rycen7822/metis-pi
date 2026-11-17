@@ -4,18 +4,17 @@
 
 import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
 import { styleToolOutputLine } from "./output-style.ts";
+import { OUTPUT_INITIAL_PREFIX, OUTPUT_SUBSEQUENT_PREFIX } from "./terminal-text.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
 import { stripAnsi, styledParts, wrapWithProvenance } from "../selection-copy/wrap.ts";
 import { truncateToWidth as truncateStyled } from "@earendil-works/pi-tui";
 
 export const COMMAND_CONTINUATION_PREFIX = "  │ ";
-export const OUTPUT_INITIAL_PREFIX = "  └ ";
-export const OUTPUT_SUBSEQUENT_PREFIX = "    ";
 export const COMMAND_CONTINUATION_MAX_ROWS = 2;
 export const OUTPUT_MAX_ROWS = 5;
 
-import type { DiffLayoutOps, ViewContext, Palette } from "./contracts.ts";
+import type { DiffLayoutOps } from "./contracts.ts";
 
 export type LayoutOps = DiffLayoutOps;
 
@@ -457,12 +456,4 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
     // the entire hidden logical line alive after its component is released.
     return styleToolOutputLine(detach(`${visual.continuation ? subsequentPrefix : initialPrefix}${visual.text}`), dimPolicy);
   });
-}
-
-/** Shell title (call region); errors keep "Ran" with a red bullet — failure surfaces in color, not the verb. */
-export function shellTitle(ctx: ViewContext, theme: Palette): { bullet: string; title: string } {
-  const done = ctx.isPartial === false;
-  const bullet = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
-  const title = done ? "Ran" : "Running";
-  return { bullet, title };
 }

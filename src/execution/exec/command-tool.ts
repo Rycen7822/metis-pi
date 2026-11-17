@@ -1,12 +1,14 @@
-import { EXEC_OUTPUT_SCHEMA, execToolResult, isUnifiedExecResult } from "./results.ts";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
-import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { createHangingText } from "../../presentation/components/rows.ts";
+import type { Foreground } from "../../presentation/terminal-text.ts";
+import { asRecord } from "../../presentation/tool-names.ts";
 import { Type } from "typebox";
 import { getPiConfiguredShellPath } from "../runtime-shell.ts";
-import { renderExecCommandCall } from "../ui/rendering.ts";
+import { renderExecCommandCall, type ExecCallContext, type RenderTheme } from "../ui/rendering.ts";
+import { firstText, renderExecOutput, trimOutputTail } from "../ui/output.ts";
 import { renderTerminalOutput } from "./output.ts";
+import { EXEC_OUTPUT_SCHEMA, execToolResult, isUnifiedExecResult } from "./results.ts";
 import type { ExecCommandInput, ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { MAX_EXEC_YIELD_TIME_MS } from "./shell.ts";
 
@@ -32,11 +34,6 @@ interface ExecCommandParams {
 
 interface ExecCommandToolOptions {
 	customRendering?: boolean | undefined;
-}
-
-interface ExecCommandRenderContextLike {
-	expanded?: boolean | undefined;
-	posixShell?: boolean;
 }
 
 function prepareExecCommandArguments(args: unknown): ExecCommandParams {
@@ -65,96 +62,32 @@ function parseExecCommandParams(params: unknown): ExecCommandParams {
 	};
 }
 
-const COLLAPSED_OUTPUT_MAX_VISUAL_LINES = 5;
-const COLLAPSED_OUTPUT_MAX_RAW_CHARS = 16_000;
-const COLLAPSED_OUTPUT_MAX_RAW_LINES = 160;
-type CollapsedExecOutput = Pick<UnifiedExecResult, "output"> & Partial<Pick<UnifiedExecResult, "exit_code" | "session_id" | "wall_time_seconds">>;
-
-function expandHint(): string {
-	try {
-		return keyHint("app.tools.expand", "to expand");
-	} catch {
-		return "ctrl+o to expand";
-	}
-}
-
-function collapsedOutput(
-  result: CollapsedExecOutput,
-  theme: { fg(role: string, text: string): string },
-): { text: string; truncated: boolean } {
-  let output = renderTerminalOutput(result.output).trimEnd();
-  let truncated = false;
-  if (output.length > COLLAPSED_OUTPUT_MAX_RAW_CHARS) {
-    output = output.slice(-COLLAPSED_OUTPUT_MAX_RAW_CHARS);
-    const newline = output.indexOf("\n");
-    if (newline !== -1) output = output.slice(newline + 1);
-    truncated = true;
-  }
-  const lines = output.split("\n");
-  if (lines.length > COLLAPSED_OUTPUT_MAX_RAW_LINES) {
-    output = lines.slice(-COLLAPSED_OUTPUT_MAX_RAW_LINES).join("\n");
-    truncated = true;
-  }
-  const parts = [output];
-  if (result.session_id !== undefined) parts.push(theme.fg("accent", `Session ${result.session_id} still running`));
-  if (result.exit_code !== undefined && result.exit_code !== 0)
-    parts.push(theme.fg("muted", `Exit code: ${result.exit_code}`));
-  if (typeof result.wall_time_seconds === "number" && parts.some(Boolean))
-    parts.push(theme.fg("muted", `Took ${result.wall_time_seconds.toFixed(1)}s`));
-  return { text: parts.filter(Boolean).join("\n"), truncated };
-}
-
-function renderCollapsedOutput(result: CollapsedExecOutput, theme: { fg(role: string, text: string): string }) {
-  let cached: { width: number; lines: string[]; skipped: number; rawTruncated: boolean } | undefined;
-  return {
-    render(width: number): string[] {
-      if (!cached || cached.width !== width) {
-        const output = collapsedOutput(result, theme);
-        const preview = output.text
-          ? truncateToVisualLines(theme.fg("dim", output.text), COLLAPSED_OUTPUT_MAX_VISUAL_LINES, width, 4)
-          : { visualLines: [], skippedCount: 0 };
-        cached = { width, lines: preview.visualLines, skipped: preview.skippedCount, rawTruncated: output.truncated };
-      }
-      if (!cached.rawTruncated && cached.skipped <= 0) return cached.lines;
-      const hint = cached.rawTruncated ? "... (earlier output hidden," : `... (${cached.skipped} earlier lines,`;
-      return [
-        truncateToWidth(`    ${theme.fg("muted", hint)} ${expandHint()}${theme.fg("muted", ")")}`, width, "..."),
-        ...cached.lines,
-      ];
-    },
-    invalidate(): void {
-      cached = undefined;
-    },
-  };
-}
-
 export function renderExecCall(
-  args: { cmd?: unknown },
-  theme: { fg(role: string, text: string): string; bold(text: string): string },
-  context: ExecCommandRenderContextLike | undefined,
+  args: unknown,
+  theme: RenderTheme,
+  context?: ExecCallContext,
 ) {
-  const command = typeof args.cmd === "string" ? args.cmd : "";
-  const text = renderExecCommandCall(command, "done", theme, context);
-  return typeof text === "string" ? new Text(text, 0, 0) : text;
+  const { cmd } = asRecord(args);
+  const rendered = renderExecCommandCall(typeof cmd === "string" ? cmd : "", theme, context);
+  return typeof rendered === "string" ? createHangingText(rendered) : rendered;
 }
 
 export function renderExecResult(
-  result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown | undefined },
-  renderOptions: { expanded: boolean; isPartial: boolean },
-  theme: { fg(role: string, text: string): string },
+  value: unknown,
+  { expanded }: { expanded?: boolean },
+  theme: Foreground,
 ) {
-  const details = isUnifiedExecResult(result.details) ? result.details : undefined;
-  const textContent = result.content.find((item) => item.type === "text");
-  const plainText = textContent?.text ?? "";
-  if (!renderOptions.expanded) {
-    const collapsed = details ?? (plainText ? { output: plainText } : undefined);
-    return collapsed ? renderCollapsedOutput(collapsed, theme) : new Container();
-  }
-  let text = theme.fg("dim", renderTerminalOutput(details?.output ?? plainText) || "(no output)");
-  if (details?.session_id !== undefined)
-    text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
-  if (details?.exit_code !== undefined) text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
-  return new Text(text, 4, 0);
+  const { details, content } = asRecord(value);
+  const result = isUnifiedExecResult(details) ? details : undefined;
+  const output = renderTerminalOutput(result?.output ?? firstText(content));
+  const body = expanded ? { output: output || "(no output)", truncated: false } : trimOutputTail(output.trimEnd(), 16_000, 160);
+  const status: string[] = [];
+  if (result?.session_id !== undefined) status.push(theme.fg("accent", `Session ${result.session_id} still running`));
+  if (result?.exit_code !== undefined && (expanded || result.exit_code !== 0))
+    status.push(theme.fg("muted", `Exit code: ${result.exit_code}`));
+  if (!expanded && typeof result?.wall_time_seconds === "number" && (body.output || status.length))
+    status.push(theme.fg("muted", `Took ${result.wall_time_seconds.toFixed(1)}s`));
+  return renderExecOutput(body.output, status, theme, expanded ? undefined : { lines: 5, hint: true, truncated: body.truncated });
 }
 
 export function createExecCommandTool(sessions: ExecSessionManager, options: ExecCommandToolOptions = {}) {
@@ -192,16 +125,8 @@ export function createExecCommandTool(sessions: ExecSessionManager, options: Exe
     ...(options.customRendering === false
       ? {}
       : {
-          renderCall: ((
-            args: { cmd?: unknown },
-            theme: { fg(role: string, text: string): string; bold(text: string): string },
-            context?: ExecCommandRenderContextLike,
-          ) => renderExecCall(args, theme, context)) as never,
-          renderResult: ((
-            result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown },
-            renderOptions: { expanded: boolean; isPartial: boolean },
-            theme: { fg(role: string, text: string): string },
-          ) => renderExecResult(result, renderOptions, theme)) as never,
+          renderCall: renderExecCall,
+          renderResult: renderExecResult,
         }),
   };
   return tool;

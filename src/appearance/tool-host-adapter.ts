@@ -289,8 +289,6 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       if (renderers) {
         if (key === "getCallRenderer") return renderers.renderCall;
         if (key === "getResultRenderer") return renderers.renderResult;
-        // Only the command call is decorated; preserve the vendor's result shell.
-        if (asRecord(this).toolName === "exec_command") return original.call(this);
         // IMPORTANT: leave the constructor's child tree in its STOCK default-shell
         // form. Activate self-shell only at first render, then populate it below.
         // This makes disabling/unloading revert without splicing children, moving
@@ -331,7 +329,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         try {
           publishRows(this, lines);
           const row = asRecord(this);
-          if (displayed.get(this) && typeof row.getRenderShell === "function" && row.getRenderShell() === "self") {
+          if (typeof row.getRenderShell === "function" && row.getRenderShell() === "self") {
             const content = publishedRowsOf(row.selfRenderContainer);
             const product = content && productFor(content);
             // The native self-shell composes a blank prefix, its text subtree,

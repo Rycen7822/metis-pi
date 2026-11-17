@@ -90,8 +90,10 @@ test("exec call summaries follow the native receipt's shell without changing str
     const view = selectToolPresentation({ name: tool.name, kind: "execution", native: tool, result: () => receipt }, {
       renderers: {}, highlightOwnedCommand: lines => lines,
     });
-    const call = view.renderCall(args, theme, {}).render(100).join("\n");
-    assert.match(call, windows || !receipt ? /Ran[\s\S]*cat .\/sample\.txt/ : /Explored[\s\S]*Read sample\.txt/);
+    const call = view.renderCall(args, theme, { isPartial: receipt === partial }).render(100).join("\n");
+    const header = receipt === partial ? /Running|Exploring/ : /Ran|Explored/;
+    assert.match(call, header);
+    assert.match(call, windows || !receipt ? /cat .\/sample\.txt/ : /Read sample\.txt/);
   }
 });
 

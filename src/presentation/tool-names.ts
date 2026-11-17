@@ -4,7 +4,7 @@ export type RecordValue = Readonly<Record<string, unknown>>;
 
 export const EXPLORATION_VERBS = { read: "Read", grep: "Search", find: "Find", ls: "List", ffgrep: "Search", fffind: "Find", neural_search: "Search" } as const;
 export function isExplorationTool(name: string, args?: unknown): boolean {
-  const action = asRecord(args).action;
+  const { action } = asRecord(args);
   return Object.hasOwn(EXPLORATION_VERBS, name) && (name !== "neural_search" ||
     action === "find" || action === "grep" || action === "multi_grep");
 }

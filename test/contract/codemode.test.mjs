@@ -650,6 +650,30 @@ test("live bash retains Running and Ran independently of parent script status", 
   assert.doesNotMatch(plain(row), /Running printf LIVE_COMMAND/);
 });
 
+test("nested exec and Bash share the same header column across execution phases", async t => {
+  const { createExecCommandTool } = await import("../../src/execution/exec/command-tool.ts");
+  const { OWNED_EXECUTION_ENTRY } = await import("../../src/presentation/tool-source.mjs");
+  const { row, capture } = setup(t, { exec_command: createExecCommandTool({}) }, true, {
+    exec_command: { source: "local", path: OWNED_EXECUTION_ENTRY },
+  });
+  const bash = { command: "printf nested-bash" }, exec = { cmd: "printf nested-exec" };
+  const done = output => ({ content: [{ type: "text", text: output }], details: { output, exit_code: 0 } });
+  capture(1, "bash", bash, done("bash output"));
+  capture(2, "exec_command", exec);
+  const phase = status => row.updateResult({ content: [], details: { calls: [
+    call(1, "bash", bash), { ...call(2, "exec_command", exec, status), id: status === "running" ? parent + "/?" : parent + "/2" },
+  ] } }, status === "running");
+  try {
+    phase("running");
+    assert.match(plain(row), /^• Ran printf nested-bash\b[\s\S]*^• Running\b/m);
+  } finally {
+    capture(2, "exec_command", exec, done("exec output"));
+    phase("ok");
+    plain(row);
+  }
+  assert.match(plain(row), /^• Ran printf nested-bash\b[\s\S]*^• Ran\b[\s\S]*^  └ exec output/m);
+});
+
 test("unavailable or mismatched history arguments keep a builtin bash phase without guessing", (t) => {
   const { row } = setup(t);
   for (const record of [

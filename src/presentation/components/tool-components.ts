@@ -1,10 +1,8 @@
 import { renderCodexDiffComponent, type DiffComponentInput } from "../diff-component.ts";
 import { renderShellCall, renderShellResult, type LayoutOps } from "../shell.ts";
 import { asRecord } from "../tool-names.ts";
-import type { Component, Highlight, Palette, ShellFactories, TextComponent } from "../contracts.ts";
-import { cellWidth, wrapStyledContent } from "../segments.ts";
-import { stripAnsi } from "../../selection-copy/wrap.ts";
-import { registerProduct, publishRows, releaseCopyCache, type CopyRow } from "../../selection-copy/model.ts";
+import type { Component, Highlight, Palette, ShellFactories } from "../contracts.ts";
+import { cachedRowsComponent } from "./rows.ts";
 
 const DIFF_PAINT_BYTES = 4 * 1024 * 1024;
 
@@ -53,54 +51,6 @@ export function createDiffPainter(highlight: Highlight) {
       return value;
     },
   };
-}
-
-/** Host updates create new tool regions. One cache owns both displayed rows
- * and copy provenance; invalidation releases them together. */
-function cachedRowsComponent(renderRows: (width: number, copyOut: CopyRow[]) => string[]): Component {
-  let cache: { width: number; rows: string[] } | undefined;
-  return {
-    render(width) {
-      if (!cache || cache.width !== width) {
-        const copyOut: CopyRow[] = [];
-        const rows = renderRows(width, copyOut);
-        if (copyOut.length === rows.length) registerProduct(rows, { width, rows: copyOut });
-        cache = { width, rows };
-      }
-      publishRows(this, cache.rows);
-      return cache.rows;
-    },
-    invalidate() { cache = undefined; releaseCopyCache(this); },
-  };
-}
-
-/** Paths/queries fill the verb row; continuation indentation is display-only. */
-export function createExplorationCall(text: string): TextComponent {
-  const component = cachedRowsComponent((width, copyOut) => {
-    const indent = Math.max(0, Math.min(4, Math.floor(width) - 2));
-    const rows: string[] = [];
-    for (const line of text.replace(/\t/g, "   ").split("\n")) {
-      for (const [index, chunk] of wrapStyledContent(line, width, indent).entries()) {
-        const plain = stripAnsi(chunk), start = index === 0 ? 0 : indent;
-        rows.push(chunk);
-        copyOut.push({
-          breakBefore: index === 0 ? "hard" : "soft",
-          spans: [
-            { colStart: 0, colEnd: start, kind: "decoration" },
-            { colStart: start, colEnd: cellWidth(plain), kind: "content", text: plain.slice(start) },
-          ],
-        });
-      }
-    }
-    return rows;
-  });
-  return Object.assign(component, {
-    setText(next: string) {
-      if (next === text) return;
-      text = next;
-      component.invalidate();
-    },
-  });
 }
 
 export function createDiffComponent(input: DiffComponentInput, layout: LayoutOps): Component {

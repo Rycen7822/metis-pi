@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
+import { renderExecResult } from "../../src/execution/exec/command-tool.ts";
 import { tokenizeBashLine, highlightBashScript } from "../../src/presentation/bash-lexer.ts";
 import { createDiffComponent, createShellFactories } from "../../src/presentation/components/tool-components.ts";
 import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent, CodexWriteCallComponent } from "../../src/presentation/components/transcript-components.ts";
@@ -80,6 +81,12 @@ test("real shell components copy consumed spaces, ANSI text and Unicode across p
       }
     }
   }
+});
+
+test("expanded exec output copies across the gutter and soft wraps", () => {
+  const output = "alpha   beta gamma\n甲乙  😀 delta";
+  const component = renderExecResult({ details: { output, exit_code: 0 } }, { expanded: true }, theme);
+  assert.equal(select(copyFrame(component, 18)).text, output + "\nExit code: 0");
 });
 
 test("shell source mapping degrades to the actual visible row when host wrap changes text", () => {

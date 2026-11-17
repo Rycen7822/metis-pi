@@ -19,7 +19,8 @@ appearance 只改变显示。参数、结果、模型正文和每次调用的展
 | 普通输出 | 首行以 `└` 开头，后续行缩进。折叠时占 5 个屏幕行，保留首尾和展开提示。展开后显示全部。 |
 | 错误 | 红色前景，证据完整保留。 |
 | read、grep、find、ls、neural_search | 显示为 `Exploring` / `Explored`。成功结果默认折叠，各调用独立。 |
-| 本包的 exec_command | call 与 bash 共用高亮、换行与复制。探索摘要依据实际执行的 shell；PowerShell、CMD 或未确认的 shell 显示原命令。 |
+| 本包的 `exec_command` | 标题与 Bash 左对齐；运行中或已交到后台为灰点，退出成功为绿点，失败为红点。探索摘要依据实际执行的 shell；PowerShell、CMD 或未确认的 shell 显示原命令。 |
+| 本包的 `write_stdin` | 等待或交互标题与命令行左对齐；输出软换行沿用命令结果的缩进。 |
 
 Bash/Zsh 的动态参数（如未引用的花括号、通配符和变量）不生成探索摘要；带引号的字面量仍可正常摘要。
 

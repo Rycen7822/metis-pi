@@ -3,7 +3,7 @@ import { asRecord } from "../../presentation/tool-names.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
 import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext } from "../../presentation/contracts.ts";
 import { MouseRegion } from "@earendil-works/pi-tui";
-import { shellTitle } from "../../presentation/shell.ts";
+import { shellTitle } from "../../presentation/terminal-text.ts";
 import { stackComponents } from "../../selection-copy/stack.ts";
 import { productFor, registerProduct } from "../../selection-copy/model.ts";
 import { CODEMODE_ORANGE, detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "../../presentation/palette.ts";

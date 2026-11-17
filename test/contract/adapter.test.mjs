@@ -126,19 +126,19 @@ test("packaged command rows preserve ownership boundaries, native results and th
     getTools: () => [{ name: "exec_command", sourceInfo }],
     enabled: () => enabled,
     highlightOwnedCommand: (lines) => lines.map((line) => `colored:${line}`),
-    renderOwnedCommand: (command, state, expanded, originalTheme) => {
+    renderOwnedCommand: (command, { title, expanded }, originalTheme) => {
       assert.equal(originalTheme, theme);
-      return bindings.makeText(`${state}:${expanded}:${command}`);
+      return bindings.makeText(`${title}:${expanded}:${command}`);
     },
   });
   const command = new Host("exec_command", commandDefinition);
   assert.match(plain(command), /colored:printf hi/);
-  assert.equal(command.getRenderShell(), "default");
+  assert.equal(command.getRenderShell(), "self");
   command.getCallRenderer()({}, theme, {});
   assert.equal(receivedTheme.fg("accent", "x"), theme.fg("accent", "x"));
   assert.equal(theme.highlightCommandLines, undefined);
   assert.equal(theme.renderCommandCall, undefined);
-  assert.deepEqual(receivedTheme.renderCommandCall("raw command", "done", true).render(80), ["done:true:raw command"]);
+  assert.deepEqual(receivedTheme.renderCommandCall("raw command", { title: "Ran", expanded: true }).render(80), ["Ran:true:raw command"]);
   command.updateResult({ content: [] });
   assert.match(plain(command), /native result/);
   assert.equal(command.toolDefinition, commandDefinition);

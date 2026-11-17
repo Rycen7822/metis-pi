@@ -307,7 +307,7 @@ test("shipped entry owns grouped read rows and images without changing the nativ
   });
 });
 
-test("built exec_command delegates its real Pi row to the shell display", async (t) => {
+test("exec headers and output align with Bash in the real Pi transcript", async (t) => {
   const h = entry(t);
   const { createExecCommandTool } = await import("../../src/execution/exec/command-tool.ts");
   const { highlightBashScript } = await import("../../src/presentation/bash-lexer.ts");
@@ -320,18 +320,54 @@ test("built exec_command delegates its real Pi row to the shell display", async 
   const row = h.row("exec_command", "exec-entry", args, tool);
   row.setArgsComplete();
   row.markExecutionStarted();
-  row.updateResult({ content: [{ type: "text", text: "output" }], details: { output: "output", session_id: 123 }, isError: false });
-  assert.match(plain(row.render(80)), /Session 123 still running/);
-  row.updateResult({ content: [{ type: "text", text: "output" }], details: { output: "output", exit_code: 1 }, isError: true });
+  const bash = h.row("bash", "bash-entry", { command: args.cmd }, Core.createBashToolDefinition(process.cwd()));
+  const header = row => row.render(80).find(line => line.includes("•"));
+  const marker = row => header(row).split("•")[0];
+  assert.match(plain(row.render(80)), /^• Running /m);
+  assert.equal(marker(row), marker(bash));
+  const output = "output-".repeat(12);
+  const content = [{ type: "text", text: output }];
+  const display = (details) => row.updateResult({ content, details: { output, ...details }, isError: false });
+  display({ session_id: 123 });
+  assert.match(plain(row.render(80)), /^• Ran [\s\S]*Session 123 still running/m);
+  assert.equal(marker(row), marker(bash), "handing off a live process is not an exit");
+  for (const exit_code of [0, 1]) {
+    display({ exit_code });
+    bash.updateResult({ content, isError: exit_code !== 0 });
+    assert.match(plain(row.render(80)), /^• Ran /m);
+    assert.equal(marker(row), marker(bash), "the process exit code, not the tool transport, determines the color");
+  }
   const rendered = row.render(80);
   assert.ok(rendered.join("\n").includes(highlightBashScript([args.cmd], detectColorLevel())[0]));
-  assert.match(plain(rendered), /Exit code: 1/);
+  assert.match(plain(rendered), /^  └ output-/m);
+  assert.match(plain(rendered), /^    Exit code: 1/m);
+  row.setExpanded(true);
+  const narrow = plain(row.render(24));
+  assert.match(narrow, /^  └ output-[^\n]*\n    \S/m);
   assert.ok(rendered.every((line) => visibleWidth(line) <= 80));
   const callRows = row.getCallRenderer()(args, { fg: (_role, text) => text, bold: (text) => text },
     { expanded: false, toolCallId: "exec-entry" }).render(80);
   assert.equal(productFor(callRows)?.rows.length, callRows.length, "owned exec preserves copy rows");
   assert.equal(row.toolDefinition, tool);
-  assert.equal(row.getRenderShell(), "default", "vendor tool retains its own shell");
+  assert.equal(row.getRenderShell(), "self");
+});
+
+test("background terminal output keeps its gutter across soft wraps", async t => {
+  const h = entry(t);
+  const { createWriteStdinTool } = await import("../../src/execution/exec/write-stdin-tool.ts");
+  const tool = createWriteStdinTool({ getSessionCommand: () => "printf background" });
+  const row = h.row("write_stdin", "stdin-entry", { session_id: 123 }, tool);
+  const output = "stdout-".repeat(10);
+  const receipt = { content: [{ type: "text", text: output }], details: { output, session_id: 123 } };
+  row.updateResult(receipt, true);
+  assert.match(plain(row.render(80)), /^• Waited for background terminal/m);
+  const region = /[^\n]*└ stdout-[^\n]*\n    \S/;
+  assert.match(plain(row.render(28)), region);
+  row.updateResult(receipt, false);
+  assert.doesNotMatch(plain(row.render(28)), /stdout-/);
+  row.setExpanded(true);
+  assert.match(plain(row.render(28)), region);
+  assert.ok(row.render(28).every(line => visibleWidth(line) <= 28));
 });
 
 test("streamed write executes through the entry and real padded edits reach the diff surface", async (t) => {

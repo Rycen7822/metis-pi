@@ -13,7 +13,7 @@ import {
   type ExplorationRow,
 } from "./explore.ts";
 import { summarizeShellCommand } from "../execution/shell/summary.ts";
-import { createExplorationCall } from "./components/tool-components.ts";
+import { createHangingText } from "./components/rows.ts";
 import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
 import { safeText, toolOutputGutter as gutter } from "./terminal-text.ts";
 import type {
@@ -23,7 +23,7 @@ import type {
 import { parseDisplayDiff, diffStatsFromRows } from "./diff.ts";
 import type { WriteDiff, DiffStats, DiffRow } from "../file-changes/diff.ts";
 import { resolveWriteStage } from "./write-preview.ts";
-import { shellTitle } from "./shell.ts";
+import { shellTitle } from "./terminal-text.ts";
 
 const PREVIEW_LINES = 5;
 const COMMAND_LINES = 2;
@@ -369,7 +369,7 @@ export function makeRenderers(
               const title = renderExplorationLines({ running: merged.isPartial !== false, isError: merged.isError === true, rows },
                 colorFor(merged), theme).join("\n");
               return component(merged.expanded ? `${title}\n${highlight(safeText(command), "bash", theme, paint)}` : title,
-                ctx, createExplorationCall);
+                ctx, createHangingText);
             }
             const { bullet, title } = shellTitle(merged, theme);
             if (makeShell?.makeShellCall) {
@@ -433,7 +433,7 @@ export function makeRenderers(
               session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
             return component(
               explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)),
-              ctx, createExplorationCall,
+              ctx, createHangingText,
             );
           }
           if (name === "neural_search") {

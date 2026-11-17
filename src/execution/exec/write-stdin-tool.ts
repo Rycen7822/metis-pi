@@ -1,11 +1,14 @@
 import { EXEC_OUTPUT_SCHEMA, execToolResult, isUnifiedExecResult } from "./results.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Container, Text } from "@earendil-works/pi-tui";
-import { renderWriteStdinCall } from "../ui/rendering.ts";
+import { Container } from "@earendil-works/pi-tui";
+import { createHangingText } from "../../presentation/components/rows.ts";
+import type { Foreground } from "../../presentation/terminal-text.ts";
+import { asRecord } from "../../presentation/tool-names.ts";
+import { firstText, renderExecOutput } from "../ui/output.ts";
+import { renderWriteStdinCall, type RenderTheme } from "../ui/rendering.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { renderTerminalOutput } from "./output.ts";
-import { toolOutputGutter } from "../../presentation/terminal-text.ts";
 
 const WRITE_STDIN_PARAMETERS = Type.Object({
 	session_id: Type.Number({ description: "Session ID" }),
@@ -41,23 +44,11 @@ function parseFormattedExecTranscript(text: string): FormattedExecTranscript {
 	};
 }
 
-function getResultState(result: {
-  details?: unknown | undefined;
-  content: Array<{ type: string; text?: string | undefined }>;
-}): FormattedExecTranscript {
-  const details = isUnifiedExecResult(result.details) ? result.details : undefined;
-  const content = result.content.find((item) => item.type === "text");
-  if (details) {
-    return {
-      output: details.output,
-      sessionId: details.session_id,
-      exitCode: details.exit_code,
-    };
-  }
-  if (content?.type === "text") {
-    return parseFormattedExecTranscript(content.text ?? "");
-  }
-  return { output: "" };
+function getResultState(value: unknown): FormattedExecTranscript {
+  const { details, content } = asRecord(value);
+  return isUnifiedExecResult(details)
+    ? { output: details.output, sessionId: details.session_id, exitCode: details.exit_code }
+    : parseFormattedExecTranscript(firstText(content));
 }
 
 function parseWriteStdinParams(params: unknown): WriteStdinParams {
@@ -72,6 +63,30 @@ function parseWriteStdinParams(params: unknown): WriteStdinParams {
       ? params.max_output_tokens
       : undefined;
   return { session_id: params.session_id, chars, yield_time_ms, max_output_tokens };
+}
+
+export function renderStdinCall(args: unknown, theme: RenderTheme, getCommand?: ExecSessionManager["getSessionCommand"]) {
+  const { session_id, chars } = asRecord(args);
+  const id = typeof session_id === "number" ? session_id : "?";
+  const input = typeof chars === "string" ? chars : undefined;
+  return createHangingText(renderWriteStdinCall(id, input, typeof id === "number" ? getCommand?.(id) : undefined, theme));
+}
+
+export function renderStdinResult(
+  value: unknown,
+  { expanded, isPartial }: { expanded?: boolean; isPartial?: boolean },
+  theme: Foreground,
+  context?: { isError?: boolean },
+) {
+  if (!expanded && !isPartial && !context?.isError) return new Container();
+  const { output, sessionId, exitCode } = getResultState(value);
+  const text = renderTerminalOutput(output);
+  const tail = expanded ? text : text.trimEnd().slice(-8_000).split("\n").slice(-5).join("\n");
+  const status = [];
+  if (sessionId !== undefined) status.push(theme.fg(expanded ? "accent" : "dim", `Session ${sessionId} still running`));
+  if (exitCode !== undefined && (expanded || exitCode !== 0)) status.push(theme.fg("muted", `Exit code: ${exitCode}`));
+  const body = tail || (expanded ? "(no output)" : !status.length && isPartial ? "Waiting for output" : "");
+  return renderExecOutput(body, status, theme, expanded ? undefined : { lines: 6 });
 }
 
 export function createWriteStdinTool(sessions: ExecSessionManager) {
@@ -99,33 +114,8 @@ export function createWriteStdinTool(sessions: ExecSessionManager) {
       }
       return execToolResult(result, command);
     },
-    renderCall(args, theme) {
-      const inputArgs = args as Partial<WriteStdinParams>;
-      const sessionId = typeof inputArgs.session_id === "number" ? inputArgs.session_id : "?";
-      const input = typeof inputArgs.chars === "string" ? inputArgs.chars : undefined;
-      const command = typeof sessionId === "number" ? sessions.getSessionCommand(sessionId) : undefined;
-      return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
-    },
-    renderResult(result, { expanded, isPartial }, theme) {
-      const state = getResultState(result);
-      if (!expanded) {
-        if (!isPartial) return new Container();
-        const output = renderTerminalOutput(state.output).trimEnd();
-        const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
-        const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;
-        const text = [tail, status].filter(Boolean).join("\n") || "Waiting for output";
-        return new Text(toolOutputGutter(text.split("\n"), theme, "dim"), 0, 0);
-      }
-      const output = renderTerminalOutput(state.output);
-      let text = theme.fg("dim", output || "(no output)");
-      if (state.sessionId !== undefined) {
-        text += `\n${theme.fg("accent", `Session ${state.sessionId} still running`)}`;
-      }
-      if (state.exitCode !== undefined) {
-        text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
-      }
-      return new Text(toolOutputGutter(text.split("\n"), theme, "dim"), 0, 0);
-    },
+    renderCall: (args, theme) => renderStdinCall(args, theme, id => sessions.getSessionCommand(id)),
+    renderResult: renderStdinResult,
   };
   return tool;
 }

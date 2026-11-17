@@ -1,5 +1,20 @@
+import { OUTPUT_INITIAL_PREFIX, OUTPUT_SUBSEQUENT_PREFIX, safeText, shellTitle } from "../../presentation/terminal-text.ts";
 import { summarizeShellCommand, type ShellAction } from "../shell/summary.ts";
-export type ExecCommandStatus = "running" | "done";
+import type { Component } from "@earendil-works/pi-tui";
+
+export interface ExecCallContext {
+  expanded?: boolean | undefined;
+  posixShell?: boolean;
+  isPartial?: boolean;
+  isError?: boolean;
+  isBackground?: boolean;
+}
+
+export interface CommandHeader {
+  bullet: string;
+  title: string;
+  expanded: boolean;
+}
 
 export interface RenderTheme {
 	fg(role: string, text: string): string;
@@ -7,19 +22,22 @@ export interface RenderTheme {
 	/** Optional metis-pi call-only painter; no shared state across extension loaders. */
 	highlightCommandLines?(lines: readonly string[]): string[];
 	/** Host-owned width-aware command component; exploration stays in this module. */
-	renderCommandCall?(command: string, state: ExecCommandStatus, expanded: boolean): { render(width: number): string[] };
+	renderCommandCall?(command: string, header: CommandHeader): Component;
 }
 
 export function renderExecCommandCall(
   command: string,
-  state: ExecCommandStatus,
   theme: RenderTheme,
-  { expanded = false, posixShell = false }: { expanded?: boolean | undefined; posixShell?: boolean | undefined } = {},
-): string | { render(width: number): string[] } {
+  { expanded = false, posixShell, isPartial = false, isError, isBackground }: ExecCallContext = {},
+) {
+  const { bullet, title } = shellTitle({ isPartial, isError: isError === true, isBackground: isBackground === true }, theme);
   const summary = posixShell ? summarizeShellCommand(command) : undefined;
-  return summary?.maskAsExplored
-    ? renderExplorationText(summary.actions, state, theme, expanded ? command : undefined)
-    : (theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded));
+  if (summary?.maskAsExplored) {
+    const title = isError ? "Exploration failed" : isPartial ? "Exploring" : "Explored";
+    return renderExplorationText(summary.actions, bullet, title, theme, expanded ? command : undefined);
+  }
+  const header = { bullet, title, expanded };
+  return theme.renderCommandCall?.(command, header) ?? renderCommandText(command, header, theme);
 }
 
 export function renderWriteStdinCall(
@@ -31,23 +49,16 @@ export function renderWriteStdinCall(
 	const interacted = typeof input === "string" && input.length > 0;
 	const marker = interacted ? "↳ " : "• ";
 	const title = interacted ? "Interacted with background terminal" : "Waited for background terminal";
-	let text = `${theme.fg("dim", marker)}${theme.fg("toolTitle", theme.bold(title))}`;
-	const commandPreview = formatCommandPreview(command);
-	if (commandPreview) {
-		text += `${theme.fg("dim", " · ")}${theme.fg("muted", commandPreview)}`;
-	}
-	if (!commandPreview) {
-		text += `${theme.fg("dim", " ")}${theme.fg("muted", `#${sessionId}`)}`;
-	}
-	return text;
+	const preview = formatCommandPreview(command);
+	const subject = preview ? theme.fg("dim", " · ") + theme.fg("muted", preview) : " " + theme.fg("muted", `#${sessionId}`);
+	return theme.fg("dim", marker) + theme.fg("toolTitle", theme.bold(title)) + subject;
 }
 
-function renderExplorationText(actions: ShellAction[], state: ExecCommandStatus, theme: RenderTheme, command?: string): string {
-	const header = state === "running" ? "Exploring" : "Explored";
-	let text = `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(header))}`;
+function renderExplorationText(actions: ShellAction[], bullet: string, title: string, theme: RenderTheme, command?: string): string {
+	let text = `${bullet} ${theme.fg("toolTitle", theme.bold(title))}`;
 
 	for (const [index, line] of coalesceReads(actions).map(formatActionLine).entries()) {
-		const prefix = index === 0 ? "  └ " : "    ";
+		const prefix = index === 0 ? OUTPUT_INITIAL_PREFIX : OUTPUT_SUBSEQUENT_PREFIX;
 		text += `\n${theme.fg("dim", prefix)}${theme.fg("accent", line.title)} ${theme.fg("muted", line.body)}`;
 	}
 
@@ -55,22 +66,21 @@ function renderExplorationText(actions: ShellAction[], state: ExecCommandStatus,
 		const lines = formatCommandLines(command, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
 		const painted = theme.highlightCommandLines?.(lines) ?? lines.map((line) => theme.fg("muted", line));
 		for (const line of painted) {
-			text += `\n${theme.fg("dim", "    ")}${line}`;
+			text += `\n${theme.fg("dim", OUTPUT_SUBSEQUENT_PREFIX)}${line}`;
 		}
 	}
 
 	return text;
 }
 
-function renderCommandText(command: string, state: ExecCommandStatus, theme: RenderTheme, expanded: boolean): string {
-	const verb = state === "running" ? "Running" : "Ran";
-	let text = `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(verb))}`;
+function renderCommandText(command: string, { bullet, title, expanded }: CommandHeader, theme: RenderTheme): string {
+	let text = `${bullet} ${theme.fg("toolTitle", theme.bold(title))}`;
 	const maxLines = expanded ? Number.POSITIVE_INFINITY : 5;
 	const maxLength = expanded ? Number.POSITIVE_INFINITY : 100;
 	const lines = formatCommandLines(command, maxLines, maxLength);
 	const painted = theme.highlightCommandLines?.(lines) ?? lines.map((line) => theme.fg("accent", line));
 	for (const [index, line] of painted.entries()) {
-		const prefix = index === 0 ? "  └ " : "    ";
+		const prefix = index === 0 ? OUTPUT_INITIAL_PREFIX : OUTPUT_SUBSEQUENT_PREFIX;
 		text += `\n${theme.fg("dim", prefix)}${line}`;
 	}
 	return text;
@@ -97,7 +107,7 @@ function shortenLine(line: string, max = 100): string {
 
 function formatCommandPreview(command: string | undefined): string | undefined {
 	if (!command) return undefined;
-	const singleLine = command.replace(/\s+/g, " ").trim();
+	const singleLine = safeText(command).replace(/\s+/g, " ").trim();
 	if (singleLine.length === 0) return undefined;
 	return shortenLine(singleLine, 80);
 }

@@ -4,10 +4,10 @@ import type { AppearanceConfig } from "../../appearance/config.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "../../appearance/transcript/codemode-view.ts";
 import type { TranscriptState } from "../../appearance/transcript/state.ts";
 import { renderExecCall, renderExecResult } from "../../execution/exec/command-tool.ts";
+import { renderStdinCall, renderStdinResult } from "../../execution/exec/write-stdin-tool.ts";
 import type { Renderers } from "../../presentation/contracts.ts";
 import type { ColorLevel } from "../../presentation/palette.ts";
 import { makeRenderers } from "../../presentation/renderers.ts";
-import { asRecord } from "../../presentation/tool-names.ts";
 import type { ToolPresentation } from "../../presentation/tool-source.mjs";
 import { isSubagentTool, subagentToolRenderers } from "./rendering.ts";
 
@@ -21,16 +21,15 @@ export function makeViewerRenderers(config: AppearanceConfig, transcript: Transc
   const codemode = makeCodemodeRenderers({ makeText, expandHint, highlight, colorLevel,
     store: new CodemodeViewStore(), shell: renderers.bash, resolve: (name, result) => resolve(name, () => result) });
   const options = { renderers, codemode, ...createOwnedCommandStyle(bindings, colorLevel) };
-  const execution: Renderers = {
-    renderCall: (args, theme, ctx) => renderExecCall(asRecord(args), theme, ctx) as ReturnType<Renderers["renderCall"]>,
-    renderResult: (result, opts, theme) => renderExecResult(result as Parameters<typeof renderExecResult>[0],
-      { expanded: opts.expanded === true, isPartial: opts.isPartial === true }, theme),
+  const execution: Record<string, Renderers> = {
+    exec_command: { renderCall: renderExecCall, renderResult: renderExecResult },
+    write_stdin: { renderCall: (args, theme) => renderStdinCall(args, theme), renderResult: renderStdinResult },
   };
   function resolve(name: string, result: () => unknown): Renderers | undefined {
     const kind = sources()[name];
     if (kind === "subagents" || isSubagentTool(name)) return subagentToolRenderers(name);
-    const native = kind === "execution" && name === "exec_command" ? execution : undefined;
-    return config.enabled ? selectToolPresentation({ name, kind, native, result }, options) : native;
+    const native = kind === "execution" && Object.hasOwn(execution, name) ? execution[name] : undefined;
+    return config.enabled ? selectToolPresentation({ name, kind, native, result }, options) ?? native : native;
   }
   return { resolve, clear: bindings.clear };
 }

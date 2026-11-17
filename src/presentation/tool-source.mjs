@@ -20,7 +20,7 @@ export function toolPresentation(name, info) {
   if (typeof source !== "string") return;
   if (source === "builtin" && path === `builtin:${name}`) return "builtin";
   if ((name === "edit" || name === "write") && path === OWNED_FUSION_ENTRY) return "fusion";
-  if (name === "exec_command" && path === OWNED_EXECUTION_ENTRY) return "execution";
+  if ((name === "exec_command" || name === "write_stdin") && path === OWNED_EXECUTION_ENTRY) return "execution";
   if (name === "neural_search" && path === OWNED_NEURAL_SEARCH_ENTRY) return "neural";
   if ((name.startsWith("subagents_") || name.startsWith("pi_")) && path === OWNED_SUBAGENTS_ENTRY) return "subagents";
   if ((name === "ffgrep" || name === "fffind") && typeof path === "string"

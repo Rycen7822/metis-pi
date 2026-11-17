@@ -44,7 +44,7 @@ const textMessage = text => ({ role: "assistant", content: [{ type: "text", text
 // Trusted registration metadata supplied separately from serialized messages.
 const toolRenderers = { bash: "builtin", read: "builtin", grep: "builtin", find: "builtin", ls: "builtin",
   codemode: "builtin", tool_search: "builtin", write: "fusion", edit: "fusion", exec_command: "execution",
-  neural_search: "neural", subagents_wait_agent: "subagents", pi_wait_agent: "subagents" };
+  write_stdin: "execution", neural_search: "neural", subagents_wait_agent: "subagents", pi_wait_agent: "subagents" };
 const inspection = (agentId, messages = [], options = {}) => ({
   agent: { name: agentId, state: "running" },
   messages: messages.map((message, id) => ({ id: String(id), message })),
@@ -292,7 +292,9 @@ test("conversation preserves mutation evidence, follow-up commands and native ex
       { diff: "-1 BEFORE_LINE\n+1 AFTER_LINE", metisActionFusion: { version: 1, mutationStatus: "success",
         command: { command: "verify", status: "succeeded", exitCode: 0, outputBlock: 2 } } }, false, /AFTER_LINE[\s\S]*COMMAND_MARKER/],
     ["exec_command", { cmd: "verify" }, { output: "RESULT\n".repeat(12), session_id: 17, wall_time_seconds: 1.25 },
-      false, /Session 17 still running/],
+      false, /^▏ • Ran verify[\s\S]*Session 17 still running/m],
+    ["write_stdin", { session_id: 17 }, { output: "", session_id: 17, wall_time_seconds: 1.25 },
+      false, /^▏ • Waited for background terminal.*#17/m],
   ];
   for (const [
     name, args, details, isError, expected,
@@ -300,7 +302,7 @@ test("conversation preserves mutation evidence, follow-up commands and native ex
     const { rows } = popup(t, { messages: { reader: [
       { role: "assistant", content: [{ type: "toolCall", id: "call", name, arguments: args }] },
       { role: "toolResult", toolCallId: "call", toolName: name, isError, details,
-        content: name === "exec_command" ? execToolResult(details, args.cmd).content : [
+        content: name === "exec_command" || name === "write_stdin" ? execToolResult(details, args.cmd).content : [
           { type: "text", text: "Successfully changed note.md" }, { type: "text", text: "COMMAND_MARKER" },
         ] },
     ] } });

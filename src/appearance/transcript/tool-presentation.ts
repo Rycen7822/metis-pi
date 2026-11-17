@@ -1,5 +1,6 @@
 import type { Component, Palette, Renderers, ShellFactories, ViewContext } from "../../presentation/contracts.ts";
 import { highlightBashScript } from "../../presentation/bash-lexer.ts";
+import type { CommandHeader } from "../../execution/ui/rendering.ts";
 import type { ColorLevel } from "../../presentation/palette.ts";
 import { asRecord, isExplorationTool, TOOL_NAMES, type ToolName } from "../../presentation/tool-names.ts";
 import type { ToolPresentation } from "../../presentation/tool-source.mjs";
@@ -8,16 +9,16 @@ import { fusionRenderers } from "./fusion-view.ts";
 export interface OwnedCommandStyle {
   /** Paint command text only; the registered tool retains grouping and execution state. */
   highlightOwnedCommand?: (lines: readonly string[]) => string[];
-  renderOwnedCommand?: (command: string, state: "running" | "done", expanded: boolean, theme: Palette, context: ViewContext) => Component;
+  renderOwnedCommand?: (command: string, header: CommandHeader, theme: Palette, context: ViewContext) => Component;
 }
 
 export function createOwnedCommandStyle(bindings: { makeShell?: ShellFactories; expandHint(): string }, colorLevel: ColorLevel) {
   const shell = bindings.makeShell?.makeShellCall;
   return {
     highlightOwnedCommand: (lines: readonly string[]) => highlightBashScript(lines, colorLevel),
-    renderOwnedCommand: shell ? (command: string, state: "running" | "done", expanded: boolean, theme: Palette, context: ViewContext) =>
-      shell({ name: "bash", args: { command }, options: { expanded }, theme, context,
-        bullet: theme.fg("dim", "•"), title: state === "running" ? "Running" : "Ran", expandHint: bindings.expandHint(), colorLevel })
+    renderOwnedCommand: shell ? (command: string, { bullet, title, expanded }: CommandHeader, theme: Palette, context: ViewContext) =>
+      shell({ name: "bash", args: { command }, options: { expanded, isPartial: context.isPartial === true }, theme, context,
+        bullet, title, expandHint: bindings.expandHint(), colorLevel })
       : undefined,
   };
 }
@@ -30,14 +31,22 @@ export function selectToolPresentation(input: {
   if ((name === "edit" || name === "write") && kind === "fusion")
     return fusionRenderers(renderers[name], renderers.bash, result);
   const call = native?.renderCall, renderResult = native?.renderResult;
-  if (kind === "execution" && options.highlightOwnedCommand && typeof call === "function" && typeof renderResult === "function") {
+  if (kind === "execution" && name === "exec_command" && options.highlightOwnedCommand
+    && typeof call === "function" && typeof renderResult === "function") {
     return {
-      renderCall: (args, theme, context) => call(args, {
-        fg: (role: string, text: string) => theme.fg(role, text), bold: (text: string) => theme.bold(text),
-        highlightCommandLines: options.highlightOwnedCommand,
-        renderCommandCall: renderOwnedCommand ? (command: string, state: "running" | "done", expanded: boolean) =>
-          renderOwnedCommand(command, state, expanded, theme, context) : undefined,
-      }, { ...context, posixShell: asRecord(asRecord(result()).details).posixShell === true }),
+      renderCall(args, theme, context) {
+        const details = asRecord(asRecord(result()).details);
+        return call(args, {
+          fg: theme.fg.bind(theme), bold: theme.bold.bind(theme),
+          highlightCommandLines: options.highlightOwnedCommand,
+          renderCommandCall: renderOwnedCommand ? (command: string, header: CommandHeader) =>
+            renderOwnedCommand(command, header, theme, context) : undefined,
+        }, {
+          ...context, posixShell: details.posixShell === true,
+          isError: context.isError === true || (typeof details.exit_code === "number" && details.exit_code !== 0),
+          isBackground: typeof details.session_id === "number",
+        });
+      },
       renderResult: (value, opts, theme, context) => renderResult(value, opts, theme, context),
     };
   }
