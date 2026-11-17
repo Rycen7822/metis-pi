@@ -204,7 +204,7 @@ exclude = []
 | --- | --- | --- |
 | `enabled` | `true` | 自动 chain 整理开关，与总开关 `contextPrune.enabled=true` 共同生效。 |
 | `rollingWindow` | `3` | 近期闭合小 chain 的参考数量，整数 ≥0；选择同时受 `minRecentTokens` 预算约束。 |
-| `minWorkTurns` | `4` | 自动工具摘要和 chain 共同保留的最近有效工具工作轮数，整数 ≥0。有效轮次要求成功的主请求和有效工具结果。 |
+| `minWorkTurns` | `4` | 自动工具摘要和 chain 共同保留的最近有效工具工作轮数，整数 ≥0。有效轮次要求成功的主请求和有效工具结果；设为 0 关闭此项保护，否则不足时保留已有有效轮，尚无有效轮时保护整个窗口。 |
 | `minRecentTokens` | `32768` | 保留的近期原文尾部，按 Pi 估算 tokens 计，与工作轮次保护取并集；整数 ≥0。 |
 | `minGainTokens` | `8192` | 大候选/共享 chain 的最低净节省量，也是发布后所需的新工作增长下限；正安全整数。 |
 | `minGainFraction` | `0.1` | 大候选/共享 chain 按总上下文检查的净节省比例，有界独立候选按自身大小检查；范围 [0,1]。工具摘要另受 `summaryBudget` 约束。 |

@@ -18,7 +18,9 @@ type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFrac
   minimumGain?: number;
   forecastRequests?: number;
 };
-type CacheRequest = { key: string; envelope: string; messages: any[]; tokens: number; implicit: boolean; stableHeader: boolean };
+type CacheRequest = { key: string; envelope: string; messages: any[]; tokens: number;
+  implicit: boolean; stableHeader: boolean; bounded: boolean };
+const matchedBoundedReceipt = (cached?: CacheRequest) => !!(cached?.bounded && cached.implicit && cached.stableHeader);
 const boundedCacheLookups = (model: Model | undefined) => model?.api === "openai-responses"
   && model.compat && "supportsExplicitPromptCacheMode" in model.compat && model.compat.supportsExplicitPromptCacheMode === true;
 
@@ -143,7 +145,7 @@ function recentWorkBoundary(raw: any[], visible: any[], config: ChainCompression
       boundary = round.index;
       if (++work >= config.minWorkTurns) break;
     }
-    if (work < config.minWorkTurns) boundary = 0;
+    if (work === 0) boundary = 0;
   }
   if (config.minRecentTokens > 0) {
     const key = (message: any) => `${message.role}:${message.timestamp}`;
@@ -279,7 +281,8 @@ export class RewriteBudget {
   private discounted = false;
   private warmRequests = 0;
   private debt = 0;
-  private repayment?: { input: number; cold?: { before: number; fees: number; reserve: number } };
+  private repayment?: { input: number; cold?: { before: number; fees: number; reserve: number };
+    needsWarmRecovery?: boolean };
   private fees = 0;
   private unknownFees = 0;
   private generation = 0;
@@ -336,7 +339,7 @@ export class RewriteBudget {
       this.warmRequests = 0;
     }
     this.request = { key, envelope: encoded, messages: messages.slice(), implicit, stableHeader,
-      tokens: messages.reduce((sum, message) => sum + estimateTokens(message), 0) };
+      bounded: !!boundedCacheLookups(model), tokens: messages.reduce((sum, message) => sum + estimateTokens(message), 0) };
   }
 
   private cachedPrefix(before: number, prefix: number, model: Model | undefined, context?: RewriteContext): number {
@@ -368,14 +371,21 @@ export class RewriteBudget {
     }
     if (message.timestamp <= this.lastUsage) return;
     this.lastUsage = message.timestamp;
+    // Failed primary attempts are background costs, not rewrite spending or a cold settlement.
+    if (["error", "aborted"].includes(message.stopReason)) {
+      this.request = this.cached = undefined;
+      this.warmRequests = 0;
+      return;
+    }
     const usage = message.usage;
-    const failed = ["error", "aborted", "length"].includes(message.stopReason);
+    const truncated = message.stopReason === "length";
     const input = finite(usage?.input) && finite(usage?.cacheRead) && finite(usage?.cacheWrite)
       ? usage.input + usage.cacheRead + usage.cacheWrite : 0;
     const validInput = finite(input) && input > 0;
-    this.cached = !failed && validInput && this.request ? { ...this.request, cacheRead: usage.cacheRead } : undefined;
+    this.cached = !truncated && validInput && this.request ? { ...this.request, cacheRead: usage.cacheRead } : undefined;
     this.request = undefined;
     const repayment = this.repayment;
+    if (repayment && !validInput) repayment.needsWarmRecovery = true;
     if (repayment?.cold) {
       const cold = repayment.cold;
       repayment.cold = undefined;
@@ -383,22 +393,27 @@ export class RewriteBudget {
       if (!validInput) { this.debt = Math.max(this.debt, cold.reserve); return; }
       const original = input + this.lastGain;
       const baseline = requestCost(original, cold.before, pricesAt(price, model.priceTiers, original));
-      // The first receipt corrects the forecast. Later warm receipts cannot stand in for a missing cold one.
+      // The first normal receipt corrects the forecast; a missing one still retains its cold reservation.
       const actual = Math.max(0, cold.fees + inputCost(usage, pricesAt(price, model.priceTiers, input)) - baseline);
-      this.debt = failed ? Math.max(this.debt, actual) : actual;
+      this.debt = truncated ? Math.max(this.debt, actual) : actual;
       repayment.input = input;
       return;
     }
-    if (failed || !validInput) { this.warmRequests = 0; return; }
+    if (truncated || !validInput) { this.warmRequests = 0; return; }
     const warm = usage.cacheRead / input >= MIN_CACHE_HIT;
     this.warmRequests = warm ? Math.min(WARM_REQUESTS, this.warmRequests + 1) : 0;
     if (!repayment) return;
-    if (warm || !this.discounted) {
+    if (this.warmRequests >= WARM_REQUESTS) repayment.needsWarmRecovery = false;
+    const measured = matchedBoundedReceipt(this.cached);
+    if (measured || warm || !this.discounted) {
       const cost = inputCost(usage, pricesAt(price, model.priceTiers, input));
-      const original = inputCost(usage, pricesAt(price, model.priceTiers, input + this.lastGain));
-      const observed = original * (input + this.lastGain) / input - cost;
+      const originalRates = pricesAt(price, model.priceTiers, input + this.lastGain);
+      const observed = measured
+        ? requestCost(input + this.lastGain, repayment.input + this.lastGain, originalRates) - cost
+        : inputCost(usage, originalRates) * (input + this.lastGain) / input - cost;
       const forecast = requestSavings(input, this.lastGain, repayment.input, price, model.priceTiers);
-      this.debt = Math.max(0, this.debt - Math.max(0, Math.min(observed, forecast)));
+      const credit = Math.min(measured ? observed : Math.max(0, observed), Math.max(0, forecast));
+      this.debt = Math.max(0, this.debt - credit);
     }
     repayment.input = input;
   }
@@ -433,7 +448,9 @@ export class RewriteBudget {
   }
 
   waitingForWork(config: RewritePolicy): boolean {
-    return this.debt > 0 || (this.discounted && this.warmRequests < WARM_REQUESTS)
+    const settled = this.repayment && !this.repayment.cold && !this.repayment.needsWarmRecovery
+      && matchedBoundedReceipt(this.cached);
+    return this.debt > 0 || (this.discounted && this.warmRequests < WARM_REQUESTS && !settled)
       || (this.lastGain > 0 && this.growth < Math.max(config.minGainTokens, this.lastGain / 4));
   }
 

@@ -18,6 +18,46 @@ const warm = (budget, current = model, start = 1) => {
   for (let i = 0; i < 3; i++) budget.observe(completion(start + i), current);
 };
 
+function boundedLedger({ settled = true } = {}) {
+  const quote = { ...model, api: "openai-responses", compat: { supportsExplicitPromptCacheMode: true },
+    cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } };
+  const budget = new RewriteBudget(), policy = { ...config, forecastRequests: 24 };
+  const initial = Array.from({ length: 6 }, (_, i) => ({ role: "user", timestamp: i + 1, content: "x".repeat(42664) }));
+  const before = initial.reduce((sum, item) => sum + estimateTokens(item), 0), gain = 48000;
+  const prefix = estimateTokens(initial[0]);
+  const assistant = { role: "assistant", api: quote.api, provider: quote.provider, model: quote.id };
+  let timestamp = 0, tokens = before, messages = initial;
+  const context = () => ({ tokens, cacheKey: "bounded-ledger", messages, appendedCacheBoundaries: 1 });
+  const grow = amount => budget.observe({ ...assistant, timestamp: ++timestamp, stopReason: "stop" }, quote, amount);
+  function receipt({ hit = 0.98, stopReason = "stop", missingUsage = false, work = 0, matched = true, payload } = {}) {
+    if (matched) budget.observeRequest(quote, "bounded-ledger",
+      payload ?? { model: quote.id, input: messages.map(item => ({ role: "user", content: item.content })) }, messages);
+    const cached = Math.floor(tokens * hit);
+    const message = { ...assistant, timestamp: ++timestamp, stopReason,
+      usage: missingUsage ? undefined : { input: tokens - cached, cacheRead: cached, cacheWrite: 0 } };
+    budget.observe(message, quote);
+    if (work) budget.observe(message, quote, work);
+    return message;
+  }
+  function resize(input) {
+    tokens = input;
+    messages = [initial[0], { role: "user", timestamp: 8, content: "y".repeat((tokens - prefix) * 4) }];
+  }
+  for (let i = 0; i < 3; i++) receipt();
+  assert.equal(budget.admits(before, gain, prefix, policy, quote, false, 0, context()), true);
+  budget.published(before, gain, prefix, quote, context());
+  resize(before - gain);
+  if (settled) {
+    receipt({ hit: prefix / tokens });
+    for (let i = 1; i <= 8; i++) {
+      resize(before - gain + i * 2000);
+      receipt({ hit: 0.89, work: 2000 });
+    }
+  }
+  const admits = () => budget.admits(tokens, Math.max(8192, Math.floor(tokens / 2)), 0, policy, quote, false, 0, context());
+  return { budget, quote, receipt, grow, admits };
+}
+
 test("a material rewrite separates the cold receipt from three warm requests and useful growth", () => {
   const budget = new RewriteBudget();
   warm(budget);
@@ -206,15 +246,62 @@ test("an unexpectedly cold first receipt adds its actual loss before three warm 
     "restored cache hits do not erase the first request's unpredicted cost");
 });
 
-test("a missing first usage retains its cold reserve instead of refunding it from a later warm request", () => {
-  for (const stopReason of ["stop", "error"]) {
-    const budget = new RewriteBudget();
-    warm(budget);
-    budget.published(320000, 80000, 235000, model);
-    budget.observe({ ...completion(4), usage: undefined, stopReason }, model);
-    budget.observe(completion(4), model, 100000);
-    for (let timestamp = 5; timestamp <= 8; timestamp++) budget.observe(completion(timestamp, 240000), model);
-    assert.equal(budget.waitingForWork(config), true, "missing usage keeps a full cold reserve after cache recovers");
+test("a normal first receipt missing usage retains its cold reserve after cache recovers", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  budget.published(320000, 80000, 235000, model);
+  budget.observe({ ...completion(4), usage: undefined }, model);
+  budget.observe(completion(4), model, 100000);
+  for (let timestamp = 5; timestamp <= 8; timestamp++) budget.observe(completion(timestamp, 240000), model);
+  assert.equal(budget.waitingForWork(config), true, "normal missing usage keeps the full cold reservation");
+});
+
+test("matched bounded low-hit receipts repay real savings but a later miss adds debt", () => {
+  const f = boundedLedger();
+  assert.equal(f.admits(), true, "profitable 89% receipts and sufficient useful growth can repay cold cost");
+  f.receipt({ hit: 0 });
+  f.receipt({ hit: 0.89 });
+  assert.equal(f.admits(), false, "one profitable receipt cannot erase the preceding normal full-price miss");
+  for (let i = 0; i < 12; i++) f.receipt();
+  assert.equal(f.admits(), true, "subsequent measured savings can repay the normal input loss");
+});
+
+test("bounded low-hit admission still requires a matching implicit request and stable header", async t => {
+  for (const kind of ["unmatched", "explicit", "header"]) await t.test(kind, () => {
+    const f = boundedLedger();
+    assert.equal(f.admits(), true);
+    const payload = { model: f.quote.id, input: [{ role: "user", content: "original" }] };
+    if (kind === "explicit") payload.prompt_cache_options = { mode: "explicit" };
+    if (kind === "header") payload.input.push({ role: "developer", content: "later header" });
+    f.receipt({ hit: 0.89, matched: kind !== "unmatched", payload });
+    assert.equal(f.admits(), false, "unverified cache conditions cannot borrow the post-cold warm bypass");
+  });
+});
+
+test("failed primary attempts leave the first normal cold receipt pending, regardless of usage", async t => {
+  for (const stopReason of ["error", "aborted"]) for (const missingUsage of [false, true])
+    await t.test(`${stopReason}, missingUsage=${missingUsage}`, () => {
+      const f = boundedLedger({ settled: false });
+      f.grow(16000);
+      const failure = f.receipt({ hit: 0, stopReason, missingUsage });
+      f.budget.observe(failure, f.quote);
+      f.receipt({ hit: 0.5 });
+      f.receipt();
+      assert.equal(f.admits(), false, "one receipt has not repaid the genuine partially cached normal cold bill");
+      f.receipt();
+      assert.equal(f.admits(), true, "two receipts pay this normal cold bill without taxing the failed attempt");
+    });
+});
+
+test("normal missing usage after cold retains three-warm recovery without a permanent unknown bill", () => {
+  const f = boundedLedger();
+  assert.equal(f.admits(), true);
+  f.receipt({ missingUsage: true });
+  f.receipt({ hit: 0.89 });
+  assert.equal(f.admits(), false, "one low-hit receipt cannot erase a normal measurement gap");
+  for (let i = 0; i < 3; i++) {
+    f.receipt();
+    assert.equal(f.admits(), i === 2, "normal missing measurements retain the existing warm recovery interval");
   }
 });
 
@@ -410,6 +497,27 @@ test("recent work and token tail are a union; open tasks never authorize arbitra
   assert.deepEqual(protectChainWorkingSet(chains, raw, visible, { ...work, minRecentTokens: 2000 }), []);
   assert.deepEqual(protectBatchWorkingSet(batches, raw, visible, { ...work, minRecentTokens: 2000 }), [],
     "the recent raw guard is measured on the effective view, including prior stubs");
+});
+
+test("short useful history preserves available rounds without pinning older consumed tasks", async t => {
+  for (const rounds of [0, 1, 3]) await t.test(`${rounds} useful rounds`, () => {
+    const raw = history(Array(2 + rounds).fill(1000), true);
+    for (const item of raw) if (item.role === "toolResult" && ["t0", "t1"].includes(item.toolCallId))
+      item.isError = true;
+    const batches = [{ timestamp: 0, turnIndex: 0, toolCalls: raw.filter(item => item.role === "toolResult").map(item => ({
+      toolCallId: item.toolCallId, toolName: item.toolName, args: {}, resultText: item.content[0].text,
+      isError: item.isError, resultTimestamp: item.timestamp,
+    })) }];
+    const policy = { ...config, rollingWindow: 0, minWorkTurns: 4, minRecentTokens: 0 };
+    const eligible = rounds === 0 ? [] : ["t0", "t1"];
+    assert.deepEqual(protectBatchWorkingSet(batches, raw, raw, policy)
+      .flatMap(batch => batch.toolCalls.map(call => call.toolCallId)), eligible);
+    assert.deepEqual(protectChainWorkingSet(detectChains(raw), raw, raw, policy)
+      .map(chain => chain.startUserTimestamp), rounds === 0 ? [] : [0, 4]);
+    const shortTail = { ...policy, minRecentTokens: 100000 };
+    assert.deepEqual(protectBatchWorkingSet(batches, raw, raw, shortTail), [], "the effective token tail stays protected");
+    assert.deepEqual(protectChainWorkingSet(detectChains(raw), raw, raw, shortTail), []);
+  });
 });
 
 test("one flush groups admitted chunks, then batch and chain share the same refill", () => {
