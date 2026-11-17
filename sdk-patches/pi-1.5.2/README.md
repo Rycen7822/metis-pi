@@ -107,4 +107,4 @@ npm 脚本策略拦住 `postinstall` 时，会话入口仍会补装并提示重�
 撤回前暂停 Metis 安装/更新并禁用其 SDK 安装入口，避免自动重装；
 将安装根目录的 `current-version` 恢复为当前 `metis-sdk.json` 的 `previousRelease`，再重启。
 恢复原版时选择保留的官方完整发行目录，不拼接旧新依赖。通常根目录为 `~/.pi/agent/install`，以 launcher 为准。
-个人认证、设置、会话和 blobs 保持原处；清理备份或暂存目录前确认相关进程已退出。
+安装器保留当前发行版和 `previousRelease`，只清理更早且能确认归属的 Metis 副本，不清理官方 Pi。旧副本仍可能在用、进程检查不受支持或删除失败时，暂不清理；后续运行安装器时重试。个人认证、设置、会话和 blobs 不在清理范围内。

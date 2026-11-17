@@ -7,8 +7,9 @@ export default function installPiSDK(pi: ExtensionAPI) {
       const result = await ensureSDK({ runningPackageDir: getPackageDir() });
       if (result.status === "unmanaged") {
         ctx.ui.notify("Metis SDK 补丁需要 Pi managed 安装布局；当前宿主未修改。", "warning");
-      } else if (result.restartRequired) {
-        ctx.ui.notify("Metis 已安装全部 Pi SDK 补丁，请重启 Pi；/reload 无法替换当前 SDK。", "warning");
+      } else {
+        if (result.restartRequired) ctx.ui.notify("Metis 已安装全部 Pi SDK 补丁，请重启 Pi；/reload 无法替换当前 SDK。", "warning");
+        if (result.cleanupWarning) ctx.ui.notify(result.cleanupWarning, "warning");
       }
     } catch (error) {
       ctx.ui.notify(`Metis SDK 安装异常：${error instanceof Error ? error.message : String(error)}`, "warning");

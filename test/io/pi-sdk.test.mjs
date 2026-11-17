@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
+import { once } from "node:events";
+import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -126,10 +128,16 @@ test("project SDK preparation replaces all verified payloads and rejects mixed v
   await h.preserved();
 });
 
-test("package postinstall replaces the snapshot while preserving both previous runtimes", async t => {
+test("package postinstall keeps only the immediate Metis rollback and leaves other directories alone", async t => {
   const h = await fixture(t);
+  const releases = path.dirname(h.source);
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  await h.payload("previous-sdk");
   await h.ensureSDK({ managedRoot: h.managedRoot });
   const previous = await h.active();
+  const unrelated = "metis-1.5.2-ffffffffffff-ffffffff";
+  await mkdir(path.join(releases, unrelated));
+  await writeFile(path.join(releases, unrelated, "metis-sdk.json"), '{"schemaVersion":1}');
   await h.payload("updated-sdk");
   await cp(path.join(root, "src/neural-search/runtime"), path.join(h.pkg, "src/neural-search/runtime"), { recursive: true });
   await mkdir(path.join(h.pkg, "src/condense"), { recursive: true });
@@ -147,7 +155,47 @@ test("package postinstall replaces the snapshot while preserving both previous r
   assert.ok((await readFile(path.join(path.dirname(h.managedRoot), "cache/metis-model-prices.refresh"), "utf8")).length > 0);
   const active = path.join(h.managedRoot, "releases", await h.active());
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(active, name), "dist/owner.txt"), "utf8"), "updated-sdk");
-  assert.equal(await readFile(path.join(h.sdkDir(path.join(h.managedRoot, "releases", previous), "ai"), "dist/owner.txt"), "utf8"), "new-sdk");
+  assert.equal(await readFile(path.join(h.sdkDir(path.join(releases, previous), "ai"), "dist/owner.txt"), "utf8"), "previous-sdk");
+  assert.equal(JSON.parse(await readFile(path.join(active, "metis-sdk.json"), "utf8")).previousRelease, previous);
+  assert.deepEqual((await readdir(releases)).sort(), ["1.5.2", await h.active(), previous, unrelated].sort());
+  await h.preserved();
+});
+
+test("a running older release survives an upgrade and is retired on the next idle startup", async t => {
+  const h = await fixture(t);
+  const releases = path.dirname(h.source);
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  const oldest = await h.active();
+  await h.payload("previous");
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  const previous = await h.active();
+  await h.payload("current");
+  const installed = await h.ensureSDK({ managedRoot: h.managedRoot,
+    runningPackageDir: h.sdkDir(path.join(releases, oldest), "coding-agent") });
+  const current = await h.active();
+  assert.equal(installed.restartRequired, true);
+  assert.deepEqual((await readdir(releases)).sort(), ["1.5.2", current, previous, oldest].sort());
+
+  if (process.platform === "linux" || process.platform === "win32") {
+    const worker = path.join(releases, oldest, "live.mjs");
+    await writeFile(worker, 'process.title = "pi-rpc"; process.stdout.write("ready\\n"); setInterval(() => {}, 60_000);');
+    const child = spawn(process.execPath, [worker], {
+      env: { ...process.env, PI_MANAGED_INSTALL_ROOT: h.managedRoot }, stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+    });
+    const closed = once(child, "close");
+    try {
+      const [ready] = await once(child.stdout, "data", { signal: AbortSignal.timeout(5000) });
+      assert.equal(ready.toString().trim(), "ready");
+      await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: installed.packageDir });
+      assert.equal(await readFile(path.join(h.sdkDir(path.join(releases, oldest), "ai"), "dist/owner.txt"), "utf8"), "new-sdk");
+    } finally {
+      child.kill();
+      await closed;
+    }
+  }
+  const restarted = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: installed.packageDir });
+  assert.equal(restarted.status, "current");
+  assert.deepEqual((await readdir(releases)).sort(), ["1.5.2", current, previous].sort());
   await h.preserved();
 });
 
@@ -181,6 +229,12 @@ for (const failure of ["legacy-version", "future-version", "corrupt-archive", "b
 
 test("activation failure removes only its candidate and preserves pre-existing temporary files", async t => {
   const h = await fixture(t), uuid = "00000000-0000-4000-8000-000000000000";
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  await h.payload("before-failure");
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  const before = await h.active();
+  const releases = (await readdir(path.dirname(h.source))).sort();
+  await h.payload("must-not-activate");
   const sentinel = path.join(h.managedRoot, `.metis-current-${uuid}`);
   await writeFile(sentinel, "not-owned-by-installer");
   const original = crypto.randomUUID;
@@ -192,9 +246,42 @@ test("activation failure removes only its candidate and preserves pre-existing t
     crypto.randomUUID = original;
     syncBuiltinESMExports();
   }
-  assert.equal(await h.active(), "1.5.2");
-  assert.deepEqual(await readdir(path.join(h.managedRoot, "releases")), ["1.5.2"]);
+  assert.equal(await h.active(), before);
+  assert.deepEqual((await readdir(path.dirname(h.source))).sort(), releases);
   assert.equal(await readFile(sentinel, "utf8"), "not-owned-by-installer");
+  await h.preserved();
+});
+
+test("cleanup failure leaves the verified update active and can be retried", async t => {
+  const h = await fixture(t);
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  const oldest = path.join(path.dirname(h.source), await h.active());
+  await h.payload("rollback");
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  const rollback = await h.active();
+  await h.payload("updated");
+
+  const remove = fs.rm;
+  fs.rm = async (target, options) => {
+    if (path.dirname(target) === oldest) throw new Error("release file busy");
+    return remove(target, options);
+  };
+  syncBuiltinESMExports();
+  try {
+    const update = await h.ensureSDK({ managedRoot: h.managedRoot });
+    assert.equal(update.status, "installed");
+    assert.match(update.cleanupWarning, /release file busy/);
+    assert.equal(path.basename(path.join(update.packageDir, "../../..")), await h.active());
+    assert.notEqual(await h.active(), rollback);
+  } finally {
+    fs.rm = remove;
+    syncBuiltinESMExports();
+  }
+  assert.ok((await readdir(oldest)).includes("metis-sdk.json"));
+  const retry = await h.ensureSDK({ managedRoot: h.managedRoot });
+  assert.equal(retry.status, "current");
+  assert.equal(retry.cleanupWarning, undefined);
+  assert.deepEqual((await readdir(path.dirname(h.source))).sort(), ["1.5.2", await h.active(), rollback].sort());
   await h.preserved();
 });
 

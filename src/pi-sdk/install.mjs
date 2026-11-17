@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
 import * as tar from "tar";
 import { readDistribution, sdkPackages, sdkFiles, verifiedArchive } from "./artifact.mjs";
+import { pruneReleases } from "./retention.mjs";
 
 const run = promisify(execFile);
 const packageDir = (release, name) => path.join(release, "node_modules", "@earendil-works", `pi-${name}`);
@@ -127,8 +128,9 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
   if (marker.kind !== "pi-managed-install" || marker.schemaVersion !== 1 || marker.layout !== "releases-v1")
     throw new Error("Unsupported Pi managed installation layout");
   const canonical = await realpath(root);
+  const releases = path.join(canonical, "releases");
   const running = runningPackageDir ? await realpath(runningPackageDir) : undefined;
-  if (running && !inside(path.join(canonical, "releases"), running))
+  if (running && !inside(releases, running))
     return { status: "unmanaged", restartRequired: false };
   const distribution = await readDistribution();
   // Same lock as Pi's native self-updater; re-read the active release only after acquiring it.
@@ -141,11 +143,10 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
     let installed;
     try { installed = await regularJSON(path.join(source.directory, "metis-sdk.json")); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
-    let active = source.directory, status = "current";
+    let active = source.name;
     if (installed?.schemaVersion !== 1 || installed.piVersion !== distribution.piVersion
       || installed.patchSet !== distribution.patchSet || installed.archiveHash !== distribution.archive.sha256) {
       const archive = await verifiedArchive(distribution);
-      const releases = path.join(canonical, "releases");
       staging = await mkdtemp(path.join(releases, ".metis-stage-"));
       const payload = path.join(staging, "payload"), candidate = path.join(staging, "release");
       await mkdir(payload);
@@ -169,19 +170,26 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
         piVersion: distribution.piVersion, patchSet: distribution.patchSet, archiveHash: distribution.archive.sha256,
         previousRelease: source.name }, null, 2) + "\n");
       const name = `metis-${distribution.piVersion}-${distribution.patchSet.slice(0, 12)}-${randomUUID().slice(0, 8)}`;
-      active = path.join(releases, name);
-      await rename(candidate, active);
-      created = active;
+      const target = path.join(releases, name);
+      await rename(candidate, target);
+      created = target;
       await rm(staging, { recursive: true, force: true });
       staging = undefined;
       await activate(canonical, name);
       activated = true;
-      status = "installed";
+      active = name;
     }
-    const currentPackage = packageDir(active, "coding-agent");
-    const comparable = value => process.platform === "win32" ? value.toLowerCase() : value;
-    return { status, restartRequired: Boolean(running && comparable(running) !== comparable(currentPackage)),
-      packageDir: currentPackage, patches: distribution.patches.length };
+    let cleanupWarning;
+    const previous = activated ? source.name : installed?.previousRelease;
+    if (validRelease(previous)) {
+      const runningRelease = running && path.relative(releases, running).split(path.sep)[0];
+      try { await pruneReleases(releases, { active, previous, runningRelease }); }
+      catch (error) { cleanupWarning = `Old Metis SDK releases could not be fully cleaned up: ${error.message}`; }
+    }
+    const currentPackage = packageDir(path.join(releases, active), "coding-agent");
+    return { status: activated ? "installed" : "current",
+      restartRequired: Boolean(running && path.relative(running, currentPackage)),
+      packageDir: currentPackage, patches: distribution.patches.length, ...(cleanupWarning ? { cleanupWarning } : {}) };
   } catch (error) { failure = error; throw error; }
   finally {
     const errors = [];
@@ -201,6 +209,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   try {
     const result = await ensureSDK();
     if (result.status === "unmanaged") console.warn("Metis SDK: no managed Pi installation found; SDK patches were not installed.");
-    else console.log(`Metis SDK: ${result.patches} patches ${result.status}; new Pi processes use the patched SDK.`);
+    else {
+      console.log(`Metis SDK: ${result.patches} patches ${result.status}; new Pi processes use the patched SDK.`);
+      if (result.cleanupWarning) console.warn(result.cleanupWarning);
+    }
   } catch (error) { console.error(`Metis SDK installation failed: ${error.message}`); process.exitCode = 1; }
 }
