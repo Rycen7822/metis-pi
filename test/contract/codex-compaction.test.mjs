@@ -1779,7 +1779,10 @@ for (const routeModel of [model, responsesModel]) test(`${routeModel.api}: a lat
   const body = h.bodies.at(-1);
   assert.ok(JSON.stringify(body.input).includes("EDITED WHILE AUTHENTICATING"));
   assert.equal(JSON.stringify(body.input).includes("HIDDEN GOAL UI"), false);
-  assert.equal(JSON.stringify(body.input).includes("STALE GOAL CONTINUATION"), false);
+  assert.equal(JSON.stringify(body.input).includes("STALE GOAL CONTINUATION"), true,
+    "immutable historical continuations survive repair; current run-start goal state supersedes them");
+  assert.ok(JSON.stringify(body).includes("preserve the active goal during context recovery"),
+    "repair retains the authoritative current goal alongside its historical snapshots");
   assert.equal(body.input.some(item => item.type === "compaction"), false);
   assert.equal(JSON.stringify(body).includes("Metis Codex remote checkpoint"), false);
   await h.session.prompt("CONTINUE AFTER EXPLICIT REPAIR");

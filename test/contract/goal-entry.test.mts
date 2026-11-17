@@ -1,5 +1,5 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { createEventBus, initTheme, InteractiveMode } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, createEventBus, initTheme, InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Input, KeybindingsManager, TUI_KEYBINDINGS, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
@@ -276,7 +276,7 @@ test("goal popup retains invalid and conflicting drafts and closes across branch
   assert.deepEqual(ui.popup.render(90), [], "disposed views cannot retain input targets");
 });
 
-test("agent editing requires a one-shot user grant, preserves accounting and refreshes only owned context", async t => {
+test("agent editing requires a one-shot grant and preserves accounting and historical continuation snapshots", async t => {
   const h = makeHost(t);
   await h.tool("create", { objective: "original full scope", token_budget: 100 });
   const id = h.entries.at(-1)!.data.goal.id;
@@ -299,7 +299,7 @@ test("agent editing requires a one-shot user grant, preserves accounting and ref
   await h.fire("agent_start", {}, h.ctx);
   tick(t, 2);
   await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 3, output: 2 } }] }, h.ctx);
-  const oldContinuation = structuredClone(h.sent.at(-1));
+  const oldContinuation = structuredClone(h.sent.at(-1) as { content: string; customType: string });
   await h.fire("input", { text: "keep the explicit requirements", source: "interactive" }, h.ctx);
   const before = (await h.tool("get")).details;
   assert.equal(before.agentEditToken, token, "ordinary input and usage accounting do not revoke authorization");
@@ -315,10 +315,12 @@ test("agent editing requires a one-shot user grant, preserves accounting and ref
   const user = { role: "user", content: "preserve this queued instruction verbatim" };
   const projected = (await h.fire("context", { messages: [permission, oldContinuation, user] }, h.ctx)).messages;
   assert.equal(projected.length, 2);
-  assert.match(projected[0].content, /updated full scope/);
-  assert.doesNotMatch(projected[0].content, /original full scope/);
+  assert.deepEqual(projected[0], oldContinuation, "an edited objective must not rewrite an earlier continuation");
+  assert.match(projected[0].content, /original full scope/);
   assert.equal(projected[1], user);
-  assert.match((oldContinuation as any).content, /original full scope/, "projection never mutates session history");
+  const systemPromptOptions = { sections: {} as Record<string, string> };
+  await h.fire("before_agent_start", { systemPromptOptions }, h.ctx);
+  assert.match(systemPromptOptions.sections.metis_goal, /updated full scope/, "the new run uses the authorized objective");
   await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 1, output: 1 } }] }, h.ctx);
   assert.equal((await h.tool("get")).details.goal.tokensUsed, 7, "the edited goal still owns the in-flight turn");
 });
@@ -545,7 +547,7 @@ test("turn accounting stays with the goal that started the turn and stops at its
   assert.equal(h.sent.length, sent, "a budget-limited goal does not continue");
 });
 
-test("settled errors stop continuation and context keeps only the current goal's last continuation", async (t) => {
+test("settled errors stop continuation without removing historical continuation snapshots", async (t) => {
   const h = makeHost(t);
   await h.command("keep the right continuation");
   const first = structuredClone(h.sent.at(-1));
@@ -554,13 +556,40 @@ test("settled errors stop continuation and context keeps only the current goal's
   const last = structuredClone(h.sent.at(-1));
   const user = { role: "user", content: "keep" };
   const filtered = await h.fire("context", { messages: [first, user, { customType: "goal-ui" }, last] });
-  assert.deepEqual(filtered.messages, [user, last]);
+  assert.deepEqual(filtered.messages, [first, user, last]);
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "rate limit" }] }, h.ctx);
   assert.equal((await h.tool("get")).details.goal.status, "active");
   await h.fire("agent_settled", { aborted: false }, h.ctx);
   assert.equal((await h.tool("get")).details.goal.status, "usageLimited");
-  assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [user]);
+  assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [first, user, last]);
+  const systemPromptOptions = { sections: {} as Record<string, string> };
+  await h.fire("before_agent_start", { systemPromptOptions }, h.ctx);
+  assert.match(systemPromptOptions.sections.metis_goal, /usageLimited/);
+});
+
+test("Goal accounting and lifecycle changes preserve the model-facing continuation prefix", async t => {
+  const h = makeHost(t);
+  await h.command("preserve this objective");
+  const first = { role: "custom" as const, timestamp: 1, ...structuredClone(h.sent.at(-1) as any) };
+  const history = [first, { role: "user" as const, timestamp: 2, content: "keep this instruction" }];
+  const before = (await h.fire("context", { messages: history })).messages;
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 3);
+  await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 2, output: 3 } }] }, h.ctx);
+  const next = { role: "custom" as const, timestamp: 3, ...structuredClone(h.sent.at(-1) as any) };
+  const after = (await h.fire("context", { messages: [...history, next] })).messages;
+  assert.deepEqual(convertToLlm(after).slice(0, before.length), convertToLlm(before));
+  assert.match(next.content, /Tokens used: 5/);
+  assert.match(first.content, /Tokens used: 0/);
+  for (const command of ["pause", "clear", "a replacement objective"]) {
+    await h.command(command);
+    assert.deepEqual((await h.fire("context", { messages: after })).messages, after, command);
+    const systemPromptOptions = { sections: {} as Record<string, string> };
+    await h.fire("before_agent_start", { systemPromptOptions }, h.ctx);
+    assert.match(systemPromptOptions.sections.metis_goal,
+      command === "pause" ? /paused/ : command === "clear" ? /none/ : /a replacement objective/);
+  }
 });
 
 test("completion reports settled final-turn usage instead of the provisional tool snapshot", async (t) => {

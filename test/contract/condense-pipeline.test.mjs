@@ -443,12 +443,19 @@ test("independent small chains publish without paid summaries while preserving t
   });
 });
 
-test("remote chain cache credit requires an observed request and matching namespace", async t => {
-  for (const scenario of ["no request evidence", "matching", "changed prompt", "changed tool"])
-    await t.test(scenario, async t => {
+test("remote and bounded Responses cache credit require an observed request and matching namespace", async t => {
+  for (const mode of ["legacy remote", "Responses remote", "Responses plain"])
+    for (const scenario of ["no request evidence", "matching", "changed prompt", "changed tool"])
+    await t.test(`${mode}: ${scenario}`, async t => {
       const f = await independentTasks(t, { total: 128000, sizes: [32000], price: 20 });
-      const first = f.sm.getBranch().find(entry => entry.type === "message");
-      f.sm.appendCompaction("Remote history checkpoint", first.id, 128000, { metisCodexRemoteCompaction: { version: 2 } });
+      if (mode.startsWith("Responses")) {
+        f.ctx.model.api = "openai-responses";
+        f.ctx.model.compat = { ...f.ctx.model.compat, supportsExplicitPromptCacheMode: true };
+      }
+      if (mode !== "Responses plain") {
+        const first = f.sm.getBranch().find(entry => entry.type === "message");
+        f.sm.appendCompaction("Remote history checkpoint", first.id, 128000, { metisCodexRemoteCompaction: { version: 2 } });
+      }
       await f.emit("session_start");
       f.ctx.getContextUsage = () => ({ tokens: 128000, contextWindow: 2000000 });
       for (let i = 0; i < 3; i++) {

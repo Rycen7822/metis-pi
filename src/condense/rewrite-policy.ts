@@ -1,5 +1,5 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
-import type { Usage } from "@earendil-works/pi-ai";
+import type { Api, Model as PiModel, Usage } from "@earendil-works/pi-ai";
 import { createRangeResolver } from "./chain-range-prune.ts";
 import { consumedToolResults, conversationSegments } from "./chain-detector.ts";
 import { occKey } from "./occurrence-key.ts";
@@ -9,14 +9,38 @@ import type { CapturedBatch, ChainCompressionConfig, ChainRange } from "./types.
 type Prices = { input: number; cacheRead: number; cacheWrite?: number };
 export type PriceTier = { after: number; cost: Prices & { output?: number } };
 export type Model = { id: string; provider: string; api: string; baseUrl?: string;
+  compat?: PiModel<Api>["compat"];
   cost?: Prices & { output?: number; tiers?: Array<Partial<Prices> & { inputTokensAbove: number; output?: number }> };
   priceTiers?: PriceTier[]; pricing?: "pi" | "models.dev" | "pending" };
-export type RewriteContext = { tokens?: number | null; opaque?: boolean; cacheKey?: string; messages?: any[] };
+export type RewriteContext = { tokens?: number | null; opaque?: boolean; cacheKey?: string; messages?: any[];
+  appendedCacheBoundaries?: number };
 type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & {
   minimumGain?: number;
   forecastRequests?: number;
 };
-type CacheRequest = { key: string; envelope: string; messages: any[]; tokens: number };
+type CacheRequest = { key: string; envelope: string; messages: any[]; tokens: number; implicit: boolean; stableHeader: boolean };
+const boundedCacheLookups = (model: Model | undefined) => model?.api === "openai-responses"
+  && model.compat && "supportsExplicitPromptCacheMode" in model.compat && model.compat.supportsExplicitPromptCacheMode === true;
+
+/** Implicit Responses lookup: latest eligible ending plus 20 earlier ones. No credit for an unobserved fallback. */
+function searchablePrefix(messages: any[], before: number, prefix: number, appended: number): number {
+  let suffix = 0, endings = appended;
+  let nextRole: string | undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    // This carrier expands to opaque history, not a user ending we can certify locally.
+    if (message.role === "compactionSummary") return 0;
+    if (message.role === "bashExecution" && message.excludeFromContext) continue;
+    const role = ["custom", "branchSummary", "bashExecution"].includes(message.role) ? "user" : message.role;
+    if (role === "user" || role === "toolResult" && nextRole !== "toolResult") {
+      if (endings++ >= 21) return 0;
+      if (before - suffix <= prefix) return Math.max(0, before - suffix);
+    }
+    suffix += estimateTokens(message);
+    nextRole = role;
+  }
+  return 0;
+}
 const WARM_REQUESTS = 3;
 const DEFAULT_FORECAST_REQUESTS = 3;
 const MIN_CACHE_HIT = 0.9;
@@ -201,7 +225,7 @@ export interface RewriteGain { pi: number; proxy: number }
 /** Aggregate or independently profitable closed chunks settle one flush in the same shared wallet. */
 export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], config: ChainCompressionConfig,
   model: Model | undefined, context?: RewriteContext) {
-  if (context?.opaque) context = { ...context, messages };
+  const admissionContext = { ...context, messages };
   const outputs = new Map<string, { prefix: number; tokens: number; closed: boolean }>();
   const consumed = consumedToolResults(messages), segments = conversationSegments(messages);
   // Closed segments are contiguous before the open one; a Native orphan prefix is not a closed group.
@@ -215,7 +239,8 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
     }
     before += tokens;
   }
-  let prefix = before, pi = 0, proxy = 0;
+  let prefix = before, pi = 0, proxy = 0, publications = 0;
+  const costContext = (appended: number) => ({ ...admissionContext, appendedCacheBoundaries: appended });
   const selection = (keys: Iterable<string>) => {
     let localPrefix = before, tokens = 0, allClosed = true, count = 0;
     for (const key of keys) {
@@ -232,18 +257,18 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
       if (!plan) return false;
       // Ordinary aggregate admission keeps its own proxy gain floor and three-request forecast.
       if (budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), plan.prefix,
-        { ...config, minimumGain: 0 }, model, false, fee, context)) return true;
+        { ...config, minimumGain: 0 }, model, false, fee, costContext(publications + 1))) return true;
       const policy = plan.allClosed ? boundedRewritePolicy(config, plan.tokens) : undefined;
       return !!policy && localRewritePrefixAllowed(before, plan.localPrefix)
-        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.localPrefix, policy, model, false, fee, context);
+        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.prefix, policy, model, false, fee, costContext(publications + 1));
     },
     published(keys: Iterable<string>, gain: RewriteGain) {
       const plan = selection(keys);
       if (!plan) throw new Error("Published batch lost its original source position");
-      prefix = plan.prefix; pi += gain.pi; proxy += gain.proxy;
+      prefix = plan.prefix; pi += gain.pi; proxy += gain.proxy; publications++;
     },
     finish() {
-      if (pi > 0 && proxy > 0) budget.published(before, Math.min(pi, proxy), prefix, model, context);
+      if (pi > 0 && proxy > 0) budget.published(before, Math.min(pi, proxy), prefix, model, costContext(publications));
     },
   };
 }
@@ -293,23 +318,42 @@ export class RewriteBudget {
       return;
     }
     this.prices(model);
+    const cacheOptions = "prompt_cache_options" in payload ? payload.prompt_cache_options : undefined;
+    const implicit = !cacheOptions || typeof cacheOptions !== "object" || !("mode" in cacheOptions)
+      || cacheOptions.mode === undefined || cacheOptions.mode === "implicit";
+    // SDK context rewrites may consolidate later developer/tool updates into the leading system message.
+    // A system-free message view cannot prove that resulting header unchanged, so withhold cache credit.
+    let initial = true, stableHeader = true;
+    for (const item of payload.input) {
+      const declaration = item?.role === "developer" || item?.role === "system" || item?.type === "additional_tools";
+      if (declaration && !initial) { stableHeader = false; break; }
+      if (!declaration) initial = false;
+    }
     const { input: _input, ...envelope } = payload;
     const encoded = JSON.stringify(envelope);
     if (this.cached?.key !== key || this.cached.envelope !== encoded) {
       this.cached = undefined;
       this.warmRequests = 0;
     }
-    this.request = { key, envelope: encoded, messages: messages.slice(),
+    this.request = { key, envelope: encoded, messages: messages.slice(), implicit, stableHeader,
       tokens: messages.reduce((sum, message) => sum + estimateTokens(message), 0) };
   }
 
-  private cachedPrefix(before: number, prefix: number, context?: RewriteContext): number {
-    if (!context?.opaque) return prefix;
+  private cachedPrefix(before: number, prefix: number, model: Model | undefined, context?: RewriteContext): number {
+    const bounded = boundedCacheLookups(model);
+    if (!context?.opaque && !bounded) return prefix;
     const cached = this.cached;
-    if (!cached || !context.messages || cached.key !== context.cacheKey) return 0;
-    // Charge the whole affected suffix, including changes since the observed request, against confirmed cache reads.
+    if (!cached || !cached.stableHeader || !context?.messages || cached.key !== context.cacheKey) return 0;
+    // Charge changes since the observed request too, then round back to a searchable whole-message ending.
     const stable = unchangedPrefixTokens(cached.messages, context.messages);
-    return Math.max(0, cached.cacheRead - Math.max(cached.tokens - stable, before - prefix));
+    if (stable === 0) return 0;
+    if (bounded) {
+      if (!cached.implicit) return 0; // Explicit-only endpoints need proof beyond our implicit message-ending model.
+      prefix = searchablePrefix(context.messages, before, Math.min(prefix, stable), context.appendedCacheBoundaries ?? 1);
+      if (prefix === 0) return 0;
+    }
+    const available = Math.max(0, cached.cacheRead - Math.max(cached.tokens - stable, before - prefix));
+    return context.opaque ? available : Math.min(prefix, available);
   }
 
   observe(message: any, model: Model | undefined, workTokens = 0) {
@@ -407,7 +451,7 @@ export class RewriteBudget {
     if (emergency) return true;
     if (context?.opaque && (!finite(context.tokens) || context.tokens === 0)) return false;
     if (model?.pricing === "pending" || !finite(fee) || this.unknownFees > 0) return false;
-    const forecast = forecastRewrite(total, gain, this.cachedPrefix(before, prefix, context),
+    const forecast = forecastRewrite(total, gain, this.cachedPrefix(before, prefix, model, context),
       prices, model?.priceTiers, config.forecastRequests);
     return forecast.cold + this.fees + fee < forecast.savings;
   }
@@ -415,7 +459,7 @@ export class RewriteBudget {
   published(before: number, gain: number, prefix: number, model: Model | undefined, context?: RewriteContext) {
     const prices = this.prices(model);
     const total = totalInput(before, context);
-    const cold = coldCost(total, gain, this.cachedPrefix(before, prefix, context), prices, model?.priceTiers);
+    const cold = coldCost(total, gain, this.cachedPrefix(before, prefix, model, context), prices, model?.priceTiers);
     // A profitable first request cannot repay already-spent summary fees before it happens.
     const fees = this.unknownFees > 0 ? Infinity : this.fees;
     const reserve = Math.max(0, coldCost(total, gain, 0, prices, model?.priceTiers)) + fees;

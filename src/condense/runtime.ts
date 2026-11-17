@@ -515,13 +515,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const tools = pi.getAllTools().filter(tool => names.has(tool.name))
       .map(tool => [tool.name, tool.description, tool.parameters]);
     return JSON.stringify([ctx.sessionManager.getSessionId(), source, ctx.model?.provider, ctx.model?.id,
-      ctx.model?.api, ctx.model?.baseUrl, ctx.getSystemPrompt(), active, tools]);
+      ctx.model?.api, ctx.model?.baseUrl, ctx.model?.compat, ctx.getSystemPrompt(), active, tools]);
+  };
+  const economicMessages = (messages: any[]): any[] => {
+    const request = { messages: messages.filter(message => message.role !== "system") };
+    pi.events.emit(METIS_EVENTS.goalProject, request);
+    return request.messages;
   };
   const rewriteContext = (ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(),
     closingMessage?: any, messages?: any[]): RewriteContext => {
     const source = remoteCacheSource(projection);
     return { tokens: pressureUsage(ctx, closingMessage)?.tokens, opaque: source !== undefined,
-      cacheKey: source && requestCacheKey(ctx, source), messages: source ? messages : undefined };
+      cacheKey: requestCacheKey(ctx, source ?? "plain"), messages };
   };
   const admitAutomaticChain = (ctx: ExtensionContext, counts: TokenComparison, prefix: number,
     context: RewriteContext, candidateTokens?: number) => {
@@ -577,11 +582,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (!resolveRange(entry, raw)) return false; // A preview final is not a persistence receipt.
         const source = projectionFingerprint(raw);
         const config = policyFingerprint(currentConfig.value);
-        const before = projectContext(raw, ctx.model?.api, { ctx, probe: true }).messages;
-        if (costContext.opaque) costContext.messages ??= before;
+        const before = economicMessages(projectContext(raw, ctx.model?.api, { ctx, probe: true }).messages);
+        costContext.messages ??= before;
+        costContext.appendedCacheBoundaries = measurements.size + 1;
         const views = currentChainViews(raw, ctx).concat(entry);
-        const after = projectContext(raw, ctx.model?.api,
-          { ctx, chainViews: views, probe: true, chainFloor: entry.startUserTimestamp }).messages;
+        const after = economicMessages(projectContext(raw, ctx.model?.api,
+          { ctx, chainViews: views, probe: true, chainFloor: entry.startUserTimestamp }).messages);
         const counts = await tokenEstimator.compare(before, after, signal);
         assertCurrent(version); signal?.throwIfAborted();
         if (!counts && automatic) lastMaintenanceSource = undefined;
@@ -616,7 +622,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // A new single view can change the baseline that authorized existing shared views.
       if (indexer.getChainEntries().some(isSharedChain)) needsSharedValidation = true;
       statsAccum.addChainsCompressed(result.compressedEntries.length);
-      if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx), costContext);
+      if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx),
+        { ...costContext, appendedCacheBoundaries: result.compressedEntries.length });
       else resetRewriteState();
       occ.rewrite(ctx, beforeRewrite);
     }
@@ -1205,7 +1212,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const admitBatch = (record: BatchRecord, gain: RewriteGain, fee = 0) => {
         assertPendingOwnership();
         if (trigger === "manual") return true;
-        batchAdmission ??= batchRewriteAdmission(rewriteBudget, withClosingMessage(visibleForPlanning(), options.closingMessage),
+        batchAdmission ??= batchRewriteAdmission(rewriteBudget,
+          economicMessages(withClosingMessage(visibleForPlanning(), options.closingMessage)),
           config.chainCompression, economicModel(ctx), rewriteContext(ctx, sourceProjection, options.closingMessage));
         const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee);
         if (!allowed) record.deferredReason = "economics";
@@ -2562,7 +2570,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const rawResolve = createRangeResolver(raw);
       const candidates = closedChainCandidates(chains, known);
       if (candidates.length === 0) return;
-      const before = projectContext(raw, ctx.model?.api, { ctx, source: sourceView, probe: true }).messages;
+      const before = economicMessages(projectContext(raw, ctx.model?.api, { ctx, source: sourceView, probe: true }).messages);
       const eligible = protectChainWorkingSet(candidates, raw, before, currentConfig.value.chainCompression).filter(chain =>
         !chainMatchesGrace(chain, grace) && chain.finalAssistantTimestamp !== deferredFinal?.timestamp
         && !chain.middleToolCallIds.some(id => edited.has(id)) && findCompressibleRange(chain, raw, rawResolve));
@@ -2641,9 +2649,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const views = chainMembers(entry);
       const current = currentChainViews(raw, ctx, sourceView);
       const floor = earliestChainStart(views);
-      const after = projectContext(raw, ctx.model?.api,
-        { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages;
+      const after = economicMessages(projectContext(raw, ctx.model?.api,
+        { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages);
       const costContext = rewriteContext(ctx, sourceView.projection, undefined, before);
+      costContext.appendedCacheBoundaries = views.length;
       const counts = await tokenEstimator.compare(before, after, signal);
       assertNewWork();
       if (!counts) {
@@ -2809,9 +2818,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const result = projectContext(messages, ctx.model?.api, { ctx, source });
     if (messages !== event.messages) result.changed = true;
     const cacheSource = remoteCacheSource(projection);
-    preparedCacheRequest = currentConfig.value.enabled && cacheSource ? {
-      session: ctx.sessionManager.getSessionId(), leaf: ctx.sessionManager.getLeafId(), source: cacheSource,
-      messages: result.messages.filter(message => message.role !== "system"),
+    preparedCacheRequest = currentConfig.value.enabled && (cacheSource || ctx.model?.api === "openai-responses") ? {
+      session: ctx.sessionManager.getSessionId(), leaf: ctx.sessionManager.getLeafId(), source: cacheSource ?? "plain",
+      messages: economicMessages(result.messages),
     } : undefined;
     occ.observeRequest(result.messages);
     const measured = result.measure?.();

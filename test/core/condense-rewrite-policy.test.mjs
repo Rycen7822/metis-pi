@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { estimateTokens } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, estimateTokens } from "@earendil-works/pi-coding-agent";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import {
   RewriteBudget, batchRewriteAdmission, boundedRewritePolicy, protectBatchWorkingSet, protectChainWorkingSet,
   isUsefulWork, summaryRequestCost,
@@ -106,6 +107,80 @@ test("remote cache credit follows a matching request and loses the entire affect
   budget.observeRequest(undefined, undefined, {});
   for (let i = 14; i < 17; i++) request(i);
   assert.equal(admits(), false, "discarding request evidence must preserve unpaid costs");
+});
+
+test("Responses cache credit stops at searchable message endings and reserves new summary boundaries", async t => {
+  for (const opaque of [false, true]) for (const scenario of [
+    { tail: 18, added: 1, admitted: true },
+    { tail: 19, added: 0, admitted: true },
+    { tail: 19, added: 1, admitted: false },
+    { tail: 30, added: 1, admitted: false },
+    { tail: 18, added: 2, admitted: false },
+    { tail: 19, added: 1, custom: true, kind: "custom users", admitted: false },
+    { tail: 24, added: 1, grouped: true, kind: "one parallel tool group", admitted: true },
+    { tail: 18, added: 1, explicit: true, kind: "explicit-only", admitted: false },
+    { tail: 18, added: 1, lateHeader: true, kind: "later developer", admitted: false },
+    ...(opaque ? [{ tail: 0, added: 1, barrier: true, kind: "opaque carrier", admitted: false }] : []),
+  ]) await t.test(`${opaque ? "opaque" : "plain"}: ${scenario.tail} ${scenario.kind ?? "user endings"} + ${scenario.added} new`, () => {
+    const quote = { ...model, api: "openai-responses", input: ["text"], compat: { supportsExplicitPromptCacheMode: true },
+      cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } };
+    const tail = scenario.grouped ? [
+      { role: "assistant", timestamp: 10, content: Array.from({ length: scenario.tail }, (_, i) =>
+        ({ type: "toolCall", id: `parallel-${i}`, name: "read", arguments: {} })) },
+      ...Array.from({ length: scenario.tail }, (_, i) => ({ role: "toolResult", timestamp: 11 + i,
+        toolCallId: `parallel-${i}`, toolName: "read", content: [{ type: "text", text: "next" }], isError: false })),
+    ] : Array.from({ length: scenario.tail }, (_, i) => ({ role: scenario.custom ? "custom" : "user",
+      timestamp: 10 + i, content: "next", ...(scenario.custom ? { customType: "goal-continuation", display: true } : {}) }));
+    const head = { role: "user", timestamp: -1, content: "x".repeat(640000) };
+    const carrier = { role: "compactionSummary", timestamp: -2, summary: "Owned checkpoint", tokensBefore: 60000 };
+    const messages = scenario.barrier ? [head, carrier, ...history([96000]).slice(1), ...tail]
+      : [...(opaque ? [carrier] : []), head, ...history([96000]), ...tail];
+    const before = messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    const prefix = messages.slice(0, messages.findIndex(message => message.role === "toolResult"))
+      .reduce((sum, message) => sum + estimateTokens(message), 0);
+    const total = before + (opaque ? 60000 : 0), budget = new RewriteBudget();
+    const context = { tokens: total, opaque, cacheKey: "observed-frame", messages, appendedCacheBoundaries: scenario.added };
+    const input = convertResponsesMessages(quote, { messages: convertToLlm(messages) }, new Set([quote.provider]));
+    if (opaque) input[messages.findIndex(message => message.role === "compactionSummary")]
+      = { type: "compaction", encrypted_content: "owned-fixture" };
+    if (scenario.explicit) input.findLast(item => item.role === "user").content.at(-1)
+      .prompt_cache_breakpoint = { mode: "explicit" };
+    if (scenario.lateHeader) input.splice(1, 0, { role: "developer", content: "Later developer instructions" });
+    const payload = { model: quote.id, input, tools: [{ type: "function", name: "read",
+      parameters: { type: "object", properties: {} } }],
+      ...(scenario.explicit ? { prompt_cache_options: { mode: "explicit" } } : {}) };
+    for (let timestamp = 1; timestamp <= 3; timestamp++) {
+      budget.observeRequest(quote, context.cacheKey, payload, messages);
+      budget.observe({ ...completion(timestamp), api: quote.api,
+        usage: { input: total * 0.02, cacheRead: total * 0.98, cacheWrite: 0 } }, quote);
+    }
+    const policy = boundedRewritePolicy(config, 24000);
+    assert.equal(budget.admits(before, 23000, prefix, policy, quote, false, 0, context), scenario.admitted);
+    assert.equal(budget.admits(before, 23000, prefix, policy, quote, false, 0,
+      { ...context, cacheKey: "unobserved-frame" }), false, "local equality cannot replace observed request evidence");
+  });
+});
+
+test("one flush reserves every new summary and keeps the earliest published rewrite in independent admission", () => {
+  const quote = { ...model, api: "openai-responses", input: ["text"], compat: { supportsExplicitPromptCacheMode: true },
+    cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } };
+  const messages = [{ role: "user", timestamp: -1, content: "x".repeat(640000) }, ...history([96000, 96000]),
+    ...Array.from({ length: 16 }, (_, i) => ({ role: "user", timestamp: 20 + i, content: "next" }))];
+  const before = messages.reduce((sum, message) => sum + estimateTokens(message), 0), budget = new RewriteBudget();
+  const context = { tokens: before, cacheKey: "one-flush", messages };
+  const payload = { model: quote.id,
+    input: convertResponsesMessages(quote, { messages: convertToLlm(messages) }, new Set([quote.provider])) };
+  for (let timestamp = 1; timestamp <= 3; timestamp++) {
+    budget.observeRequest(quote, context.cacheKey, payload, messages);
+    budget.observe({ ...completion(timestamp), api: quote.api,
+      usage: { input: before * 0.02, cacheRead: before * 0.98, cacheWrite: 0 } }, quote);
+  }
+  const frame = batchRewriteAdmission(budget, messages, config, quote, context), gain = { pi: 23000, proxy: 23000 };
+  assert.equal(frame.accepts(["t0@2"], gain), true);
+  assert.equal(frame.accepts(["t1@6"], gain), true, "the later rewrite is independently profitable before publication");
+  frame.published(["t0@2"], gain);
+  assert.equal(frame.accepts(["t1@6"], gain), false,
+    "a second summary cannot reuse its own later prefix while the first rewrite lies outside the lookup window");
 });
 
 test("both forecast paths apply their own context tier while opaque cold costs remain funded", () => {
