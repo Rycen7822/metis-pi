@@ -12,6 +12,7 @@ const os = await import("node:os");
 const path = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const Core = await import("@earendil-works/pi-coding-agent");
+const { Container, stripTerminalSequences } = await import("@earendil-works/pi-tui");
 
 // Activate THIS package's theme through the host's own loader (custom themes
 // live at <agentDir>/themes; getAgentDir honors PI_CODING_AGENT_DIR) so the
@@ -32,6 +33,20 @@ fs.copyFileSync(
 );
 process.env.PI_CODING_AGENT_DIR = agentDir;
 Core.initTheme("metis-pi", false);
+
+test("native status rows retain separate messages across a redraw", () => {
+  const chatContainer = new Container();
+  const mode = Object.assign(Object.create(Core.InteractiveMode.prototype), { chatContainer, ui: { requestRender() {} } });
+  const rows = () => chatContainer.render(100).map(row => stripTerminalSequences(row).trim()).filter(Boolean);
+  mode.showExtensionNotify("Starting Pi", "info");
+  mode.showExtensionNotify("Restored session", "info");
+  mode.showExtensionNotify("Extension warning", "warning");
+  const before = rows();
+  assert.deepEqual(before, ["Restored session", "Warning: Extension warning"]);
+  mode.showExtensionNotify("Dynamic agents: codex", "info");
+  chatContainer.invalidate();
+  assert.deepEqual(rows(), [...before, "Dynamic agents: codex"]);
+});
 
 test("real UserMessageComponent paints the gray surface from the native theme slot", () => {
   const text = "帮我看看这段很长的用户消息在终端宽度下如何折行，背景应当铺满每一行包括右侧内边距，并且不能泄漏到下一块。";

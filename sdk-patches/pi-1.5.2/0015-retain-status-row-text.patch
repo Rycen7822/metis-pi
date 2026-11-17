@@ -1,0 +1,53 @@
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 299890261..8e5ce5eb8 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -521,7 +521,5 @@ export class InteractiveMode {
+ 
+ 	// Status line tracking (for mutating immediately-sequential status updates)
+-	private lastStatusSpacer: Spacer | undefined = undefined;
+-	private lastStatusText: ThemedText | undefined = undefined;
+-	private lastStatusMessage = "";
++	private lastStatus: { spacer: Spacer; text: ThemedText; update: (message: string) => void } | undefined;
+ 	private managedToolStatusStarted = false;
+ 
+@@ -3954,6 +3952,5 @@ export class InteractiveMode {
+ 		const color = status.type === "warning" ? "warning" : "dim";
+ 		this.chatContainer.addChild(new ThemedText(() => theme.fg(color, message), 1, 0));
+-		this.lastStatusSpacer = undefined;
+-		this.lastStatusText = undefined;
++		this.lastStatus = undefined;
+ 		this.ui.requestRender();
+ 	}
+@@ -3970,7 +3967,7 @@ export class InteractiveMode {
+ 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
+ 
+-		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
+-			this.lastStatusMessage = message;
+-			this.lastStatusText.invalidate();
++		const status = this.lastStatus;
++		if (status && last === status.text && secondLast === status.spacer) {
++			status.update(message);
+ 			this.ui.requestRender();
+ 			return;
+@@ -3978,10 +3975,16 @@ export class InteractiveMode {
+ 
+ 		const spacer = new Spacer(1);
+-		this.lastStatusMessage = message;
+-		const text = new ThemedText(() => theme.fg("dim", this.lastStatusMessage), 1, 0);
++		let rowMessage = message;
++		const text = new ThemedText(() => theme.fg("dim", rowMessage), 1, 0);
+ 		this.chatContainer.addChild(spacer);
+ 		this.chatContainer.addChild(text);
+-		this.lastStatusSpacer = spacer;
+-		this.lastStatusText = text;
++		this.lastStatus = {
++			spacer,
++			text,
++			update(message) {
++				rowMessage = message;
++				text.invalidate();
++			},
++		};
+ 		this.ui.requestRender();
+ 	}

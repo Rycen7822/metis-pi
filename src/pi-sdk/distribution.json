@@ -58,13 +58,17 @@
     {
       "file": "0014-cap-automatic-compaction.patch",
       "sha256": "523f44b64ce2c086b2f631757b1bc059c3390fe01cdfd0732aacceccd50bf860"
+    },
+    {
+      "file": "0015-retain-status-row-text.patch",
+      "sha256": "a890dfffe5d5bffbf44f7015e57737c599261f230980a6b68cd77890d44020be"
     }
   ],
-  "patchSet": "32c6ef34a11528e7dc14d15f11833bc12f46832d93b0884236b9a944ec190511",
+  "patchSet": "981ffa7d8e99019dea9171bbfeff24f5d379d9f35e5a97658506772225914371",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "4585d8c8e647b1afd6ffffce001eade553158745a1c06dae8f701359d36ec8fd",
-    "bytes": 6038916,
-    "unpackedBytes": 26761719
+    "sha256": "6434b023e0006f840513289810bff9ef421a8385a85cee80ab44231fea1a2005",
+    "bytes": 6037808,
+    "unpackedBytes": 26761262
   }
 }
