@@ -1,30 +1,19 @@
-# metis-pi 文档
+# Metis 文档
 
-安装见 [中文 README](../README.zh-CN.md) 或 [English README](../README.md)。本目录介绍各功能的用法，默认值以[配置参考](configuration.md)为准。
+安装见[中文 README](../README.zh-CN.md)或 [English README](../README.md)。安装后用 [配置参考](configuration.md) 查找配置文件，用 [操作速查](commands.md) 查命令和按键。
 
-## 使用
+## 使用指南
 
-| 需求 | 页面 |
+| 主题 | 文档 |
 | --- | --- |
-| 命令、工具、按键 | [操作速查](commands.md) |
-| 工具输出、diff、write 预览、思考块 | [转录显示](features/display.md) |
-| 输入区、Working、Footer、历史、字形 | [界面](features/interface.md) |
-| 选区与剪贴板 | [复制](features/selection-copy.md) |
-| 多 skill 输入 | [skills](features/skills.md) |
-| 委派与恢复 | [子代理](subagents/native.md)、[生命周期](subagents/lifecycle.md) |
-| 持久目标与续跑 | [goal](features/goal.md) |
-| `/compact`、检查点与模型切换 | [远端压缩](features/codex-compaction.md) |
-| 工具历史整理、原文回读与空闲压缩 | [Condense](features/condense.md) |
-| 按模型选择全局指令 | [动态指令](features/dynamic-agents.md) |
-| 修改后执行命令 | [Action Fusion](features/action-fusion.md) |
-| PTY 会话与图片 | [执行工具](execution.md) |
-| 网页与会话查询 | [内置扩展](features/managed-plugins.md) |
-| 阻塞式决策问卷 | [结构化提问](features/ask-user-question.md) |
-| 诊断与单文件修复 | [LSP](features/lsp.md) |
-| 路径、内容与语义检索 | [Neural Search](features/neural-search.md) |
-| MCP | [配置与连接](configuration.md#mcp) |
-| 故障定位 | [诊断](diagnostics.md)、[兼容性](compatibility.md) |
+| 终端 | [全屏与状态栏](features/interface.md)、[转录显示](features/display.md)、[选区复制](features/selection-copy.md) |
+| 上下文 | [历史整理](features/condense.md)、[OpenAI / Codex 压缩](features/codex-compaction.md)、[动态指令](features/dynamic-agents.md) |
+| 任务协作 | [目标](features/goal.md)、[子代理](subagents/native.md)、[结构化提问](features/ask-user-question.md)、[Skills](features/skills.md) |
+| 工具 | [工具发现](features/tool-discovery.md)、[进程会话](execution.md)、[修改后执行命令](features/action-fusion.md)、[本地搜索](features/neural-search.md)、[LSP](features/lsp.md) |
+| 其他集成 | [网页、会话检索与 BTW](features/managed-plugins.md)、[MCP](configuration.md#mcp) |
 
 ## 维护
 
-模块归属见[架构](architecture.md)，检查与发布流程见[开发说明](development.md)。SDK 文档的定位模板见 [Pi 文档指引](PI_Documentation_Guide.md)。执行与子代理的来源和许可分别记录在[执行模块来源](provenance/execution/README.md)与[子代理来源](provenance/subagents/README.md)中；其余组件的记录放在各自的源码目录。
+- 用户侧：[支持的环境](compatibility.md)、[诊断](diagnostics.md)、[子代理生命周期](subagents/lifecycle.md)。
+- 开发者：[架构](architecture.md)、[开发与验证](development.md)、[Pi 文档指引](PI_Documentation_Guide.md)。
+- 来源与许可：[执行模块](provenance/execution/README.md)、[子代理](provenance/subagents/README.md)、[NOTICE](../NOTICE)。
