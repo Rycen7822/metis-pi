@@ -1,0 +1,77 @@
+diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
+index a49230a..fd13ba5 100644
+--- a/packages/coding-agent/src/package-manager-cli.ts
++++ b/packages/coding-agent/src/package-manager-cli.ts
+@@ -31,6 +31,7 @@ import {
+ 	type SelfUpdatePackageTarget,
+ 	VERSION,
+ } from "./config.ts";
++import { loadExtensions } from "./core/extensions/loader.ts";
+ import type { InlineExtension } from "./core/extensions/types.ts";
+ import { ModelRuntime } from "./core/model-runtime.ts";
+ import { DefaultPackageManager, isOfflineModeEnabled } from "./core/package-manager.ts";
+@@ -608,7 +609,46 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
+ 	return target.type === "all" || target.type === "extensions";
+ }
+ 
+-async function refreshModelCatalogs(agentDir: string): Promise<void> {
++async function registerMetisModelCatalog(
++	modelRuntime: ModelRuntime,
++	agentDir: string,
++	projectTrustOverride: boolean | undefined,
++): Promise<void> {
++	const cwd = process.cwd();
++	const { settingsManager } = await createCommandSettingsManager({
++		cwd,
++		agentDir,
++		projectTrustOverride,
++		useSavedProjectTrustOnly: true,
++	});
++	const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
++	const { extensions } = await manager.resolve(async () => "skip");
++	const paths = extensions
++		.filter(({ enabled, path, metadata }) => {
++			const root = metadata.packageRoot;
++			if (!enabled || !root || path !== join(root, "extensions", "model-catalog.ts")) return false;
++			try {
++				return (
++					JSON.parse(stripBom(readFileSync(join(root, "package.json"), "utf8")))?.name === "@rycen7822/metis-pi"
++				);
++			} catch {
++				return false;
++			}
++		})
++		.map((extension) => extension.path);
++	if (paths.length === 0) return;
++
++	// A catalog-only command must not execute unrelated extension factories.
++	const { runtime, errors } = await loadExtensions(paths, cwd);
++	if (errors.length > 0) {
++		throw new Error(`Could not load Metis model catalog: ${errors.map((error) => error.error).join("; ")}`);
++	}
++	for (const { provider } of runtime.pendingNativeProviderRegistrations) {
++		modelRuntime.registerNativeProvider(provider);
++	}
++}
++
++async function refreshModelCatalogs(agentDir: string, projectTrustOverride: boolean | undefined): Promise<void> {
+ 	const controller = new AbortController();
+ 	const timeout = setTimeout(() => controller.abort(), 15_000);
+ 	try {
+@@ -618,6 +658,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
+ 			allowModelNetwork: false,
+ 			signal: controller.signal,
+ 		});
++		await registerMetisModelCatalog(modelRuntime, agentDir, projectTrustOverride);
+ 		const result = await modelRuntime.refresh({
+ 			allowNetwork: true,
+ 			force: true,
+@@ -1010,7 +1051,7 @@ export async function handlePackageCommand(
+ 
+ 	if (options.command === "update" && options.updateTarget?.type === "models") {
+ 		try {
+-			await refreshModelCatalogs(getAgentDir());
++			await refreshModelCatalogs(getAgentDir(), options.projectTrustOverride);
+ 		} catch (error: unknown) {
+ 			const message = error instanceof Error ? error.message : "Unknown model catalog refresh error";
+ 			console.error(chalk.red(`Error: ${message}`));

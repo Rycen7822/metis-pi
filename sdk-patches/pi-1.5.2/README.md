@@ -20,6 +20,7 @@
 | `0010` | 投影/分支按有界热正文窗口读取；原生压缩按有效投影准备，完整事件分支首次访问才加载。协作读取支持取消，预览拒绝混读改写后的来源。 |
 | `0011` | CLI codemode分离在途准入、FIFO执行与结果消费背压；有界预览保留总数/失败/未结算状态，终态不再更新，迟到结果不序列化。 |
 | `0012` | Read显式`format: page`返回原文与行游标/完整性状态；沿用流式读取和原预算，默认string/image与模型正文不变。 |
+| `0013` | `pi update --models` 按包过滤和项目授权加载 Metis 模型目录入口，使用 Pi 的强制同步和缓存。 |
 
 按编号顺序应用；`0002` 已由上游覆盖，编号留空。
 保留 1.5.2 的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
@@ -88,7 +89,7 @@ npm --prefix "$METIS" run verify:pi-sdk
 避免副本破坏相对引用或制造第二个模块实例；类型也由同一源码导出，不添加假声明或放宽检查。
 
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
-`build:pi-sdk` 核对官方 SHA，干净重放十二补丁并逐路径比对源码，再构建四个 SDK 包；
+`build:pi-sdk` 核对官方 SHA，干净重放十三个补丁并逐路径比对源码，再构建四个 SDK 包；
 归档包含 `coding-agent/docs/codemode.md`，使运行时指向的文档同步更新；独立沙箱和 bundled worker 均使用补丁后的规则。
 输出 `assets/pi-sdk/pi-1.5.2.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
 若 check 格式化改写源码，先同步补丁，再重新构建；不能沿用旧归档改名充当新版本。

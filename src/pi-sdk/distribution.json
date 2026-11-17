@@ -50,13 +50,17 @@
     {
       "file": "0012-add-programmatic-read-pages.patch",
       "sha256": "9d28884a2dde042330aec9698d89f228966deb332cb4688df6189e3da19d7c18"
+    },
+    {
+      "file": "0013-refresh-metis-catalog-from-cli.patch",
+      "sha256": "b846c65d9dc09733865e4019fba65338dc3980dc2eba121240b2c9473d4a9a56"
     }
   ],
-  "patchSet": "52de2ae5e77b66b08195f69966d1322770847c931af289508605174eb4a468e0",
+  "patchSet": "b21858443c6d5d2e94037c1d4a46ca2e92bc26e06192b2e32b012217c68c0bc2",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "5bdab115fcc54a04217b44bb8d0ca6c3d94b9efc6031b2fc791fd0f46dd03057",
-    "bytes": 6034342,
-    "unpackedBytes": 26747526
+    "sha256": "5e4023116c0837afce451c4ca8816a3c49ce5cf24d4266c19e7b21f5633485c6",
+    "bytes": 6035724,
+    "unpackedBytes": 26753497
   }
 }

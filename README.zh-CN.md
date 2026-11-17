@@ -38,6 +38,7 @@ pi install git:git@github.com:Rycen7822/metis-pi.git
 | [Dynamic agents](docs/features/dynamic-agents.md) | 按 provider/模型选择下一 run 的全局指令，保留项目规则与源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | edit/write 成功后执行 `then_run`，分别保留状态、diff 和日志。 |
 | [远端压缩](docs/features/codex-compaction.md) | OpenAI/Codex 加密检查点、持久化回放与跨模型恢复。 |
+| [OpenAI 模型目录](docs/configuration.md#pi-152-模型与预热) | 按当前 ChatGPT 登录刷新 `openai` 和 `openai-codex` 的可用模型。 |
 | [condense](docs/features/condense.md) | 整理工具历史，按引用回读原文；自动整理和空闲整段压缩默认关闭。 |
 
 偏好统一存于全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），项目级覆盖不在支持范围内。`/metis-config init` 创建缺失默认配置及[参数说明](metis-pi-config.md)，已有 TOML 直接编辑，缺项采用[默认模板](metis-pi.toml)。旧 LSP JSON 须手工迁移，子代理后端变更后须安全重启 daemon。`[appearance] enabled = false` 只关显示；Pi 的模型/主题/packages/trust/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。

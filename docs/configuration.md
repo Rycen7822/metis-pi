@@ -27,6 +27,17 @@ Metis 的偏好设置保存在全局的 **`<agentDir>/metis-pi.toml`**。`agentD
 
 ## Pi 1.5.2 模型与预热
 
+Metis 的模型目录扩展在 Pi 刷新模型时，为使用 ChatGPT OAuth 的 `openai` 和 `openai-codex` 查询各自的账号目录。
+`openai` 请求 OpenAI 的 `/v1/models`，`openai-codex` 使用本机 Codex 的版本号请求旧 Codex 后端目录。
+认证、续期和推理请求继续由 Pi 处理。API Key 和自定义 provider 地址沿用 Pi 的目录。
+
+目录公布的可见模型按同一 ID 补齐参数。必需字段缺失时，扩展自动调用本机 `codex debug models` 获取元数据。
+GPT‑6.2 Sol 和 Astra 的输出上限与标准价格来自 OpenAI 规格。仍缺必需参数的条目暂不显示。
+首次同步可通过打开 `/model` 触发，缓存随后可供同一登录态离线启动和 `pi --list-models` 使用。
+使用 Metis 随包的 Pi SDK 时，终端命令 `pi update --models` 强制刷新账号目录，跳过 Metis 的 60 秒缓存窗口。
+同步失败时可继续使用该账号的上次结果，或使用 Pi 的内置和公开目录。
+其他扩展若也注册这两个同名 provider，可通过下文的入口过滤停用 Metis 的目录扩展。
+
 模型与预热属于 Pi 的配置，不写入 Metis 的 TOML。全局 `<agentDir>/settings.json` 中的 `cacheWarming` 默认为 `"idle"`。符合条件时，它在运行中以及回答后继续预热。空闲窗口最长 30 分钟。经济阈值与上下文有效性仍由 Pi 判断。`"streaming"` 只在运行中预热。`"off"` 关闭预热。主会话、BTW 与 worker 都沿用该设置。Metis 不会替用户修改默认值。
 
 主界面 footer 中的会话 I/O、最近的缓存率，以及内部对话 ledger，只统计 assistant 和 compaction、branch summary 消息。独立的 `cache_warm` 用量不计入。当前 footer 不显示费用金额。ledger 中的 cost 不是完整账单。预热和其他独立请求的费用，以 provider 的记录为准。
@@ -131,6 +142,7 @@ Pi 的 package entry filter 控制扩展的加载。在 `settings.json` 的 pack
 | 功能 | 排除项 |
 | --- | --- |
 | 配置命令、显示 | `-extensions/config.ts`、`-extensions/appearance.ts` |
+| OpenAI 账号模型目录 | `-extensions/model-catalog.ts` |
 | goal、condense | `-extensions/goal.ts`、`-extensions/condense.ts` |
 | 动态指令 | `-extensions/dynamic-agents.ts`。停用前，先恢复所需的全局指令。 |
 | Pi 文档提示、网关错误分类 | `-extensions/system-prompt.ts`、`-extensions/retry-policy.ts` |

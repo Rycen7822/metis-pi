@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import test, { type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { getSupportedThinkingLevels, InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { createAgentSessionServices, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { temporaryDirectory } from "../helpers/temp-dir.mjs";
+
+const openai = "https://api.openai.com/v1/models";
+const legacy = "https://chatgpt.com/backend-api/codex/models?client_version=0.150.0";
+const visibleSol = { slug: "gpt-6.2-sol", display_name: "Sol", visibility: "list", context_window: 500_000,
+  max_context_window: 872_000, input_modalities: ["text", "image", "audio"],
+  supported_reasoning_levels: ["low", "high", "max", "ultra"].map(effort => ({ effort })) };
+const oauth = (access: string) => ({ type: "oauth" as const, access, refresh: "synthetic-refresh",
+  expires: Date.now() + 3_600_000, accountId: "synthetic-account" });
+
+function installFakeCodex(t: TestContext, dir: string, manifest: unknown) {
+  const script = join(dir, "fake-codex.cjs");
+  writeFileSync(join(dir, "codex-models.json"), JSON.stringify(manifest));
+  writeFileSync(script, `
+    const fs = require("node:fs");
+    const path = require("node:path");
+    fs.appendFileSync(path.join(__dirname, "calls"), process.argv.slice(2).join(" ") + "\\n");
+    const value = process.argv[2] === "--version" ? "codex-cli 0.150.0"
+      : fs.readFileSync(path.join(__dirname, "codex-models.json"), "utf8");
+    process.stdout.write(value);
+  `);
+  if (process.platform === "win32") {
+    writeFileSync(join(dir, "codex.cmd"), `@"${process.execPath}" "%~dp0fake-codex.cjs" %*\r\n`);
+  } else {
+    writeFileSync(join(dir, "codex"), `#!/usr/bin/env node\nrequire("./fake-codex.cjs");\n`, { mode: 0o700 });
+  }
+  const original = process.env.PATH;
+  process.env.PATH = dir + delimiter + (original ?? "");
+  t.after(() => {
+    if (original === undefined) delete process.env.PATH;
+    else process.env.PATH = original;
+  });
+}
+
+async function loadExtension(dir: string, credentials: InMemoryCredentialStore, modelsStore: InMemoryModelsStore) {
+  const runtime = await ModelRuntime.create({ modelsPath: null, credentials, modelsStore, refreshOnCreate: false });
+  const services = await createAgentSessionServices({
+    cwd: dir, agentDir: dir, modelRuntime: runtime, settingsManager: SettingsManager.inMemory({}),
+    resourceLoaderOptions: {
+      noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      additionalExtensionPaths: [fileURLToPath(new URL("../../extensions/model-catalog.ts", import.meta.url))],
+    },
+  });
+  assert.deepEqual(services.diagnostics, []);
+  assert.deepEqual(services.resourceLoader.getExtensions().errors, []);
+  assert.equal(services.resourceLoader.getExtensions().extensions.length, 1);
+  assert.equal(runtime.getProvider("openai")?.refreshModelsAuth, "credential");
+  return runtime;
+}
+
+test("the shipped entry refreshes the two OAuth lists and restores the same account offline", async t => {
+  const dir = temporaryDirectory(t);
+  installFakeCodex(t, dir, { models: [] });
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("openai", async () => oauth("public-token"));
+  await credentials.modify("openai-codex", async () => oauth("legacy-token"));
+  const store = new InMemoryModelsStore();
+  const calls: string[] = [];
+  let failPublic = false;
+  t.mock.method(globalThis, "fetch", async (url: URL, options: RequestInit) => {
+    const headers = new Headers(options.headers);
+    calls.push(String(url));
+    if (url.hostname === "pi.dev") {
+      assert.equal(headers.has("authorization"), false);
+      assert.equal(url.pathname, "/api/models/providers/openai");
+      return new Response(null, { status: 404 });
+    }
+    assert.equal(options.redirect, "error");
+    if (String(url) === openai) {
+      assert.equal(headers.get("authorization"), "Bearer public-token");
+      assert.equal(headers.has("chatgpt-account-id"), false);
+      if (failPublic) return new Response(null, { status: 503 });
+      return Response.json({ models: [visibleSol, { ...visibleSol, slug: "hidden-model", visibility: "hide" }] });
+    }
+    assert.equal(String(url), legacy);
+    assert.equal(headers.get("authorization"), "Bearer legacy-token");
+    assert.equal(headers.get("chatgpt-account-id"), "synthetic-account");
+    return Response.json({ models: [{ ...visibleSol, context_window: 272_000 }] });
+  });
+  const runtime = await loadExtension(dir, credentials, store);
+  assert.equal(calls.length, 0);
+  assert.equal(runtime.getProvider("openai")?.auth.oauth?.loginLabel, "Sign in with ChatGPT");
+  assert.ok(runtime.getProvider("openai")?.auth.apiKey);
+  assert.deepEqual((await runtime.refresh({ providers: ["openai", "openai-codex"] })).errors, new Map());
+  assert.deepEqual(calls.sort(), [openai, legacy].sort());
+  const openaiModels = await runtime.getAvailable("openai");
+  assert.deepEqual(openaiModels.map(model => model.id), ["gpt-6.2-sol"]);
+  const sol = openaiModels[0];
+  assert.equal(sol.api, "openai-responses");
+  assert.equal(sol.contextWindow, 500_000);
+  assert.equal(sol.maxTokens, 128_000);
+  assert.equal(sol.cost.cacheRead, 0.1);
+  assert.deepEqual(sol.input, ["text", "image"]);
+  assert.deepEqual(getSupportedThinkingLevels(sol), ["low", "high", "max"]);
+  const codexModels = await runtime.getAvailable("openai-codex");
+  assert.deepEqual(codexModels.map(model => [model.id, model.api, model.contextWindow]), [
+    ["gpt-6.2-sol", "openai-codex-responses", 272_000],
+  ]);
+  assert.equal(readFileSync(join(dir, "calls"), "utf8"), "--version\n");
+  assert.equal(JSON.stringify(await store.read("openai")).includes("public-token"), false);
+
+  await runtime.refresh({ providers: ["openai"] });
+  assert.equal(calls.length, 2, "recent catalog prevents redundant fetches");
+  failPublic = true;
+  const failed = await runtime.refresh({ providers: ["openai"], force: true });
+  assert.match(failed.errors.get("openai")?.message ?? "", /HTTP 503/);
+  assert.equal((await runtime.getAvailable("openai"))[0]?.id, "gpt-6.2-sol");
+  const restarted = await loadExtension(dir, credentials, store);
+  assert.equal((await restarted.getAvailable("openai"))[0]?.id, "gpt-6.2-sol");
+  assert.equal(calls.length, 3, "offline startup restores a catalog without a network refresh");
+
+  await credentials.modify("openai", async () => oauth("other-user"));
+  await restarted.refresh({ providers: ["openai"], allowNetwork: false });
+  assert.ok(!(await restarted.getAvailable("openai")).some(model => model.id === "gpt-6.2-sol"));
+  await credentials.modify("openai", async () => ({ type: "api_key", key: "synthetic-key" }));
+  assert.deepEqual((await restarted.refresh({ providers: ["openai"] })).errors, new Map());
+  assert.match(calls.at(-1) ?? "", /^https:\/\/pi\.dev\//);
+  assert.ok((await restarted.getAllAvailable("openai")).some(model => model.type === "classifier"));
+});
+
+test("local Codex fills exact-slug fields without extending the account inventory", async t => {
+  const dir = temporaryDirectory(t);
+  const metadata = { slug: "fresh-model", visibility: "list", context_window: 300_000, max_output_tokens: 32_000,
+    input_modalities: ["text"], supported_reasoning_levels: [{ effort: "high" }],
+    cost: { input: 1, output: 2, cache_read: 0.05, cache_write: 1.2 } };
+  installFakeCodex(t, dir, { models: [metadata, { ...metadata, slug: "foreign-account-model" }] });
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("openai", async () => oauth("public-token"));
+  t.mock.method(globalThis, "fetch", async (url: URL) => {
+    assert.equal(String(url), openai);
+    return Response.json({ models: [{ slug: "fresh-model", visibility: "list", context_window: 200_000 }] });
+  });
+  const runtime = await loadExtension(dir, credentials, new InMemoryModelsStore());
+  assert.deepEqual((await runtime.refresh({ providers: ["openai"] })).errors, new Map());
+  const models = await runtime.getAvailable("openai");
+  assert.deepEqual(models.map(model => [model.id, model.contextWindow, model.maxTokens, model.cost.cacheWrite]), [
+    ["fresh-model", 200_000, 32_000, 1.2],
+  ]);
+  assert.equal(readFileSync(join(dir, "calls"), "utf8"), "debug models\n");
+});
+
+test("pi update --models forces an enabled Metis catalog refresh through the packaged CLI", async t => {
+  const dir = temporaryDirectory(t);
+  const metadata = { slug: "new-model", visibility: "list", context_window: 300_000, max_output_tokens: 32_000,
+    input_modalities: ["text"], supported_reasoning_levels: [{ effort: "high" }],
+    cost: { input: 1, output: 2, cache_read: 0.05, cache_write: 1.2 } };
+  installFakeCodex(t, dir, { models: [metadata] });
+  const agentDir = join(dir, "agent");
+  const packageDir = join(dir, "metis");
+  for (const path of [agentDir, join(packageDir, "extensions"), join(packageDir, "src")]) {
+    mkdirSync(path, { recursive: true });
+  }
+  cpSync(new URL("../../extensions/model-catalog.ts", import.meta.url), join(packageDir, "extensions", "model-catalog.ts"));
+  cpSync(new URL("../../src/model-catalog/", import.meta.url), join(packageDir, "src", "model-catalog"), { recursive: true });
+  writeFileSync(join(packageDir, "package.json"), JSON.stringify({
+    name: "@rycen7822/metis-pi", pi: { extensions: ["./extensions/*.ts"] },
+  }));
+  writeFileSync(join(packageDir, "extensions", "unrelated.ts"), 'throw new Error("unrelated extension executed");');
+  writeFileSync(join(agentDir, "auth.json"), JSON.stringify({
+    openai: oauth("public-token"), "openai-codex": oauth("legacy-token"),
+  }));
+  const settings = join(agentDir, "settings.json");
+  writeFileSync(settings, JSON.stringify({ packages: [packageDir] }));
+  const requests = join(dir, "requests");
+  const hook = join(dir, "catalog-fetch.mjs");
+  writeFileSync(hook, `
+    import assert from "node:assert/strict";
+    import { appendFileSync } from "node:fs";
+    const fetch = async (input, options) => {
+      const url = String(input);
+      const headers = new Headers(options.headers);
+      appendFileSync(${JSON.stringify(requests)}, url + "\\n");
+      if (new URL(url).hostname === "pi.dev") {
+        assert.equal(headers.has("authorization"), false);
+        return new Response(null, { status: 404 });
+      }
+      if (url === ${JSON.stringify(openai)}) {
+        assert.equal(headers.get("authorization"), "Bearer public-token");
+      } else {
+        assert.equal(url, ${JSON.stringify(legacy)});
+        assert.equal(headers.get("authorization"), "Bearer legacy-token");
+      }
+      return Response.json({ models: [{ slug: "new-model", visibility: "list", context_window: 200_000 }] });
+    };
+    // Keep the fake transport in place when the CLI installs Undici's globals.
+    Object.defineProperty(globalThis, "fetch", { get: () => fetch, set: () => {} });
+  `);
+  const cli = fileURLToPath(new URL("../../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js", import.meta.url));
+  const run = promisify(execFile);
+  const update = () => run(process.execPath, ["--import", hook, cli, "update", "--models"], {
+    cwd: dir, timeout: 20_000, windowsHide: true,
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PATHEXT: process.env.PATHEXT,
+      PI_CODING_AGENT_DIR: agentDir },
+  });
+  for (let refresh = 0; refresh < 2; refresh++) {
+    const { stdout } = await update();
+    assert.match(stdout, /Model catalogs refreshed/);
+  }
+  assert.deepEqual(readFileSync(requests, "utf8").trim().split("\n").sort(), [openai, legacy, openai, legacy].sort());
+  assert.equal(readFileSync(join(dir, "calls"), "utf8").match(/debug models/g)?.length, 4);
+  const store = JSON.parse(readFileSync(join(agentDir, "models-store.json"), "utf8"));
+  for (const provider of ["openai", "openai-codex"]) {
+    assert.deepEqual(store[provider].metisAccountCatalog.models.map((model: { id: string; maxTokens: number }) =>
+      [model.id, model.maxTokens]), [["new-model", 32_000]]);
+  }
+
+  writeFileSync(requests, "");
+  writeFileSync(settings, JSON.stringify({ packages: [{ source: packageDir, extensions: ["-extensions/model-catalog.ts"] }] }));
+  await update();
+  assert.deepEqual(readFileSync(requests, "utf8").trim().split("\n").map(url => new URL(url).hostname), ["pi.dev", "pi.dev"]);
+});

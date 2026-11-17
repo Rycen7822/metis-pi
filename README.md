@@ -38,6 +38,7 @@ Use Pi package entry filters to disable features, for example `"extensions": ["-
 | [Dynamic agents](docs/features/dynamic-agents.md) | Next-run global instructions selected by provider/model; project rules and source files remain unchanged. |
 | [Action Fusion](docs/features/action-fusion.md) | edit/write `then_run`: execute after successful mutation, retaining separate statuses, diffs and logs. |
 | [Remote compaction](docs/features/codex-compaction.md) | Encrypted checkpoints for OpenAI/Codex, persistent replay and cross-model recovery. |
+| [OpenAI model catalog](docs/configuration.md#pi-152-模型与预热) | Refresh the `openai` and `openai-codex` model lists for the signed-in ChatGPT account. |
 | [Condense](docs/features/condense.md) | Summarize tool history and recall archived originals; automatic pruning and idle compaction are opt-in. |
 
 Preferences live only in global `~/.pi/agent/metis-pi.toml` (or `PI_CODING_AGENT_DIR`), not project overrides. `/metis-config init` creates missing defaults and the [parameter guide](metis-pi-config.md), without importing or rewriting other settings. Edit existing TOML directly; omitted fields use [package defaults](metis-pi.toml). LSP JSON migration is manual; safely restart the subagent daemon after backend changes. `[appearance] enabled = false` disables display only. Pi keeps its model/theme/package/trust/MCP credential files. See [configuration](docs/configuration.md).
