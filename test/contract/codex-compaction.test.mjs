@@ -52,7 +52,7 @@ function checkpointEvents(n = 1) {
 async function host(t, {
   auto = false, condense = false, goal = false, execution = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
   oauth = routeModel.api !== "openai-responses", codexAuth = "cli", credential,
-  beforeBind, modelsConfig,
+  beforeBind, modelsConfig, compactionPolicy, previousTokens, compactionSettings,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -80,7 +80,7 @@ async function host(t, {
     sm.appendMessage(user("ORIGINAL USER"));
     sm.appendMessage(assistant("old work ".repeat(100)));
     sm.appendMessage(user("SECOND USER"));
-    sm.appendMessage(assistant("more work ".repeat(100), auto ? model.contextWindow - 10 : 100));
+    sm.appendMessage(assistant("more work ".repeat(100), previousTokens ?? (auto ? model.contextWindow - 10 : 100)));
     sm.appendMessage(user("KEPT TAIL"));
   }
   if (goal) sm.appendCustomEntry("goal", { version: 2, action: "create", goal: {
@@ -88,8 +88,16 @@ async function host(t, {
   } });
   writeFileSync(join(dir, "metis-pi.toml"), "[contextPrune]\nenabled = true\nopportunisticCompaction = true\n[contextPrune.chainCompression]\nenabled = false\n[contextPrune.purgeErrors]\nenabled = false\n");
   const eventBus = createEventBus();
-  const settings = SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 1 }, retry: { enabled: false }, defaultThinkingLevel: "off", transport, cacheWarming: "off" });
+  const settings = SettingsManager.inMemory({
+    compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 1, ...compactionSettings },
+    retry: { enabled: false }, defaultThinkingLevel: "off", transport, cacheWarming: "off",
+  });
   const paths = [fileURLToPath(new URL("extensions/codex-compaction.ts", root))];
+  if (compactionPolicy !== undefined) {
+    const path = join(dir, "metis-pi.toml");
+    writeFileSync(path, readFileSync(path, "utf8") + `\n[compactionPolicy]\n${compactionPolicy}\n`);
+    paths.push(fileURLToPath(new URL("extensions/compaction-policy.ts", root)));
+  }
   if (providerOverride) {
     const entry = join(dir, "configured-provider.ts");
     const { id, name, reasoning, input, contextWindow, maxTokens, cost } = routeModel;
@@ -415,6 +423,36 @@ test("Pi refresh during checkpoint publication preserves verified OAuth login ow
       else assert.match(h.notices.join("\n"), /OAuth refresh continuity unavailable/);
     });
   }
+});
+
+test("Metis TOML caps Pi's native automatic compaction before the next remote request", async t => {
+  const cases = [
+    { title: "500k window uses the default cap", window: 500_000, used: 420_000, compacts: true },
+    { title: "not yet past the cap", window: 500_000, used: 390_000, compacts: false },
+    { title: "window exactly equal to the cutoff", window: 400_000, used: 350_000, limit: 300_000, compacts: false },
+    { title: "custom cutoff and cap", window: 400_000, used: 340_000, above: 350_000, limit: 320_000, compacts: true },
+    { title: "keep a stricter Pi model override", window: 500_000, used: 390_000, reserve: 120_000, compacts: true },
+    { title: "respect disabled auto-compaction", window: 500_000, used: 420_000, enabled: false, compacts: false },
+  ];
+  for (const { title, window, used, above, limit, reserve, enabled, compacts } of cases) await t.test(title, async t => {
+    const routeModel = { ...model, contextWindow: window };
+    const h = await host(t, {
+      routeModel, previousTokens: used,
+      compactionPolicy: [above && `contextWindowAbove = ${above}`, limit && `autoCompactTokenLimit = ${limit}`]
+        .filter(Boolean).join("\n"),
+      compactionSettings: { enabled: enabled ?? true,
+        ...(reserve && { modelOverrides: { [`${model.provider}/${model.id}`]: { reserveTokens: reserve } } }) },
+    });
+    const reasons = [];
+    t.after(h.session.subscribe(event => {
+      if (event.type === "compaction_end") reasons.push(event.reason);
+    }));
+    await h.session.prompt("CONTINUE WITH NATIVE CAP");
+    assert.deepEqual(reasons, compacts ? ["threshold"] : []);
+    assert.equal(compactions(h).length, Number(compacts));
+    assert.deepEqual(h.bodies.map(body => body.input.at(-1)?.type === "compaction_trigger"), compacts ? [true, false] : [false]);
+    assert.equal(h.session.model.contextWindow, window, "keep the model's actual request window");
+  });
 });
 
 test("threshold compaction survives the native refresh window with verified login ownership", async t => {

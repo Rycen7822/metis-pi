@@ -61,7 +61,7 @@ Condense 把较长的工具历史整理成摘要、去重引用或归档预览�
 
 ### 付费摘要压力与预算
 
-设模型窗口为 `W`，Pi 自动压缩的有效容量为 `T = W − reserveTokens`。付费摘要的默认压力线为：
+设模型窗口为 `W`，Pi 的自动压缩触发线为 `T`，包含 Metis 的[大窗口上限](../../metis-pi-config.md#compactionpolicypi-自动压缩)。付费摘要的默认压力线为：
 
 ```text
 min(autoBudgetThreshold × W, maxBudgetWindowTokens, max(0, T − growthHeadroomTokens))

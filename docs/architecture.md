@@ -13,6 +13,7 @@
 | `system-prompt.ts` | 把 Pi 的 `docs` 段指向 agent 目录的指引，保留用户原有的自定义提示。 |
 | `retry-policy.ts` | 瞬时计费查询失败的分类。重试次数、退避和取消归 Pi。 |
 | `condense.ts` | `src/condense/`：归档、精简、恢复、摘要与 OCC。 |
+| `compaction-policy.ts` | 由全局 TOML 设置大窗口模型的自动压缩线；触发与执行由 Pi 管理。 |
 | `codex-compaction.ts` | `src/remote-compaction/`：远端检查点、跨模型摘要与压缩请求归属。 |
 | `action-fusion.ts` | `src/execution/action-fusion.ts`：`then_run`、路径队列与修改回执。 |
 | `execution.ts` | `src/execution/`：PTY 会话、后台 shell 与进程清理。 |

@@ -191,8 +191,13 @@ groups = []
 
 
 # =============================================================================
-# 5. 历史精简 / Condense 与 OCC
+# 5. 上下文压缩 / Condense 与 OCC
 # =============================================================================
+# 只提前 Pi 的自动压缩，不改变模型窗口。两个值的单位都是 token。
+[compactionPolicy]
+contextWindowAbove = 400000
+autoCompactTokenLimit = 400000
+
 # 自动历史整理与空闲整段压缩（OCC）默认关闭；完整说明见 docs/features/condense.md。
 [contextPrune]
 enabled = false

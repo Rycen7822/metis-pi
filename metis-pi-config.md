@@ -166,6 +166,17 @@ exclude = []
 
 只替换已知全局指令来源，项目指令、会话消息、认证、provider 路由保持原样。
 
+## `[compactionPolicy]`（Pi 自动压缩）
+
+| 字段 | 默认值 | 含义 / 单位 |
+| --- | --- | --- |
+| `contextWindowAbove` | `400000` | 模型上下文窗口严格大于此值时，应用压缩线的上限（token）。 |
+| `autoCompactTokenLimit` | `400000` | 自动压缩触发线的上限（token）。 |
+
+两个值均为正整数。对匹配的模型，触发线为 `min(autoCompactTokenLimit, contextWindow - reserveTokens)`。
+保留 Pi 更早的阈值（包括模型单独设置的预留量）和自动压缩开关。触发线不是单次请求的硬上限；模型窗口、手动 `/compact` 和压缩协议不变。
+修改全局 TOML 后执行 `/reload`。首次使用需重启到含此接口的 Metis 受管 SDK。
+
 ## `[contextPrune]`（Condense / OCC）
 
 自动历史整理与空闲整段压缩的初始状态均为关闭。使用方式、分组和费用规则见 [Condense 指南](docs/features/condense.md)。

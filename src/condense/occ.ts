@@ -106,7 +106,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (!settings) {
         // Resolve Pi's live effective settings with its own defaults/model overrides,
         // without reopening global/project files or discarding in-memory overrides.
-        settings = SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(ctx.model);
+        settings = pi.getCompactionSettings?.() ?? SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(ctx.model);
       }
       const limit = window - settings.reserveTokens;
       return settings.enabled && limit > 0 ? { limit, buffer: Math.max(1024, limit * 0.05) } : undefined;

@@ -54,13 +54,17 @@
     {
       "file": "0013-refresh-metis-catalog-from-cli.patch",
       "sha256": "a3d7396bc328be2a621eba9539b4b5e298f425ec9ef7e3d01aba1f7daadacc9e"
+    },
+    {
+      "file": "0014-cap-automatic-compaction.patch",
+      "sha256": "523f44b64ce2c086b2f631757b1bc059c3390fe01cdfd0732aacceccd50bf860"
     }
   ],
-  "patchSet": "04d6770e380a30fa4ae1d98fae40a26466e0ac54f38e79b0b3098e65beed2839",
+  "patchSet": "32c6ef34a11528e7dc14d15f11833bc12f46832d93b0884236b9a944ec190511",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "e98dcfc5f4d03acf826ca7ea8f59b6548a1eec15f4ae7170decfaaebdf99430a",
-    "bytes": 6035865,
-    "unpackedBytes": 26754273
+    "sha256": "4585d8c8e647b1afd6ffffce001eade553158745a1c06dae8f701359d36ec8fd",
+    "bytes": 6038916,
+    "unpackedBytes": 26761719
   }
 }
