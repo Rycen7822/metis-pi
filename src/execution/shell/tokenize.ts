@@ -1,6 +1,10 @@
 // Shell tokenization is intentionally lightweight: it only needs enough fidelity
 // to classify obvious read/list/search commands for compact Codex-style rendering.
-export function shellSplit(input: string): string[] {
+const nonLiteralBare = /[{}*?\[\]~^#$`&<>()]/;
+
+export function shellSplit(input: string): string[];
+export function shellSplit(input: string, mode: "literal"): string[] | undefined;
+export function shellSplit(input: string, mode?: "literal"): string[] | undefined {
 	const tokens: string[] = [];
 	let current = "";
 	let quote: "'" | '"' | undefined;
@@ -18,6 +22,7 @@ export function shellSplit(input: string): string[] {
 		const next = (input[index + 1])!;
 
 		if (escaping) {
+			if (mode && (char === "\n" || char === "\r")) return undefined;
 			current += char;
 			escaping = false;
 			continue;
@@ -39,6 +44,7 @@ export function shellSplit(input: string): string[] {
 		}
 
 		if (quote) {
+			if (mode && quote === '"' && (char === "$" || char === "`")) return undefined;
 			if (char === quote) {
 				quote = undefined;
 			} else {
@@ -81,9 +87,11 @@ export function shellSplit(input: string): string[] {
 			continue;
 		}
 
+		if (mode && (nonLiteralBare.test(char) || (char === "=" && !current))) return undefined;
 		current += char;
 	}
 
+	if (mode && (quote || escaping)) return undefined;
 	pushCurrent();
 	return tokens;
 }
@@ -114,14 +122,6 @@ export function joinCommandTokens(tokens: string[]): string {
 export function normalizeTokens(tokens: string[]): string[] {
 	if (tokens.length >= 3 && (tokens[0] === "yes" || tokens[0] === "y" || tokens[0] === "no" || tokens[0] === "n") && tokens[1] === "|") {
 		return normalizeTokens(tokens.slice(2));
-	}
-	const shell = tokens[0]!?.replace(/\\/g, "/").split("/").pop();
-	if (
-		tokens.length === 3 &&
-		(shell === "bash" || shell === "zsh" || shell === "sh") &&
-		(tokens[1] === "-c" || tokens[1] === "-lc")
-	) {
-		return normalizeTokens(shellSplit(tokens[2]!));
 	}
 	return tokens;
 }

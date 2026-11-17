@@ -1,4 +1,4 @@
-import { extractBashCommand, parseShellLcPlainCommands } from "./bash.ts";
+import { extractBashCommand, parseBashPlainCommands } from "./bash.ts";
 import { cdTarget } from "./command-operands.ts";
 import {
 	isSmallFormattingCommand,
@@ -16,7 +16,8 @@ import {
 export type { ParsedShellCommand } from "./parsed-command.ts";
 
 export function parseCommandString(command: string): ParsedShellCommand[] {
-	return parseCommandTokens(shellSplit(command));
+	const tokens = shellSplit(command, "literal");
+	return tokens ? parseCommandTokens(tokens) : [{ kind: "unknown", command }];
 }
 
 export function parseCommandTokens(command: string[]): ParsedShellCommand[] {
@@ -54,15 +55,15 @@ function summarizeParts(parts: string[][]): ParsedShellCommand[] {
 }
 
 function parseCommandImpl(command: string[]): ParsedShellCommand[] {
-	const shellCommands = parseShellLcCommands(command);
+	const normalized = normalizeTokens(command);
+	const shellCommands = parseShellLcCommands(normalized);
 	if (shellCommands) return shellCommands;
 
-	const powerShellScript = extractPowerShellCommand(command);
+	const powerShellScript = extractPowerShellCommand(normalized);
 	if (powerShellScript) {
 		return [{ kind: "unknown", command: powerShellScript[1]! }];
 	}
 
-	const normalized = normalizeTokens(command);
 	const parts = containsConnectors(normalized)
 		? splitOnConnectors(normalized)
 		: [normalized];
@@ -135,12 +136,11 @@ function parseShellLcCommands(
 	const bash = extractBashCommand(original);
 	if (!bash) return undefined;
 	const [, script] = bash;
-	const allCommands = parseShellLcPlainCommands(original);
-	if (!allCommands || allCommands.length === 0) {
+	const scriptTokens = shellSplit(script, "literal");
+	const allCommands = scriptTokens && parseBashPlainCommands(script);
+	if (!scriptTokens || !allCommands?.length) {
 		return [{ kind: "unknown", command: script }];
 	}
-
-	const scriptTokens = shellSplit(script);
 	const hadMultipleCommands = allCommands.length > 1;
 	const filteredCommands = dropSmallFormattingCommands(allCommands);
 	if (filteredCommands.length === 0) {

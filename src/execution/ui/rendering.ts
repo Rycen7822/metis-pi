@@ -14,10 +14,10 @@ export function renderExecCommandCall(
   command: string,
   state: ExecCommandStatus,
   theme: RenderTheme,
-  expanded = false,
+  { expanded = false, posixShell = false }: { expanded?: boolean | undefined; posixShell?: boolean | undefined } = {},
 ): string | { render(width: number): string[] } {
-  const summary = summarizeShellCommand(command);
-  return summary.maskAsExplored
+  const summary = posixShell ? summarizeShellCommand(command) : undefined;
+  return summary?.maskAsExplored
     ? renderExplorationText(summary.actions, state, theme, expanded ? command : undefined)
     : (theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded));
 }

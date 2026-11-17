@@ -14,6 +14,7 @@ import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, 
 export interface ExecResultSessionState extends ExecOutputSessionState {
 	id: number;
 	command: string;
+	posixShell?: boolean;
 	exitCode: number | null | undefined;
 	startedAt: number;
 	updatedAt: number;
@@ -32,6 +33,7 @@ function fromSnapshot(
     wall_time_seconds: waitMs / 1000,
     output: snapshot.output,
   };
+  if (session.posixShell) result.posixShell = true;
   if (snapshot.original_token_count !== undefined) result.original_token_count = snapshot.original_token_count;
   if (session.exitCode === undefined || session.exitCode === null) result.session_id = session.id;
   else result.exit_code = session.exitCode;
@@ -106,5 +108,5 @@ export function execToolResult(result: UnifiedExecResult, command: string) {
 }
 
 export function execStructuredContent(result: UnifiedExecResult): Record<string, string | number | boolean> {
-  return Object.fromEntries(Object.entries(result).filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined));
+  return Object.fromEntries(Object.entries(result).filter(([key, value]) => key !== "posixShell" && value !== undefined));
 }

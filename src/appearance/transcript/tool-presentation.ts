@@ -37,7 +37,7 @@ export function selectToolPresentation(input: {
         highlightCommandLines: options.highlightOwnedCommand,
         renderCommandCall: renderOwnedCommand ? (command: string, state: "running" | "done", expanded: boolean) =>
           renderOwnedCommand(command, state, expanded, theme, context) : undefined,
-      }, context),
+      }, { ...context, posixShell: asRecord(asRecord(result()).details).posixShell === true }),
       renderResult: (value, opts, theme, context) => renderResult(value, opts, theme, context),
     };
   }

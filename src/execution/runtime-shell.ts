@@ -19,6 +19,10 @@ function getShellName(shell: string): string {
 	return shell.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? shell.toLowerCase();
 }
 
+export function isPosixShell(shell: string): boolean {
+	return /^(?:bash|zsh|sh|dash|ksh)(?:\.exe)?$/.test(getShellName(shell));
+}
+
 export function getCodexShellArgs(shell: string, command: string, login: boolean): string[] {
 	const name = getShellName(shell);
 	if (name === "cmd" || name === "cmd.exe") {

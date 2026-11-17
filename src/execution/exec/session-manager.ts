@@ -15,8 +15,11 @@ import {
 import { registerAbortHandler, waitForExitOrInactivity } from "./wait.ts";
 import { makeExecResult, makeSnapshotResult, makeSnapshotSince, snapshotSession } from "./results.ts";
 import { ExecOutputBuffer } from "./output-buffer.ts";
+import { isPosixShell } from "../runtime-shell.ts";
 
 export interface UnifiedExecResult {
+	/** Renderer-only metadata, absent from older receipts and structured output. */
+	posixShell?: true | undefined;
 	fullOutputPath?: string | undefined;
 	fullOutputError?: string | undefined;
 	fullOutputBytes?: number | undefined;
@@ -69,6 +72,7 @@ interface ExecSession {
   id: number;
   process: BridgeExecProcess;
   command: string;
+  posixShell: boolean;
   tty: boolean;
   buffer: ExecOutputBuffer;
   emittedOffset: number;
@@ -289,6 +293,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
         id,
         process: processHandle,
         command: input.cmd,
+        posixShell: isPosixShell(execution.shell),
         tty: Boolean(input.tty),
         buffer,
         emittedOffset: 0,

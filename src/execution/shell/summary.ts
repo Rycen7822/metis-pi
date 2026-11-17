@@ -6,7 +6,7 @@ export type { CommandSummary, ShellAction } from "./types.ts";
 export function summarizeShellCommand(command: string): CommandSummary {
 	const actions = parseCommandString(command).map(parsedToAction);
 	return {
-		maskAsExplored: actions.every((action) => action.kind !== "run"),
+		maskAsExplored: actions.length > 0 && actions.every((action) => action.kind !== "run"),
 		actions,
 	};
 }

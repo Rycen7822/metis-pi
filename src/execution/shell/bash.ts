@@ -29,8 +29,8 @@ export function extractBashCommand(command: string[]): [shell: string, script: s
 	if (command.length !== 3) return undefined;
 	const [shell, flag, script] = command as [string, string, string];
 	if (flag !== "-lc" && flag !== "-c") return undefined;
-	const shellName = shell.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-	if (shellName !== "bash" && shellName !== "zsh" && shellName !== "sh") return undefined;
+	const shellName = shell.replace(/\\/g, "/").split("/").pop() ?? "";
+	if (!/^(?:bash|zsh|sh)(?:\.exe)?$/i.test(shellName)) return undefined;
 	return [shell, script];
 }
 
@@ -72,13 +72,9 @@ export function tryParseWordOnlyCommandsSequence(tree: Tree): string[][] | undef
 	return commands;
 }
 
-export function parseShellLcPlainCommands(command: string[]): string[][] | undefined {
-	const bash = extractBashCommand(command);
-	if (!bash) return undefined;
-	const [, script] = bash;
+export function parseBashPlainCommands(script: string): string[][] | undefined {
 	const tree = tryParseShell(script);
-	if (!tree) return undefined;
-	return tryParseWordOnlyCommandsSequence(tree);
+	return tree ? tryParseWordOnlyCommandsSequence(tree) : undefined;
 }
 
 async function createBashParser(): Promise<Parser | undefined> {

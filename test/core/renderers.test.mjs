@@ -276,7 +276,8 @@ test("native bash exploration retains commands, output and failures", () => {
     assert.match(formatResult("bash", result("SEARCH OUTPUT"), {}, theme, { args }), /SEARCH OUTPUT/);
   }
   for (const command of ["fd -x rm {}", "ast-grep scan --update-all", "rg needle src/ && npm test", "rg needle > saved",
-    "bat src/needle.ts && npm test", "bat src/needle.ts | tee saved", "bat src/needle.ts > saved", "bat --list-themes"])
+    "bat src/needle.ts && npm test", "bat src/needle.ts | tee saved", "bat src/needle.ts > saved", "bat --list-themes",
+    "rg needle webui/{templates/index.html,static/app.js}"])
     assert.match(call("bash", { command }, { isPartial: false }), /Ran/);
 });
 

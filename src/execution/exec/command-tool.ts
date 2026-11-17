@@ -36,6 +36,7 @@ interface ExecCommandToolOptions {
 
 interface ExecCommandRenderContextLike {
 	expanded?: boolean | undefined;
+	posixShell?: boolean;
 }
 
 function prepareExecCommandArguments(args: unknown): ExecCommandParams {
@@ -133,7 +134,7 @@ export function renderExecCall(
   context: ExecCommandRenderContextLike | undefined,
 ) {
   const command = typeof args.cmd === "string" ? args.cmd : "";
-  const text = renderExecCommandCall(command, "done", theme, context?.expanded === true);
+  const text = renderExecCommandCall(command, "done", theme, context);
   return typeof text === "string" ? new Text(text, 0, 0) : text;
 }
 

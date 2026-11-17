@@ -7,6 +7,8 @@ import test, { describe } from "node:test";
 import { createExecSessionManager } from "../../src/execution/exec/session-manager.ts";
 import { createBridgeSessionRuntime } from "../../src/execution/exec/bridge-session.ts";
 import { createExecCommandTool } from "../../src/execution/exec/command-tool.ts";
+import { selectToolPresentation } from "../../src/appearance/transcript/tool-presentation.ts";
+import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { captureBatch } from "../../src/condense/batch-capture.ts";
 import { packToolResult } from "../../src/condense/packing.ts";
 import { waitForExitOrInactivity } from "../../src/execution/exec/wait.ts";
@@ -66,6 +68,32 @@ test(
 );
 
 
+
+test("exec call summaries follow the native receipt's shell without changing structured output", {
+  timeout: 15_000, skip: !nativeTest,
+}, async t => {
+  const dir = temporaryDirectory(t);
+  fs.writeFileSync(join(dir, "sample.txt"), "SAMPLE\n");
+  const { manager } = nativeExec(t);
+  const windows = process.platform === "win32";
+  const shell = windows ? join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/sh";
+  const args = { cmd: "cat ./sample.txt", shell, login: false };
+  const tool = createExecCommandTool(manager);
+  let partial;
+  const result = await tool.execute("shell-summary", args, undefined, update => { partial = update; }, { cwd: dir });
+  assert.equal(result.details.exit_code, 0);
+  assert.equal(result.details.output.trim(), "SAMPLE");
+  assert.ok(partial, "native execution publishes a partial receipt");
+  const theme = { fg: (_role, text) => text, bold: text => text };
+  for (const receipt of [undefined, partial, result]) {
+    if (receipt) assert.equal(Object.hasOwn(receipt.structuredContent, "posixShell"), false);
+    const view = selectToolPresentation({ name: tool.name, kind: "execution", native: tool, result: () => receipt }, {
+      renderers: {}, highlightOwnedCommand: lines => lines,
+    });
+    const call = view.renderCall(args, theme, {}).render(100).join("\n");
+    assert.match(call, windows || !receipt ? /Ran[\s\S]*cat .\/sample\.txt/ : /Explored[\s\S]*Read sample\.txt/);
+  }
+});
 
 test("a failed snapshot rejects and releases its wait callback without declaring the process exited", async () => {
   const session = { exitCode: undefined, outputVersion: 0, listeners: new Set() };
