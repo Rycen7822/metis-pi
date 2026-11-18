@@ -12,7 +12,7 @@
 | `semantic` | 在指定范围内按内容含义找相关片段，不使用路径的使用频率排序。 |
 | `describe` | 查看指定操作的参数。 |
 
-通过 [`tool_search`](tool-discovery.md) 发现。以下示例可在下次 Codemode 调用中运行：
+通过 [`tool_search`](tool-discovery.md) 发现。以下是工具在 Codemode 中的调用示例：
 
 ```js
 text(await tools.neural_search({ action: "describe", target: "grep" }));

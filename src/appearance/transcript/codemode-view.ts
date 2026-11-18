@@ -1,7 +1,7 @@
 import { CODEMODE_HELPERS, readCodemodeActions, type CodemodeAction } from "./codemode-actions.ts";
 import { asRecord } from "../../presentation/tool-names.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
-import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext } from "../../presentation/contracts.ts";
+import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext, ViewOptions } from "../../presentation/contracts.ts";
 import { MouseRegion } from "@earendil-works/pi-tui";
 import { shellTitle } from "../../presentation/terminal-text.ts";
 import { stackComponents } from "../../selection-copy/stack.ts";
@@ -262,6 +262,33 @@ function scriptBody(component: Component, glyph: string, preview: boolean): Comp
   };
 }
 
+/** Native progress can replace a row many times between frames. Only build the partial tree that will be painted.
+ * Timers and terminal rows still settle at update time; execution events and their snapshots are never coalesced. */
+function livePreviews(makeText: TextFactory, build: (
+  result: unknown, options: ViewOptions, theme: Palette, context: ViewContext, timerText?: string,
+) => Component): Renderers["renderResult"] {
+  return (result, options, theme, context) => {
+    const timer = toolTimerText(context, options.isPartial === true);
+    if (!options.isPartial || context.isError) return build(result, options, theme, context, timer);
+    // Pi passes the previous component in the context. Do not retain a chain of superseded snapshots.
+    const current = { ...context, lastComponent: undefined };
+    let prepare: (() => Component) | undefined = () => build(result, options, theme, current, timer);
+    let body: Component | undefined;
+    return {
+      render(width) {
+        if (prepare) {
+          try { body = prepare(); }
+          catch (error) { body = makeText("Live preview unavailable: " + safeText(error instanceof Error ? error.message : String(error))); }
+          prepare = undefined;
+        }
+        return body?.render(width) ?? [];
+      },
+      invalidate() { body?.invalidate(); },
+      handleMouse(event) { return body?.handleMouse?.(event); },
+    };
+  };
+}
+
 /** Preview source during generation, then show actions; completed source and output expand independently. */
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
@@ -319,9 +346,8 @@ export function makeCodemodeRenderers(input: {
         component = stackComponents([component, input.makeText(`${theme.fg("dim", "•")} Preparing script`)], "child-placements");
       return clickRegion(component, context, () => { view.script = !expanded; });
     },
-    renderResult(result, options, theme, context) {
+    renderResult: livePreviews(input.makeText, (result, options, theme, context, timerText) => {
       const view = expansion(context, options.expanded === true);
-      const timerText = toolTimerText(context, options.isPartial === true);
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
       const parent = context.toolCallId ?? "", previewId = `${parent}/?`;
@@ -507,7 +533,7 @@ export function makeCodemodeRenderers(input: {
         parts.push(clickRegion(input.makeText(context.isError ? `${footer} ${theme.fg("error", "[error]")}` : footer), context, toggleOutput));
       }
       return clickRegion(stackComponents(parts, "child-placements"), context);
-    },
+    }),
   };
 }
 

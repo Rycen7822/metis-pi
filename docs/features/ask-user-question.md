@@ -1,6 +1,6 @@
 # 结构化提问
 
-`ask_user_question` 在交互会话中显示问卷。需要开启全局 `[askUserQuestion].enabled`。通过 [`tool_search`](tool-discovery.md) 发现，或在 Codemode 中用 `describeTool("ask_user_question")` 查看参数。
+`ask_user_question` 在交互会话中显示问卷。需要开启全局 `[askUserQuestion].enabled`。通过 [`tool_search`](tool-discovery.md) 的 `describe` 查看参数并激活。Codemode 内使用同样的参数调用 `tools.tool_search`。
 
 ## 等待模式
 

@@ -167,7 +167,7 @@ test("native codemode owns MCP calls, permissions and resource results alongside
   assert.equal(succeeded.result.structuredContent.isError, true, "MCP domain errors retain the script result");
 });
 
-async function lateNativeSession(t, code, resultConfiguration = {}, serverNames = ["late-docs"]) {
+async function lateNativeSession(t, code, resultConfiguration = {}, serverNames = ["late-docs"], unified = false) {
   const dir = mkdtempSync(join(tmpdir(), "metis-mcp-native-late-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
@@ -200,7 +200,8 @@ async function lateNativeSession(t, code, resultConfiguration = {}, serverNames 
   const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null,
     modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager,
-    additionalExtensionPaths: [fileURLToPath(new URL("../../extensions/mcp.ts", import.meta.url))],
+    additionalExtensionPaths: ["mcp", ...(unified ? ["tool-search"] : [])]
+      .map(name => fileURLToPath(new URL(`../../extensions/${name}.ts`, import.meta.url))),
     extensionFactories: [{ builtin: true, name: "codemode", factory: pi => createCodemodeExtension({ models: false })({
       ...pi, registerTool(definition) {
         pi.registerTool({ ...definition, reachesTools(input) { reached(); return definition.reachesTools(input); } });
@@ -252,6 +253,38 @@ test("first native codemode discovery waits for late stdio tools and sees reloca
   const events = readFileSync(loaded.log, "utf8");
   assert.equal(events.split("\n").filter(line => line.startsWith("call:")).length, 1);
   assert.doesNotMatch(events, /resources\/list|resources\/templates\/list/);
+});
+
+test("one gateway describes late MCP tools identically in Codemode and direct calls", { timeout: 15000 }, async t => {
+  const search = { namespace: "late-docs" };
+  const describe = { action: "describe", name: "mcp__late_docs__echo" };
+  const code = [
+    'if ([typeof searchTools, typeof describeTool, typeof describeNamespace].some(type => type !== "undefined"))',
+    '  throw Error("Native discovery duplicates are still bound");',
+    'if (!ALL_TOOLS.some(tool => tool.name === "mcp__late_docs__echo")) throw Error("missing script binding");',
+    `return [await tools.tool_search(${JSON.stringify(search)}), await tools.tool_search(${JSON.stringify(describe)})];`,
+  ].join("\n");
+  const { session, reach, gate, errors, log } = await lateNativeSession(t, code, {}, ["late-docs"], true);
+  const codemode = session.agent.state.tools.find(tool => tool.name === "codemode");
+  assert.match(codemode.description, /tools\.tool_search/);
+  assert.doesNotMatch(codemode.description, /searchTools\(|describeTool\(|describeNamespace\(/);
+  const running = session.prompt("Discover tools without calling them");
+  await reach;
+  writeFileSync(gate, "ready");
+  await running;
+  await session.waitForIdle();
+  assert.deepEqual(errors, []);
+  const result = session.state.messages.find(message => message.role === "toolResult" && message.toolCallId === "late-cell");
+  assert.equal(result.isError, false, JSON.stringify(result));
+  const [listed, described] = JSON.parse(result.content.at(-1).text);
+  assert.equal(listed.namespaces[0].name, "mcp__late_docs");
+  assert.deepEqual(listed.activated, []);
+  assert.match(described.matches[0].signature, /Promise<[\s\S]*token: string/);
+  session.setActiveToolsByName(session.getActiveToolNames().filter(name => name !== describe.name));
+  const gateway = session.agent.state.tools.find(tool => tool.name === "tool_search");
+  assert.deepEqual((await gateway.execute("direct-list", search)).structuredContent, listed);
+  assert.deepEqual((await gateway.execute("direct-describe", describe)).structuredContent, described);
+  assert.doesNotMatch(readFileSync(log, "utf8"), /call:/);
 });
 
 test("native literal MCP call waits only for its server with a similar namespace prefix", { timeout: 15000 }, async t => {

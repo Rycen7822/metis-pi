@@ -5,27 +5,24 @@ export const TOOL_SEARCH_NAME = "tool_search";
 export const DEFAULT_TOOL_SEARCH_LIMIT = 8;
 const DESCRIPTION_LIMIT = 500;
 
-export interface RankRequest {
-  query: string;
-  limit: number;
+interface RankRequest {
+  query?: string;
   namespace?: string;
 }
 
-/** Registered metadata only: hidden tools are unreachable, inactive direct/model-only tools are not model-visible. */
+/** Tools reachable from scripts even before direct activation. */
+export function isLoadable(tool: ToolInfo): boolean {
+  return tool.exposure === "codemode" || tool.exposure === "deferred";
+}
+
+/** Hidden tools are excluded; other tools must be loadable or already active. */
 export function isVisible(tool: ToolInfo, active: ReadonlySet<string>): boolean {
-  if (tool.exposure === "hidden") return false;
-  if (tool.exposure === "codemode" || tool.exposure === "deferred") return true;
-  return active.has(tool.name);
+  return tool.exposure !== "hidden" && (isLoadable(tool) || active.has(tool.name));
 }
 
 /** Direct tools are callable only while active; model-only tools are never callable. */
 export function isCallable(tool: ToolInfo, active: ReadonlySet<string>): boolean {
-  if (tool.exposure === "codemode" || tool.exposure === "deferred") return true;
-  return tool.exposure === "direct" && active.has(tool.name);
-}
-
-export function isLoadable(tool: ToolInfo): boolean {
-  return tool.exposure === "codemode" || tool.exposure === "deferred";
+  return isLoadable(tool) || (tool.exposure === "direct" && active.has(tool.name));
 }
 
 /** The script identifier pi actually binds, when the raw name is not one. */
@@ -73,33 +70,33 @@ function exactTier(tool: ToolInfo, query: string): number {
 
 /** Deterministic lexical rank over name, namespace and description; no index or persistence. */
 export function rankTools(tools: readonly ToolInfo[], active: ReadonlySet<string>, request: RankRequest): ToolInfo[] {
-  const queryTokens = [...new Set(tokens(request.query))];
+  const { query, namespace } = request;
+  const visible = tools.filter(tool => isVisible(tool, active) && (namespace === undefined || namespaceMatches(tool, namespace)));
+  if (query === undefined) return visible.sort((a, b) => a.name.localeCompare(b.name));
+  const queryTokens = [...new Set(tokens(query))];
   if (queryTokens.length === 0) return [];
-  const ranked = tools
-    .filter(tool => isVisible(tool, active))
-    .filter(tool => request.namespace === undefined || namespaceMatches(tool, request.namespace))
-    .flatMap(tool => {
-      const nameTokens = new Set(tokens(tool.name));
-      const namespaceTokens = new Set(tokens(tool.namespace?.name ?? ""));
-      const descriptionTokens = new Set(tokens(tool.description));
-      let nameHits = 0;
-      let namespaceHits = 0;
-      let descriptionHits = 0;
-      let coverage = 0;
-      for (const token of queryTokens) {
-        const inName = nameTokens.has(token);
-        const inNamespace = namespaceTokens.has(token);
-        const inDescription = descriptionTokens.has(token);
-        if (inName) nameHits += 1;
-        if (inNamespace) namespaceHits += 1;
-        if (inDescription) descriptionHits += 1;
-        if (inName || inNamespace || inDescription) coverage += 1;
-      }
-      const exact = exactTier(tool, request.query);
-      const score = nameHits * 5 + namespaceHits * 2 + descriptionHits;
-      return score > 0 || exact > 0 ? [{ tool, exact, coverage, score }] : [];
-    });
+  const ranked = visible.flatMap(tool => {
+    const nameTokens = new Set(tokens(tool.name));
+    const namespaceTokens = new Set(tokens(tool.namespace?.name ?? ""));
+    const descriptionTokens = new Set(tokens(tool.description));
+    let nameHits = 0;
+    let namespaceHits = 0;
+    let descriptionHits = 0;
+    let coverage = 0;
+    for (const token of queryTokens) {
+      const inName = nameTokens.has(token);
+      const inNamespace = namespaceTokens.has(token);
+      const inDescription = descriptionTokens.has(token);
+      if (inName) nameHits += 1;
+      if (inNamespace) namespaceHits += 1;
+      if (inDescription) descriptionHits += 1;
+      if (inName || inNamespace || inDescription) coverage += 1;
+    }
+    const exact = exactTier(tool, query);
+    const score = nameHits * 5 + namespaceHits * 2 + descriptionHits;
+    return score > 0 || exact > 0 ? [{ tool, exact, coverage, score }] : [];
+  });
   ranked.sort((a, b) => b.exact - a.exact || b.coverage - a.coverage || b.score - a.score
     || a.tool.name.localeCompare(b.tool.name));
-  return ranked.slice(0, request.limit).map(match => match.tool);
+  return ranked.map(match => match.tool);
 }

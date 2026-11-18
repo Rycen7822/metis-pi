@@ -1,16 +1,22 @@
 // Metis-owned unified tool discovery; ranking and detail contract live in src/tool-discovery/.
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { OWNED_TOOL_SEARCH_ENTRY } from "../src/presentation/tool-source.mjs";
-import { catalogNotice, visibleNames } from "../src/tool-discovery/context.ts";
+import { catalogNotice, snapshot, type CatalogSnapshot } from "../src/tool-discovery/context.ts";
 import { createToolSearchDefinition } from "../src/tool-discovery/definition.ts";
 import { TOOL_SEARCH_NAME } from "../src/tool-discovery/search.ts";
 
 const CATALOG_MESSAGE = "metis-tool-catalog";
 
 export default function toolSearch(pi: ExtensionAPI): void {
-  pi.registerTool(createToolSearchDefinition(pi));
-  let baseline: Set<string> | undefined;
-  let pending: Set<string> | undefined;
+  let baseline: CatalogSnapshot | undefined;
+  let pending: CatalogSnapshot | undefined;
+  pi.registerTool(createToolSearchDefinition(pi, tool => {
+    // A nested describe observes a definition; it does not acknowledge that a change notice reached the model.
+    if (!baseline || baseline.parameters.has(tool.name)) return;
+    const parameters = JSON.stringify(tool.parameters);
+    baseline.parameters.set(tool.name, parameters);
+    if (pending && !pending.parameters.has(tool.name)) pending.parameters.set(tool.name, parameters);
+  }));
   const owned = (tool: ToolInfo | undefined) => tool?.sourceInfo.path === OWNED_TOOL_SEARCH_ENTRY;
 
   pi.on("session_start", (_event, ctx) => {
@@ -25,7 +31,7 @@ export default function toolSearch(pi: ExtensionAPI): void {
     // Registered inactive for codemode exposure; direct calls need activation in every codemode mode.
     if (!pi.getActiveTools().includes(TOOL_SEARCH_NAME))
       pi.setActiveTools([...pi.getActiveTools(), TOOL_SEARCH_NAME]);
-    baseline = visibleNames(tools, pi.getActiveTools());
+    baseline = snapshot(tools, pi.getActiveTools());
   });
 
   pi.on("context", event => {
@@ -33,12 +39,9 @@ export default function toolSearch(pi: ExtensionAPI): void {
     const tools = pi.getAllTools();
     pending = undefined;
     if (!previous || !owned(tools.find(tool => tool.name === TOOL_SEARCH_NAME))) return;
-    const current = visibleNames(tools, pi.getActiveTools());
-    const added = [...current].filter(name => !previous.has(name));
-    const removed = [...previous].filter(name => !current.has(name));
-    const notice = catalogNotice(added, removed);
+    pending = snapshot(tools, pi.getActiveTools(), previous);
+    const notice = catalogNotice(previous, pending);
     if (!notice) return;
-    pending = current;
     return { messages: [...event.messages, {
       role: "custom" as const, customType: CATALOG_MESSAGE, content: notice, display: false, timestamp: Date.now(),
     }] };
@@ -46,8 +49,8 @@ export default function toolSearch(pi: ExtensionAPI): void {
 
   pi.on("message_end", ({ message }) => {
     // A prepared request can fail before the model sees it; keep its delta for a retry.
-    if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") return;
-    if (pending) baseline = pending;
+    if (message.role !== "assistant") return;
+    if (pending && message.stopReason !== "error" && message.stopReason !== "aborted") baseline = pending;
     pending = undefined;
   });
   pi.on("session_shutdown", () => {

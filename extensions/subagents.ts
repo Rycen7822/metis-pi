@@ -12,8 +12,8 @@ const namespace = {
   name: "subagents",
   description: "Create, observe, message, answer and interrupt persistent Pi subagents in this parent session.",
 };
-const searchGuidance = "Use tool_search with namespace=subagents, or action=describe and name=subagents_<operation>. " +
-  "In codemode use tools.tool_search(args), then tools.subagents_<operation>(args). Already loaded tools remain searchable. ";
+const searchGuidance = "Use tool_search with namespace=subagents to list candidates, or action=describe and name=subagents_<operation> " +
+  "to read its parameters and activate it. In codemode use tools.tool_search with the same arguments. ";
 const lookupGuidance = "In codemode discover with describeNamespace('subagents') and describeTool(name), " +
   "then call tools.subagents_<operation>(args). ";
 const guidance = "Use the subagent-delegation skill before spawning or assigning work. " +

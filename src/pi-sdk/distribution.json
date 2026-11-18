@@ -66,13 +66,17 @@
     {
       "file": "0016-load-codemode-store-by-metadata.patch",
       "sha256": "4fd0ffe5c5cc91048e00ea42e9990a0cfe76fa7080869844f0323f6624c12329"
+    },
+    {
+      "file": "0017-unify-codemode-discovery.patch",
+      "sha256": "5d5d332daea7db26308d7e45a7f7ed3e043600cd9776fd423d946f83f81b6d64"
     }
   ],
-  "patchSet": "e06a29f0d51265d1547fcd80c9ed3ddd0988521654a57073a5f6a1b69e3783bb",
+  "patchSet": "a17a020066fa2e5e495ef9688eae8725a362af8e1cd45f3aaec32b8cf4a8cbbc",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "2256735f77f6df026b9ce9a3cc10873fc2ff85da979817ed1832a54f657203bd",
-    "bytes": 6038505,
-    "unpackedBytes": 26761703
+    "sha256": "53352a99373a897263f9424bf79521a1b25a39c638545c0433e3e6073676095f",
+    "bytes": 6041046,
+    "unpackedBytes": 26771990
   }
 }

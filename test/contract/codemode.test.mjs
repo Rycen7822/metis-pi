@@ -604,6 +604,25 @@ test("nested renderers receive their own recorded duration instead of the parent
   assert.notEqual(states.get(`${parent}/1`), states.get(`${parent}/2`));
 });
 
+test("unpainted progress does not invoke child renderers or hide the final failure", t => {
+  const drawn = [];
+  const renderer = {
+    renderCall(args) { drawn.push(args.key); return bindings.makeText(args.key); },
+    renderResult() { return bindings.makeText("lookup result"); },
+  };
+  const { row } = setup(t, { lookup: renderer });
+  const update = (key, isPartial) => row.updateResult({ content: [], isError: !isPartial,
+    details: { calls: [call(1, "lookup", { key }, isPartial ? "running" : "error")] } }, isPartial);
+  update("superseded", true);
+  update("current", true);
+  assert.match(plain(row), /current/);
+  update("never painted", true);
+  update("final failure", false);
+  assert.match(plain(row), /final failure[\s\S]*\[error\]/);
+  assert.ok(drawn.includes("current") && drawn.includes("final failure"));
+  assert.ok(!drawn.includes("superseded") && !drawn.includes("never painted"));
+});
+
 test("parallel running calls use real lifecycle ids and independent callback state", (t) => {
   const states = [], results = [];
   const renderer = {

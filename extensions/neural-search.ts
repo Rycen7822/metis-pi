@@ -48,7 +48,7 @@ export default function neuralSearch(pi: ExtensionAPI): void {
     diagnose(ctx, ready ? undefined : "Metis Neural Search needs tool_search enabled for discovery.");
     const unified = pi.getAllTools().some(tool => isToolSearch(tool) && tool.sourceInfo.path === OWNED_TOOL_SEARCH_ENTRY);
     const hint = unified
-      ? "Use tool_search to find it again or describe its current definition; in codemode use tools.tool_search(args)."
+      ? "Use tool_search action=describe, name=neural_search; in codemode call tools.tool_search with the same arguments."
       : "If not already active, load it with tool_search; otherwise call it directly. In codemode use describeTool('neural_search').";
     event.systemPromptOptions.sections.metis_neural_search = ready
       ? `${name}: ${description} ${hint} Use neural_search action=describe for an action's detailed parameters.`

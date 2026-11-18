@@ -1,0 +1,266 @@
+diff --git a/packages/coding-agent/docs/codemode.md b/packages/coding-agent/docs/codemode.md
+index a57ca5de7..bc59f9ce4 100644
+--- a/packages/coding-agent/docs/codemode.md
++++ b/packages/coding-agent/docs/codemode.md
+@@ -29,10 +29,10 @@ The result starts with `Script completed` or `Script failed`, the wall time, and
+ | `exit()` | End the script successfully. |
+ | `store(key, value)` / `load(key)` | Keep small JSON values across `codemode` calls. See [Store values](#store-values). |
+ | `ALL_TOOLS` | Every callable tool as `{ name, description }`, including tools the description does not list. |
+-| `tools.tool_search(args)` | Use the registered discovery gateway when callable; its schema defines search and parameter lookup. |
++| `tools.tool_search(args)` | Use the discovery gateway when callable. Metis supports search, namespace listing, and exact description with a Codemode signature. |
+ | `searchTools(query, { limit?, namespace? })` | Fallback only without a callable `tool_search`: rank tools by relevance (BM25, default limit 8). |
+-| `describeTool(name)` | Resolves to a tool's description and TypeScript declaration, or `undefined`. |
+-| `describeNamespace(name)` | Resolves to `{ name, description?, instructions?, tools }` for a namespace such as an MCP server, or `undefined`. |
++| `describeTool(name)` | Fallback without a gateway that describes signatures and namespaces: a tool's description and TypeScript declaration. |
++| `describeNamespace(name)` | Same fallback: `{ name, description?, instructions?, tools }` for a namespace such as an MCP server. |
+ | `models` | List and run non-LLM models. See [Models](#models). |
+ 
+ ## Call tools
+@@ -49,10 +49,10 @@ What a call resolves to depends on the tool:
+ A call that fails, is blocked, or gets invalid arguments rejects with an `Error` that carries the tool's error text. Use `Promise.allSettled()` to keep the results of the calls that succeed.
+ 
+ The `codemode` description lists tools with their TypeScript declarations, grouped by namespace (for example one MCP server). Tools with `deferred` exposure, which includes MCP tools with the default `codemode` exposure, are not listed, so the description stays the same while MCP servers connect. Listed declarations share a budget of 3000 estimated tokens (`codemode.inlineBudget` in [settings](settings.md#tools)). Scripts use `tools.tool_search()` when that gateway is callable; the competing `searchTools()` global is then absent.
+-Without a callable gateway, `searchTools()` remains available. `describeTool()`, `describeNamespace()`, and `ALL_TOOLS` stay available in both cases.
++With the Metis discovery gateway, `describeTool()` and `describeNamespace()` are also absent. Use `tools.tool_search({ action: "describe", name })` or `tools.tool_search({ namespace })` instead. Without a callable gateway, the three native helpers remain. `ALL_TOOLS` always describes the current script’s bindings; the gateway reads the live session catalog.
+ Bindings are fixed at script start: a newly registered tool is callable in the next script, not hot-inserted into a running script.
+ 
+-While `codemode` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools stay declared, and their descriptions say how to call them from scripts. With `only` they are hidden from the model and listed in the `codemode` description instead, so the model calls them through scripts. Tool declarations in the `codemode` description, `describeTool()`, and `ALL_TOOLS` carry the tools' prompt guidelines, since the system prompt rules only cover declared tools.
++While `codemode` is active, `codemode.mode` in [settings](settings.md#tools) decides how the other tools are presented. With `on` (default) declared tools stay declared, and their descriptions say how to call them from scripts. With `only` they are hidden from the model and listed in the `codemode` description instead, so the model calls them through scripts. The discovery gateway and native declaration helpers include tool prompt guidelines, since the system prompt rules only cover declared tools.
+ 
+ ## Explicit text pages
+ 
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index b75ec76bf..956d07f24 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -1597,6 +1597,7 @@ export class AgentSession {
+ 			name: definition.name,
+ 			description: definition.description,
+ 			parameters: definition.parameters,
++			...(definition.outputSchema ? { outputSchema: definition.outputSchema } : {}),
+ 			promptGuidelines: definition.promptGuidelines,
+ 			exposure: this._getToolExposure(definition.name),
+ 			...(definition.namespace ? { namespace: definition.namespace } : {}),
+diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
+index ab74403a5..62296d5dd 100644
+--- a/packages/coding-agent/src/core/extensions/types.ts
++++ b/packages/coding-agent/src/core/extensions/types.ts
+@@ -2173,10 +2173,10 @@ export type GetSessionNameHandler = () => string | undefined;
+ 
+ export type GetActiveToolsHandler = () => string[];
+ 
+-/** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
++/** Tool info with input/output schemas, prompt guidelines, and source metadata. */
+ export type ToolInfo = Pick<
+ 	ToolDefinition,
+-	"name" | "description" | "parameters" | "promptGuidelines" | "reachesTools"
++	"name" | "description" | "parameters" | "outputSchema" | "promptGuidelines" | "reachesTools"
+ > & {
+ 	exposure: ToolExposure;
+ 	namespace?: ToolNamespace;
+diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
+index aeef8cb86..b5e157aeb 100644
+--- a/packages/coding-agent/src/extensions/codemode/execute.ts
++++ b/packages/coding-agent/src/extensions/codemode/execute.ts
+@@ -35,6 +35,7 @@ import { CodemodeCallTracker } from "./call-tracker.ts";
+ import {
+ 	CODEMODE_DOCS_PATH,
+ 	CODEMODE_STORE_ENTRY_TYPE,
++	type CodemodeDiscovery,
+ 	type CodemodeModelRuntime,
+ 	type CodemodeNestedCall,
+ 	type CodemodeStoreEntryData,
+@@ -42,7 +43,7 @@ import {
+ 	type CodemodeToolInput,
+ 	type CodemodeToolOptions,
+ 	getCodemodeCallableTools,
+-	hasCodemodeToolSearch,
++	getCodemodeDiscovery,
+ 	toCodemodeDeclaration,
+ } from "./tool.ts";
+ 
+@@ -526,8 +527,7 @@ export async function executeCodemode(
+ 	tracker.publish();
+ 
+ 	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
+-	// A callable tool_search replaces searchTools(), so scripts get one way to find tools.
+-	const toolSearch = hasCodemodeToolSearch(callable);
++	const discovery = getCodemodeDiscovery(callable);
+ 	// ALL_TOOLS entries carry the declaration.
+ 	const guidelines = options.getToolGuidelines?.();
+ 	const samples = new Map(
+@@ -606,7 +606,7 @@ export async function executeCodemode(
+ 		sandbox = new CodemodeSandbox({
+ 			tools: sandboxTools,
+ 			globals: [
+-				...createDiscoveryGlobals(callable, samples, options, toolSearch),
++				...createDiscoveryGlobals(callable, samples, options, discovery),
+ 				...(options.models && ctx
+ 					? createModelGlobals(ctx.modelRegistry, toolCallId, tracker, addModelUsage, addGeneratedImages)
+ 					: []),
+@@ -692,15 +692,15 @@ function isNamespaceName(namespace: ToolNamespace, query: string): boolean {
+ 
+ /**
+  * `searchTools()`, `describeTool()`, and `describeNamespace()`: ranked search and lookup over the
+- * script's nested tools and their namespaces. A callable tool_search replaces only the ranked
+- * search global; lookup helpers and standalone/no-gateway behavior stay unchanged.
++ * script's nested tools and their namespaces, when no equivalent callable gateway exists.
+  */
+ function createDiscoveryGlobals(
+ 	tools: readonly AgentTool<any>[],
+ 	samples: ReadonlyMap<string, string>,
+ 	options: CodemodeToolOptions,
+-	toolSearch: boolean,
++	discovery: CodemodeDiscovery,
+ ): CodemodeTool[] {
++	if (discovery === "unified") return [];
+ 	const ranker = new Bm25Ranker();
+ 	const entry = (name: string) => ({ name: toCodemodeIdentifier(name), description: samples.get(name) ?? "" });
+ 	const globals: CodemodeTool[] = [
+@@ -762,7 +762,7 @@ function createDiscoveryGlobals(
+ 			},
+ 		},
+ 	];
+-	return toolSearch ? globals.filter((global) => global.name !== "searchTools") : globals;
++	return discovery === "search" ? globals.filter((global) => global.name !== "searchTools") : globals;
+ }
+ 
+ /**
+diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
+index 2da6a0c40..aec781d6a 100644
+--- a/packages/coding-agent/src/extensions/codemode/tool.ts
++++ b/packages/coding-agent/src/extensions/codemode/tool.ts
+@@ -145,16 +145,24 @@ const DESCRIPTION_INTRO = `Run JavaScript that calls other tools. The input is r
+ - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\``;
+ 
+ /** One line per global. The details live in {@link CODEMODE_DOCS_PATH}. */
+-function describeGlobals(models: boolean, toolSearch: boolean): string {
+-	const search = toolSearch
+-		? "`await tools.tool_search({ ...args })`"
+-		: "`await searchTools(query, { limit?, namespace? })`";
++function describeGlobals(models: boolean, discovery: CodemodeDiscovery): string {
+ 	const lines = [
+ 		"Globals:",
+ 		"- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script. With several text items, each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block. `image()` also saves the image to a temp file and the result names its path.",
+ 		"- `store(key, value)` and `load(key)` keep JSON values across codemode calls.",
+-		`- \`ALL_TOOLS\`, ${search}, \`await describeTool(name)\`, \`await describeNamespace(name)\`: find unlisted tools, such as MCP tools.`,
+ 	];
++	if (discovery === "unified") {
++		lines.push(
++			"- Use `await tools.tool_search(args)` to find tools, list a namespace, or describe an exact tool and its return type.",
++		);
++	} else {
++		const search =
++			discovery === "search"
++				? "`await tools.tool_search(args)`"
++				: "`await searchTools(query, { limit?, namespace? })`";
++		const lookups = "`await describeTool(name)`, `await describeNamespace(name)`";
++		lines.push(`- \`ALL_TOOLS\`, ${search}, ${lookups}: find unlisted tools, such as MCP tools.`);
++	}
+ 	if (models) {
+ 		lines.push(`- \`models\`: classifiers and image generation. Read ${CODEMODE_DOCS_PATH} first.`);
+ 	}
+@@ -188,9 +196,20 @@ export function getCodemodeCallableTools(tools: readonly AgentTool<any>[]): Agen
+ 	return tools.filter((tool) => tool.name !== CODEMODE_TOOL_NAME);
+ }
+ 
+-/** Inspect actual callable bindings, not registered or model-only tools. */
+-export function hasCodemodeToolSearch(tools: readonly AgentTool<any>[]): boolean {
+-	return tools.some((tool) => tool.name === "tool_search");
++export type CodemodeDiscovery = "native" | "search" | "unified";
++
++/** Only suppress lookups when the callable gateway also advertises signatures and namespace details. */
++export function getCodemodeDiscovery(tools: readonly AgentTool<any>[]): CodemodeDiscovery {
++	const gateway = tools.find((tool) => tool.name === "tool_search");
++	if (!gateway) return "native";
++	const signature = resolveSchemaRef("#/properties/matches/items/properties/signature", gateway.outputSchema);
++	const namespaces = resolveSchemaRef("#/properties/namespaces", gateway.outputSchema);
++	return typeof signature === "object" &&
++		signature.type === "string" &&
++		typeof namespaces === "object" &&
++		namespaces.type === "array"
++		? "unified"
++		: "search";
+ }
+ 
+ export interface CodemodeDescriptionOptions {
+@@ -208,7 +227,7 @@ export interface CodemodeDescriptionOptions {
+ 	 */
+ 	inlineBudget?: number;
+ 	/** Gateway availability from the full callable set, even when it is omitted from this catalog. */
+-	toolSearch?: boolean;
++	discovery?: CodemodeDiscovery;
+ }
+ 
+ /** `### \`id\` (\`raw name\`)` followed by the tool's description and declaration. */
+@@ -283,7 +302,7 @@ export function createCodemodeDescription(
+ 
+ 	const sections = [
+ 		DESCRIPTION_INTRO,
+-		describeGlobals(options.models === true, options.toolSearch ?? hasCodemodeToolSearch(tools)),
++		describeGlobals(options.models === true, options.discovery ?? getCodemodeDiscovery(tools)),
+ 	];
+ 	if (declarations.length === 0) return sections.join("\n\n");
+ 
+@@ -338,14 +357,16 @@ function describeFields(schema: unknown, root: CodemodeJsonSchema, depth: number
+  * fits on one line, or a pointer to `describeTool()` for anything longer. The full type of a large
+  * schema would otherwise be sent with every request (#11501).
+  */
+-function describeOutput(name: string, schema: CodemodeJsonSchema | undefined): string {
++function describeOutput(name: string, schema: CodemodeJsonSchema | undefined, discovery: CodemodeDiscovery): string {
+ 	const type = renderToolOutputType(schema);
+ 	if (type === "string") return "a string";
+ 	const fields =
+ 		schema === undefined ? undefined : (describeFields(schema, schema, 1) ?? describeUnionFields(schema, schema));
+ 	if (fields) return `\`${fields}\``;
+ 	if (!type.includes("\n")) return `\`${type}\``;
+-	return `a value; \`await describeTool(${JSON.stringify(name)})\` shows its type`;
++	return discovery === "unified"
++		? `a value; \`await tools.tool_search({ action: "describe", name: ${JSON.stringify(name)} })\` shows its type`
++		: `a value; \`await describeTool(${JSON.stringify(name)})\` shows its type`;
+ }
+ 
+ /**
+@@ -384,8 +405,9 @@ function followRef(schema: unknown, root: CodemodeJsonSchema): unknown {
+  * A declared tool's description followed by how scripts call it and what the call resolves to. The
+  * arguments are the tool's declared parameters, so they are not repeated.
+  */
+-function describeScriptCall(tool: AgentTool<any>): string {
+-	return `${tool.description.trim()}\n\nCodemode: \`tools.${toCodemodeIdentifier(tool.name)}(args)\` resolves to ${describeOutput(tool.name, toCodemodeDeclaration(tool).outputSchema)}.`;
++function describeScriptCall(tool: AgentTool<any>, discovery: CodemodeDiscovery): string {
++	const output = describeOutput(tool.name, toCodemodeDeclaration(tool).outputSchema, discovery);
++	return `${tool.description.trim()}\n\nCodemode: \`tools.${toCodemodeIdentifier(tool.name)}(args)\` resolves to ${output}.`;
+ }
+ 
+ /**
+@@ -405,10 +427,11 @@ function prepareCodemodeLoadout(loadout: ToolLoadout, options: CodemodeToolOptio
+ 	const isDirect = (tool: AgentTool) => loadout.getExposure(tool.name) === "direct";
+ 	const callable = getCodemodeCallableTools(loadout.callable);
+ 	const callableNames = new Set(callable.map((tool) => tool.name));
++	const discovery = getCodemodeDiscovery(callable);
+ 	const descriptions: Record<string, string> = {};
+ 	if (mode === "on") {
+ 		for (const tool of loadout.declared) {
+-			if (callableNames.has(tool.name)) descriptions[tool.name] = describeScriptCall(tool);
++			if (callableNames.has(tool.name)) descriptions[tool.name] = describeScriptCall(tool, discovery);
+ 		}
+ 	}
+ 	const listed = mode === "only" ? callable : callable.filter((tool) => !isDirect(tool));
+@@ -421,7 +444,7 @@ function prepareCodemodeLoadout(loadout: ToolLoadout, options: CodemodeToolOptio
+ 	const guidelines = new Map(listed.map((tool) => [tool.name, loadout.getPromptGuidelines(tool.name)] as const));
+ 	descriptions[CODEMODE_TOOL_NAME] = createCodemodeDescription(listed, {
+ 		models: options.models === true,
+-		toolSearch: hasCodemodeToolSearch(callable),
++		discovery,
+ 		namespaces,
+ 		guidelines,
+ 		deferred: new Set(
+@@ -489,7 +512,7 @@ export function createCodemodeTool(
+ 	Object.assign(tool, {
+ 		description: createCodemodeDescription(tools, {
+ 			models: options.models === true,
+-			toolSearch: hasCodemodeToolSearch(getCodemodeCallableTools(tools)),
++			discovery: getCodemodeDiscovery(getCodemodeCallableTools(tools)),
+ 		}),
+ 		promptSnippet: definition.promptSnippet,
+ 		promptGuidelines: definition.promptGuidelines,
