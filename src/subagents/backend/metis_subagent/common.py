@@ -16,8 +16,9 @@ DEFAULT_WAIT_SECONDS = 600
 MAX_WAIT_SECONDS = 3_600
 TEXT_MAX_BYTES = 65_536
 LABEL_MAX_CHARS = 128
-# The final lookahead requires absolute end in both Python and JSON Schema regexes.
-IDENTIFIER_PATTERN = r'^[A-Za-z0-9_.:-]+(?![\s\S])'
+MODEL_IDENTIFIER_PATTERN = r'^[A-Za-z0-9_.:-]+$'
+# Python regex search allows a match before a final newline; IPC requires absolute end.
+IDENTIFIER_PATTERN = MODEL_IDENTIFIER_PATTERN.removesuffix('$') + r'(?![\s\S])'
 # Agent states in which a worker may still hold processes or work behind it; the
 # workspace exclusion and crash reconciliation both use exactly this set.
 RESIDENT_AGENT_STATES = ('starting', 'running', 'needs_input', 'idle', 'stopping', 'orphaned')

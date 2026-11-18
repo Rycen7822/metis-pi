@@ -77,6 +77,18 @@ test("native subagents register deferred namespace without changing schemas or o
   assert.deepEqual(f.warnings, []);
 });
 
+test("packaged subagent ID patterns need no look-around and reject trailing newlines", () => {
+  const properties = name => runtime.tools.find(tool => tool.name === `subagents_${name}`).inputSchema.properties;
+  const ids = [properties("spawn_agent").request_id, properties("agent_result").run_id, properties("wait_agent").run_ids.items];
+  for (const { pattern } of ids) {
+    assert.doesNotMatch(pattern, /\(\?(?:[=!]|<[=!])/);
+    const regex = new RegExp(pattern, "u");
+    assert.match("Run_0.1:-", regex);
+    assert.doesNotMatch("run\n", regex);
+    assert.doesNotMatch("run id", regex);
+  }
+});
+
 test("discovery hint is one structured section, not an opaque full prompt override", async t => {
   const f = await fixture(t);
   const first = await f.before();
