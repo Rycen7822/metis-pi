@@ -1,0 +1,71 @@
+diff --git a/packages/ai/src/utils/transcript.ts b/packages/ai/src/utils/transcript.ts
+index e9bec79..e43cbb5 100644
+--- a/packages/ai/src/utils/transcript.ts
++++ b/packages/ai/src/utils/transcript.ts
+@@ -150,18 +150,26 @@ export interface ToolStateChanges {
+ export function getToolStateChanges(previous: readonly Tool[], current: readonly Tool[]): ToolStateChanges {
+ 	const previousTools = new Map(previous.map((tool) => [tool.name, tool]));
+ 	const currentTools = new Map(current.map((tool) => [tool.name, tool]));
++	const canonical = new Map<Tool, { declaration: Tool; serialized: string }>();
++	function normalize(tool: Tool) {
++		let entry = canonical.get(tool);
++		if (!entry) {
++			const declaration = toToolDeclaration(tool);
++			entry = { declaration, serialized: JSON.stringify(declaration) };
++			canonical.set(tool, entry);
++		}
++		return entry;
++	}
++	function changed(tool: Tool, other: Tool | undefined): boolean {
++		return other === undefined || normalize(tool).serialized !== normalize(other).serialized;
++	}
+ 	return {
+-		toolsAdded: current
+-			.filter((tool) => {
+-				const previousTool = previousTools.get(tool.name);
+-				return previousTool === undefined || !declarationsEqual(previousTool, tool);
+-			})
+-			.map(toToolDeclaration),
++		toolsAdded: current.flatMap((tool) => {
++			if (!changed(tool, previousTools.get(tool.name))) return [];
++			return [normalize(tool).declaration];
++		}),
+ 		toolsRemoved: previous
+-			.filter((tool) => {
+-				const currentTool = currentTools.get(tool.name);
+-				return currentTool === undefined || !declarationsEqual(tool, currentTool);
+-			})
++			.filter((tool) => changed(tool, currentTools.get(tool.name)))
+ 			.map((tool) => ({ name: tool.name })),
+ 	};
+ }
+diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
+index aec781d..ae8f771 100644
+--- a/packages/coding-agent/src/extensions/codemode/tool.ts
++++ b/packages/coding-agent/src/extensions/codemode/tool.ts
+@@ -164,7 +164,9 @@ function describeGlobals(models: boolean, discovery: CodemodeDiscovery): string
+ 		lines.push(`- \`ALL_TOOLS\`, ${search}, ${lookups}: find unlisted tools, such as MCP tools.`);
+ 	}
+ 	if (models) {
+-		lines.push(`- \`models\`: classifiers and image generation. Read ${CODEMODE_DOCS_PATH} first.`);
++		lines.push(
++			"- `models`: classifiers and image generation. Read `docs/codemode.md` in the Pi documentation first.",
++		);
+ 	}
+ 	return lines.join("\n");
+ }
+diff --git a/packages/coding-agent/test/tool-search.test.ts b/packages/coding-agent/test/tool-search.test.ts
+index 0af75c6..88c1df8 100644
+--- a/packages/coding-agent/test/tool-search.test.ts
++++ b/packages/coding-agent/test/tool-search.test.ts
+@@ -251,6 +251,10 @@ describe("schema references in the search text", () => {
+ });
+ 
+ describe("codemode description catalog", () => {
++	it("points at Pi documentation without putting an installation path into tool declarations", () => {
++		const description = createCodemodeDescription([], { models: true });
++		expect(description).toMatch(/Read `docs\/codemode\.md` in the Pi documentation/);
++	});
+ 	const plain = tool("read_notes", "Read notes.");
+ 	const github = ["a", "b", "c"].map((suffix) => tool(`mcp__github__${suffix}`, `GitHub ${suffix}.`));
+ 	const docs = [tool("mcp__docs__search", "Search docs."), tool("mcp__docs__long", "Long ".repeat(200))];

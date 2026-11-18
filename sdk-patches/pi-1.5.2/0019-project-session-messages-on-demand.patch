@@ -1,0 +1,356 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 956d07f..d470e8c 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -73,6 +73,7 @@ import {
+ 	collectEntriesForBranchSummary,
+ 	compact,
+ 	estimateContextTokens,
++	estimateContextUsageFromTail,
+ 	estimateProjectedContextTokens,
+ 	estimateTokens,
+ 	generateBranchSummary,
+@@ -828,7 +829,10 @@ export class AgentSession {
+ 	private _getCompactionSettings(model = this.model) {
+ 		const settings = this.settingsManager.getCompactionSettings(this.model);
+ 		if (model && model.contextWindow > 0 && settings.enabled) {
+-			settings.reserveTokens = this._extensionRunner.getCompactionReserve(model.contextWindow, settings.reserveTokens);
++			settings.reserveTokens = this._extensionRunner.getCompactionReserve(
++				model.contextWindow,
++				settings.reserveTokens,
++			);
+ 		}
+ 		return settings;
+ 	}
+@@ -844,14 +848,22 @@ export class AgentSession {
+ 	}
+ 
+ 	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
+-		const projection = this.sessionManager.buildSessionProjection();
++		const session = this.sessionManager;
+ 		// A virtual selection is checked in prepareRequest, against the model the request is routed to.
+ 		const model = this.model;
+-		if (!model || isVirtualModel(model) || !this._exceedsCompactionThreshold(model, projection)) {
+-			return { ...context, messages: projection.messages };
++		if (model && !isVirtualModel(model) && model.contextWindow > 0) {
++			const fast = estimateContextUsageFromTail(session);
++			const projection = fast === undefined ? session.buildSessionProjection() : undefined;
++			const tokens = projection
++				? estimateProjectedContextTokens(projection, session.getBranchMetadata()).tokens
++				: fast;
++			if (tokens !== undefined && shouldCompact(tokens, model.contextWindow, this._getCompactionSettings(model))) {
++				await this._runAutoCompaction("threshold", false);
++			} else if (projection) {
++				return { ...context, messages: projection.messages };
++			}
+ 		}
+-		await this._runAutoCompaction("threshold", false);
+-		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
++		return { ...context, messages: session.buildSessionContext().messages };
+ 	}
+ 
+ 	private _installAgentRequestProjection(): void {
+@@ -860,10 +872,15 @@ export class AgentSession {
+ 			const failed = this._failedResponse;
+ 			this._failedResponse = undefined;
+ 			const prepare = async () => {
+-				const projection = this.sessionManager.buildSessionProjection();
++				// Routing may need the original projection to compare usage after awaiting the router.
++				const model = this.agent.state.model;
++				const projection =
++					(model && isVirtualModel(model)) || previousPrepareRequest
++						? this.sessionManager.buildSessionProjection()
++						: undefined;
+ 				const canonicalContext = {
+ 					...request.context,
+-					messages: projection.messages,
++					messages: projection?.messages ?? this.sessionManager.buildSessionContext().messages,
+ 					// Messages declare the provider-visible loadout; context.tools keeps executable implementations.
+ 					tools: this.agent.state.tools.slice(),
+ 				};
+@@ -907,7 +924,9 @@ export class AgentSession {
+ 			}
+ 			// The route stands: the router already decided this request. The state entry does not change
+ 			// the projection.
+-			if (this._exceedsCompactionThreshold(route.model, projection)) {
++			if (
++				this._exceedsCompactionThreshold(route.model, projection ?? this.sessionManager.buildSessionProjection())
++			) {
+ 				await this._runAutoCompaction("threshold", false);
+ 				({ previous, context } = await prepare());
+ 			}
+@@ -4456,6 +4475,9 @@ export class AgentSession {
+ 		const contextWindow = model.contextWindow ?? 0;
+ 		if (contextWindow <= 0) return undefined;
+ 
++		const tokens = estimateContextUsageFromTail(this.sessionManager);
++		if (tokens !== undefined) return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
++
+ 		// After compaction, the last assistant usage reflects pre-compaction context size.
+ 		// We can only trust usage from an assistant that responded after the latest compaction.
+ 		// If no such assistant exists, context token count is unknown until the next LLM response.
+diff --git a/packages/coding-agent/src/core/compaction/compaction.ts b/packages/coding-agent/src/core/compaction/compaction.ts
+index b03590c..1111119 100644
+--- a/packages/coding-agent/src/core/compaction/compaction.ts
++++ b/packages/coding-agent/src/core/compaction/compaction.ts
+@@ -25,11 +25,13 @@ import type {
+ } from "@earendil-works/pi-ai/compat";
+ import { completeSimple } from "@earendil-works/pi-ai/compat";
+ import { convertToLlm } from "../messages.ts";
++import type { SessionMessageMetadata } from "../session-entry-metadata.ts";
+ import {
+ 	buildSessionProjection,
+ 	type CompactionEntry,
+ 	type ProjectedSessionEntry,
+ 	type SessionEntry,
++	type SessionManager,
+ 	type SessionProjection,
+ 	sessionEntryToContextMessages,
+ } from "../session-manager.ts";
+@@ -145,17 +147,52 @@ export function calculateContextTokens(usage: Usage): number {
+  * Get usage from an assistant message if available.
+  * Skips aborted, error, and all-zero usage messages as they don't have valid usage data.
+  */
+-function getAssistantUsage(msg: AgentMessage): Usage | undefined {
+-	if (msg.role === "assistant" && "usage" in msg) {
+-		const assistantMsg = msg as AssistantMessage;
+-		if (
+-			assistantMsg.stopReason !== "aborted" &&
+-			assistantMsg.stopReason !== "error" &&
+-			assistantMsg.usage &&
+-			calculateContextTokens(assistantMsg.usage) > 0
++function getAssistantUsage(msg: AgentMessage | SessionMessageMetadata): Usage | undefined {
++	if (
++		msg.role === "assistant" &&
++		"usage" in msg &&
++		msg.usage &&
++		msg.stopReason !== "aborted" &&
++		msg.stopReason !== "error" &&
++		calculateContextTokens(msg.usage) > 0
++	) {
++		return msg.usage;
++	}
++	return undefined;
++}
++
++/** A valid usage after the last edit/checkpoint needs only the trailing ordinary messages. */
++export function estimateContextUsageFromTail(session: SessionManager): number | undefined {
++	const trailing: string[] = [];
++	let id = session.getLeafId();
++	while (id) {
++		const entry = session.getEntryMetadata(id);
++		if (!entry) return undefined;
++		if (entry.type === "message") {
++			const { message } = entry;
++			if (message.role === "assistant") {
++				const usage = getAssistantUsage(message);
++				if (!usage) return undefined;
++				let tokens = calculateContextTokens(usage);
++				for (const id of trailing.reverse()) {
++					const body = session.getEntryForScan(id);
++					if (!body) return undefined;
++					for (const msg of sessionEntryToContextMessages(body)) tokens += estimateTokens(msg);
++				}
++				return tokens;
++			}
++			if (message.role !== "user" && message.role !== "toolResult") return undefined;
++			trailing.push(entry.id);
++		} else if (
++			entry.type === "compaction" ||
++			entry.type === "context_edit" ||
++			entry.type === "branch_summary" ||
++			entry.type === "custom_message" ||
++			entry.type === "unknown"
+ 		) {
+-			return assistantMsg.usage;
++			return undefined;
+ 		}
++		id = entry.parentId;
+ 	}
+ 	return undefined;
+ }
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 680ad5b..9ca1301 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -388,25 +388,36 @@ export function buildSessionProjection(
+ 	return projectContextEntries(selectContextEntries(path), getSessionContextSettings(path));
+ }
+ 
++function contextEdits(entries: SessionEntry[]): Map<string, ContextEditEntry> {
++	const edits = new Map<string, ContextEditEntry>();
++	for (const entry of entries) {
++		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
++	}
++	return edits;
++}
++
++function projectsMessages(entry: SessionEntry | SessionEntryMetadata, index: number): boolean {
++	// Older checkpoints can lie inside the retained range without contributing messages.
++	return (
++		entry.type === "message" ||
++		entry.type === "custom_message" ||
++		entry.type === "branch_summary" ||
++		(entry.type === "compaction" && index === 0)
++	);
++}
++
+ function projectContextEntries(
+ 	contextEntries: SessionEntry[],
+ 	settings: Pick<SessionContext, "thinkingLevel" | "model">,
+ ): SessionProjection {
+ 	const { thinkingLevel, model } = settings;
+-	const edits = new Map<string, ContextEditEntry>();
+-	for (const entry of contextEntries) {
+-		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
+-	}
++	const edits = contextEdits(contextEntries);
+ 	const projectedEntries = contextEntries.map(
+ 		(sourceEntry, index): ProjectedSessionEntry => ({
+ 			sourceEntry,
+-			// buildContextEntries() may retain an older compaction entry because its
+-			// raw ID lies inside the newest retained range. Only the newest compaction
+-			// at index zero contributes a checkpoint and summary.
+-			messages:
+-				sourceEntry.type === "compaction" && index > 0
+-					? []
+-					: projectContextEntry(sourceEntry, edits.get(sourceEntry.id)),
++			messages: projectsMessages(sourceEntry, index)
++				? projectContextEntry(sourceEntry, edits.get(sourceEntry.id))
++				: [],
+ 		}),
+ 	);
+ 	return {
+@@ -1052,7 +1063,7 @@ export class SessionManager {
+ 		usage?: Usage,
+ 	): string {
+ 		const timestamp = new Date().toISOString();
+-		const systemMessage = getCurrentSystemMessage(this.buildSessionProjection().messages);
++		const systemMessage = getCurrentSystemMessage(this.readContextMessages(this.getBranchMetadata(), "system"));
+ 		const id = generateId(this.store);
+ 		const entry: CompactionEntry<T> = {
+ 			type: "compaction",
+@@ -1350,9 +1361,30 @@ export class SessionManager {
+ 		}
+ 	}
+ 
++	private readContextMessages(path: SessionEntryMetadata[], scope: "all" | "system"): AgentMessage[] {
++		const selected = selectContextEntries(path);
++		const sources = new Set<string>();
++		for (const [index, entry] of selected.entries()) {
++			if (!projectsMessages(entry, index)) continue;
++			if (
++				scope === "all" ||
++				entry.type === "compaction" ||
++				(entry.type === "message" && entry.message.role === "system")
++			) {
++				sources.add(entry.id);
++			}
++		}
++		const needed = selected.filter(
++			(entry) => sources.has(entry.id) || (entry.type === "context_edit" && sources.has(entry.targetId)),
++		);
++		const entries = this.store.readProjectionEntries(needed, path);
++		const edits = contextEdits(entries);
++		return entries.flatMap((entry) => (sources.has(entry.id) ? projectContextEntry(entry, edits.get(entry.id)) : []));
++	}
++
+ 	buildSessionContext(): SessionContext {
+-		const { messages, thinkingLevel, model } = this.buildSessionProjection();
+-		return { messages, thinkingLevel, model };
++		const path = this.getBranchMetadata();
++		return { ...getSessionContextSettings(path), messages: this.readContextMessages(path, "all") };
+ 	}
+ 
+ 	/**
+diff --git a/packages/coding-agent/test/agent-session-stats.test.ts b/packages/coding-agent/test/agent-session-stats.test.ts
+index a26346f..7d9eeeb 100644
+--- a/packages/coding-agent/test/agent-session-stats.test.ts
++++ b/packages/coding-agent/test/agent-session-stats.test.ts
+@@ -98,6 +98,29 @@ function syncAgentMessages(session: AgentSession, sessionManager: SessionManager
+ }
+ 
+ describe("AgentSession.getSessionStats", () => {
++	it("keeps context usage on the active branch and invalidates it at edit and compaction boundaries", async () => {
++		const { session, sessionManager: history } = await createSession();
++		try {
++			const user = history.appendMessage(createUserMessage("hello", 1));
++			const reply = history.appendMessage(createAssistantMessage("ok", 200, 2));
++			history.appendCustomEntry("journal", { ignored: true });
++			const tail = history.appendMessage(createUserMessage("12345678", 3));
++			expect(session.getContextUsage()?.tokens).toBe(202);
++			history.appendContextEdit(tail, { content: "1234" });
++			expect(session.getContextUsage()?.tokens).toBe(4); // two user blocks and one assistant block
++			history.appendCompaction("summary", user, 202);
++			expect(session.getContextUsage()?.tokens).toBeNull();
++			history.appendMessage({ ...createAssistantMessage("aborted", 999, 4), stopReason: "aborted" });
++			expect(session.getContextUsage()?.tokens).toBeNull();
++			history.appendMessage(createAssistantMessage("fresh", 300, 5));
++			expect(session.getContextUsage()?.tokens).toBe(300);
++			history.branch(reply);
++			expect(session.getContextUsage()?.tokens).toBe(200);
++		} finally {
++			await session.dispose();
++		}
++	});
++
+ 	it("exposes the current context usage alongside token totals", async () => {
+ 		const { session, sessionManager } = await createSession();
+ 
+diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+index 57977b0..ce8a51c 100644
+--- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
++++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+@@ -32,6 +32,36 @@ describe("persisted session body cache", () => {
+ 		expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
+ 	});
+ 
++	it("keeps the compacted message view and full provenance consistent after edits and a reopen", () => {
++		const seed = SessionManager.create(directory, directory);
++		seed.appendMessage({ role: "system", content: "original prompt", timestamp: 1 });
++		const user = seed.appendMessage(userMsg("original"));
++		const archive = seed.appendCustomEntry("archive", { body: "not a conversation message" });
++		const visible = seed.appendCustomMessageEntry("note", "visible to the model", false);
++		seed.appendContextEdit(user, { content: "replacement" });
++		seed.appendContextEdit(visible, null);
++		seed.appendCompaction("older", user, 100);
++		seed.appendCompaction("newest", user, 90);
++		const session = SessionManager.open(seed.getSessionFile()!);
++		const full = session.buildSessionProjection();
++		const actual = session.buildSessionContext();
++		expect(actual.messages).toEqual(full.messages);
++		expect(actual.messages).toMatchObject([
++			{ role: "system", content: "original prompt" },
++			{ role: "compactionSummary", summary: "newest" },
++			{ role: "user", content: "replacement" },
++		]);
++		expect(full.entries.find((entry) => entry.sourceEntry.id === archive)?.sourceEntry).toMatchObject({
++			data: { body: "not a conversation message" },
++		});
++		session.branch(visible);
++		expect(session.buildSessionContext().messages).toMatchObject([
++			{ role: "system", content: "original prompt" },
++			{ role: "user", content: "original" },
++			{ role: "custom", content: "visible to the model" },
++		]);
++	});
++
+ 	it("accounts UTF-8 bytes and evicts the least recently used body", () => {
+ 		const seed = SessionManager.create(directory, directory);
+ 		seed.appendMessage(userMsg("start persistence"));
+diff --git a/packages/coding-agent/test/suite/virtual-models.test.ts b/packages/coding-agent/test/suite/virtual-models.test.ts
+index f70a513..756308f 100644
+--- a/packages/coding-agent/test/suite/virtual-models.test.ts
++++ b/packages/coding-agent/test/suite/virtual-models.test.ts
+@@ -298,8 +298,9 @@ describe("AgentSession virtual models", () => {
+ 
+ 		await harness.session.prompt("hello");
+ 
+-		// One per request, one between the turns, and one for the compaction check after the run.
+-		expect(projections).toHaveBeenCalledTimes(4);
++		// One full projection per routed request and one for the post-run check.
++		// Refreshing the messages between turns does not need full provenance.
++		expect(projections).toHaveBeenCalledTimes(3);
+ 	});
+ 
+ 	it("stores router state on the branch and passes it to later requests", async () => {

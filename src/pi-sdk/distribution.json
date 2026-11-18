@@ -74,13 +74,29 @@
     {
       "file": "0018-observe-prepared-provider-requests.patch",
       "sha256": "b6f3cca74a687abbb6fc3232253334fcf96fd1d17e8eabe1582f7dcf0ad9ecba"
+    },
+    {
+      "file": "0019-project-session-messages-on-demand.patch",
+      "sha256": "7fb964984ee173d14d3007c316ddac44fa0af5c864f9c0d77a703f3f41f0144f"
+    },
+    {
+      "file": "0020-stabilize-tool-declarations.patch",
+      "sha256": "1faf6402b973b22ace21b06d4745e84c5dd9fc86aaf0bbf999fc9a322d4f7bae"
+    },
+    {
+      "file": "0021-avoid-buffering-completion-events.patch",
+      "sha256": "b3b4d9dedbe7f00edc7ca0e86d999bb8f8b48ac7a09bd990b67c357ad6039708"
+    },
+    {
+      "file": "0022-exercise-read-pages-through-sdk-tool.patch",
+      "sha256": "778d163acad5cadf88cf58b8c15dfa2ff8db0fdee261c9c79ae35125c618c366"
     }
   ],
-  "patchSet": "9e4f71f2e0c7329aa3bede2c0bb2f21fd18cbc349d417af2233068abd31dbbe8",
+  "patchSet": "02de1300f391bc62ce31979a51f1ffe4cdfe2934c190ad9a580f926e04af3dea",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "397fb056436718854ed7bb603901837739c91ef64dbbf3bb17067760f1a3291a",
-    "bytes": 6042590,
-    "unpackedBytes": 26770893
+    "sha256": "dcda03d5f0589f22ccdf3a413d77e89b68bae8a5e4125cb201c9a56494b392a2",
+    "bytes": 6048547,
+    "unpackedBytes": 26792809
   }
 }

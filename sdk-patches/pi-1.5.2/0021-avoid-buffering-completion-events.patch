@@ -1,0 +1,172 @@
+diff --git a/packages/ai/src/api/lazy.ts b/packages/ai/src/api/lazy.ts
+index fad2116..f4ba635 100644
+--- a/packages/ai/src/api/lazy.ts
++++ b/packages/ai/src/api/lazy.ts
+@@ -67,9 +67,10 @@ export function lazyStream(
+ 	setup: () => Promise<AsyncIterable<AssistantMessageEvent>>,
+ 	observer?: LazyStreamObserver,
+ 	signal?: AbortSignal,
++	delivery?: "result-only",
+ ): AssistantMessageEventStream {
+ 	const startedAt = Date.now();
+-	const outer = new AssistantMessageEventStream();
++	const outer = new AssistantMessageEventStream(delivery);
+ 	let observedResult = false;
+ 	const observeResult = (result: AssistantMessage | undefined): void => {
+ 		if (observedResult) return;
+diff --git a/packages/ai/src/models.ts b/packages/ai/src/models.ts
+index 99189b0..e5f73b6 100644
+--- a/packages/ai/src/models.ts
++++ b/packages/ai/src/models.ts
+@@ -933,20 +933,7 @@ class ModelsImpl implements MutableModels {
+ 		context: Context,
+ 		options?: ModelsApiStreamOptions<TApi>,
+ 	): AssistantMessageEventStream {
+-		const transcript = normalizeContext(context);
+-		return lazyStream(
+-			model,
+-			async () => {
+-				const provider = this.requireChatProvider(model);
+-				const { requestModel, requestOptions } = await this.applyAuth(
+-					model,
+-					options as ModelsApiStreamOptions<Api> | undefined,
+-				);
+-				return provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>);
+-			},
+-			observeModelRequest(model, options, false),
+-			options?.signal,
+-		);
++		return this.chatStream(model, context, options as ModelsApiStreamOptions<Api> | undefined, "full");
+ 	}
+ 
+ 	async complete<TApi extends Api>(
+@@ -954,20 +941,39 @@ class ModelsImpl implements MutableModels {
+ 		context: Context,
+ 		options?: ModelsApiStreamOptions<TApi>,
+ 	): Promise<AssistantMessage> {
+-		return this.stream(model, context, options).result();
++		return this.chatStream(
++			model,
++			context,
++			options as ModelsApiStreamOptions<Api> | undefined,
++			"full",
++			"result-only",
++		).result();
+ 	}
+ 
+ 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
++		return this.chatStream(model, context, options, "simple");
++	}
++
++	private chatStream(
++		model: Model<Api>,
++		context: Context,
++		options: ModelsApiStreamOptions<Api> | ModelsSimpleStreamOptions | undefined,
++		mode: "full" | "simple",
++		delivery?: "result-only",
++	): AssistantMessageEventStream {
+ 		const transcript = normalizeContext(context);
+ 		return lazyStream(
+ 			model,
+ 			async () => {
+ 				const provider = this.requireChatProvider(model);
+ 				const { requestModel, requestOptions } = await this.applyAuth(model, options);
+-				return provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions);
++				return mode === "simple"
++					? provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions)
++					: provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<Api>);
+ 			},
+ 			observeModelRequest(model, options, false),
+ 			options?.signal,
++			delivery,
+ 		);
+ 	}
+ 
+@@ -976,7 +982,7 @@ class ModelsImpl implements MutableModels {
+ 		context: Context,
+ 		options?: ModelsSimpleStreamOptions,
+ 	): Promise<AssistantMessage> {
+-		return this.streamSimple(model, context, options).result();
++		return this.chatStream(model, context, options, "simple", "result-only").result();
+ 	}
+ 
+ 	streamDeferred(
+diff --git a/packages/ai/src/utils/event-stream.ts b/packages/ai/src/utils/event-stream.ts
+index eb968c0..480c4c1 100644
+--- a/packages/ai/src/utils/event-stream.ts
++++ b/packages/ai/src/utils/event-stream.ts
+@@ -31,10 +31,16 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
+ 	private resolveFinalResult!: (result: R) => void;
+ 	private isComplete: (event: T) => boolean;
+ 	private extractResult: (event: T) => R;
++	private readonly delivery: "iterable" | "result-only";
+ 
+-	constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
++	constructor(
++		isComplete: (event: T) => boolean,
++		extractResult: (event: T) => R,
++		delivery: "iterable" | "result-only" = "iterable",
++	) {
+ 		this.isComplete = isComplete;
+ 		this.extractResult = extractResult;
++		this.delivery = delivery;
+ 		this.finalResultPromise = new Promise((resolve) => {
+ 			this.resolveFinalResult = resolve;
+ 		});
+@@ -48,6 +54,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
+ 			this.resolveFinalResult(this.extractResult(event));
+ 		}
+ 
++		if (this.delivery === "result-only") return;
+ 		// Deliver to waiting consumer or queue it
+ 		const waiter = this.waiting.dequeue();
+ 		if (waiter) {
+@@ -70,6 +77,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
+ 	}
+ 
+ 	async *[Symbol.asyncIterator](): AsyncIterator<T> {
++		if (this.delivery === "result-only") return;
+ 		while (true) {
+ 			if (this.queue.length > 0) {
+ 				yield this.queue.dequeue()!;
+@@ -98,7 +106,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
+ 	readonly #startedAt = Date.now();
+ 	readonly #startedAtMonotonic = performance.now();
+ 
+-	constructor() {
++	constructor(delivery?: "result-only") {
+ 		super(
+ 			(event) => event.type === "done" || event.type === "error",
+ 			(event) => {
+@@ -109,6 +117,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
+ 				}
+ 				throw new Error("Unexpected event type for final result");
+ 			},
++			delivery,
+ 		);
+ 	}
+ 
+diff --git a/packages/ai/test/event-stream.test.ts b/packages/ai/test/event-stream.test.ts
+index 39d3248..b57ae9c 100644
+--- a/packages/ai/test/event-stream.test.ts
++++ b/packages/ai/test/event-stream.test.ts
+@@ -4,6 +4,19 @@ import { AssistantMessageEventStream, EventStream } from "../src/utils/event-str
+ 
+ // Regression tests for https://github.com/earendil-works/pi/issues/9055
+ describe("EventStream", () => {
++	it("does not retain intermediate events when explicitly opened for a final result only", async () => {
++		const stream = new EventStream<number>(
++			(event) => event === 3,
++			(event) => event,
++			"result-only",
++		);
++		stream.push(1);
++		stream.push(2);
++		stream.push(3);
++		expect(await stream.result()).toBe(3);
++		for await (const event of stream) expect.unreachable(`Unexpected buffered event: ${event}`);
++	});
++
+ 	it("drains buffered events in order and ignores events pushed after completion", async () => {
+ 		const stream = new EventStream<number, number>(
+ 			(event) => event === 3,

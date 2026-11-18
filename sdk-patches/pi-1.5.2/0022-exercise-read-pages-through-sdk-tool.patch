@@ -1,0 +1,88 @@
+diff --git a/packages/coding-agent/test/read-streaming.test.ts b/packages/coding-agent/test/read-streaming.test.ts
+index 210d39e..feb11f9 100644
+--- a/packages/coding-agent/test/read-streaming.test.ts
++++ b/packages/coding-agent/test/read-streaming.test.ts
+@@ -5,7 +5,7 @@ import { join, resolve } from "path";
+ import { pathToFileURL } from "url";
+ import type * as util from "util";
+ import { afterAll, describe, expect, it, vi } from "vitest";
+-import { createReadToolDefinition, type ReadOperations } from "../src/core/tools/read.ts";
++import { createReadTool, createReadToolDefinition, type ReadOperations } from "../src/core/tools/read.ts";
+ import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "../src/core/tools/truncate.ts";
+ 
+ // Runs when the read tool decodes a chunk: the file is open and partly read, so a test can change it mid-read.
+@@ -152,20 +152,28 @@ describe("read tool streaming", () => {
+ 			"a\nb\n",
+ 			"a\n\nb",
+ 			"\uFEFFé\n😀\r\n字\n",
+-			lines(2005, (i) => "line " + i),
++			lines(2005, (i) => `line ${i}`),
+ 			lines(3, () => "x".repeat(20 * 1024)),
+ 		]) {
+ 			for (const streaming of [false, true]) {
+ 				const bytes = Buffer.from(text),
+ 					pages: string[] = [];
+ 				const ops = streaming ? streamingOps(bytes, 4096) : { access: async () => {}, readFile: async () => bytes };
+-				const tool = createReadToolDefinition(process.cwd(), { operations: ops });
++				const tool = createReadTool(process.cwd(), { operations: ops });
+ 				let offset = 1,
+ 					count = 0;
+ 				while (true) {
+ 					const result = await tool.execute("page", { path: FILE_PATH, offset, limit: 3000, format: "page" });
+ 					const page = result.structuredContent;
+-					if (typeof page !== "object" || page.type !== "text_page") throw new Error("Expected a text page");
++					if (
++						!page ||
++						typeof page !== "object" ||
++						!("type" in page) ||
++						page.type !== "text_page" ||
++						typeof page.text !== "string" ||
++						typeof page.lines !== "number"
++					)
++						throw new Error("Expected a text page");
+ 					expect(page.totalLines).toBe(text.split("\n").length);
+ 					expect(page.lines).toBeGreaterThan(0);
+ 					expect(Buffer.byteLength(page.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+@@ -176,7 +184,7 @@ describe("read tool streaming", () => {
+ 						break;
+ 					}
+ 					expect(page.nextOffset).toBeGreaterThan(offset);
+-					if (page.nextOffset === null) throw new Error("A partial page must advance");
++					if (typeof page.nextOffset !== "number") throw new Error("A partial page must advance");
+ 					offset = page.nextOffset;
+ 				}
+ 				expect(count).toBe(text.split("\n").length);
+@@ -186,7 +194,7 @@ describe("read tool streaming", () => {
+ 	});
+ 
+ 	it("separates requested pagination from safety truncation and never mixes notices into raw text", async () => {
+-		const tool = createReadToolDefinition(process.cwd(), { operations: streamingOps(Buffer.from("a\nb\nc\n"), 1) });
++		const tool = createReadTool(process.cwd(), { operations: streamingOps(Buffer.from("a\nb\nc\n"), 1) });
+ 		expect((await tool.execute("page", { path: FILE_PATH, format: "page", limit: 2 })).structuredContent).toEqual({
+ 			type: "text_page",
+ 			text: "a\nb",
+@@ -203,7 +211,7 @@ describe("read tool streaming", () => {
+ 	});
+ 
+ 	it("rejects invalid page ranges, unsupported images and lines that cannot make progress", async () => {
+-		const tool = createReadToolDefinition(process.cwd(), { operations: streamingOps(Buffer.from("a\nb"), 1) });
++		const tool = createReadTool(process.cwd(), { operations: streamingOps(Buffer.from("a\nb"), 1) });
+ 		for (const range of [
+ 			{},
+ 			{ limit: 0 },
+@@ -217,13 +225,13 @@ describe("read tool streaming", () => {
+ 				/positive integer/,
+ 			);
+ 		}
+-		const large = createReadToolDefinition(process.cwd(), {
++		const large = createReadTool(process.cwd(), {
+ 			operations: streamingOps(Buffer.from("x".repeat(DEFAULT_MAX_BYTES + 1)), 4096),
+ 		});
+ 		await expect(large.execute("page", { path: FILE_PATH, format: "page", limit: 1 })).rejects.toThrow(
+ 			/Line 1 exceeds/,
+ 		);
+-		const image = createReadToolDefinition(process.cwd(), {
++		const image = createReadTool(process.cwd(), {
+ 			operations: {
+ 				access: async () => {},
+ 				detectImageMimeType: async () => "image/png",
