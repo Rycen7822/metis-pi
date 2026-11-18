@@ -925,8 +925,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const fingerprints = new WeakMap<object, string>();
         const candidates = argumentCandidates(base.entries, argumentProtection, argumentHistory).filter(
           ({ group }) =>
-            !group.keys.some((key) => indexer.getRecord(key)?.metadataUnavailable) &&
-            projectArguments(before, [group], argumentProtection, fingerprints) !== before,
+            projectArguments(before, [group], argumentProtection, fingerprints) !== before &&
+            !group.keys.some((key) => indexer.getProjectionEvidence(key)?.metadataUnavailable),
         );
         const after = projectArguments(
           before,
