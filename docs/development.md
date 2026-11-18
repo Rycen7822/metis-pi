@@ -15,6 +15,7 @@ npm run prepare:subagents
 | 改动 | 检查 |
 | --- | --- |
 | TypeScript | `npm run check`、`npm run check:test` |
+| 测试同步规则 | `npm run lint:tests` |
 | 规则与渲染 | `npm run test:fast`、`npm run test:chrome` |
 | 宿主、包内容与协议 | `npm run test:host`、`npm run test:protocol` |
 | 存储与资源释放 | `npm run test:io`、`npm run test:resource` |
@@ -30,6 +31,10 @@ npm run prepare:subagents
 PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 另需 Git。CI 在 Ubuntu 和 Windows 上检查普通构建与测试，在 Linux 上运行严格 PTY 检查。纯文档改动检查事实、链接、示例和包清单即可。
 
 如需查看渲染效果，运行 `npm run preview` 生成 HTML、ANSI 与文本转录。`node scripts/copy-perf.mjs` 测量渲染和提取成本，不测试系统剪贴板。临时探针和日志放在 `.work/`。
+
+### 测试同步规则
+
+CI 用 [Landmines](https://github.com/interfere-inc/landmines) 拦截对 spy 或请求记录的无信号轮询，问卷 Vitest 测试另禁止固定休眠。优先等待操作、回调信号或假时钟。外部进程没有事件时可有界检查就绪条件；真实计时测试可等待时间经过。保留故障超时和协议边界的离线替身。不启用其他上游规则。
 
 ## 重建 Pi SDK
 

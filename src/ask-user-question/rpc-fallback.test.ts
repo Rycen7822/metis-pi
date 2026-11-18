@@ -328,27 +328,30 @@ describe("ask_user_question.execute — native mode dispatch", () => {
 	it("keeps the blocked event active until the RPC dialog reply arrives", async () => {
 		const { tool, captured } = registerWithCapture();
 		const custom = vi.fn(async () => undefined);
-		let reply!: () => void;
-		const answer = new Promise<string>((resolve) => { reply = () => resolve("B"); });
-		const select = vi.fn(async () => answer);
+		const opened = Promise.withResolvers<"dialog opened">();
+		const answer = Promise.withResolvers<string>();
+		const select = vi.fn(() => {
+			opened.resolve("dialog opened");
+			return answer.promise;
+		});
 		const ctx = createMockCtx({
 			hasUI: true,
 			mode: "rpc",
 			ui: { custom: custom as never, select: select as never, input: vi.fn(async () => "") as never } as never,
 		});
 		const pending = run(tool, SINGLE, ctx);
+		let result: Awaited<typeof pending>;
 		try {
-			await vi.waitFor(() => expect(select).toHaveBeenCalledOnce());
+			expect(await Promise.race([opened.promise, pending])).toBe("dialog opened");
 			expect(captured.eventsEmitted.get("rpiv:ask-user:blocked")?.at(-1)).toEqual({ active: true });
 		} finally {
-			reply();
-			await pending;
+			answer.resolve("B");
+			result = await pending;
 		}
-		const r = await pending;
 		expect(captured.eventsEmitted.get("rpiv:ask-user:blocked")?.at(-1)).toEqual({ active: false });
 		expect(custom).not.toHaveBeenCalled();
 		expect(select).toHaveBeenCalledOnce();
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Which?"="B"') });
+		expect(result?.content[0]).toMatchObject({ text: expect.stringContaining('"Which?"="B"') });
 	});
 
 	it("uses custom rendering in TUI mode even when select is available", async () => {
