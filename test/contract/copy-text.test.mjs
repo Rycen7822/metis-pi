@@ -4,7 +4,7 @@ import * as Tui from "@earendil-works/pi-tui";
 import { copyFrame as renderFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 import { makeRenderers } from "../../src/presentation/renderers.ts";
 import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
-import { theme as toolTheme } from "../helpers.mjs";
+import { theme as toolTheme } from "../helpers/presentation.mjs";
 
 test.beforeEach((t) => installCopyPrototypes(t, undefined, { renderLatex: () => null }));
 const theme = {

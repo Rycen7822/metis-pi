@@ -1,35 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ModelPricing } from "../../src/condense/model-pricing.ts";
 import { priceRefreshMarker, requestPriceRefresh } from "../../src/condense/refresh-prices.mjs";
 import { RewriteBudget, boundedRewritePolicy } from "../../src/condense/rewrite-policy.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
+import { createWorkDirectory } from "../helpers/temp-dir.mjs";
 
 const prices = (input = 2) => ({ input, output: input * 3, cacheRead: input / 10, cacheWrite: input });
 const model = (id, provider = "vendor", cost = prices(0)) => ({ id, provider, api: "test", cost });
-async function fixture(t, fetcher) {
-  await mkdir(".work", { recursive: true });
-  const dir = await mkdtemp(join(".work", "model-pricing-")), file = join(dir, "prices.json");
+function fixture(t, fetcher) {
+  const dir = createWorkDirectory("model-pricing-"), file = join(dir, "prices.json");
   let updated = Promise.withResolvers();
-  const warnings = [];
+  const warnings = [], instances = [];
   const sources = [join(dir, "models-store.json"), priceRefreshMarker(dir)];
-  const create = fetcher => new ModelPricing({ file, sources, fetcher,
-    changed: () => updated.resolve(), warning: message => warnings.push(message) });
-  const pricing = create(fetcher);
-  const instances = [pricing];
-  t.after(async () => { for (const instance of instances) await instance.close(); await rm(dir, { recursive: true, force: true }); });
-  return { pricing, file, dir, warnings, sources,
+  t.after(async () => {
+    for (const instance of instances) await instance.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const create = fetcher => {
+    const instance = new ModelPricing({ file, sources, fetcher,
+      changed: () => updated.resolve(), warning: message => warnings.push(message) });
+    instances.push(instance);
+    return instance;
+  };
+  return { pricing: create(fetcher), file, dir, warnings, sources,
     wait: () => updated.promise,
     next: () => { updated = Promise.withResolvers(); },
-    reopen: fetcher => { const instance = create(fetcher); instances.push(instance); return instance; },
+    reopen: create,
   };
 }
 
 test("Pi quotes take priority, regex aliases preserve model qualifiers, and selected models are not mutated", { timeout: 5000 }, async t => {
   let downloads = 0;
-  const f = await fixture(t, async () => { downloads++; throw new Error("offline"); });
+  const f = fixture(t, async () => { downloads++; throw new Error("offline"); });
   const native = model("proto-4.1-pro", "vendor", prices(2));
   f.pricing.start([native]);
   const request = model("vendor/proto-4-1-pro-20261114");
@@ -52,7 +57,7 @@ test("Pi quotes take priority, regex aliases preserve model qualifiers, and sele
 
 test("Pi context tiers survive alias lookup and fund each path at its own future input size", { timeout: 5000 }, async t => {
   let downloads = 0;
-  const f = await fixture(t, async () => { downloads++; throw new Error("Pi prices are available"); });
+  const f = fixture(t, async () => { downloads++; throw new Error("Pi prices are available"); });
   const native = model("proto-4.1", "vendor", { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
     tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }] });
   f.pricing.start([native]);
@@ -78,7 +83,7 @@ test("Pi context tiers survive alias lookup and fund each path at its own future
 
 test("models.dev prices persist until a source update, with context tiers and live Pi priority", { timeout: 5000 }, async t => {
   let downloads = 0;
-  const f = await fixture(t, async () => {
+  const f = fixture(t, async () => {
     downloads++;
     return new Response(JSON.stringify({ vendor: { api: "https://api.vendor.invalid", models: {
       "proto-4.1-pro": { id: "proto-4.1-pro", cost: { input: 2, output: 6, cache_read: 0.2,
@@ -130,7 +135,7 @@ test("models.dev prices persist until a source update, with context tiers and li
 
 test("conflicting gateway quotes and an unavailable website use fallback without repeated hot-path requests", { timeout: 5000 }, async t => {
   let downloads = 0;
-  const f = await fixture(t, async () => { downloads++; throw new Error("unavailable"); });
+  const f = fixture(t, async () => { downloads++; throw new Error("unavailable"); });
   f.pricing.start([model("proto-4.1", "gateway-one", prices(1)), model("proto-4.1", "gateway-two", prices(2))]);
   const request = model("proto-4.1", "unknown-gateway");
   f.pricing.get(request);
@@ -149,7 +154,7 @@ test("conflicting gateway quotes and an unavailable website use fallback without
 
 test("directory and extension-install changes each allow one refresh, including retry after a failed generation", { timeout: 5000 }, async t => {
   let downloads = 0;
-  const f = await fixture(t, async () => {
+  const f = fixture(t, async () => {
     downloads++;
     if (downloads === 2) throw new Error("temporary outage");
     return new Response(JSON.stringify({ vendor: { models: {
@@ -187,7 +192,7 @@ test("directory and extension-install changes each allow one refresh, including 
 
 test("a background website lookup cannot acknowledge a Pi registry reload that has not happened", { timeout: 5000 }, async t => {
   let downloads = 0;
-  const f = await fixture(t, async () => {
+  const f = fixture(t, async () => {
     downloads++;
     return new Response(JSON.stringify({ vendor: { models: { proto: { id: "proto", cost: { input: 2, output: 6 } } } } }));
   });
@@ -209,7 +214,7 @@ test("a background website lookup cannot acknowledge a Pi registry reload that h
 
 test("a late old-source writer cannot roll back the current source's completed lookup", { timeout: 5000 }, async t => {
   const started = Promise.withResolvers(), response = Promise.withResolvers();
-  const f = await fixture(t, () => { started.resolve(); return response.promise; });
+  const f = fixture(t, () => { started.resolve(); return response.promise; });
   const catalog = () => new Response(JSON.stringify({ vendor: { models: { proto: { cost: { input: 2, output: 6 } } } } }));
   const clock = Date.now;
   let now = clock();
@@ -241,7 +246,7 @@ test("a late old-source writer cannot roll back the current source's completed l
 test("shutdown aborts and joins an outstanding catalog request", { timeout: 5000 }, async t => {
   const started = Promise.withResolvers();
   let aborted = false;
-  const f = await fixture(t, (_url, { signal }) => new Promise((_, reject) => {
+  const f = fixture(t, (_url, { signal }) => new Promise((_, reject) => {
     started.resolve();
     signal.addEventListener("abort", () => { aborted = true; reject(signal.reason); }, { once: true });
   }));

@@ -51,7 +51,7 @@
     "verify:neural-engine": "node scripts/neural-engine.mjs verify",
     "verify:native-assets": "node scripts/verify-native-assets.mjs",
     "prepack": "npm run verify:pi-sdk && npm run verify:native-assets && npm run build:plugins && npm run prepare:subagents",
-    "test:subagents": "node --experimental-strip-types scripts/python.mjs -m pytest -q test/subagents -n 4 --dist=loadfile",
+    "test:subagents": "node --experimental-strip-types scripts/python.mjs -m pytest -q test/subagents -n 4 --dist=loadfile -o cache_dir=.work/test-cache/subagents",
     "build:plugins": "node scripts/build-web-access.mjs",
     "test:plugins": "node scripts/test.mjs plugins",
     "check:plugins": "node node_modules/typescript/bin/tsc -p src/pi-web-access && node node_modules/typescript/bin/tsc -p src/pi-session-recall"

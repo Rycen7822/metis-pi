@@ -3,7 +3,7 @@ import { convertToLlm, createEventBus, initTheme, InteractiveMode } from "@earen
 import { CURSOR_MARKER, Input, KeybindingsManager, TUI_KEYBINDINGS, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
-import { sgr } from "../helpers.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import goalExtension from "../../extensions/goal.ts";

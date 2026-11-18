@@ -4,7 +4,7 @@ import * as Tui from "@earendil-works/pi-tui";
 import { initTheme, UserMessageComponent, SkillInvocationMessageComponent } from "@earendil-works/pi-coding-agent";
 import { createFullscreenLayout } from "../../src/appearance/chrome/fullscreen-layout.ts";
 import { altScreen, container, screenLines, installCopyPrototypes, select, drag } from "../helpers/ui-fixtures.mjs";
-import { sgr } from "../helpers.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 
 initTheme("dark", false);
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");

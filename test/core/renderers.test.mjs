@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { formatResult, makeRenderers } from "../../src/presentation/renderers.ts";
 import { parseDisplayDiff, renderDiffLines } from "../../src/presentation/diff.ts";
 import { stripVTControlCharacters } from "node:util";
-import { theme, FakeText, deepFreeze, sessionStub } from "../helpers.mjs";
+import { theme, FakeText, deepFreeze, presentationSession } from "../helpers/presentation.mjs";
 import { layout } from "../helpers/layout.mjs";
 import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
 import { MouseRegion, Text } from "@earendil-works/pi-tui";
@@ -231,7 +231,7 @@ test("image preview setting is respected and data never appears in text", () => 
 });
 
 test("owned renderer components reuse safely and refresh diff counts without host mutation", () => {
-  const r = makeRenderers((text) => new FakeText(text), () => "expand", undefined, undefined, undefined, sessionStub);
+  const r = makeRenderers((text) => new FakeText(text), () => "expand", undefined, undefined, undefined, presentationSession());
   const foreign = { setText() { throw new Error("foreign component mutated"); }, render() { return ["foreign"]; } };
   const first = r.read.renderCall({ path: "a.ts" }, theme, { lastComponent: foreign });
   assert.notEqual(first, foreign);

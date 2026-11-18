@@ -5,7 +5,7 @@ import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
-import { fakeTerminal, sgr } from "../helpers.mjs";
+import { fakeTerminal, sgr } from "./terminal.mjs";
 
 export const markdownTheme = {
   ...Object.fromEntries([

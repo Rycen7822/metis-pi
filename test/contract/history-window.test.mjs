@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { createHistoryWindowSystem } from "../../src/appearance/chrome/history-window.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
-import { sgr } from "../helpers.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 import { altScreen, container, drag, installCopyPrototypes, screenLines, select } from "../helpers/ui-fixtures.mjs";
 
 const HISTORY_ROW_BUDGET = 5000; // Independent contract, not the production constant.

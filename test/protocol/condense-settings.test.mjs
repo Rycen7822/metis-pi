@@ -8,12 +8,12 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../../src/condense/confi
 import { displayValue, parseScalar, scalarRow, writeScalar } from "../../src/condense/setting-fields.ts";
 import { parseMetisConfig } from "../../src/configuration/store.ts";
 import { stringify } from "smol-toml";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { createWorkDirectory } from "../helpers/temp-dir.mjs";
 
 test("partial chain settings keep defaults, accept zero window and reject invalid fields", async () => {
-  mkdirSync(".work", { recursive: true });
-  const dir = mkdtempSync(join(process.cwd(), ".work/condense-config-"));
+  const dir = createWorkDirectory("condense-config-");
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   try {

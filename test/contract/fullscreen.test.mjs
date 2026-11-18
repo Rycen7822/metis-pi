@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import * as Tui from "@earendil-works/pi-tui";
 import { createFullscreenLayout, FULLSCREEN_MARGIN_OWNER } from "../../src/appearance/chrome/fullscreen-layout.ts";
-import { sgr } from "../helpers.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 
 test("auto scrollbar keeps colored history inside both gutters on wheel input and resize", (t) => {

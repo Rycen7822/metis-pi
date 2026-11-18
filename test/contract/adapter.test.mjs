@@ -6,7 +6,7 @@ import { makeRenderers } from "../../src/presentation/renderers.ts";
 import { TOOL_NAMES } from "../../src/presentation/tool-names.ts";
 import { initTheme, InteractiveMode, createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
-import { toolInfo, bindings, deepFreeze, theme, sessionStub } from "../helpers.mjs";
+import { toolInfo, bindings, deepFreeze, theme, presentationSession } from "../helpers/presentation.mjs";
 
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 
@@ -14,7 +14,7 @@ initTheme("dark", false);
 
 const plain = (row) => stripVTControlCharacters(row.render(80).join("\n"));
 
-const ownRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+const ownRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, presentationSession());
 function setup(t, tools = TOOL_NAMES.map((name) => toolInfo(name)), options = {}, Host = isolatedToolHost()) {
   const renderers = ownRenderers();
   const original = Object.getOwnPropertyDescriptors(Host.prototype);

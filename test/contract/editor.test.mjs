@@ -6,7 +6,7 @@ import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-wor
 import { makeCodexEditorFactory } from "../../src/appearance/chrome/editor.ts";
 import { createHardwareCursor } from "../../src/appearance/chrome/hardware-cursor.ts";
 import { CURSOR_MARKER, makeSurfaceOps } from "../../src/appearance/chrome/surface.ts";
-import { theme } from "../helpers.mjs";
+import { theme } from "../helpers/presentation.mjs";
 import { altScreen, container } from "../helpers/ui-fixtures.mjs";
 
 initTheme("dark", false);

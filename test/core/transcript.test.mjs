@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { TranscriptState, renderedThinkingRuns, assistantHasVisibleThinking } from "../../src/appearance/transcript/state.ts";
 import { makeRenderers } from "../../src/presentation/renderers.ts";
 import { createThinkingViewControl } from "../../src/presentation/thinking-view.ts";
-import { theme, FakeText, sessionStub } from "../helpers.mjs";
+import { theme, FakeText, presentationSession } from "../helpers/presentation.mjs";
 
 const IMAGE_NAMES = ["first.png", "second.png", "third.png"];
 
@@ -85,7 +85,7 @@ test("identical response content keeps independent clocks and historical thinkin
 
 test("serial read appends update group membership and only the last image notice", () => {
   const transcript = new TranscriptState();
-  const session = { ...sessionStub, transcript };
+  const session = { ...presentationSession(), transcript };
   const renderers = makeRenderers((s) => new FakeText(s), () => "ctrl+o to expand", undefined, undefined, undefined, undefined, session);
   const ids = [];
   for (let index = 0; index < IMAGE_NAMES.length; index++) {

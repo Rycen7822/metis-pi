@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createFooterComponent, layoutFooter } from "../../src/appearance/chrome/footer.ts";
 import * as Tui from "@earendil-works/pi-tui";
-import { sgr } from "../helpers.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 import { altScreen, screenLines } from "../helpers/ui-fixtures.mjs";
 import { setPruneStatusWidget } from "../../src/condense/commands.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";

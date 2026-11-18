@@ -7,7 +7,8 @@ import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth, Text, Container, Spa
 import { SubagentViewer } from "../../src/subagents/ui/viewer.ts";
 import { execToolResult } from "../../src/execution/exec/results.ts";
 import { DEFAULT_CONFIG } from "../../src/appearance/config.ts";
-import { sgr, theme } from "../helpers.mjs";
+import { theme } from "../helpers/presentation.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import { installTranscriptDecorations } from "../../src/appearance/transcript/adapter.ts";
 import { TranscriptState } from "../../src/appearance/transcript/state.ts";

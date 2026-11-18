@@ -18,7 +18,8 @@ import { installAdapter } from "../../src/appearance/tool-host-adapter.ts";
 import { activate } from "../../src/appearance/runtime.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "../../src/appearance/transcript/codemode-view.ts";
 import { makeRenderers } from "../../src/presentation/renderers.ts";
-import { bindings, sessionStub, toolInfo, deepFreeze, theme, sgr } from "../helpers.mjs";
+import { bindings, presentationSession, toolInfo, deepFreeze, theme } from "../helpers/presentation.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 
 initTheme("dark", false);
@@ -27,7 +28,7 @@ const code = 'const JS_ONLY_MARKER = "script";\n'.repeat(14) + 'text(await tools
 const render = (component, width = 80) => component.render(width).join("\n");
 const plain = (component, width = 80) => stripVTControlCharacters(render(component, width));
 const makeTestRenderers = (textBindings = bindings) =>
-  makeRenderers(textBindings.makeText, textBindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+  makeRenderers(textBindings.makeText, textBindings.expandHint, undefined, undefined, undefined, undefined, presentationSession());
 const call = (id, name, args, status = "ok") => ({ id: `${parent}/${id}`, name, args: JSON.stringify(args), status });
 function setup(t, overrides = {}, lifecycle = false, sources = {}, options = {}) {
   const textBindings = { ...bindings, ...options.bindings };

@@ -23,6 +23,10 @@ npm run prepare:subagents
 | 实际终端交互 | `npm run test:pty:strict`；开发中可用 `npm run test:pty -- --journey=E3` 跑单个场景。 |
 | Condense 状态模型 | `npm run test:formal`，需要 Java 与 TLC。见[模型说明](https://github.com/Rycen7822/metis-pi/blob/main/test/formal/README.md)。 |
 
+`test/core/` 放纯逻辑与渲染规则，`test/contract/` 放真实宿主和扩展入口契约；存储、协议与资源生命周期分在 `test/io/`、`test/protocol/` 和 `test/resource/`。LSP、子代理及形式化验证有专门目录。共享夹具放 `test/helpers/`，专用替身就近放在套件内。
+
+一次性测试、临时复现脚本及结果放 `.work/`，不加入正式套件发现。子代理的 pytest 缓存在 `.work/test-cache/subagents/`。
+
 PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 另需 Git。CI 在 Ubuntu 和 Windows 上检查普通构建与测试，在 Linux 上运行严格 PTY 检查。纯文档改动检查事实、链接、示例和包清单即可。
 
 如需查看渲染效果，运行 `npm run preview` 生成 HTML、ANSI 与文本转录。`node scripts/copy-perf.mjs` 测量渲染和提取成本，不测试系统剪贴板。临时探针和日志放在 `.work/`。

@@ -6,9 +6,11 @@ import {
   initializeMetisConfig, isMetisConfigTable,
 } from "../../src/configuration/store.ts";
 import { readWebAccessConfig, updateWebAccessConfig } from "../../src/configuration/web-access.ts";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
+import { createWorkDirectory } from "../helpers/temp-dir.mjs";
+
 const tomlReader = (text: string) => (path: string) => path.endsWith("metis-pi.toml") ? text : undefined;
 function table(value: unknown): Record<string, unknown> {
   assert.ok(isMetisConfigTable(value), "expected a configuration table");
@@ -16,7 +18,7 @@ function table(value: unknown): Record<string, unknown> {
 }
 
 test("web credentials remain outside TOML and preference updates never rewrite them", (t) => {
-  const dir = mkdtempSync(join(process.cwd(), ".work", "web-config-"));
+  const dir = createWorkDirectory("web-config-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const jsonPath = join(dir, "web-search.json"), tomlPath = join(dir, "metis-pi.toml");
   const credentials = {
@@ -133,8 +135,7 @@ test("readable rendering retains default annotations without changing serialized
 });
 
 test("global saves retain defaults, annotations, unknown fields and other owners", t => {
-  mkdirSync(".work", { recursive: true });
-  const dir = mkdtempSync(join(process.cwd(), ".work/metis-config-"));
+  const dir = createWorkDirectory("metis-config-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "metis-pi.toml"), initialConfig = defaultMetisConfig();
   table(table(initialConfig.execution).tools).autoReasoning = true;
@@ -155,8 +156,7 @@ test("global saves retain defaults, annotations, unknown fields and other owners
 });
 
 test("initialization leaves existing TOML preferences unchanged", t => {
-  mkdirSync(".work", { recursive: true });
-  const dir = mkdtempSync(join(process.cwd(), ".work/metis-recall-config-"));
+  const dir = createWorkDirectory("metis-recall-config-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const configPath = join(dir, "metis-pi.toml");
   assert.equal(readMetisConfig(dir).present, false);

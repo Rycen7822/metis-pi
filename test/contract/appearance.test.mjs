@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { setImmediate as nextDelivery } from "node:timers/promises";
 import { activate } from "../../src/appearance/runtime.ts";
 import { GIT_CHANGES_INTERVAL_MS } from "../../src/appearance/git-changes.ts";
-import { theme, toolInfo } from "../helpers.mjs";
+import { theme, toolInfo } from "../helpers/presentation.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 import * as Tui from "@earendil-works/pi-tui";

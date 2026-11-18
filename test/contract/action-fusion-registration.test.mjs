@@ -18,24 +18,47 @@ const fusionEntry = fileURLToPath(new URL("../../extensions/action-fusion.ts", i
 const vendorEntry = fileURLToPath(new URL("../../extensions/execution.ts", import.meta.url));
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
 
+function fusionWorkspace(t, prefix) {
+  const cwd = mkdtempSync(join(tmpdir(), prefix));
+  const prior = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = cwd;
+  const errors = [];
+  let session;
+  t.after(async () => {
+    try {
+      try { await session?.extensionRunner.emit({ type: "session_shutdown" }); }
+      finally { session?.dispose(); }
+      assert.deepEqual(errors, []);
+    } finally {
+      if (prior === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = prior;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  async function start({ settingsManager, sessionManager, additionalExtensionPaths }) {
+    const resourceLoader = new DefaultResourceLoader({
+      cwd, agentDir: cwd, settingsManager, additionalExtensionPaths,
+      noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
+    });
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(cwd, "auth.json"), modelsPath: null,
+      modelsStorePath: join(cwd, "models.json"), refreshOnCreate: false,
+    });
+    await resourceLoader.reload();
+    const loaded = await createAgentSession({ cwd, agentDir: cwd, settingsManager, modelRuntime, resourceLoader, sessionManager });
+    session = loaded.session;
+    assert.deepEqual(loaded.extensionsResult.errors, []);
+    await session.bindExtensions({ onError: (error) => errors.push(error) });
+    return session;
+  }
+
+  return { cwd, start };
+}
+
 for (const reverseOrder of [false, true])
   test(`fusion entry controls native schemas with reverse load order=${reverseOrder}`, async (t) => {
-    const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-switch-"));
-    const prior = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = cwd;
-    let session;
-    const errors = [];
-    t.after(async () => {
-      try {
-        await session?.extensionRunner.emit({ type: "session_shutdown" });
-      } finally {
-        session?.dispose();
-        if (prior === undefined) delete process.env.PI_CODING_AGENT_DIR;
-        else process.env.PI_CODING_AGENT_DIR = prior;
-        rmSync(cwd, { recursive: true, force: true });
-      }
-      assert.deepEqual(errors, []);
-    });
+    const { cwd, start } = fusionWorkspace(t, "metis-fusion-switch-");
     const packages = (disabled) => [
       {
         source: packageRoot,
@@ -47,34 +70,11 @@ for (const reverseOrder of [false, true])
       },
     ];
     const settingsManager = SettingsManager.inMemory({ packages: reverseOrder ? [] : packages(false) });
-    const resourceLoader = new DefaultResourceLoader({
-      cwd,
-      agentDir: cwd,
+    const session = await start({
       settingsManager,
-      additionalExtensionPaths: reverseOrder ? [vendorEntry, fusionEntry] : [],
-      noSkills: true,
-      noThemes: true,
-      noPromptTemplates: true,
-      noContextFiles: true,
-    });
-    const modelRuntime = await ModelRuntime.create({
-      authPath: join(cwd, "auth.json"),
-      modelsPath: null,
-      modelsStorePath: join(cwd, "models.json"),
-      refreshOnCreate: false,
-    });
-    await resourceLoader.reload();
-    const loaded = await createAgentSession({
-      cwd,
-      agentDir: cwd,
-      settingsManager,
-      modelRuntime,
-      resourceLoader,
       sessionManager: SessionManager.inMemory(cwd),
+      additionalExtensionPaths: reverseOrder ? [vendorEntry, fusionEntry] : [],
     });
-    session = loaded.session;
-    assert.deepEqual(loaded.extensionsResult.errors, []);
-    await session.bindExtensions({ onError: (error) => errors.push(error) });
     for (const disabled of reverseOrder ? [false] : [false, true, false]) {
       if (!reverseOrder) {
         settingsManager.setPackages(packages(disabled));
@@ -88,25 +88,11 @@ for (const reverseOrder of [false, true])
       for (const name of ["edit", "write"])
         assert.equal(Boolean(tools.find((tool) => tool.name === name)?.parameters.properties.then_run), !disabled);
     }
-    assert.deepEqual(errors, []);
   });
 
 for (const foreignWrite of [false, true])
   test(`real host registers native fusion and respects foreign write=${foreignWrite}`, async (t) => {
-    const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-entry-"));
-    const prior = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = cwd;
-    let session;
-    t.after(async () => {
-      try {
-        await session?.extensionRunner.emit({ type: "session_shutdown" });
-      } finally {
-        session?.dispose();
-        if (prior === undefined) delete process.env.PI_CODING_AGENT_DIR;
-        else process.env.PI_CODING_AGENT_DIR = prior;
-        rmSync(cwd, { recursive: true, force: true });
-      }
-    });
+    const { cwd, start } = fusionWorkspace(t, "metis-fusion-entry-");
     const extra = join(cwd, "foreign.ts");
     if (foreignWrite)
       writeFileSync(
@@ -115,37 +101,11 @@ for (const foreignWrite of [false, true])
           'ption:"foreign",parameters:{type:"object",properties:{}},async ' +
           'execute(){return{content:[{type:"text",text:"foreign"}],details:{}}}})}',
       );
-    const settingsManager = SettingsManager.inMemory();
-    const modelRuntime = await ModelRuntime.create({
-      authPath: join(cwd, "auth.json"),
-      modelsPath: null,
-      modelsStorePath: join(cwd, "models.json"),
-      refreshOnCreate: false,
-    });
-    const resourceLoader = new DefaultResourceLoader({
-      cwd,
-      agentDir: cwd,
-      settingsManager,
-      additionalExtensionPaths: [fusionEntry, ...(foreignWrite ? [extra] : [])],
-      noSkills: true,
-      noThemes: true,
-      noPromptTemplates: true,
-      noContextFiles: true,
-    });
-    await resourceLoader.reload();
-    const loaded = await createAgentSession({
-      cwd,
-      agentDir: cwd,
-      settingsManager,
-      modelRuntime,
-      resourceLoader,
+    const session = await start({
+      settingsManager: SettingsManager.inMemory(),
       sessionManager: SessionManager.create(cwd, cwd),
+      additionalExtensionPaths: [fusionEntry, ...(foreignWrite ? [extra] : [])],
     });
-    session = loaded.session;
-    assert.deepEqual(loaded.extensionsResult.errors, []);
-    const errors = [];
-    await session.bindExtensions({ onError: (error) => errors.push(error) });
-    assert.deepEqual(errors, []);
     const tools = session.extensionRunner.getAllRegisteredTools();
     const write = tools.find((tool) => tool.definition.name === "write");
     const edit = tools.find((tool) => tool.definition.name === "edit");
@@ -214,5 +174,4 @@ for (const foreignWrite of [false, true])
     const cancelled = await pending;
     assert.equal(cancelled.details.metisActionFusion.command.status, "cancelled");
     assert.equal(readFileSync(join(cwd, "other"), "utf8"), "saved before shutdown");
-    assert.deepEqual(errors, []);
   });

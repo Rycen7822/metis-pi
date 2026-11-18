@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TuiAltScreen } from "@earendil-works/pi-tui";
-import { fakeTerminal } from "../helpers.mjs";
+import { fakeTerminal } from "../helpers/terminal.mjs";
 import { createInteractiveTuiReference } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/tui-renderer.js";
 import { createSelectionClipboard, needsWindowsClipboard } from "../../src/selection-copy/clipboard.ts";
 
