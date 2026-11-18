@@ -1,0 +1,167 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 022061b..f6b915f 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -1027,7 +1027,7 @@ export class AgentSession {
+ 	// =========================================================================
+ 
+ 	private _refreshFinalizedContext(): void {
+-		const projection = this.sessionManager.buildSessionProjection();
++		const projection = this.sessionManager.buildSessionProjection({ entries: "message-sources" });
+ 		for (const entry of projection.entries) {
+ 			for (const message of entry.messages) this._entryIdsByMessage.set(message, entry.sourceEntry.id);
+ 		}
+@@ -1319,7 +1319,7 @@ export class AgentSession {
+ 
+ 		const messageIndex = this.agent.state.messages.indexOf(message);
+ 		if (messageIndex < 0) return undefined;
+-		const projection = this.sessionManager.buildSessionProjection();
++		const projection = this.sessionManager.buildSessionProjection({ entries: "message-sources" });
+ 		let projectedIndex = 0;
+ 		for (const entry of projection.entries) {
+ 			for (let i = 0; i < entry.messages.length; i++) {
+@@ -4482,7 +4482,7 @@ export class AgentSession {
+ 		// After compaction, the last assistant usage reflects pre-compaction context size.
+ 		// We can only trust usage from an assistant that responded after the latest compaction.
+ 		// If no such assistant exists, context token count is unknown until the next LLM response.
+-		const projection = this.sessionManager.buildSessionProjection();
++		const projection = this.sessionManager.buildSessionProjection({ entries: "message-sources" });
+ 		const branch = this.sessionManager.getBranchMetadata();
+ 		const latestCompaction = getLatestCompactionEntry(branch);
+ 
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 6720a4d..58859b6 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -93,6 +93,11 @@ export type ReadonlySessionManager = Pick<
+ 	| "getSessionName"
+ >;
+ 
++interface SessionProjectionOptions {
++	/** Omit unrelated entries when the caller only needs message provenance and edits. Defaults to the complete view. */
++	entries?: "all" | "message-sources";
++}
++
+ /** A body-free tree snapshot; complete entries are read explicitly from its original store. */
+ export interface SessionTreeSource {
+ 	roots: SessionTreeNode<SessionEntryMetadata>[];
+@@ -406,6 +411,16 @@ function projectsMessages(entry: SessionEntry | SessionEntryMetadata, index: num
+ 	);
+ }
+ 
++function selectProjectionEntries(
++	path: SessionEntryMetadata[],
++	entries: SessionProjectionOptions["entries"],
++): SessionEntryMetadata[] {
++	const selected = selectContextEntries(path);
++	return entries === "message-sources"
++		? selected.filter((entry, index) => projectsMessages(entry, index) || entry.type === "context_edit")
++		: selected;
++}
++
+ function projectContextEntries(
+ 	contextEntries: SessionEntry[],
+ 	settings: Pick<SessionContext, "thinkingLevel" | "model">,
+@@ -1338,32 +1353,38 @@ export class SessionManager {
+ 	 * Build the session context (what gets sent to the LLM).
+ 	 * Uses tree traversal from current leaf.
+ 	 */
+-	buildSessionProjection(): SessionProjection {
++	buildSessionProjection(options: SessionProjectionOptions = {}): SessionProjection {
+ 		const path = this.getBranchMetadata();
+ 		return projectContextEntries(
+-			this.store.readProjectionEntries(selectContextEntries(path), path),
++			this.store.readProjectionEntries(selectProjectionEntries(path, options.entries), path),
+ 			getSessionContextSettings(path),
+ 		);
+ 	}
+ 
+ 	/** Cooperative body loading with the same projection rules; callers still revalidate source content after awaits. */
+-	async buildSessionProjectionAsync(options: { signal?: AbortSignal } = {}): Promise<SessionProjection> {
++	async buildSessionProjectionAsync(
++		options: SessionProjectionOptions & { signal?: AbortSignal } = {},
++	): Promise<SessionProjection> {
+ 		const { signal } = options;
+ 		signal?.throwIfAborted();
+ 		const store = this.store;
+ 		const leaf = this.leafId;
+ 		const path = this.getBranchMetadata();
+ 		try {
+-			const entries = await store.readProjectionEntriesAsync(selectContextEntries(path), path, signal);
++			const entries = await store.readProjectionEntriesAsync(
++				selectProjectionEntries(path, options.entries),
++				path,
++				signal,
++			);
+ 			signal?.throwIfAborted();
+-			if (store !== this.store || leaf !== this.leafId) return this.buildSessionProjection();
++			if (store !== this.store || leaf !== this.leafId) return this.buildSessionProjection(options);
+ 			return projectContextEntries(entries, getSessionContextSettings(path));
+ 		} catch (error) {
+ 			signal?.throwIfAborted();
+ 			// A concurrent rewrite/reload must not publish a torn set of locations.
+ 			// Complete against the current source synchronously rather than introducing a new failure mode.
+ 			if (store !== this.store || leaf !== this.leafId || error instanceof SessionEntryStoreChangedError)
+-				return this.buildSessionProjection();
++				return this.buildSessionProjection(options);
+ 			throw error;
+ 		}
+ 	}
+diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+index 4630352..e2f57de 100644
+--- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
++++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+@@ -32,18 +32,33 @@ describe("persisted session body cache", () => {
+ 		expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
+ 	});
+ 
+-	it("keeps the compacted message view and full provenance consistent after edits and a reopen", () => {
++	it("keeps scoped and full model provenance consistent after edits, compaction, and a branch change", async () => {
+ 		const seed = SessionManager.create(directory, directory);
+ 		seed.appendMessage({ role: "system", content: "original prompt", timestamp: 1 });
+-		const user = seed.appendMessage(userMsg("original"));
+ 		const archive = seed.appendCustomEntry("archive", { body: "not a conversation message" });
++		const user = seed.appendMessage(userMsg("original"));
+ 		const visible = seed.appendCustomMessageEntry("note", "visible to the model", false);
+-		seed.appendContextEdit(user, { content: "replacement" });
+-		seed.appendContextEdit(visible, null);
+-		seed.appendCompaction("older", user, 100);
+-		seed.appendCompaction("newest", user, 90);
++		const replace = seed.appendContextEdit(user, { content: "replacement" });
++		const hide = seed.appendContextEdit(visible, null);
++		seed.appendCompaction("older", archive, 100);
++		const checkpoint = seed.appendCompaction("newest", archive, 90);
++		seed.appendThinkingLevelChange("high");
+ 		const session = SessionManager.open(seed.getSessionFile()!);
+ 		const full = session.buildSessionProjection();
++		const options = { entries: "message-sources" } as const;
++		const scoped = session.buildSessionProjection(options);
++		expect(scoped).toMatchObject({ messages: full.messages, model: full.model, thinkingLevel: "high" });
++		expect(scoped.entries.map(({ sourceEntry }) => sourceEntry.id)).toEqual([
++			checkpoint,
++			user,
++			visible,
++			replace,
++			hide,
++		]);
++		expect(scoped.entries.find(({ sourceEntry }) => sourceEntry.id === user)?.sourceEntry).toMatchObject({
++			message: { content: "original" },
++		});
++		expect(await session.buildSessionProjectionAsync(options)).toEqual(scoped);
+ 		const actual = session.buildSessionContext();
+ 		expect(actual.messages).toEqual(full.messages);
+ 		expect(actual.messages).toMatchObject([
+@@ -54,8 +69,11 @@ describe("persisted session body cache", () => {
+ 		expect(full.entries.find((entry) => entry.sourceEntry.id === archive)?.sourceEntry).toMatchObject({
+ 			data: { body: "not a conversation message" },
+ 		});
+-		session.branch(visible);
+-		expect(session.buildSessionContext().messages).toMatchObject([
++		const cold = SessionManager.open(seed.getSessionFile()!);
++		const loading = cold.buildSessionProjectionAsync(options);
++		cold.branch(visible);
++		expect((await loading).entries.some(({ sourceEntry }) => sourceEntry.id === archive)).toBe(false);
++		expect((await loading).messages).toMatchObject([
+ 			{ role: "system", content: "original prompt" },
+ 			{ role: "user", content: "original" },
+ 			{ role: "custom", content: "visible to the model" },

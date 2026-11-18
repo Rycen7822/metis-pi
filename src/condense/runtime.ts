@@ -88,6 +88,7 @@ import {
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 type NativeProjection = ReturnType<ExtensionContext["sessionManager"]["buildSessionProjection"]>;
+const MESSAGE_SOURCES = { entries: "message-sources" } as const;
 type PreparedProjection = {
   projection: NativeProjection; leaf: ReturnType<ExtensionContext["sessionManager"]["getLeafId"]>;
   source?: { capture: ReturnType<typeof createSourceSnapshotter>; snapshot: string | undefined };
@@ -96,12 +97,12 @@ type PreparedProjection = {
 /** Load cooperatively where supported; publication guards below remain synchronous and content-based. */
 async function readProjection(ctx: ExtensionContext, signal = ctx.signal): Promise<NativeProjection> {
   const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
-    buildSessionProjectionAsync?: (options: { signal?: AbortSignal }) => Promise<NativeProjection>;
+    buildSessionProjectionAsync?: ExtensionContext["sessionManager"]["buildSessionProjectionAsync"];
   };
   signal?.throwIfAborted();
-  if (ctx.mode !== "tui" || typeof manager.buildSessionProjectionAsync !== "function") return manager.buildSessionProjection();
+  if (ctx.mode !== "tui" || typeof manager.buildSessionProjectionAsync !== "function") return manager.buildSessionProjection(MESSAGE_SOURCES);
   const leaf = manager.getLeafId();
-  const projection = await manager.buildSessionProjectionAsync({ signal });
+  const projection = await manager.buildSessionProjectionAsync({ ...MESSAGE_SOURCES, signal });
   signal?.throwIfAborted();
   // The SDK may rebase after a concurrent append. A prepared Condense operation must retry, not adopt that new source.
   if (leaf !== manager.getLeafId()) throw new CondenseContextChangedError("source changed during projection read");
@@ -386,7 +387,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let projection = opts?.projection;
     try {
       indexer.syncSummaryEntries(ctx);
-      const current: NativeProjection = projection ?? ctx.sessionManager.buildSessionProjection();
+      const current: NativeProjection = projection ?? ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
       projection = current;
       const source = activeCaptureSource(ctx.sessionManager, current.entries);
       const projectedCapture = occ.enabled();
@@ -449,7 +450,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!currentConfig.value.chainCompression.fuseRangeSummary || automatic) return undefined;
     const version = lifecycle;
     return async (text, entry, extraBody) => {
-      const raw = ctx.sessionManager.buildSessionProjection().messages;
+      const raw = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages;
       const source = projectionFingerprint(raw), config = policyFingerprint(currentConfig.value);
       const views = currentChainViews(raw, ctx);
       const render = (body: string) => projectContext(
@@ -472,7 +473,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const valid = () => {
         assertCurrent(version);
         signal?.throwIfAborted();
-        if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
+        if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages)
           || config !== policyFingerprint(currentConfig.value)) throw new CondenseContextChangedError("fusion source changed");
       };
       valid();
@@ -522,7 +523,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     pi.events.emit(METIS_EVENTS.goalProject, request);
     return request.messages;
   };
-  const rewriteContext = (ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(),
+  const rewriteContext = (ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES),
     closingMessage?: any, messages?: any[]): RewriteContext => {
     const source = remoteCacheSource(projection);
     return { tokens: pressureUsage(ctx, closingMessage)?.tokens, opaque: source !== undefined,
@@ -549,7 +550,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const { closingMessage, signal, automatic = false, onPublished } = options;
     const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
-    const projection = ctx.sessionManager.buildSessionProjection();
+    const projection = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
     const costContext = rewriteContext(ctx, projection, closingMessage);
     const messages = withClosingMessage(projection.messages, closingMessage);
     const chains = options.candidate ? [options.candidate]
@@ -578,7 +579,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (indexer.getOwnedSummaryText(keys) === null || !singleSummaryCurrent(entry, ctx)) return false;
         if (keys.some(key => { const record = indexer.getRecord(key);
           return !record || record.metadataUnavailable || record.archiveComplete === false; })) return false;
-        const raw = ctx.sessionManager.buildSessionProjection().messages;
+        const raw = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages;
         if (!resolveRange(entry, raw)) return false; // A preview final is not a persistence receipt.
         const source = projectionFingerprint(raw);
         const config = policyFingerprint(currentConfig.value);
@@ -600,7 +601,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
         const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
           && (!automatic || admitAutomaticChain(ctx, counts, prefix, costContext, candidateTokens))
-          && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
+          && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages)
           && config === policyFingerprint(currentConfig.value);
         if (accepted && counts) measurements.set(entry.blockId, { counts, prefix });
         return accepted;
@@ -903,7 +904,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         toolCalls: batch.toolCalls.filter(call => closedKeys.has(occKey(call.toolCallId, call.resultTimestamp))),
       })).filter(batch => batch.toolCalls.length > 0);
       if (trigger !== "manual") {
-        const source = preparedProjection ?? ctx.sessionManager.buildSessionProjection();
+        const source = preparedProjection ?? ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
         const visible = preparedVisible ?? projectContext(source.messages, ctx.model?.api,
           { ctx, source: readSourceEdits(ctx, source), probe: true }).messages;
         const estimated = visible.reduce((sum, message) => sum + estimateTokens(message), 0);
@@ -916,7 +917,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
       preparedVisible = undefined;
       if (trigger === "message-end") {
-        const base = ctx.sessionManager.buildSessionProjection();
+        const base = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
         const before = projectContext(base.messages, ctx.model?.api, { ctx, source: readSourceEdits(ctx, base) }).messages;
         const argumentProtection = effectiveProtection();
         // These checks and the combined projection are synchronous. Never
@@ -938,7 +939,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             { indexer, ...archiveOptions(ctx.sessionManager), appendEntry: appendEntry! },
           );
           assertPendingOwnership();
-          const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, { ctx }).messages;
+          const current = projectContext(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages, ctx.model?.api, { ctx }).messages;
           if (
             currentConfig.value.enabled &&
             JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection) &&
@@ -1226,7 +1227,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const checkActive = () => { assertCurrent(version); signal.throwIfAborted(); assertPendingOwnership(); };
       const checkSource = (projection?: NativeProjection) => {
         checkActive();
-        if (expectedSource !== undefined && snapshotSource((projection ?? ctx.sessionManager.buildSessionProjection()).messages) !== expectedSource) {
+        if (expectedSource === undefined) return;
+        const current = projection ?? ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
+        if (snapshotSource(current.messages) !== expectedSource) {
           throw new CondenseContextChangedError("summary source changed");
         }
       };
@@ -1534,7 +1537,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           try { groupAttempts.resolve(publication.attemptKey, appendEntry!); }
           catch (error) { safeNotify(ctx, `pruner: group published; retry-state cleanup failed: ${errorMessage(error)}`, "warning"); }
         }
-        const committedProjection: NativeProjection = ctx.sessionManager.buildSessionProjection();
+        const committedProjection: NativeProjection = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
         sourceProjection = committedProjection;
         expectedSource = snapshotSource(committedProjection.messages);
         planningView = undefined;
@@ -2329,7 +2332,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     ? normalizeSummaryToolCallRefs(message.details).map(ref => bareToolCallId(ref.toolCallId)) : [];
 
   // A transient read view, never a writer's authorization across awaits.
-  function readSourceEdits(ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection()) {
+  function readSourceEdits(ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES)) {
     const changedToolIds = new Set<string>(), editedToolIds = new Set<string>(), editedSummaries = new Set<string>();
     for (const { sourceEntry: source, messages } of projection.entries) {
       const summary = source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY;
@@ -2529,7 +2532,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (!counts) continue; // A failed measurement is retryable, not a negative verdict.
         const hasGain = counts.piBefore > counts.piAfter && counts.proxyDelta > 0;
         if (hasGain) {
-          const current = manager.buildSessionProjection();
+          const current = manager.buildSessionProjection(MESSAGE_SOURCES);
           if (source !== captureSharedSource(current.messages)) return;
           sourceView = readSourceEdits(ctx, current);
           analysis.source = sourceView;
@@ -2631,7 +2634,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         anchors, grace, signal);
       assertNewWork();
       if (!entry) return;
-      const preparedSource = manager.buildSessionProjection();
+      const preparedSource = manager.buildSessionProjection(MESSAGE_SOURCES);
       if (source !== projectionFingerprint(preparedSource.messages)) return;
       sourceView = readSourceEdits(ctx, preparedSource);
       const views = chainMembers(entry);
@@ -2650,7 +2653,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const prefix = unchangedPrefixTokens(before, after);
       if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0
         || !admitAutomaticChain(ctx, counts, prefix, costContext)) return;
-      const measuredSource = manager.buildSessionProjection();
+      const measuredSource = manager.buildSessionProjection(MESSAGE_SOURCES);
       if (source !== projectionFingerprint(measuredSource.messages)) return;
       if (
         indexer

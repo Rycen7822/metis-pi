@@ -81,7 +81,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     catch { /* UI teardown must not affect compaction or goal continuation. */ }
   };
   const persist = () => pi.appendEntry(STATE, { ...state });
-  const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection();
+  const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection({ entries: "message-sources" });
   const visible = (ctx: ExtensionContext) => {
     const projected = projection(ctx);
     const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages,

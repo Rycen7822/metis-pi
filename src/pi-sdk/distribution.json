@@ -98,13 +98,17 @@
     {
       "file": "0024-bound-unknown-tool-previews.patch",
       "sha256": "1fb70a939a3a879f7725b9a8e389f53e307d1eb7649c531c799f071926fdfa17"
+    },
+    {
+      "file": "0025-scope-session-projection.patch",
+      "sha256": "b1bd7179303acab7a6d47f4ade745d866eafcf697328051116c3ce0ca9c0f665"
     }
   ],
-  "patchSet": "e3c40d3d15477443a95815a9d310b3d4fac876db4eea3749ebed1eebde5ed489",
+  "patchSet": "41cdad21051c792195106198f3a07c0c56938683d48f5478cfc034ac4f8a73b2",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "789e446bdb3f6813a67988b816755e7bbd3ef8094df77358fd89e2f5592e7e5f",
-    "bytes": 6053961,
-    "unpackedBytes": 26807385
+    "sha256": "a91a1fe5792e634862b62e68895531948a6d555f7cc998487a30a8550d0119fb",
+    "bytes": 6055258,
+    "unpackedBytes": 26809868
   }
 }
