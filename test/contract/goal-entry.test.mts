@@ -568,6 +568,45 @@ test("settled errors stop continuation without removing historical continuation 
   assert.match(systemPromptOptions.sections.metis_goal, /usageLimited/);
 });
 
+test("Goal refreshes the full audit periodically without repeating it on ordinary continuations", async t => {
+  const h = makeHost(t);
+  const objective = "verify the public behavior <against the spec>";
+  await h.command(objective);
+  const next = async () => {
+    await h.fire("agent_start", {}, h.ctx);
+    await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop", usage: { input: 2, output: 3 } }] }, h.ctx);
+    return h.sent.at(-1) as { customType: string; content: string };
+  };
+  const audit = /Completion audit:/;
+  const initial = h.sent.at(-1) as { content: string };
+  assert.match(initial.content, audit);
+  for (let i = 1; i <= 4; i++) {
+    const followUp = await next();
+    assert.equal(followUp.customType, "goal-continuation");
+    assert.doesNotMatch(followUp.content, audit);
+    assert.match(followUp.content, /verify the public behavior &lt;against the spec&gt;/);
+    assert.match(followUp.content, new RegExp(`Tokens used: ${i * 5}\\b`));
+    assert.match(followUp.content, /no required work remains/);
+    assert.match(followUp.content, /three consecutive goal turns/);
+  }
+  assert.match((await next()).content, audit);
+  assert.doesNotMatch((await next()).content, audit);
+  await h.fire("session_compact", {}, h.ctx);
+  assert.match((await next()).content, audit, "the previous full audit may have been compacted away");
+  assert.doesNotMatch((await next()).content, audit);
+  h.ctx.ui.editor = async () => "verified revised requirements";
+  await h.command("edit");
+  const edited = await next();
+  assert.match(edited.content, audit);
+  assert.match(edited.content, /verified revised requirements/);
+  assert.doesNotMatch((await next()).content, audit);
+  await h.tool("update", { status: "blocked" });
+  await h.command("resume");
+  assert.match((h.sent.at(-1) as { content: string }).content, audit, "resuming a blocked goal starts a fresh audit");
+  assert.match(initial.content, /against the spec/);
+  assert.doesNotMatch(initial.content, /revised requirements/);
+});
+
 test("Goal accounting and lifecycle changes preserve the model-facing continuation prefix", async t => {
   const h = makeHost(t);
   await h.command("preserve this objective");

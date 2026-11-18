@@ -41,7 +41,7 @@ test("package exposes extensions, themes and portable skills with their referenc
   assert.deepEqual([...extensions].sort(), packagedExtensions.sort(), "Pi discovers every shipped extension and no unpackaged entries");
   for (const name of [
     "config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp",
-    "ask-user-question", "btw", "pi-sdk", "tool-search",
+    "ask-user-question", "btw", "pi-sdk", "tool-search", "cache-prefix",
   ]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }

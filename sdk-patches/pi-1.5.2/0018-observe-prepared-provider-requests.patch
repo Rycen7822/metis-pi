@@ -1,0 +1,117 @@
+diff --git a/packages/coding-agent/src/core/extensions/loader.ts b/packages/coding-agent/src/core/extensions/loader.ts
+index f8c16b99e..17092fd7e 100644
+--- a/packages/coding-agent/src/core/extensions/loader.ts
++++ b/packages/coding-agent/src/core/extensions/loader.ts
+@@ -276,23 +276,28 @@ function createExtensionAPI(
+ 		loadingUnsubscribers.length = 0;
+ 	};
+ 
++	function on(event: string, handler: HandlerFn): () => void {
++		assertActive();
++		const registeredHandler: HandlerFn = (...args) => handler(...args);
++		const list = extension.handlers.get(event) ?? [];
++		list.push(registeredHandler);
++		extension.handlers.set(event, list);
++
++		return () => {
++			const handlers = extension.handlers.get(event);
++			if (!handlers) return;
++			const handlerIndex = handlers.indexOf(registeredHandler);
++			if (handlerIndex === -1) return;
++			handlers.splice(handlerIndex, 1);
++			if (handlers.length === 0) extension.handlers.delete(event);
++		};
++	}
++
+ 	const api = {
+ 		// Registration methods - write to extension
+-		on(event: string, handler: HandlerFn): () => void {
+-			assertActive();
+-			const registeredHandler: HandlerFn = (...args) => handler(...args);
+-			const list = extension.handlers.get(event) ?? [];
+-			list.push(registeredHandler);
+-			extension.handlers.set(event, list);
+-
+-			return () => {
+-				const handlers = extension.handlers.get(event);
+-				if (!handlers) return;
+-				const handlerIndex = handlers.indexOf(registeredHandler);
+-				if (handlerIndex === -1) return;
+-				handlers.splice(handlerIndex, 1);
+-				if (handlers.length === 0) extension.handlers.delete(event);
+-			};
++		on,
++		onProviderRequestPrepared(handler: Parameters<ExtensionAPI["onProviderRequestPrepared"]>[0]): () => void {
++			return on("provider_request_prepared", handler as HandlerFn);
+ 		},
+ 
+ 		registerTool(tool: ToolDefinition): void {
+diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
+index 62296d5dd..80e613d78 100644
+--- a/packages/coding-agent/src/core/extensions/types.ts
++++ b/packages/coding-agent/src/core/extensions/types.ts
+@@ -925,6 +925,14 @@ export interface BeforeProviderRequestEvent {
+ 	payload: unknown;
+ }
+ 
++/** Main session payload after extension transforms, before transport-specific processing. Observe without mutation. */
++export interface ProviderRequestPreparedEvent {
++	readonly type: "provider_request_prepared";
++	readonly payload: unknown;
++	readonly model: Model<Api>;
++	readonly context: TranscriptContext;
++}
++
+ /**
+  * Fired after request headers are assembled, before the provider HTTP call.
+  * Handlers mutate `headers` in place (e.g. to inject tracing/session headers);
+@@ -1433,6 +1441,7 @@ export type ExtensionEvent =
+ 	| ContextWithSystemEvent
+ 	| CacheWarmingDecisionEvent
+ 	| BeforeProviderRequestEvent
++	| ProviderRequestPreparedEvent
+ 	| BeforeProviderHeadersEvent
+ 	| AfterProviderResponseEvent
+ 	| ProviderStreamEvent
+@@ -1641,6 +1650,9 @@ export interface ExtensionAPI {
+ 	// Event Subscription
+ 	// =========================================================================
+ 
++	/** Observe a prepared foreground request. No cache warming or maintenance requests are emitted here. */
++	onProviderRequestPrepared(handler: ExtensionHandler<ProviderRequestPreparedEvent>): () => void;
++
+ 	on(event: "project_trust", handler: ProjectTrustHandler): () => void;
+ 	on(
+ 		event: "resources_discover",
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index af696e771..00723216a 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -416,8 +416,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 			// the current transcript still extends the request's prefix. Agent state may
+ 			// shallow-copy the messages array or refresh the model object without changing
+ 			// the provider request, so top-level object identity is not a valid cache key.
++			const runner = extensionRunnerRef.current;
+ 			if (options?.sessionId === sessionManager.getSessionId()) {
+ 				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
++				if (runner?.hasHandlers("provider_request_prepared")) {
++					return modelRuntime.streamSimple(model, context, {
++						...requestOptions,
++						onPayload: async (payload, requestModel) => {
++							const transformed = await requestOptions.onPayload?.(payload, requestModel);
++							const prepared = transformed === undefined ? payload : transformed;
++							if (!options.signal?.aborted && runner.hasHandlers("provider_request_prepared")) {
++								await runner.emit({
++									type: "provider_request_prepared",
++									payload: prepared,
++									model: requestModel,
++									context,
++								});
++							}
++							return prepared;
++						},
++					});
++				}
+ 			}
+ 			return modelRuntime.streamSimple(model, context, requestOptions);
+ 		},

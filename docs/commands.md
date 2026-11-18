@@ -6,6 +6,7 @@
 | --- | --- |
 | `/metis-config`、`/metis-config init` | 查看全局配置路径；生成缺失的 TOML 和说明。 |
 | `/codex-ui` | 查看本进程的显示、用量与[诊断](diagnostics.md)。 |
+| `/cache-prefix [on / off / status]` | 临时采集或查看[请求前缀诊断](diagnostics.md#请求前缀诊断)。 |
 | `/execution` | 修改[执行设置](execution.md)。 |
 | `/pruner` | 管理[历史整理](features/condense.md)。常用子命令：`status`、`settings`、`on`、`off`、`now`、`compact`。 |
 | `/goal [objective]` | 查看、创建或管理[目标](features/goal.md)。 |

@@ -70,13 +70,17 @@
     {
       "file": "0017-unify-codemode-discovery.patch",
       "sha256": "5d5d332daea7db26308d7e45a7f7ed3e043600cd9776fd423d946f83f81b6d64"
+    },
+    {
+      "file": "0018-observe-prepared-provider-requests.patch",
+      "sha256": "b6f3cca74a687abbb6fc3232253334fcf96fd1d17e8eabe1582f7dcf0ad9ecba"
     }
   ],
-  "patchSet": "a17a020066fa2e5e495ef9688eae8725a362af8e1cd45f3aaec32b8cf4a8cbbc",
+  "patchSet": "9e4f71f2e0c7329aa3bede2c0bb2f21fd18cbc349d417af2233068abd31dbbe8",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "53352a99373a897263f9424bf79521a1b25a39c638545c0433e3e6073676095f",
-    "bytes": 6041046,
-    "unpackedBytes": 26771990
+    "sha256": "397fb056436718854ed7bb603901837739c91ef64dbbf3bb17067760f1a3291a",
+    "bytes": 6042590,
+    "unpackedBytes": 26770893
   }
 }
