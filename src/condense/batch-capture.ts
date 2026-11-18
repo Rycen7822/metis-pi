@@ -1,6 +1,6 @@
 import { captureFusionResult } from "./fusion.ts";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { branchEntryReferences, readHistoryEntries, type SessionEntryReference } from "../session-history.ts";
+import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences, type SessionEntryReference } from "../session-history.ts";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { isConversationBoundary } from "./chain-detector.ts";
@@ -29,12 +29,23 @@ export function projectBranchMessages(branch: any[]): any[] {
  * Returns -1 when the branch has no projected assistant message (harness-only;
  * a real `turn_end` always follows a persisted assistant message).
  */
-export function deriveLiveTurnIndex(branch: readonly SessionEntryReference[]): number {
-  let count = 0;
-  for (const entry of branch) {
-    if (entry.type === "message" && entry.message?.role === "assistant") count++;
-  }
-  return count - 1;
+export function createLiveTurnCounter() {
+  let head: SessionEntryReference | undefined, count = 0;
+  return (manager: ExtensionContext["sessionManager"]): number => {
+    if (!manager.getEntryMetadata) {
+      return manager.getBranch().filter(entry => entry.type === "message" && entry.message.role === "assistant").length - 1;
+    }
+    let next: SessionEntryReference | undefined, added = 0;
+    for (const entry of reverseBranchEntryReferences(manager)) {
+      next ??= entry;
+      if (entry === head) { added += count; break; }
+      if (entry.type === "message" && entry.message.role === "assistant") added++;
+    }
+    // Retain one metadata cursor. A fork missing that cursor is counted to its root.
+    head = next;
+    count = added;
+    return count - 1;
+  };
 }
 
 /** Complete message history for raw evidence and chain logic, excluding unrelated extension payloads. */
@@ -53,9 +64,14 @@ export function activeCaptureSource(manager: ExtensionContext["sessionManager"],
   let assistant: string | undefined, turn = 0;
   for (const entry of references) {
     if (entry.type === "message" && entry.message.role === "assistant") {
-      assistant = entry.id; turnIndices.set(entry.id, turn++);
+      assistant = entry.id;
+      if (wanted.has(entry.id)) turnIndices.set(entry.id, turn);
+      turn++;
     }
-    if (wanted.has(entry.id) && entry.type === "message" && entry.message.role === "toolResult" && assistant) wanted.add(assistant);
+    if (wanted.has(entry.id) && entry.type === "message" && entry.message.role === "toolResult" && assistant) {
+      wanted.add(assistant);
+      turnIndices.set(assistant, turn - 1);
+    }
   }
   // Only active projected bodies establish text checkpoints; never load old payloads for grouping.
   let group = "truncated";
@@ -64,13 +80,15 @@ export function activeCaptureSource(manager: ExtensionContext["sessionManager"],
     if (message.role === "assistant") chainGroups.set(entry.sourceEntry.id, group);
   }
   return { turnIndices, chainGroups, readBranch: () => {
-    for (const entry of readHistoryEntries(manager, "branch", entry => wanted.has(entry.id) && !selected.has(entry.id),
-      { cacheAdmission: "bypass" })) selected.set(entry.id, entry);
-    return references.filter(entry => wanted.has(entry.id)).map(entry => {
-      const body = selected.get(entry.id);
+    const read = manager.getEntryForScan ?? manager.getEntry;
+    const branch: SessionEntry[] = [];
+    for (const entry of references) {
+      if (!wanted.has(entry.id)) continue;
+      const body = selected.get(entry.id) ?? read.call(manager, entry.id);
       if (!body) throw new Error(`Capture source unavailable: ${entry.id}`);
-      return body;
-    });
+      branch.push(body);
+    }
+    return branch;
   } };
 }
 

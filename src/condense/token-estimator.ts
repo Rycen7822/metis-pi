@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { isDeepStrictEqual } from "node:util";
-import { convertToLlm, estimateTokens } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, estimateTokens, type SessionProjection } from "@earendil-works/pi-coding-agent";
 
 export interface TokenComparison {
   piBefore: number;
@@ -39,6 +39,14 @@ const WORKER_IDLE_TIMEOUT_MS = 60_000;
 // A flush alternates batch, stub and summary-overhead counts across concurrent candidates.
 const MAX_CACHED_COMPARISONS = 64;
 type ProxyCounts = Pick<TokenComparison, "proxyDelta" | "proxyBefore" | "proxyAfter">;
+type RewriteMessage = Extract<SessionProjection["messages"][number], { role: "toolResult" | "custom" | "user" }>;
+type RewriteCount = { before: number; after: number; piBefore: number; piAfter: number };
+
+function rewriteFields(message: RewriteMessage) {
+  return message.role === "toolResult"
+    ? [message.role, message.toolCallId, message.toolName, message.content, message.isError]
+    : [message.role, message.content];
+}
 
 /** One lazy encoder; FIFO keeps concurrent summary validations from displacing each other. */
 export class TokenEstimator {
@@ -49,6 +57,25 @@ export class TokenEstimator {
   private pending: Job[] = [];
   private nextId = 0;
   private cache = new Map<string, ProxyCounts>();
+  private rewriteCounts = new Map<string, RewriteCount>();
+
+  /** Ignore display metadata; cache counts, never admission decisions or archive validation. */
+  async measureRewrite(before: RewriteMessage[], after: RewriteMessage[], signal: AbortSignal): Promise<RewriteCount | null> {
+    signal.throwIfAborted();
+    const key = projectionFingerprint([before.map(rewriteFields), after.map(rewriteFields)]);
+    const cached = this.rewriteCounts.get(key);
+    if (cached) return cached;
+    const pi = (messages: RewriteMessage[]) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    const piBefore = pi(before), piAfter = pi(after);
+    const counts = await this.measure(before, after, signal);
+    if (!counts) return null;
+    signal.throwIfAborted();
+    const result = { ...counts, piBefore, piAfter };
+    const oldest = this.rewriteCounts.keys().next();
+    if (this.rewriteCounts.size === MAX_CACHED_COMPARISONS && !oldest.done) this.rewriteCounts.delete(oldest.value);
+    this.rewriteCounts.set(key, result);
+    return result;
+  }
 
   compare(before: any[], after: any[], signal?: AbortSignal, absolute = false): Promise<TokenComparison | null> {
     if (signal?.aborted) return Promise.resolve(null);
@@ -193,6 +220,7 @@ export class TokenEstimator {
   clear() {
     this.cancelIdleTimer();
     this.cache.clear();
+    this.rewriteCounts.clear();
     if (this.active) this.finish(this.active, null);
     for (const job of this.pending) this.finish(job, null);
     this.active = undefined;

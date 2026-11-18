@@ -3,7 +3,7 @@ import { estimateTokens, getAgentDir, type ExtensionAPI, type ExtensionContext }
 import { join } from "node:path";
 import { ModelPricing } from "./model-pricing.ts";
 import { priceRefreshMarker } from "./refresh-prices.mjs";
-import { branchEntryReferences, readHistoryEntries, sourceEntryReference, type SessionEntryReference } from "../session-history.ts";
+import { readHistoryEntries, sourceEntryReference, type SessionEntryReference } from "../session-history.ts";
 import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
@@ -15,7 +15,7 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
 import {
-  activeCaptureSource, captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex,
+  activeCaptureSource, captureBatch, captureUnindexedBatchesFromSession, createLiveTurnCounter,
   groupBatchesByMode, projectBranchMessages,
 } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
@@ -89,6 +89,7 @@ import {
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 type NativeProjection = ReturnType<ExtensionContext["sessionManager"]["buildSessionProjection"]>;
 const MESSAGE_SOURCES = { entries: "message-sources" } as const;
+type ToolResult = Extract<NativeProjection["messages"][number], { role: "toolResult" }>;
 type PreparedProjection = {
   projection: NativeProjection; leaf: ReturnType<ExtensionContext["sessionManager"]["getLeafId"]>;
   source?: { capture: ReturnType<typeof createSourceSnapshotter>; snapshot: string | undefined };
@@ -194,7 +195,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // session_start / session_tree the cold floor re-activates everything.
   const supersede = createSupersedeState();
 
-  const pendingBatches: CapturedBatch[] = [];
+  // Durable history is the retry source; the scheduling hint owns no tool bodies.
+  let pendingCount = 0;
+  const liveTurnIndex = createLiveTurnCounter();
   let lifecycle = 0;
   let nativeWindowEpoch = 0;
   let recoveryTask: Promise<void> | undefined;
@@ -242,6 +245,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   });
   const economicModel = (ctx: ExtensionContext, model = ctx.model, tokens = contextUsage(ctx)?.tokens ?? 0) => pricing.get(model, tokens);
   let deferredFinal: { timestamp: number; keys: ReadonlySet<string> } | undefined;
+  type IdleWork = Pick<FlushOptions, "trigger" | "closedKeys">;
+  let idleWork: IdleWork | undefined;
+  let idleFlush: { work: IdleWork; abort: AbortController; done: Promise<void> } | undefined;
+  const stopIdleFlush = (disposition: "discard" | "retry" = "discard") => {
+    if (disposition === "discard") idleWork = undefined;
+    if (!idleFlush) return;
+    if (disposition === "retry" && !idleFlush.abort.signal.aborted) idleWork ??= idleFlush.work;
+    idleFlush.abort.abort();
+  };
   const assertCurrent = (version: number) => {
     if (version !== lifecycle) throw new CondenseContextChangedError("condense lifecycle changed");
   };
@@ -255,10 +267,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     try { await maintenanceTask; } finally { maintenanceHandoffs--; }
   };
   const unsubscribeRemoteCompaction = pi.events.on(METIS_EVENTS.beforeRemoteCompact, (data) => {
-    if (isBeforeRemoteCompactRequest(data)) data.waits.push(stopMaintenance());
+    if (isBeforeRemoteCompactRequest(data)) {
+      stopIdleFlush();
+      data.waits.push(stopMaintenance());
+      if (idleFlush) data.waits.push(idleFlush.done);
+    }
   });
   // Native/OCC preparation must wait for the current archive write before it owns I/O.
   pi.on("session_before_compact", async (event) => {
+    stopIdleFlush();
     // Cancellation changes no source. Retain witnesses; use-time shape checks
     // reject changed windows, which must be revalidated before the next request.
     tokenEstimator.clear(); needsSharedValidation = true;
@@ -274,7 +291,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       nativeCompaction = pending;
       signal.addEventListener("abort", pending.finish, { once: true });
     }
-    await stopMaintenance();
+    await Promise.all([stopMaintenance(), idleFlush?.done]);
   });
   const occ = registerOcc(pi, indexer, currentConfig);
   let activeFlushAbort: AbortController | undefined;
@@ -282,6 +299,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const previousPolicy = policyFingerprint(currentConfig.value);
     currentConfig.value = config;
     if (previousPolicy === policyFingerprint(config)) return;
+    stopIdleFlush();
     maintenanceNext = undefined;
     maintenanceAbort?.abort();
     tokenEstimator.clear();
@@ -293,9 +311,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   let previousFraction: number | null = null;
   // Set on session_start/session_tree when the branch rescan finds recoverable
-  // work but pendingBatches was just zeroed (reload/tree-switch). Lets the
-  // turn_end budget gate fire without a freshly pushed batch. Boolean only —
-  // no queue reconstruction; flushPending's own rescan is the data path.
+  // work but the pending count was reset (reload/tree-switch). The next
+  // turn can evaluate its budget even without a fresh tool result.
   // Cleared on every non-concurrent flushPending invocation.
   let rearmedPending = false;
 
@@ -366,52 +383,30 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return { ...batch, toolCalls: remaining };
   };
 
-  const restoreBatches = (batches: CapturedBatch[]) => {
-    pendingBatches.unshift(...batches);
-  };
-
-  // Exposed to commands.ts via registerCommands so /pruner now can preview the
-  // queue before opening the multi-row progress overlay.
-  // `rethrow` is for the reload rearm probe only (session_start/session_tree):
-  // it needs to observe a rescan failure so it can console.error and leave
-  // rearmedPending false, per spec. Every other caller (turn_end capture path,
-  // flushPending, /pruner commands) keeps the existing swallow-and-fall-back
-  // behavior so a transient getBranch failure there never blocks the turn.
+  // Read pending output from its durable source, including for /pruner now previews.
   const queuedSummaryKeys = new Set<string>();
-  // Cache only pre-request admission failures; rejected generated output must still retry/fallback.
-  const budgetAdmissions = new Set<string>();
-  const capturePendingBatches = (ctx: any, opts?: {
-    rethrow?: boolean; projection?: NativeProjection; visible?: any[];
+  const capturePendingBatches = (ctx: ExtensionContext, opts?: {
+    projection?: NativeProjection; visible?: NativeProjection["messages"];
   }): CapturedBatch[] => {
-    let batches: CapturedBatch[] = [];
-    let projection = opts?.projection;
-    try {
-      indexer.syncSummaryEntries(ctx);
-      const current: NativeProjection = projection ?? ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
-      projection = current;
-      const source = activeCaptureSource(ctx.sessionManager, current.entries);
-      const projectedCapture = occ.enabled();
-      const branch = projectedCapture
-        ? current.entries.flatMap((entry: any) =>
-              entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
-            )
-        : source.readBranch();
-      batches = captureUnindexedBatchesFromSession(
-        branch,
-        { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },
-        protectionPredicate,
-        { turnIndices: source.turnIndices, chainGroups: projectedCapture ? undefined : source.chainGroups },
-      );
-    } catch (err) {
-      if (opts?.rethrow) throw err;
-      batches = pendingBatches.slice();
-    }
+    indexer.syncSummaryEntries(ctx);
+    const projection = opts?.projection ?? ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
+    const source = activeCaptureSource(ctx.sessionManager, projection.entries);
+    const projectedCapture = occ.enabled();
+    const branch = projectedCapture
+      ? projection.entries.flatMap(entry => entry.messages.map(message => ({ ...entry.sourceEntry, type: "message", message })))
+      : source.readBranch();
+    let batches = captureUnindexedBatchesFromSession(
+      branch,
+      { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },
+      protectionPredicate,
+      { turnIndices: source.turnIndices, chainGroups: projectedCapture ? undefined : source.chainGroups },
+    );
     // Archive-only records in a dropped chain are recoverable, not pending
     // model work. Also leave non-text results intact rather than summarizing
     // only their text and accidentally discarding attachments.
-    const source = readSourceEdits(ctx, projection);
-    const visible = opts?.visible ?? projectContext(source.projection.messages, ctx.model?.api, { ctx, source, probe: true }).messages;
-    const edited = source.changedToolIds;
+    const edits = readSourceEdits(ctx, projection);
+    const visible = opts?.visible ?? projectContext(projection.messages, ctx.model?.api, { ctx, source: edits, probe: true }).messages;
+    const edited = edits.changedToolIds;
     const visibleKeys = new Set(
       visible
         .filter(
@@ -673,12 +668,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const prepareReplacement = async (
     batch: CapturedBatch,
     ctx: any,
-    { appendEntry, signal, onDeferred, visible, admission }: {
+    { appendEntry, signal, onDeferred, visible }: {
       appendEntry: (type: string, data?: unknown) => void;
       signal: AbortSignal;
       onDeferred: (reason: DeferredReason) => void;
       visible: NativeProjection["messages"];
-      admission: "automatic" | "manual" | "packed";
     },
   ) => {
     const unavailable = (reason: DeferredReason) => {
@@ -689,12 +683,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // opportunity between candidates, before starting another source read.
     if (ctx.mode === "tui") await setImmediate(undefined, { signal });
     // The flush validates this view after planning and synchronously before publication.
-    const refs = await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager) });
+    const refs = await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager),
+      assertValid: () => signal.throwIfAborted() });
     signal.throwIfAborted();
     const replacements = new Map(
       batch.toolCalls.map((call, i) => [
         occKey(call.toolCallId, call.resultTimestamp),
-        { call, ref: refs[i]!.shortId, record: indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))! },
+        { call, ref: refs[i]!.shortId, record: indexer.getProjectionEvidence(occKey(call.toolCallId, call.resultTimestamp)) },
       ]),
     );
     const before = visible.filter(
@@ -721,43 +716,35 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const replacement = replacements.get(occKey(message.toolCallId, message.timestamp))!;
       return toolResultStub(message, replacement.record, replacement.ref);
     });
-    const admissionKey = admission === "automatic" ? projectionFingerprint([
-      before, stubs, batch.toolCalls.map(call => call.toolName), currentConfig.value.summaryBudget,
-      ctx.model?.provider, ctx.model?.id, ctx.model?.api,
-    ]) : undefined;
-    if (admissionKey && budgetAdmissions.has(admissionKey)) return unavailable("budget");
-    const counts = await tokenEstimator.measure(before, stubs, signal);
-    if (!counts) return unavailable("measurement");
     const timestamp = Date.now();
     const render = (text: string, deterministic = false) => ({ role: "custom" as const, customType: CUSTOM_TYPE_SUMMARY,
       content: substituteInlineRefs(text, refs, batch.toolCalls.map(call => call.toolName)) + formatSummaryToolCallRefs(refs),
       display: false, details: { ...makeSummaryDetails(batch, refs),
         representation: deterministic ? "packed" as const : "summary" as const }, timestamp });
-    const emptyMessage = render("");
-    const empty = await tokenEstimator.measure([emptyMessage], [], signal);
-    if (!empty) return unavailable("measurement");
+    const counts = await tokenEstimator.measureRewrite(before, stubs, signal);
+    const empty = counts && await tokenEstimator.measureRewrite([render("")], [], signal);
+    if (!counts || !empty) return unavailable("measurement");
     const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length, currentConfig.value.summaryBudget);
     budget.target = Math.max(budget.target, empty.before + 256);
-    if (admissionKey && budget.limit < budget.target) {
-      if (budgetAdmissions.size >= 64) budgetAdmissions.delete(budgetAdmissions.keys().next().value!);
-      budgetAdmissions.add(admissionKey);
-    }
-    const piSaved = before.reduce((sum, message) => sum + estimateTokens(message), 0)
-      - stubs.reduce((sum, message) => sum + estimateTokens(message), 0);
+    const piSaved = counts.piBefore - counts.piAfter, proxySaved = counts.before - counts.after;
     return { before, stubs, replacements, render, budget,
-      upperGain: { pi: piSaved - estimateTokens(emptyMessage), proxy: counts.before - counts.after - empty.before },
+      upperGain: { pi: piSaved - empty.piBefore, proxy: proxySaved - empty.before },
       evaluate: async (text: string, deterministic = false) => {
-        const summary = render(text, deterministic);
-        const size = await tokenEstimator.measure([summary], [], signal);
+        const size = await tokenEstimator.measureRewrite([render(text, deterministic)], [], signal);
         if (!size) { onDeferred("measurement"); return undefined; }
-        const accepted = deterministic ? counts.after + size.before < counts.before : size.before <= budget.limit;
+        const accepted = deterministic ? size.before < proxySaved : size.before <= budget.limit;
         if (!accepted) { onDeferred(deterministic ? "no-gain" : "budget"); return undefined; }
-        return { pi: piSaved - estimateTokens(summary), proxy: counts.before - counts.after - size.before };
+        return { pi: piSaved - size.piBefore, proxy: proxySaved - size.before };
       } };
   };
 
-  const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
+  const flushPending = async (ctx: ExtensionContext, options: FlushOptions = {}): Promise<FlushResult> => {
+    if ((options.trigger ?? "manual") === "manual" && idleFlush) {
+      stopIdleFlush();
+      await idleFlush.done;
+    }
     await awaitRecovery();
+    if (options.signal?.aborted) return { ok: false, reason: "aborted" };
     if (!projectionContext || activeSessionId !== ctx.sessionManager.getSessionId())
       return { ok: false, reason: "failed", error: "Condense history recovery is not ready" };
     if (isFlushing || isArchiving || isCompactingChains) return { ok: false, reason: "already-flushing" };
@@ -769,6 +756,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       return { ok: false, reason: "deferred-native" };
     }
     const assertPendingOwnership = (estimated = 0) => {
+      if (options.idle && (!ctx.isIdle() || ctx.hasPendingMessages())) throw new CondenseContextChangedError("session no longer idle");
       if (trigger !== "manual" && deferToNative(ctx, options.closingMessage, estimated)) throw new NativePendingDeferral();
     };
     const version = lifecycle, nativeEpoch = nativeWindowEpoch;
@@ -782,10 +770,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // rearm is a one-shot nudge for the very next eligible gate check.
     rearmedPending = false;
 
-    // Pre-flush pressure snapshot — recorded once at flush entry so the
-    // observability entry reflects what triggered this attempt, not what's
-    // left after it ran.
-    let entryMetrics = EMPTY_METRICS_SNAPSHOT;
+    let entryMetrics = options.metrics;
     const delivery = options.delivery ?? "runtime";
 
     // One-entry-per-attempt tracking, emitted once from the outer `finally`
@@ -801,6 +786,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let argumentCharsSaved = 0;
     let firstChangedMessage: number | undefined;
     let modelAttempted = false;
+    let receivedUsage = false;
     let batchAdmission: ReturnType<typeof batchRewriteAdmission> | undefined;
     let outcome: FlushMetricsEntry["outcome"] = "empty";
     let failureReason: string | undefined, failureMessage: string | undefined;
@@ -823,7 +809,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         ...(Object.keys(deferredReasons).length ? { deferredReasons: { ...deferredReasons } } : {}),
         ...(failureReason ? { reason: failureReason } : {}),
         ...((outcome === "error" || outcome === "partial") && failureMessage ? { error: failureMessage } : {}),
-        metrics: entryMetrics,
+        ...(entryMetrics ? { metrics: entryMetrics } : {}),
       };
       try {
         assertCurrent(version);
@@ -844,13 +830,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       | "deduped"
       | "deferred";
     let batches: CapturedBatch[] = [];
-    let unprocessed = () => batches.slice(processedCount);
+    let unprocessed = () => batches.length - processedCount;
+    let drained = false;
     let restored = false;
     const restoreUnprocessed = () => {
       if (restored) return;
       if (version === lifecycle) {
-        if (nativeEpoch === nativeWindowEpoch) restoreBatches(unprocessed());
-        else rearmedPending = true; // Native owns the new window; recover its surviving work from persisted source.
+        if (nativeEpoch !== nativeWindowEpoch) rearmedPending = true;
+        else if (drained) pendingCount += unprocessed();
+        else rearmedPending ||= pendingCount === 0; // Native owns the new window; recover its surviving work from persisted source.
       }
       restored = true;
     };
@@ -876,10 +864,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
       } else appendEntry = (type, data) => { assertCurrent(version); pi.appendEntry(type, data); };
 
-      const metricsLeaf = ctx.sessionManager.getLeafId();
-      entryMetrics = await computeMetricsSnapshot(ctx, signal) ?? EMPTY_METRICS_SNAPSHOT;
-      assertCurrent(version); signal.throwIfAborted();
-      if (metricsLeaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("source changed during metrics");
+      if (trigger === "manual") {
+        const leaf = ctx.sessionManager.getLeafId();
+        entryMetrics = await computeMetricsSnapshot(ctx, signal);
+        assertCurrent(version); signal.throwIfAborted();
+        if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("source changed during metrics");
+      }
       const snapshotSource = createSourceSnapshotter();
       let preparedProjection: NativeProjection | undefined, preparedSource: string | undefined, preparedVisible: any[] | undefined;
       if (yieldToUi) {
@@ -916,7 +906,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         rewriteBudget.observeWork(source.messages, economicModel(ctx));
       }
       preparedVisible = undefined;
-      if (trigger === "message-end") {
+      if (trigger === "message-end" && !options.idle) {
         const base = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES);
         const before = projectContext(base.messages, ctx.model?.api, { ctx, source: readSourceEdits(ctx, base) }).messages;
         const argumentProtection = effectiveProtection();
@@ -978,7 +968,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "empty" };
       }
 
-      // Bail out before we drain pendingBatches so they don't need restoring.
+      // Bail out before resetting the queue hint.
       if (options.signal?.aborted) {
         outcome = "aborted";
         failureReason = "aborted";
@@ -986,10 +976,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "aborted" };
       }
 
-      // Draining the queue since we've captured the state via session or slice.
-      // We drain BEFORE the await so concurrent calls (though guarded by isFlushing)
-      // or rapid turn-ends don't result in double-summarization.
-      pendingBatches.length = 0;
+      // This pass owns the captured work; later turns can add new pending hints.
+      pendingCount = 0;
+      drained = true;
 
       // Reload/rescan can reach the final boundary without a turn_end callback.
       // Recover fused evidence before any summary can replace its visible tail.
@@ -1043,7 +1032,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         dedupedRawChars: 0,
       }));
       let dedupProjection: NativeProjection | undefined, dedupSource: string | undefined;
-      let dedupVisible: Map<string, NativeProjection["messages"][number]> | undefined;
+      let dedupVisible: Map<string, ToolResult> | undefined;
       if (dedupEnabled) {
         for (const record of dedupRecords) {
           const batch = record.batch;
@@ -1058,8 +1047,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
                 dedupSource = preparedSource ?? snapshotSource(dedupProjection.messages);
                 const visible = projectContext(dedupProjection.messages, ctx.model?.api,
                   { ctx, source: readSourceEdits(ctx, dedupProjection), probe: true }).messages;
-                dedupVisible = new Map(visible.filter((message: any) => message.role === "toolResult")
-                  .map((message: any) => [occKey(message.toolCallId, message.timestamp), message]));
+                dedupVisible = new Map(visible.filter((message: NativeProjection["messages"][number]): message is ToolResult =>
+                  message.role === "toolResult").map((message: ToolResult) => [occKey(message.toolCallId, message.timestamp), message]));
               }
               // Allocate a durable recovery ref without authorizing hiding.
               // registerDuplicate reuses it only after this exact stub wins.
@@ -1067,19 +1056,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
                 indexer,
                 appendEntry: appendEntry!,
                 ...archiveOptions(ctx.sessionManager),
+                assertValid: () => signal.throwIfAborted(),
               });
               const message = dedupVisible?.get(key);
-              const archived = indexer.getRecord(key);
-              const counts =
-                message &&
-                archived &&
-                !archived.metadataUnavailable &&
-                archived.archiveComplete !== false &&
-                (await tokenEstimator.measure(
-                  [message],
-                  [toolResultStub(message, archived, refs[0]!.shortId)],
-                  signal,
-                ));
+              const archived = indexer.getProjectionEvidence(key);
+              const counts = message && archived && !archived.metadataUnavailable && archived.archiveComplete !== false
+                && await tokenEstimator.measureRewrite([message], [toolResultStub(message, archived, refs[0]!.shortId)], signal);
               assertCurrent(version);
               signal.throwIfAborted(); assertPendingOwnership();
               beneficial = !!counts && counts.before > counts.after;
@@ -1091,7 +1073,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             } else remaining.push(tc);
           }
           // Shallow-clone the batch so we don't mutate the captured array
-          // (pendingBatches consumers retain the original shape on retry).
+          // (the persisted source retains the original shape on retry).
           record.batch = { ...batch, toolCalls: remaining };
           batches[record.index] = record.batch;
         }
@@ -1120,7 +1102,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         plan: undefined as Awaited<ReturnType<typeof prepareReplacement>> | undefined,
         completed: false,
       }));
-      unprocessed = () => records.filter(record => !record.completed).map(record => record.batch);
+      unprocessed = () => records.filter(record => !record.completed).length;
       type BatchRecord = (typeof records)[number];
 
       for (const [key, originalId, occurrence] of pendingAliases) {
@@ -1131,8 +1113,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
 
       // Process results in order; stop at first null (individual call failure).
-      // Batches before the first failure are persisted; remaining are restored to
-      // pendingBatches so they are retried on the next flush.
+      // Batches before the first failure are persisted; the rest remain
+      // recoverable from the session for the next attempt.
       const processedBatches: BatchRecord[] = [];
       let totalRawCharCount = 0;
       let totalSummaryCharCount = 0;
@@ -1186,6 +1168,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
       const allowPaid = trigger === "manual" || paidPressure(ctx, options.closingMessage);
+      const deferPaid = !options.idle && trigger !== "manual" && ctx.mode === "tui" && !ctx.isIdle();
       const waitingForWork = trigger !== "manual" && rewriteBudget.waitingForWork(currentConfig.value.chainCompression);
       const workKind = (record: BatchRecord) => {
         if (record.deduped.length > 0 && record.batch.toolCalls.length === 0) return "deduped";
@@ -1193,11 +1176,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         // only that guard, not deterministic packing or paid admission.
         if (record.prepared.packedBatch.toolCalls.length === record.batch.toolCalls.length) return waitingForWork ? "deferred" : "packed";
         if (minChars > 0 && record.prepared.candidateChars < minChars && record.batch.toolCalls.length > 0) return "trivial";
-        return allowPaid && !waitingForWork ? "paid" : "deferred";
+        return allowPaid && !waitingForWork ? (deferPaid ? "idle" : "paid") : "deferred";
       };
       // Only a wholly deferred pass can omit source snapshots. Derive this
       // from the same admission policy used by scheduling below.
-      const mayPublish = records.some(record => workKind(record) !== "deferred");
+      const mayPublish = records.some(record => {
+        const kind = workKind(record);
+        return kind !== "deferred" && kind !== "idle";
+      });
       let sourceProjection = mayPublish ? dedupProjection ?? preparedProjection ?? await readProjection(ctx, signal) : undefined;
       // A rejected alias still captured a source before its archive await; never adopt later in-place edits.
       let expectedSource = sourceProjection ? preparedSource ?? dedupSource ?? snapshotSource(sourceProjection.messages) : undefined;
@@ -1241,6 +1227,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           const i = nextRequest++, record = records[i]!;
           const kind = workKind(record);
           if (kind === "deduped" || kind === "trivial") { record.result = kind; continue; }
+          if (kind === "idle") {
+            idleWork = { trigger, closedKeys };
+            record.deferredReason = "idle";
+            record.result = "deferred";
+            continue;
+          }
           if (kind === "deferred") {
             record.deferredReason = waitingForWork ? "economics"
               : config.autoBudgetThreshold === null ? "automatic-disabled" : "pressure";
@@ -1249,7 +1241,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           const deterministic = kind === "packed";
           record.plan = await prepareReplacement(record.batch, ctx, {
             appendEntry: appendEntry!, signal, visible: visibleForPlanning(),
-            admission: deterministic ? "packed" : trigger === "manual" ? "manual" : "automatic",
             onDeferred: reason => { record.deferredReason = reason; },
           });
           checkActive();
@@ -1282,7 +1273,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             acceptSummary: async text => !!await evaluateBatch(record, text),
             onUsage: usage => {
               record.settleCost?.(usage);
-              if (!signal.aborted) statsAccum.add(usage);
+              if (version === lifecycle) { statsAccum.add(usage); receivedUsage = true; }
             },
             onModelAttempt: () => { modelAttempted = true; },
             onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
@@ -1300,10 +1291,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       };
 
       const quoteRequest = async (request: SummaryRequest, requestSignal = signal) => {
-        const counts = await tokenEstimator.measure([request.message], [], requestSignal);
+        const measured = await tokenEstimator.measureRewrite([request.message], [], requestSignal);
         checkActive();
-        if (!counts) return;
-        const input = Math.max(estimateTokens(request.message), counts.before) + 256;
+        if (!measured) return;
+        const input = Math.max(measured.piBefore, measured.before) + 256;
         return summaryRequestCost(economicModel(ctx), economicModel(ctx, request.model, input) ?? request.model,
           input, request.maxOutputTokens);
       };
@@ -1373,9 +1364,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const keys = selected.flatMap(record => [...record.plan!.replacements.keys()]);
         const keyFor = () => projectionFingerprint([summaryGroupSource(ctx.sessionManager, options.closingMessage), keys,
           policyFingerprint(currentConfig.value), [ctx.model, ...summarizerModels(config, ctx)].map(model => {
-            const quote = economicModel(ctx, model) ?? model;
-            return quote && [quote.provider, quote.id, quote.api, quote.baseUrl, quote.contextWindow, quote.maxTokens,
-              quote.reasoning, quote.cost, quote.priceTiers, quote.pricing];
+            const quote = economicModel(ctx, model);
+            return model && [model.provider, model.id, model.api, model.baseUrl, model.contextWindow, model.maxTokens, model.reasoning,
+              quote?.cost ?? model.cost, quote?.priceTiers, quote?.pricing];
           })]);
         const key = keyFor();
         if (groupAttempts.has(key)) return;
@@ -1419,7 +1410,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               return true;
             },
             acceptSummary: async text => !!await record.plan!.evaluate(text),
-            onUsage: usage => { record.settleCost?.(usage); if (!signal.aborted) statsAccum.add(usage); },
+            onUsage: usage => {
+              record.settleCost?.(usage);
+              if (version === lifecycle) { statsAccum.add(usage); receivedUsage = true; }
+            },
             onModelAttempt: () => { modelAttempted = true; },
             onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
             onTextProgress: chars => options.onBatchTextProgress?.(record.index, records.length, record.batch, chars),
@@ -1560,7 +1554,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       );
       const completionDetail = () => {
         const state = deliveryPending ? "Summary queued — raw results retained until delivery"
-          : firstFailureIndex >= 0 || pendingBatches.length > 0
+          : firstFailureIndex >= 0 || pendingCount > 0
             ? `${processedCount}/${records.length} complete; remaining pending${failureMessage ? ` — ${failureMessage}` : ""}`
             : "No pending turns";
         if (currentConfig.value.quietOversizedSkips) return state;
@@ -1709,6 +1703,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "stale-context", error: errorMessage(err) };
       }
       restoreUnprocessed();
+      if (options.idle && receivedUsage) {
+        try { appendEntry?.(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
+        catch (error) { safeNotify(ctx, `pruner: summary usage was not saved: ${errorMessage(error)}`, "warning"); }
+      }
       if (err instanceof NativePendingDeferral) {
         rearmedPending = true; // Rescan restores staged-but-unpublished aliases as well as the remaining batches.
         outcome = processedCount > 0 ? "partial" : "deferred";
@@ -1724,7 +1722,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "aborted", batchCount: processedCount };
       }
       if (isStaleContextError(err)) {
-        const count = pendingBatches.length;
+        const count = pendingCount;
         const detail = "Source changed — raw evidence retained";
         updatePruneStatus(ctx, count ? queuedDetail(count, `${detail}; `) : detail);
         return { ok: false, reason: "stale-context", error: errorMessage(err), batchCount: processedCount };
@@ -1770,14 +1768,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
     frontier.reconstructFromSession(ctx);
 
-    pendingBatches.length = 0;
-    budgetAdmissions.clear();
+    pendingCount = 0;
     previousFraction = null;
     rearmedPending = false;
     latestPruneDetail = () => "No pending turns";
     if (currentConfig.value.enabled) {
       try {
-        const count = capturePendingBatches(ctx, { rethrow: true, projection }).length;
+        const count = capturePendingBatches(ctx, { projection }).length;
         rearmedPending = count > 0;
         if (rearmedPending) latestPruneDetail = queuedDetail(count, `${count} pending batch(es) recovered from current branch — `);
       } catch (err) {
@@ -1825,6 +1822,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const startSession = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
+    stopIdleFlush();
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
@@ -1864,6 +1862,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const restoreTree = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
+    stopIdleFlush();
     maintenanceAbort?.abort();
     tokenEstimator.clear();
     sharedValidations.clear();
@@ -1898,6 +1897,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Cache is a per-model prefix; these three moments are cold regardless, so
   // activating every pending supersession here costs no extra cache miss.
   pi.on("before_agent_start", async (_event, ctx) => {
+    stopIdleFlush("retry");
     if (!currentConfig.value.enabled) return;
     const version = lifecycle;
     try {
@@ -1920,6 +1920,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   });
 
   pi.on("model_select", async (_event, ctx) => {
+    stopIdleFlush();
     pricing.start(ctx.modelRegistry.getAll());
     previousFraction = null;
     resetRewriteState();
@@ -1938,12 +1939,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   pi.on("session_compact", async (event, ctx) => {
     const version = lifecycle, nativeEpoch = ++nativeWindowEpoch;
+    stopIdleFlush();
     activeFlushAbort?.abort();
-    // These are payload caches, not recovery evidence. Late flushes must not restore the discarded window.
-    pendingBatches.length = 0;
+    // Late flushes must not rearm work for the discarded window.
+    pendingCount = 0;
     jsonSizes.clear();
     queuedSummaryKeys.clear();
-    budgetAdmissions.clear();
+    tokenEstimator.clear();
     deferredFinal = undefined;
     rearmedPending = true;
     await finishNativeCompaction(event, ctx);
@@ -1955,7 +1957,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
       if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("Native cleanup window changed");
       retainArguments(projection);
-      const count = capturePendingBatches(ctx, { projection, rethrow: true }).length;
+      const count = capturePendingBatches(ctx, { projection }).length;
       rearmedPending = count > 0;
       updatePruneStatus(ctx, count ? queuedDetail(count) : "No pending turns");
     } catch (error) {
@@ -1995,22 +1997,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // branch at turn_end already holds the just-ended assistant message (pi
       // persists it at message_end, a strictly earlier event), so the derived
       // index is the rescan index of this turn.
-      let liveTurnIndex = event.turnIndex;
-      let branch: SessionEntryReference[] | undefined;
-      try {
-        branch = branchEntryReferences(ctx.sessionManager);
-      } catch {
-        // Transient getBranch failure must never block the turn; fall back to
-        // the run-local index (pre-#16 behavior). The flush-time rescan still
-        // recovers the batch.
-      }
-      if (branch) liveTurnIndex = deriveLiveTurnIndex(branch);
-      const capturedBatch = captureBatch(
-        event.message,
-        event.toolResults,
-        liveTurnIndex,
-        Date.now()
-      );
+      let turn = event.turnIndex;
+      try { turn = liveTurnIndex(ctx.sessionManager); }
+      catch { /* A transient read failure is recoverable at the next persisted rescan. */ }
+      const capturedBatch = captureBatch(event.message, event.toolResults, turn, Date.now());
       // Drop user-protected tool/path results so they stay verbatim in context.
       // Filtering at capture time keeps the
       // underlying assistant `toolCall` block AND its `ToolResultMessage`
@@ -2075,9 +2065,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const batch = trimBatchToPendingRange(filtered);
       if (batch) {
         pushedBatch = true;
-        pendingBatches.push(batch);
-
-        const detail = queuedDetail(pendingBatches.length);
+        const detail = queuedDetail(++pendingCount);
         updatePruneStatus(ctx, detail);
         if (currentConfig.value.showPruneStatusLine && ctx.mode !== "tui") {
           safeNotify(ctx, `pruner: ${detail()}`, "info");
@@ -2086,9 +2074,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
 
     // Mirrors main's `if (!batch) return;`: no freshly pushed batch this turn
-    // means no gate evaluation, regardless of leftover pendingBatches from an
-    // earlier turn — UNLESS a reload probe armed rearmedPending, in which case
-    // the gate below must still run.
+    // means no gate evaluation for leftovers unless recovery armed the gate.
     if (!pushedBatch && !rearmedPending) return;
 
     // Final-reply mode defers pressure hints to that same boundary. Pi's native
@@ -2097,8 +2083,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
     // Token-budget auto-flush: an additional, mode-independent trigger. When context
     // usage crosses autoBudgetThreshold, compact the queued batches now instead of
-    // waiting for this mode's flush boundary. The pendingBatches.length-or-rearmed
-    // guard makes an already-drained, non-rearmed queue a no-op.
+    // waiting for this mode's flush boundary. No pending work means no flush.
     const usage = contextUsage(ctx);
     const budgetHit = shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx), currentConfig.value.summaryBudget);
     const deltaHit = shouldDeltaFlush(usage, previousFraction, currentConfig.value.budgetTurnDelta, currentConfig.value.summaryBudget);
@@ -2108,8 +2093,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const config = currentConfig.value, leaf = ctx.sessionManager.getLeafId(), policy = policyFingerprint(config);
     const model = modelWindowKey(ctx.model), native = nativeCompaction;
     const gapThreshold = config.frontierGapThresholdTokens;
-    const gapHit = !budgetHit && !deltaHit && gapThreshold != null
-      && shouldFrontierGapFlush(await computeMetricsSnapshot(ctx), gapThreshold);
+    const metrics = !budgetHit && !deltaHit && gapThreshold != null ? await computeMetricsSnapshot(ctx) : undefined;
+    const gapHit = shouldFrontierGapFlush(metrics, gapThreshold);
     if (version !== lifecycle || policy !== policyFingerprint(currentConfig.value) || leaf !== ctx.sessionManager.getLeafId()
       || model !== modelWindowKey(ctx.model) || native !== nativeCompaction) return;
     // Update the per-turn baseline; leave it unchanged when tokens is null (e.g.
@@ -2117,7 +2102,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const f = usageFraction(usage, currentConfig.value.summaryBudget);
     if (f != null) previousFraction = f;
 
-    const n = pendingBatches.length;
+    const n = pendingCount;
     if ((n > 0 || rearmedPending) && !isFlushing && (budgetHit || deltaHit || gapHit)) {
       if (deferToNative(ctx)) { nativePendingStatus(ctx); return; }
       const reason = budgetHit ? "context budget reached" : deltaHit ? "context jumped this turn" : "un-pruned tail exceeded frontier gap threshold";
@@ -2131,6 +2116,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       await flushPending(ctx, {
         delivery: "session",
         trigger: n === 0 ? "rearmed" : budgetHit ? "budget" : deltaHit ? "delta" : "frontier-gap",
+        metrics,
       });
     }
   });
@@ -2162,7 +2148,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const version = lifecycle, nativeEpoch = nativeWindowEpoch;
     await awaitRecovery();
     if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
-    const batches = capturePendingBatches(ctx);
+    let batches: CapturedBatch[];
+    try { batches = capturePendingBatches(ctx); }
+    catch (error) {
+      rearmedPending = true;
+      safeNotify(ctx, `pruner: pending-turn inspection failed; raw evidence retained: ${errorMessage(error)}`, "warning");
+      return;
+    }
     const keys = new Set(batches.flatMap(batch => batch.toolCalls.map(call => occKey(call.toolCallId, call.resultTimestamp))));
     const result = await flushPending(ctx, { delivery: "session", closingMessage: event.message, trigger: "message-end",
       preparedBatches: batches, closedKeys: keys });
@@ -2175,13 +2167,31 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // already be disposing the session, so avoid starting a best-effort LLM call here.
   pi.on("agent_end", async (_event, ctx) => {
     if (!currentConfig.value.enabled) return;
-    if (pendingBatches.length === 0 && !rearmedPending) return;
+    if (pendingCount === 0 && !rearmedPending) return;
     updatePruneStatus(ctx);
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_settled", (event, ctx) => {
     indexer.syncSummaryEntries(ctx);
     queuedSummaryKeys.clear();
+    if (event.aborted || !idleWork || idleFlush || !currentConfig.value.enabled) return;
+    const work = idleWork, version = lifecycle;
+    const abort = new AbortController();
+    const done = (async () => {
+      // Let the settled frame and any queued Goal continuation run first.
+      await setImmediate(undefined, { signal: abort.signal });
+      if (version !== lifecycle || !ctx.isIdle() || ctx.hasPendingMessages() || isFlushing || nativeCompaction) return;
+      idleWork = undefined;
+      const result = await flushPending(ctx, { ...work, idle: true, delivery: "session", signal: abort.signal });
+      if (version === lifecycle && !abort.signal.aborted && (result.ok ? result.reason !== "partial" : result.reason === "empty"))
+        deferredFinal = undefined;
+    })().catch(error => {
+      if (!abort.signal.aborted && version === lifecycle) safeNotify(ctx, `pruner: ${errorMessage(error)}`, "error");
+    }).finally(() => {
+      idleFlush = undefined;
+      if (version === lifecycle && !abort.signal.aborted && ctx.isIdle() && !ctx.hasPendingMessages()) void maintainChains(ctx);
+    });
+    idleFlush = { work, abort, done };
   });
 
   type ProjectionOptions = {
@@ -2709,9 +2719,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     void maintainChains(ctx);
   });
-  pi.on("agent_settled", (_event, ctx) => { void maintainChains(ctx); });
+  pi.on("agent_settled", (_event, ctx) => { if (!idleFlush) void maintainChains(ctx); });
   const unsubscribeMaintenance = pi.events.on(METIS_EVENTS.condenseMaintenance, (data) => {
-    if (isCondenseMaintenanceRequest(data)) data.pending = maintenanceTask;
+    if (isCondenseMaintenanceRequest(data)) data.pending = idleFlush?.done ?? maintenanceTask;
   });
 
   const withDurableSummaries = (messages: any[], ctx: ExtensionContext, api?: string, prefixOnly = false,
@@ -2760,6 +2770,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     request.messages = projectContext(messages, request.api, { ctx: projectionContext, source }).messages;
   });
   pi.on("context", async (event, ctx) => {
+    if (ctx.mode === "tui" && !ctx.isIdle()) stopIdleFlush("retry");
     await nativeCompaction?.done;
     await awaitRecovery();
     if (needsSharedValidation) await trackRecovery(revalidateSharedChains(ctx, lifecycle));
@@ -2785,10 +2796,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
     // A below-pressure final kept its batches pending. Retry only when a real
     // subsequent request arrives and pressure now admits paid work.
-    if (currentConfig.value.enabled && currentConfig.value.pruneOn === "agent-message"
-      && deferredFinal !== undefined && paidPressure(ctx)) {
-      const flush = await flushPending(ctx, { delivery: "session", trigger: "context", signal: ctx.signal, closedKeys: deferredFinal.keys });
-      if (flush.ok && flush.reason !== "partial" || !flush.ok && flush.reason === "empty") deferredFinal = undefined;
+    if (currentConfig.value.enabled && currentConfig.value.pruneOn === "agent-message" && deferredFinal && paidPressure(ctx)) {
+      const work = { trigger: "context", closedKeys: deferredFinal.keys } as const;
+      if (ctx.mode === "tui" && !ctx.isIdle()) idleWork ??= work;
+      else {
+        const flush = await flushPending(ctx, { ...work, delivery: "session", signal: ctx.signal });
+        if (flush.ok ? flush.reason !== "partial" : flush.reason === "empty") deferredFinal = undefined;
+      }
     }
     indexer.syncSummaryEntries(ctx);
     // Session delivery can append evidence after Pi took this request snapshot.
@@ -2826,7 +2840,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       throw new Error("Condense history recovery is not ready");
   });
 
-  const compactChains = async (ctx: any) => {
+  const compactChains = async (ctx: ExtensionContext) => {
+    if (idleFlush) {
+      stopIdleFlush();
+      await idleFlush.done;
+    }
     if (nativeCompaction || isFlushing || isArchiving || isCompactingChains || occ.isRunning())
       throw new Error("Another context rewrite is running; retry after it settles");
     const version = lifecycle;
@@ -2859,7 +2877,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     currentConfig,
     applyConfig,
     flushPending,
-    ctx => splitPackingRuns(capturePendingBatches(ctx, { rethrow: true })),
+    ctx => splitPackingRuns(capturePendingBatches(ctx)),
     () => statsAccum.getStats(),
     () => statsAccum.getLiveReclaim(),
     compactChains,
@@ -2875,6 +2893,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     start, tree,
     async shutdown(ctx: ExtensionContext) {
       lifecycle++;
+      stopIdleFlush();
       resetRewriteState();
       nativeCompaction?.finish();
       contextMetrics.clear();
@@ -2886,15 +2905,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       occ.shutdown(ctx);
       activeSessionId = undefined;
       projectionContext = undefined;
-      pendingBatches.length = 0;
+      pendingCount = 0;
       latestPruneDetail = () => "No pending turns";
       queuedSummaryKeys.clear();
-      budgetAdmissions.clear();
       unsubscribeProjection();
       unsubscribeMaintenance();
       unsubscribeRemoteCompaction();
       try { ctx.ui.setStatus(METIS_STATUS_IDS.condense, undefined); } catch { /* UI may already be gone. */ }
-      await pricing.close();
+      await Promise.all([pricing.close(), idleFlush?.done]);
     },
   };
 }

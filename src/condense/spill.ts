@@ -70,10 +70,13 @@ export async function archiveBatches(batches: readonly CapturedBatch[], args: {
   indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
   appendEntry: (customType: string, data?: unknown) => void;
   spillThreshold: number; spillPreviewBytes: number;
+  assertValid?: () => void;
 }) {
   const records: ToolCallRecord[] = [];
   for (const batch of batches) for (const call of batch.toolCalls) {
+    args.assertValid?.();
     await archiveToolOutput(call, args);
+    args.assertValid?.();
     records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true,
       contentHash: call.contentHash ?? hashToolResult(call.toolName, call.resultText) });
   }

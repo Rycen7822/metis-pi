@@ -45,6 +45,68 @@ async function changeSetting(f, id, selectedValue) {
   await f.commands.get("pruner").handler("settings", f.ctx);
 }
 
+test("a busy TUI tool loop leaves automatic paid summaries for the idle session", { timeout: 20000 }, async t => {
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", defer: true });
+  let idle = false;
+  f.ctx.isIdle = () => idle;
+  const { id } = f.add(buildLog, "produce-output");
+  await f.finish(false, usage); // A successful request must consume the result before pruning it.
+  const { assistant, result } = f.add("The next result", "produce-output");
+  await f.emit("turn_end", { message: assistant, toolResults: [result], turnIndex: 0 });
+  assert.equal(f.calls.length, 0);
+  const flush = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics");
+  assert.deepEqual(flush.data.deferredReasons, { idle: 1 });
+  assert.equal(flush.data.metrics, undefined, "budget-triggered foreground work does not need full history metrics");
+
+  idle = true;
+  f.ctx.hasPendingMessages = () => true;
+  await f.emit("agent_settled", { aborted: false });
+  await f.waitMaintenance();
+  assert.equal(f.calls.length, 0, "queued input wins over a paid summary");
+  f.ctx.hasPendingMessages = () => false;
+  await f.emit("agent_settled", { aborted: false });
+  await waitForSummarizer(f);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"), false);
+  f.release();
+  await f.waitMaintenance();
+  assert.ok(f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"
+    && entry.details.toolCallRefs.some(ref => ref.toolCallId === id)));
+});
+
+test("fresh input does not wait for an idle summary and late output cannot replace its evidence", { timeout: 20000 }, async t => {
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", defer: true, ignoreAbort: true });
+  let idle = false;
+  f.ctx.isIdle = () => idle;
+  const { id, result: original } = f.add(buildLog, "produce-output");
+  await f.finish(false, usage);
+  const { assistant, result } = f.add("The next result", "produce-output");
+  await f.emit("turn_end", { message: assistant, toolResults: [result], turnIndex: 0 });
+  idle = true;
+  await f.emit("agent_settled", { aborted: false });
+  await waitForSummarizer(f);
+
+  const abort = AbortSignal.timeout(5000);
+  // Release even if the implementation incorrectly waits for the provider.
+  const release = () => f.release();
+  abort.addEventListener("abort", release, { once: true });
+  try {
+    await f.emit("before_agent_start");
+    idle = false;
+    f.sm.appendMessage({ role: "user", content: "Next request", timestamp: f.nextTimestamp() });
+    const messages = f.sm.buildSessionProjection().messages;
+    const next = await f.emit("context", { messages });
+    assert.equal(abort.aborted, false, "the next request was prepared while the provider was still holding the summary");
+    assert.ok(f.requests[0].signal.aborted);
+    assert.deepEqual((next?.messages ?? messages).find(message => message.toolCallId === id)?.content, original.content);
+  } finally {
+    abort.removeEventListener("abort", release);
+    release();
+  }
+  await f.waitMaintenance();
+  assert.equal(f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"), false);
+});
+
 test("Native usage reads coalesce within a source slice and refresh after an await", async t => {
   const f = await fixture(t, { pruneOn: "on-demand", capacity: true });
   let epoch = 0, tokens = 75000;

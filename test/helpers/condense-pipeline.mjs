@@ -23,6 +23,7 @@ export async function fixture(
     summaryUsage = usage,
     stopReason = "stop",
     defer = false,
+    ignoreAbort = false,
     occ = false,
     capacity = false,
     pruneOn = "agent-message",
@@ -64,7 +65,7 @@ export async function fixture(
     const finish = () => {
       if (settled) return;
       settled = true;
-      const reason = options.signal?.aborted
+      const reason = options.signal?.aborted && !ignoreAbort
         ? "aborted"
         : typeof stopReason === "function"
           ? stopReason(callNumber, context)
@@ -83,7 +84,7 @@ export async function fixture(
       output.push({ type: reason === "error" ? "error" : "done", reason, message, error: message });
       output.end(message);
     };
-    options.signal?.addEventListener("abort", finish, { once: true });
+    if (!ignoreAbort) options.signal?.addEventListener("abort", finish, { once: true });
     releases.push(finish);
     if (!defer) queueMicrotask(finish);
     summaryStarted.dispatchEvent(new Event("request"));

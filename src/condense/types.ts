@@ -537,12 +537,14 @@ export interface ContextMetricsSnapshot {
 
 export type FlushTrigger = "budget" | "delta" | "frontier-gap" | "message-end" | "context" | "manual" | "rearmed";
 
-export type DeferredReason = "automatic-disabled" | "pressure" | "measurement" | "replacement" | "budget" | "no-gain" | "economics";
+export type DeferredReason = "automatic-disabled" | "pressure" | "measurement" | "replacement" | "budget" | "no-gain" | "economics"
+  | "idle";
 
 export const DEFERRED_REASON_LABELS: Record<DeferredReason, string> = {
   "automatic-disabled": "automatic summarization disabled",
   pressure: "automatic summaries not admitted by pressure/capacity policy",
   economics: "waiting for useful growth or a cache-economical rewrite",
+  idle: "paid summaries wait until the session is idle",
   measurement: "token measurement unavailable",
   replacement: "safe complete replacement unavailable",
   budget: "complete-summary token budget insufficient",
@@ -580,8 +582,8 @@ export interface FlushMetricsEntry {
   deferredReasons?: Partial<Record<DeferredReason, number>>;
   reason?: string;
   error?: string;
-  /** Computed at flush ENTRY (pre-flush pressure). */
-  metrics: ContextMetricsSnapshot;
+  /** Pre-flush snapshot, when already needed for admission or requested by a manual flush. */
+  metrics?: ContextMetricsSnapshot;
 }
 
 
@@ -715,6 +717,10 @@ export interface FlushOptions {
   signal?: AbortSignal;
   /** Which trigger initiated this flush. Defaults to "manual" when absent. */
   trigger?: FlushTrigger;
+  /** Reuse the snapshot that admitted a frontier-gap flush. */
+  metrics?: ContextMetricsSnapshot;
+  /** The idle TUI's paid batch pass; foreground input can preempt it. */
+  idle?: true;
   /**
    * The complete visible assistant message that triggered a checkpoint flush; it may also contain tool calls.
    * pi emits `message_end` to extensions before persisting it to the session, so it

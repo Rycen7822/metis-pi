@@ -14,7 +14,7 @@ import {
 } from "./types.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { customEntries } from "./custom-entries.ts";
-import { readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
+import { readHistoryEntries, reverseBranchEntryReferences, type SessionEntryReference } from "../session-history.ts";
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,
@@ -83,6 +83,7 @@ export class ToolCallIndexer {
    */
   private summaryBodies: Array<{ toolCallIds: string[]; text: string }> = [];
   private seenSummaryEntries = new Set<string>();
+  private summaryCursor?: SessionEntryReference;
   private chainRegistry = new Map<string, ChainCompressionEntry>();
 
   /** Rebuild a directory, never retain all historical args/results in the extension. */
@@ -117,6 +118,7 @@ export class ToolCallIndexer {
     this.nextShortAliasNumber = next.nextShortAliasNumber;
     this.summaryBodies = next.summaryBodies;
     this.seenSummaryEntries = next.seenSummaryEntries;
+    this.summaryCursor = next.summaryCursor;
     this.chainRegistry = next.chainRegistry;
   }
 
@@ -174,6 +176,7 @@ export class ToolCallIndexer {
       && entry.customType === CUSTOM_TYPE_SUMMARY, { cacheAdmission: "bypass" })) {
       this.syncSummaryBranch([entry]); yield;
     }
+    this.summaryCursor = ctx.sessionManager.getEntryMetadata?.(ctx.sessionManager.getLeafId() ?? "");
   }
 
   /**
@@ -428,9 +431,27 @@ export class ToolCallIndexer {
    * can serve chain summaries without re-scanning session entries.
    */
   syncSummaryEntries(ctx: ExtensionContext): void {
-    const entries = readHistoryEntries(ctx.sessionManager, "branch", entry => entry.type === "custom_message"
-      && entry.customType === CUSTOM_TYPE_SUMMARY && !this.seenSummaryEntries.has(entry.id));
-    this.syncSummaryBranch(entries);
+    const manager = ctx.sessionManager;
+    const select = (entry: SessionEntryReference) => entry.type === "custom_message"
+      && entry.customType === CUSTOM_TYPE_SUMMARY && !this.seenSummaryEntries.has(entry.id);
+    if (manager !== this.sourceReader || !manager.getEntryMetadata) {
+      this.syncSummaryBranch(readHistoryEntries(manager, "branch", select));
+      return;
+    }
+    // Only immutable metadata identities prove an already-scanned prefix. A
+    // different branch or a rebuilt prefix falls back to scanning that path.
+    const tail: SessionEntry[] = [];
+    let head: SessionEntryReference | undefined;
+    for (const entry of reverseBranchEntryReferences(manager)) {
+      head ??= entry;
+      if (entry === this.summaryCursor) break;
+      if (!select(entry)) continue;
+      const body = manager.getEntry(entry.id);
+      if (!body) throw new Error(`Session entry not found: ${entry.id}`);
+      tail.push(body);
+    }
+    this.syncSummaryBranch(tail.reverse());
+    this.summaryCursor = head;
   }
 
   private syncSummaryBranch(branch: Iterable<SessionEntry>): void {
