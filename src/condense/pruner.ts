@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ToolCallIndexer } from "./indexer.ts";
-import type { ChainCompressionConfig, ErrorPurgeConfig, ToolCallRecord } from "./types.ts";
+import type { ToolCallIndexer, ToolStubEvidence } from "./indexer.ts";
+import type { ChainCompressionConfig, ErrorPurgeConfig } from "./types.ts";
 import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { applyChainCompressions } from "./chain-range-prune.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
@@ -113,14 +113,12 @@ export function pruneMessages(
         : undefined;
     if (lookupKey === undefined) return msg;
 
-    const record = indexer.getRecord(lookupKey);
+    const record = indexer.getProjectionEvidence(lookupKey);
     // Render-time re-check: a record summarized before protectedPaths
     // covered it is repaired here — the raw toolResult still lives in the
     // session JSONL, so skipping the stub restores it verbatim.
-    if (record?.archiveOnly || record?.metadataUnavailable || (protection && record && isProtected(record.toolName, record.args, protection))) {
-      return msg;
-    }
-    if (inGrace.has(key)) {
+    if (!record || record.archiveOnly || record.metadataUnavailable || inGrace.has(key)) return msg;
+    if (protection && isProtected(record.toolName, { path: record.argumentPath }, protection)) {
       return msg;
     }
     pruned = true;
@@ -206,7 +204,7 @@ export function pruneMessages(
     : { messages, pruned, beforeChars: 0, afterChars: 0 };
 }
 
-export function toolResultStub(msg: any, record: ToolCallRecord | undefined, ref: string): any {
+export function toolResultStub(msg: any, record: ToolStubEvidence | undefined, ref: string): any {
   const text = record?.spillPath
     ? [
         `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,

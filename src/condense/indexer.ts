@@ -41,7 +41,17 @@ function directoryMetadata(record: DirectoryMetadata): DirectoryMetadata {
   return { toolCallId, resultTimestamp, archiveOnly, contentHash, toolName, parentToolCallId,
     isError, metadataUnavailable, spillPath, archiveComplete, archiveSource };
 }
-type StoredRecord = DirectoryMetadata & {
+export type ToolStubEvidence = Pick<ToolCallRecord, "toolName" | "spillPath" | "spillBytes" | "resultPreview" | "archiveComplete" | "archiveSource">;
+type ProjectionEvidence = ToolStubEvidence & Pick<ToolCallRecord, "archiveOnly" | "metadataUnavailable"> & { argumentPath?: string };
+
+function projectionEvidence(record: ToolCallRecord): ProjectionEvidence {
+  const { toolName, archiveOnly, metadataUnavailable, spillPath, spillBytes, archiveComplete, archiveSource } = record;
+  const argumentPath = typeof record.args?.path === "string" ? record.args.path : undefined;
+  return { toolName, archiveOnly, metadataUnavailable, argumentPath, spillPath, spillBytes, archiveComplete, archiveSource,
+    resultPreview: spillPath ? record.resultPreview : undefined };
+}
+
+type StoredRecord = DirectoryMetadata & ProjectionEvidence & {
   argsPreview: string;
   entryId: string;
   position: number;
@@ -54,8 +64,6 @@ export class ToolCallIndexer {
   /** Persisted payloads stay in the session store; only legacy aliases without index entries need full fallback records. */
   private index = new Map<string, IndexedRecord>();
   private sourceReader?: RecordReader;
-  private activeKeys = new Set<string>();
-  private activeBodies = new Map<string, ToolCallRecord>();
   /** bare toolCallId -> its occurrence keys, in insertion order */
   private bareIdToKeys = new Map<string, string[]>();
   private aliasToToolCallId = new Map<string, string>();
@@ -102,8 +110,6 @@ export class ToolCallIndexer {
   private adopt(next: ToolCallIndexer): void {
     this.index = next.index;
     this.sourceReader = next.sourceReader;
-    this.activeKeys = next.activeKeys;
-    this.activeBodies = next.activeBodies;
     this.bareIdToKeys = next.bareIdToKeys;
     this.aliasToToolCallId = next.aliasToToolCallId;
     this.toolCallIdToAlias = next.toolCallIdToAlias;
@@ -177,10 +183,10 @@ export class ToolCallIndexer {
    */
   private indexRecord(record: ToolCallRecord, source?: Pick<StoredRecord, "entryId" | "position">): string {
     const key = occKey(record.toolCallId, record.resultTimestamp);
-    this.index.set(key, source ? { ...directoryMetadata(record), ...source, argsPreview: argumentPreview(record.args),
-      contentHash: record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined) } : { record });
-    if (source && this.activeKeys.has(key)) this.activeBodies.set(key, record);
-    else this.activeBodies.delete(key);
+    this.index.set(key, source ? {
+      ...directoryMetadata(record), ...projectionEvidence(record), ...source, argsPreview: argumentPreview(record.args),
+      contentHash: record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined),
+    } : { record });
     const keys = this.bareIdToKeys.get(record.toolCallId) ?? [];
     if (!keys.includes(key)) keys.push(key);
     this.bareIdToKeys.set(record.toolCallId, keys);
@@ -220,28 +226,10 @@ export class ToolCallIndexer {
 
   hasRecord(key: string): boolean { return this.index.has(key); }
 
-  /** Cache payloads only for the Native active window; historical recalls remain transient. */
-  retainForContext(messages: readonly any[]): void {
-    const keys = new Set<string>();
-    for (const message of messages) {
-      if (message.role !== "toolResult") continue;
-      const key = occKey(message.toolCallId, message.timestamp);
-      keys.add(key); // Newly persisted archives in this window must use the same bounded payload cache.
-      if (this.hasLegacyBareRecord(message.toolCallId)) keys.add(message.toolCallId);
-    }
-    this.activeKeys = keys;
-    for (const key of this.activeBodies.keys()) if (!keys.has(key)) this.activeBodies.delete(key);
-  }
-
-  async prepareContext(messages: readonly any[], assertValid: () => void): Promise<void> {
-    this.retainForContext(messages);
-    let slice = performance.now();
-    for (const key of this.activeKeys) {
-      if (this.isSummarized(key)) this.getRecord(key);
-      if (performance.now() - slice < 8) continue;
-      await setImmediate(); assertValid(); slice = performance.now();
-    }
-    assertValid();
+  /** Stub and protection facts for an exact occurrence, with no archive body read. */
+  getProjectionEvidence(key: string): ProjectionEvidence | undefined {
+    const item = this.index.get(key);
+    return item && ("record" in item ? projectionEvidence(item.record) : item);
   }
 
   /** Directory/parent selection must not load archived argument or result bodies. */
@@ -318,19 +306,10 @@ export class ToolCallIndexer {
     const item = this.index.get(resolved);
     if (!item) return undefined;
     if ("record" in item) return item.record;
-    let record = this.activeBodies.get(resolved);
-    if (!record) {
-      const reader = this.sourceReader;
-      const entry = reader && (reader.getEntryForScan ?? reader.getEntry).call(reader, item.entryId);
-      const records = entry?.type === "custom" && entry.customType === CUSTOM_TYPE_INDEX
-        ? (entry.data as IndexEntryData)?.toolCalls : undefined;
-      record = records?.[item.position];
-      if (records && this.activeKeys.has(resolved)) for (const [position, body] of records.entries()) {
-        const key = occKey(body.toolCallId, body.resultTimestamp), owner = this.index.get(key);
-        if (this.activeKeys.has(key) && owner && !("record" in owner)
-          && owner.entryId === item.entryId && owner.position === position) this.activeBodies.set(key, body);
-      }
-    }
+    const reader = this.sourceReader;
+    const entry = reader && (reader.getEntryForScan ?? reader.getEntry).call(reader, item.entryId);
+    const record = entry?.type === "custom" && entry.customType === CUSTOM_TYPE_INDEX
+      ? (entry.data as IndexEntryData)?.toolCalls?.[item.position] : undefined;
     if (!record || occKey(record.toolCallId, record.resultTimestamp) !== resolved) {
       throw new Error(`Execution archive record unavailable: ${resolved}`);
     }

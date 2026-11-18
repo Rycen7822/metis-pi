@@ -27,6 +27,24 @@ test("projection-only pruning skips display-size serialization while preserving 
   assert.equal(messages[1].content[0].text, body, "immutable source evidence is not replaced");
 });
 
+test("projection uses archived stub and path facts without reading the recall body", async (t) => {
+  const body = 'archived text with Unicode 🧪';
+  const f = queryFixture([record("saved", body, 3, { args: { path: "private/proof.txt", extra: "command metadata" } })]);
+  const reads = t.mock.method(f.ctx.sessionManager, "getEntryForScan");
+  const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "saved", "read"), toolResult("saved", "read", body)];
+
+  const projected = pruneMessages(messages, f.indexer);
+  assert.match(projected.messages[1].content[0].text, /ref `saved@3`/);
+  const protectedResult = pruneMessages(messages, f.indexer, undefined, undefined,
+    { protectedTools: [], protectedPaths: ["private/**"] });
+  assert.equal(protectedResult.messages[1], messages[1]);
+  assert.equal(reads.mock.callCount(), 0);
+
+  const recalled = (await f.run({ toolCallIds: ["saved"] })).details.results[0];
+  assert.equal(recalled.text, body);
+  assert.ok(reads.mock.callCount() > 0, "recall loads the source archive");
+});
+
 test("pruning a failed execution retains ERROR and its independent evidence reference", () => {
   const f = queryFixture([record("failed", "failure detail", 3, { isError: true })]);
   const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "failed", "read"),

@@ -1814,20 +1814,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (version === lifecycle) jsonSizes.measure(projection.messages);
     } catch { /* Optional warming must leave session setup intact on a read or serialization failure. */ }
   };
-  const prepareRecoveryProjection = async (ctx: ExtensionContext, version: number, projection: NativeProjection) => {
+  const prepareRecoveryProjection = (ctx: ExtensionContext, projection: NativeProjection): PreparedProjection => {
     retainArguments(projection);
     const capture = indexer.getChainEntries().some(isSharedChain) ? createSourceSnapshotter() : undefined;
-    const prepared: PreparedProjection = { projection, leaf: ctx.sessionManager.getLeafId(),
+    return { projection, leaf: ctx.sessionManager.getLeafId(),
       source: capture ? { capture, snapshot: capture(projection.messages) } : undefined };
-    if (ctx.mode === "tui") {
-      const assertValid = () => {
-        assertCurrent(version);
-        if (prepared.leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("recovery window changed");
-      };
-      await setImmediate(); assertValid();
-      await indexer.prepareContext(projection.messages, assertValid);
-    }
-    return prepared;
   };
   const startSession = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
@@ -1851,7 +1842,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const projection = await readProjection(ctx);
     assertCurrent(version);
     fallbackController = new FallbackController();
-    const prepared = await prepareRecoveryProjection(ctx, version, projection);
+    const prepared = prepareRecoveryProjection(ctx, projection);
     restoreBranchPending(ctx, projection);
     activeSessionId = ctx.sessionManager.getSessionId();
     projectionContext = ctx;
@@ -1884,7 +1875,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     groupAttempts.restore(ctx.sessionManager);
     const projection = await readProjection(ctx);
     assertCurrent(version);
-    const prepared = await prepareRecoveryProjection(ctx, version, projection);
+    const prepared = prepareRecoveryProjection(ctx, projection);
     restoreBranchPending(ctx, projection);
     activeSessionId = ctx.sessionManager.getSessionId();
     projectionContext = ctx;
@@ -1947,7 +1938,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     activeFlushAbort?.abort();
     // These are payload caches, not recovery evidence. Late flushes must not restore the discarded window.
     pendingBatches.length = 0;
-    indexer.retainForContext([]);
     jsonSizes.clear();
     queuedSummaryKeys.clear();
     budgetAdmissions.clear();
@@ -1961,7 +1951,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const projection = await readProjection(ctx, new AbortController().signal);
       if (version !== lifecycle || nativeEpoch !== nativeWindowEpoch) return;
       if (leaf !== ctx.sessionManager.getLeafId()) throw new CondenseContextChangedError("Native cleanup window changed");
-      indexer.retainForContext(projection.messages);
       retainArguments(projection);
       const count = capturePendingBatches(ctx, { projection, rethrow: true }).length;
       rearmedPending = count > 0;
@@ -2341,7 +2330,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   // A transient read view, never a writer's authorization across awaits.
   function readSourceEdits(ctx: ExtensionContext, projection = ctx.sessionManager.buildSessionProjection()) {
-    indexer.retainForContext(projection.messages);
     const changedToolIds = new Set<string>(), editedToolIds = new Set<string>(), editedSummaries = new Set<string>();
     for (const { sourceEntry: source, messages } of projection.entries) {
       const summary = source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY;
