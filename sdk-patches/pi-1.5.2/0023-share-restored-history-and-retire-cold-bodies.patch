@@ -1,0 +1,296 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index d470e8c..022061b 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -1507,6 +1507,7 @@ export class AgentSession {
+ 	 * Call this when completely done with the session.
+ 	 */
+ 	dispose(): void {
++		this.sessionManager.discardPreparedRestore();
+ 		try {
+ 			this.abortRetry();
+ 			this.abortCompaction();
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index 0072321..2a2302a 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -207,7 +207,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 	}
+ 
+ 	// Check if session has existing data to restore
+-	const existingSession = sessionManager.buildSessionContext();
++	const existingSession = sessionManager.consumeSessionRestore();
+ 	const hasExistingSession = existingSession.messages.length > 0;
+ 	const hasThinkingEntry = sessionManager.getBranchMetadata().some((entry) => entry.type === "thinking_level_change");
+ 
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index 4206112..0c905a8 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -35,6 +35,7 @@ export class SessionEntryStore {
+ 	private path?: string;
+ 	private cache = new Map<StoredSessionEntry, { entry: SessionEntry; bytes: number }>();
+ 	private cachedBytes = 0;
++	private cacheEpoch = 0;
+ 	private entryReadBuffer?: Buffer;
+ 	private rewriteEpoch = 0;
+ 	private sourceIsCurrent?: () => boolean;
+@@ -183,6 +184,7 @@ export class SessionEntryStore {
+ 		isCurrent?: () => boolean,
+ 	): Promise<SessionEntry[]> {
+ 		const epoch = this.rewriteEpoch;
++		const admission = this.cacheEpoch;
+ 		const assertCurrent = () => {
+ 			signal?.throwIfAborted();
+ 			if (epoch !== this.rewriteEpoch || (isCurrent && !isCurrent())) throw new SessionEntryStoreChangedError();
+@@ -232,7 +234,8 @@ export class SessionEntryStore {
+ 							bufferedBytes = read;
+ 						}
+ 					}
+-					entries.push(this.decode(record, bytes, length, admitted.has(record) ? "retain" : "transient"));
++					const retain = admission === this.cacheEpoch && admitted.has(record);
++					entries.push(this.decode(record, bytes, length, retain ? "retain" : "transient"));
+ 				}
+ 				if (performance.now() - sliceStarted >= 8) {
+ 					await setImmediate(undefined, { signal });
+@@ -341,6 +344,19 @@ export class SessionEntryStore {
+ 		return entry;
+ 	}
+ 
++	/** Drop decoded disk bodies outside the committed display/model window, not records or in-memory entries. */
++	discardInactiveBodies(kept: () => ReadonlySet<string>): void {
++		// An in-flight scan may complete, but must not fill the cache for an older window.
++		this.cacheEpoch++;
++		if (this.cache.size === 0) return;
++		const ids = kept();
++		for (const [record, cached] of this.cache) {
++			if (ids.has(record.metadata.id)) continue;
++			this.cache.delete(record);
++			this.cachedBytes -= cached.bytes;
++		}
++	}
++
+ 	private remember(record: StoredSessionEntry, entry: SessionEntry, bytes: number): void {
+ 		const previous = this.cache.get(record);
+ 		if (previous) {
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 9ca1301..6720a4d 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -801,6 +801,8 @@ export class SessionManager {
+ 	private labelsById: Map<string, string> = new Map();
+ 	private labelTimestampsById: Map<string, string> = new Map();
+ 	private leafId: string | null = null;
++	private restoreContext?: SessionContext;
++	private restoreDisplay?: Map<string, SessionEntry>;
+ 
+ 	private constructor(
+ 		cwd: string,
+@@ -832,6 +834,7 @@ export class SessionManager {
+ 	}
+ 
+ 	private _setSessionFile(sessionFile: string, preloadedFileEntries?: FileEntry[]): void {
++		this.discardPreparedRestore();
+ 		this.sessionFile = resolvePath(sessionFile);
+ 		if (existsSync(this.sessionFile)) {
+ 			const store = preloadedFileEntries
+@@ -862,6 +865,7 @@ export class SessionManager {
+ 	}
+ 
+ 	newSession(options?: NewSessionOptions): string | undefined {
++		this.discardPreparedRestore();
+ 		if (options?.id !== undefined) {
+ 			assertValidSessionId(options.id);
+ 		}
+@@ -977,6 +981,7 @@ export class SessionManager {
+ 	}
+ 
+ 	private _appendEntry(entry: SessionEntry): void {
++		this.discardPreparedRestore();
+ 		const previousLeafId = this.leafId;
+ 		this.store.append(entry);
+ 		this.leafId = entry.id;
+@@ -1079,6 +1084,8 @@ export class SessionManager {
+ 			...(systemMessage ? { systemMessage: { ...systemMessage, timestamp: new Date(timestamp).getTime() } } : {}),
+ 		};
+ 		this._appendEntry(entry);
++		// Persistence must succeed before discarding cached bodies from the old window.
++		this.store.discardInactiveBodies(() => new Set(this.getContextEntriesMetadata().map((item) => item.id)));
+ 		return entry.id;
+ 	}
+ 
+@@ -1361,7 +1368,11 @@ export class SessionManager {
+ 		}
+ 	}
+ 
+-	private readContextMessages(path: SessionEntryMetadata[], scope: "all" | "system"): AgentMessage[] {
++	private readContextMessages(
++		path: SessionEntryMetadata[],
++		scope: "all" | "system",
++		display?: Map<string, SessionEntry>,
++	): AgentMessage[] {
+ 		const selected = selectContextEntries(path);
+ 		const sources = new Set<string>();
+ 		for (const [index, entry] of selected.entries()) {
+@@ -1379,7 +1390,52 @@ export class SessionManager {
+ 		);
+ 		const entries = this.store.readProjectionEntries(needed, path);
+ 		const edits = contextEdits(entries);
+-		return entries.flatMap((entry) => (sources.has(entry.id) ? projectContextEntry(entry, edits.get(entry.id)) : []));
++		return entries.flatMap((entry) => {
++			if (!sources.has(entry.id)) return [];
++			const messages = projectContextEntry(entry, edits.get(entry.id));
++			// Only share original records whose unedited content already belongs to the agent.
++			if (display && entry.type === "message" && messages[0] === entry.message) display.set(entry.id, entry);
++			return messages;
++		});
++	}
++
++	/** @internal Prepare the context once for CLI model selection and SDK creation. */
++	prepareSessionRestore(includeDisplay: boolean): boolean {
++		this.discardPreparedRestore();
++		const path = this.getBranchMetadata();
++		const display = includeDisplay ? new Map<string, SessionEntry>() : undefined;
++		const messages = this.readContextMessages(path, "all", display);
++		this.restoreContext = { ...getSessionContextSettings(path), messages };
++		this.restoreDisplay = display;
++		return messages.length > 0;
++	}
++
++	/** @internal Consume the context if CLI preparation is still current. */
++	consumeSessionRestore(): SessionContext {
++		const context = this.restoreContext;
++		this.restoreContext = undefined;
++		return context ?? this.buildSessionContext();
++	}
++
++	/** @internal First render only; source selection, including edited and display-only rows, remains authoritative. */
++	consumeInitialDisplayEntries(): SessionEntry[] {
++		const display = this.restoreDisplay;
++		this.restoreDisplay = undefined;
++		if (!display?.size) return this.buildContextEntries();
++		const path = this.getBranchMetadata();
++		const selected = selectContextEntries(path);
++		const missing = this.store.readProjectionEntries(
++			selected.filter((entry) => !display.has(entry.id)),
++			path,
++		);
++		let next = 0;
++		return selected.map((entry) => display.get(entry.id) ?? missing[next++]);
++	}
++
++	/** @internal Release unconsumed startup data before changing the branch or leaving the UI path. */
++	discardPreparedRestore(): void {
++		this.restoreContext = undefined;
++		this.restoreDisplay = undefined;
+ 	}
+ 
+ 	buildSessionContext(): SessionContext {
+@@ -1482,6 +1538,7 @@ export class SessionManager {
+ 		if (!this.store.has(branchFromId)) {
+ 			throw new Error(`Entry ${branchFromId} not found`);
+ 		}
++		this.discardPreparedRestore();
+ 		this.leafId = branchFromId;
+ 	}
+ 
+@@ -1491,6 +1548,7 @@ export class SessionManager {
+ 	 * Use this when navigating to re-edit the first user message.
+ 	 */
+ 	resetLeaf(): void {
++		this.discardPreparedRestore();
+ 		this.leafId = null;
+ 	}
+ 
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 0fae552..04a0a77 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -880,7 +880,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 		} = buildSessionOptions(
+ 			parsed,
+ 			scopedModels,
+-			sessionManager.buildSessionContext().messages.length > 0,
++			sessionManager.prepareSessionRestore(appMode === "interactive"),
+ 			modelRuntime,
+ 			settingsManager,
+ 		);
+@@ -974,6 +974,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 
+ 	time("resolveModelScope");
+ 	if (appMode !== "interactive" || hasRuntimeErrors) {
++		session.sessionManager.discardPreparedRestore();
+ 		reportDiagnostics(startupDiagnostics);
+ 	}
+ 	if (hasRuntimeErrors) {
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 8e5ce5e..30c3dd7 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -4400,7 +4400,7 @@ export class InteractiveMode {
+ 	}
+ 
+ 	renderInitialMessages(): void {
+-		const entries = this.sessionManager.buildContextEntries();
++		const entries = this.sessionManager.consumeInitialDisplayEntries();
+ 		this.renderSessionEntries(entries, {
+ 			updateFooter: true,
+ 			populateHistory: true,
+diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+index ce8a51c..4630352 100644
+--- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
++++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+@@ -62,6 +62,53 @@ describe("persisted session body cache", () => {
+ 		]);
+ 	});
+ 
++	it("shares only original message records for one restore and one display read", () => {
++		const seed = SessionManager.create(directory, directory);
++		const old = seed.appendMessage(userMsg("first " + "界".repeat(6 * 1024 * 1024)));
++		const edited = seed.appendMessage(userMsg("original"));
++		seed.appendContextEdit(edited, { content: "replacement" });
++		const session = SessionManager.open(seed.getSessionFile()!);
++		expect(session.prepareSessionRestore(true)).toBe(true);
++		const restored = session.consumeSessionRestore();
++		expect(restored.messages.at(-1)).toMatchObject({ content: "replacement" });
++		const display = session.consumeInitialDisplayEntries();
++		expect(display.find((entry) => entry.id === old)).toMatchObject({ message: restored.messages[0] });
++		const shared = display.find((entry) => entry.id === old);
++		if (shared?.type !== "message") throw new Error("Missing original user entry");
++		expect(shared.message).toBe(restored.messages[0]);
++		expect(display.find((entry) => entry.id === edited)).toMatchObject({ message: { content: "original" } });
++		expect(session.consumeInitialDisplayEntries().find((entry) => entry.id === old)).not.toBe(shared);
++	});
++
++	it("invalidates prepared model and display history when the active branch changes", () => {
++		const seed = SessionManager.inMemory();
++		const root = seed.appendMessage(userMsg("root"));
++		seed.appendMessage(userMsg("abandoned"));
++		seed.prepareSessionRestore(true);
++		seed.branch(root);
++		const correct = seed.appendMessage(userMsg("selected"));
++		expect(seed.consumeSessionRestore().messages.at(-1)).toMatchObject({ content: "selected" });
++		expect(seed.consumeInitialDisplayEntries().map((entry) => entry.id)).toEqual([root, correct]);
++	});
++
++	it("drops only inactive cached bodies after compaction, without admitting late reads from the old window", async () => {
++		const seed = SessionManager.create(directory, directory);
++		const cold = seed.appendMessage(userMsg("cold"));
++		const old = seed.appendMessage(userMsg("old"));
++		const kept = seed.appendMessage(userMsg("kept"));
++		const manager = SessionManager.open(seed.getSessionFile()!);
++		const before = manager.getEntry(old);
++		const reused = manager.getEntry(kept);
++		const pending = manager.getBranchAsync(); // begins opening the file for the cold entry
++		manager.appendCompaction("summary", kept, 100);
++		const captured = (await pending).find((entry) => entry.id === cold);
++		expect(captured).toMatchObject({ message: { content: "cold" } });
++		expect(manager.getEntryForScan(cold)).not.toBe(captured);
++		expect(manager.getEntryForScan(old)).not.toBe(before);
++		expect(manager.getEntryForScan(old)).toEqual(before);
++		expect(manager.getEntry(kept)).toBe(reused);
++	});
++
+ 	it("accounts UTF-8 bytes and evicts the least recently used body", () => {
+ 		const seed = SessionManager.create(directory, directory);
+ 		seed.appendMessage(userMsg("start persistence"));

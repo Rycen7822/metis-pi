@@ -90,13 +90,21 @@
     {
       "file": "0022-exercise-read-pages-through-sdk-tool.patch",
       "sha256": "778d163acad5cadf88cf58b8c15dfa2ff8db0fdee261c9c79ae35125c618c366"
+    },
+    {
+      "file": "0023-share-restored-history-and-retire-cold-bodies.patch",
+      "sha256": "ffc23d9139233284b45d657b3afd950c206ee378dfa95d17572b8a67c283fbc9"
+    },
+    {
+      "file": "0024-bound-unknown-tool-previews.patch",
+      "sha256": "1fb70a939a3a879f7725b9a8e389f53e307d1eb7649c531c799f071926fdfa17"
     }
   ],
-  "patchSet": "02de1300f391bc62ce31979a51f1ffe4cdfe2934c190ad9a580f926e04af3dea",
+  "patchSet": "e3c40d3d15477443a95815a9d310b3d4fac876db4eea3749ebed1eebde5ed489",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "dcda03d5f0589f22ccdf3a413d77e89b68bae8a5e4125cb201c9a56494b392a2",
-    "bytes": 6048547,
-    "unpackedBytes": 26792809
+    "sha256": "789e446bdb3f6813a67988b816755e7bbd3ef8094df77358fd89e2f5592e7e5f",
+    "bytes": 6053961,
+    "unpackedBytes": 26807385
   }
 }

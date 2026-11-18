@@ -1,0 +1,82 @@
+diff --git a/packages/coding-agent/src/modes/interactive/components/tool-execution.ts b/packages/coding-agent/src/modes/interactive/components/tool-execution.ts
+index 6d691b4..3051c27 100644
+--- a/packages/coding-agent/src/modes/interactive/components/tool-execution.ts
++++ b/packages/coding-agent/src/modes/interactive/components/tool-execution.ts
+@@ -21,6 +21,7 @@ import { theme } from "../theme/theme.ts";
+ import { keyHint, keyText } from "./keybinding-hints.ts";
+ 
+ const FALLBACK_PREVIEW_LINES = 10;
++const UNKNOWN_TOOL_PREVIEW_CHARS = 4096;
+ 
+ export interface ToolExecutionOptions {
+ 	showImages?: boolean;
+@@ -406,14 +407,21 @@ export class ToolExecutionComponent extends Container {
+ 
+ 	private formatToolExecution(): string {
+ 		let text = theme.fg("toolTitle", theme.bold(this.toolName));
+-		const content = JSON.stringify(this.args, null, 2);
+-		if (content) {
+-			text += `\n\n${content}`;
+-		}
+-		const output = this.getTextOutput();
+-		if (output) {
+-			text += `\n${output}`;
++		const sections = [JSON.stringify(this.args, null, 2), this.getTextOutput()];
++		let truncated = false;
++		for (const [index, section] of sections.entries()) {
++			if (!section) continue;
++			let preview = section;
++			if (!this.expanded) {
++				const lines = section.slice(0, UNKNOWN_TOOL_PREVIEW_CHARS).split("\n", FALLBACK_PREVIEW_LINES + 1);
++				if (section.length > UNKNOWN_TOOL_PREVIEW_CHARS || lines.length > FALLBACK_PREVIEW_LINES) {
++					preview = Buffer.from(lines.slice(0, FALLBACK_PREVIEW_LINES).join("\n"), "utf16le").toString("utf16le");
++					truncated = true;
++				}
++			}
++			text += (index === 0 ? "\n\n" : "\n") + preview;
+ 		}
++		if (truncated) text += "\n" + theme.fg("muted", "… (output abbreviated; expand to view all)");
+ 		return text;
+ 	}
+ }
+diff --git a/packages/coding-agent/test/tool-execution-component.test.ts b/packages/coding-agent/test/tool-execution-component.test.ts
+index f880910..0401e5c 100644
+--- a/packages/coding-agent/test/tool-execution-component.test.ts
++++ b/packages/coding-agent/test/tool-execution-component.test.ts
+@@ -65,6 +65,36 @@ describe("ToolExecutionComponent parity", () => {
+ 		expect(component.render(120).join("\n")).toBe(rendered);
+ 	});
+ 
++	test("bounds unknown tool previews by lines and characters without changing expanded text", () => {
++		const args = { input: `${"a".repeat(20000)}ARG_TAIL` };
++		const component = new ToolExecutionComponent(
++			"unknown",
++			"id",
++			args,
++			{},
++			undefined,
++			createFakeTui(),
++			process.cwd(),
++		);
++		const text = [
++			"START",
++			"b".repeat(20000),
++			...Array.from({ length: 64 }, (_, index) => String(index)),
++			"OUT_TAIL",
++		].join("\n");
++		component.updateResult({ content: [{ type: "text", text }], details: {}, isError: false });
++		const display = () => stripAnsi(component.render(120).join("\n"));
++		expect(display()).toContain("START");
++		expect(display()).not.toContain("ARG_TAIL");
++		expect(display()).not.toContain("OUT_TAIL");
++		expect(component.render(120).length).toBeLessThan(100);
++		component.setExpanded(true);
++		expect(display()).toContain("ARG_TAIL");
++		expect(display()).toContain("OUT_TAIL");
++		component.setExpanded(false);
++		expect(display()).not.toContain("OUT_TAIL");
++	});
++
+ 	test("stacks custom call and result renderers like the old implementation", () => {
+ 		const toolDefinition: ToolDefinition = {
+ 			...createBaseToolDefinition(),
