@@ -35,10 +35,16 @@ async function localManifest(signal: AbortSignal) {
   }
 }
 
+const digest = (parts: readonly unknown[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+
 function scopeOf(credential: Credential | undefined): string | undefined {
   if (credential?.type !== "oauth") return;
-  // An opaque credential change invalidates this cache before network refresh.
-  return createHash("sha256").update(JSON.stringify([credential.access, credential.accountId])).digest("hex");
+  // Mirror the SDK's OAuth binding: reject stale login metadata, and derive the
+  // legacy ID that Pi preserves on the first managed token refresh.
+  const binding = digest([credential.access, credential.refresh]);
+  const session = catalogRecord(credential.authSession), id = session?.id;
+  const verified = typeof id === "string" && id.length > 0 && id.length <= 256 && session?.credentialBinding === binding;
+  return "login:" + digest([verified ? id : "legacy:" + binding, credential.accountId]);
 }
 
 function accountHeaders(credential: OAuthCredential, legacy: boolean): Headers | undefined {
@@ -59,7 +65,7 @@ export function withAccountCatalog(base: Provider, api: ResponsesApi): Provider 
   const fallback = () => base.getAllModels?.() ?? base.getModels();
   let codexVersion: string | undefined;
   let account: AccountCatalog | undefined;
-  const differentAccount = (credential: Credential | undefined) => account && scopeOf(credential) !== account.scope;
+  const hasDifferentScope = (credential: Credential | undefined) => account && scopeOf(credential) !== account.scope;
 
   return {
     ...base,
@@ -67,26 +73,30 @@ export function withAccountCatalog(base: Provider, api: ResponsesApi): Provider 
     getModels: () => account?.models ?? base.getModels(),
     getAllModels: () => account ? [...account.models, ...fallback().filter(model => !isModelType(model, "chat"))] : fallback(),
     filterModels: (models, credential) => {
-      const list = differentAccount(credential) ? base.getModels() : models;
+      const list = hasDifferentScope(credential) ? base.getModels() : models;
       return base.filterModels?.(list, credential) ?? list;
     },
     filterAllModels: (models, credential) => {
-      const list = differentAccount(credential) ? fallback() : models;
+      const list = hasDifferentScope(credential) ? fallback() : models;
       return base.filterAllModels?.(list, credential) ?? list;
     },
     async refreshModels(context) {
-      const { credential, signal } = context;
+      const { signal } = context;
       const stockRoute = context.baseUrl?.replace(/\/$/, "") === baseUrl;
-      const scope = stockRoute ? scopeOf(credential) : undefined;
+      const credential = stockRoute && context.credential?.type === "oauth" ? context.credential : undefined;
+      const scope = scopeOf(credential);
       const cached = catalogRecord(catalogRecord(context.stored)?.metisAccountCatalog);
       let restored = account?.scope === scope ? account : undefined;
-      if (scope && cached?.scope === scope && typeof cached.checkedAt === "number"
+      // Older records still require the original token and account.
+      if (credential && scope && cached
+          && (cached.scope === scope || cached.scope === digest([credential.access, credential.accountId]))
+          && typeof cached.checkedAt === "number"
           && (!restored || cached.checkedAt > restored.checkedAt)
           && Array.isArray(cached.models) && cached.models.every(model => isStoredModel(model, route))) {
         restored = { scope, checkedAt: cached.checkedAt, models: cached.models };
       }
       if (restored !== account && !(await context.publish({ update: () => { account = restored; } }))) return;
-      if (!context.allowNetwork || !scope || credential?.type !== "oauth") {
+      if (!context.allowNetwork || !scope || !credential) {
         await base.refreshModels?.(context);
         return;
       }

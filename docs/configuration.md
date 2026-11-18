@@ -25,7 +25,9 @@ Metis 读取全局的 `<agentDir>/metis-pi.toml`。`agentDir` 默认为 `~/.pi/a
 
 Metis 按当前 ChatGPT OAuth 登录刷新 `openai` 与 `openai-codex` 的账号目录。API key 和自定义地址沿用 Pi 的目录。`openai` 查询 `/v1/models`，`openai-codex` 使用本机 Codex 的版本号查询 Codex 后端；缺少模型参数时，Metis 会尝试用 `codex debug models` 补齐。缺少必需参数的条目不加入目录。
 
-打开 `/model` 会触发查询。使用 Metis 随包 SDK 时，终端命令 `pi update --models` 强制刷新，跳过 60 秒缓存。同步失败时优先使用该登录对应的可用缓存，否则使用 Pi 的目录。
+打开 `/model` 会触发查询。使用 Metis 随包 SDK 时，终端命令 `pi update --models` 强制刷新，跳过 60 秒缓存。
+同步失败时优先使用同一次登录、同一账号和服务地址的缓存，否则使用 Pi 的目录。
+随包 SDK 正常刷新 OAuth 令牌不会使这份缓存失效。旧版缓存仍需匹配原令牌，下次成功查询后会写入新版缓存。
 
 预热在 Pi 的 `settings.json` 设置：`cacheWarming: "idle"`（默认）也可在空闲期预热，最长 30 分钟；`"streaming"` 只在运行中预热；`"off"` 关闭。主会话、BTW 和子代理沿用 Pi 的设置。独立的预热请求不计入[状态栏用量](features/interface.md#统计口径)，费用以提供商记录为准。
 

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { getSupportedThinkingLevels, InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, InMemoryCredentialStore, InMemoryModelsStore, type OAuthCredential } from "@earendil-works/pi-ai";
 import { createAgentSessionServices, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 
@@ -41,8 +42,9 @@ function installFakeCodex(t: TestContext, dir: string, manifest: unknown) {
   });
 }
 
-async function loadExtension(dir: string, credentials: InMemoryCredentialStore, modelsStore: InMemoryModelsStore) {
-  const runtime = await ModelRuntime.create({ modelsPath: null, credentials, modelsStore, refreshOnCreate: false });
+async function loadExtension(dir: string, credentials: InMemoryCredentialStore, modelsStore: InMemoryModelsStore,
+  modelsPath: string | null = null) {
+  const runtime = await ModelRuntime.create({ modelsPath, credentials, modelsStore, refreshOnCreate: false });
   const services = await createAgentSessionServices({
     cwd: dir, agentDir: dir, modelRuntime: runtime, settingsManager: SettingsManager.inMemory({}),
     resourceLoaderOptions: {
@@ -125,6 +127,63 @@ test("the shipped entry refreshes the two OAuth lists and restores the same acco
   assert.deepEqual((await restarted.refresh({ providers: ["openai"] })).errors, new Map());
   assert.match(calls.at(-1) ?? "", /^https:\/\/pi\.dev\//);
   assert.ok((await restarted.getAllAvailable("openai")).some(model => model.type === "classifier"));
+});
+
+test("offline startup can restore the saved model after Pi rotates the OAuth tokens", async t => {
+  const dir = temporaryDirectory(t), credentials = new InMemoryCredentialStore(), store = new InMemoryModelsStore();
+  const provider = "openai", id = visibleSol.slug;
+  const initial = oauth("initial-token");
+  await credentials.modify(provider, async () => initial);
+  const tokens: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: URL, options: RequestInit) => {
+    assert.equal(String(url), openai);
+    const auth = new Headers(options.headers).get("authorization");
+    assert.ok(auth);
+    tokens.push(auth);
+    return auth === "Bearer initial-token" ? Response.json({ models: [visibleSol] }) : new Response(null, { status: 503 });
+  });
+  const runtime = await loadExtension(dir, credentials, store);
+  assert.equal((await runtime.refresh({ providers: [provider] })).errors.size, 0);
+  const model = runtime.getModel(provider, id);
+  assert.ok(model);
+
+  const oldStore = new InMemoryModelsStore();
+  const scope = createHash("sha256").update(JSON.stringify([initial.access, initial.accountId])).digest("hex");
+  const oldEntry = { models: [], metisAccountCatalog: { scope, models: [model], checkedAt: Date.now() } };
+  await oldStore.write(provider, oldEntry);
+  assert.equal((await loadExtension(dir, credentials, oldStore)).getModel(provider, id)?.id, id, "a matching older catalog still opens offline");
+
+  const auth = runtime.getProvider(provider)?.auth.oauth;
+  assert.ok(auth);
+  const rotate = t.mock.method(auth, "refresh", async (credential: OAuthCredential) => ({
+    ...credential, access: "rotated-token", refresh: "rotated-refresh", expires: initial.expires,
+  }));
+  await credentials.modify(provider, async () => ({ ...initial, expires: 0 }));
+  const failed = await runtime.refresh({ providers: [provider], force: true });
+  assert.match(failed.errors.get(provider)?.message ?? "", /HTTP 503/);
+  assert.equal(rotate.mock.callCount(), 1, "refresh runs through Pi's actual credential broker");
+  const cold = await loadExtension(dir, credentials, store);
+  assert.equal(cold.getModel(provider, id)?.id, id, "the resumed session can find its saved model");
+  assert.ok((await cold.getAvailable(provider)).some(model => model.id === id));
+  assert.equal((await loadExtension(dir, credentials, oldStore)).getModel(provider, id), undefined, "unproven legacy cache stays isolated");
+
+  const config = join(dir, "custom-models.json");
+  writeFileSync(config, JSON.stringify({ providers: { openai: { baseUrl: "https://custom.invalid/v1" } } }));
+  assert.equal((await loadExtension(dir, credentials, store, config)).getModel(provider, id), undefined);
+  assert.deepEqual(tokens, ["Bearer initial-token", "Bearer rotated-token"], "offline startup never requests either catalog");
+  const rotated = await credentials.read(provider);
+  assert.ok(rotated?.type === "oauth");
+  for (const unrelated of [{ ...rotated, accountId: "other-account" }, { ...rotated, access: "external-token" }]) {
+    await credentials.modify(provider, async () => unrelated);
+    assert.ok(!(await cold.getAvailable(provider)).some(model => model.id === id));
+  }
+  const login = cold.getProvider(provider)?.auth.oauth;
+  assert.ok(login?.login);
+  t.mock.method(login, "login", async () => rotated);
+  await cold.login(provider, "oauth", { async prompt() { throw new Error("unexpected prompt"); }, notify() {} });
+  assert.ok(!(await cold.getAvailable(provider)).some(model => model.id === id), "a fresh login with identical tokens is still distinct");
+  await cold.refresh({ providers: [provider], allowNetwork: false });
+  assert.equal(cold.getModel(provider, id), undefined);
 });
 
 test("local Codex fills exact-slug fields without extending the account inventory", async t => {
