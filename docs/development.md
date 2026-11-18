@@ -14,7 +14,7 @@ npm run prepare:subagents
 
 | 改动 | 检查 |
 | --- | --- |
-| TypeScript | `npm run check`、`npm run check:test`、`npm run lint:types` |
+| TypeScript 源码、测试或类型配置 | 见[类型检查与类型感知 lint](#类型检查与类型感知-lint) |
 | 测试同步规则 | `npm run lint:tests` |
 | 规则与渲染 | `npm run test:fast`、`npm run test:chrome` |
 | 宿主、包内容与协议 | `npm run test:host`、`npm run test:protocol` |
@@ -32,14 +32,31 @@ PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 
 
 如需查看渲染效果，运行 `npm run preview` 生成 HTML、ANSI 与文本转录。`node scripts/copy-perf.mjs` 测量渲染和提取成本，不测试系统剪贴板。临时探针和日志放在 `.work/`。
 
-### 类型感知 lint
+### 类型检查与类型感知 lint
 
-先运行 `npm run prepare:pi-sdk`，再用 `npm run lint:types` 检查 `src/` 和 `extensions/` 里的 TypeScript。Oxlint 用 `tsrs` 分析类型，检查遗漏处理的 Promise、异步回调误用和无效的 `await`。
-CI 在准备 SDK 后运行这项检查；它不替代 `npm run check` 和 `npm run check:test` 的完整类型检查。
+按页首步骤安装依赖、运行 `npm run prepare:pi-sdk`，再从仓库根目录运行下列命令。
+
+| 什么时候跑 | 命令 | 检查什么 |
+| --- | --- | --- |
+| 修改 TypeScript 源码、公开类型、依赖声明或 `tsconfig` | `npm run check` | 用 `tsc` 检查核心、执行模块、Condense、插件和扩展入口的类型契约。只改 Condense 等单一模块时，可先用 `npm run check:condense` 快速反馈。 |
+| 修改 TypeScript 测试、测试夹具，或改变测试依赖的接口 | `npm run check:test` | 用 `tsc` 检查 `test/**/*.mts`、问卷 Vitest 测试及其夹具；不执行测试。 |
+| 修改 `src/` 或 `extensions/` 的 TypeScript，尤其是 Promise、事件回调或后台任务 | `npm run lint:types` | 用 Oxlint `--type-aware` 和 `tsrs` 检查类型正确但用法容易出错的代码。默认扫这两个目录，不检查 JavaScript。 |
+
+开发中可以先定向检查改过的文件，例如 `npm run lint:types -- extensions/mcp.ts`。CI 会运行全范围 lint；改动跨模块接口时，不要用定向 lint 代替 `npm run check`。
+
+[类型感知规则配置](../.oxlintrc.types.jsonc) 将以下三条规则设为错误：
+
+| 规则 | 拦截什么 | 怎么处理 |
+| --- | --- | --- |
+| `no-floating-promises` | 调用返回 `Promise`，却没有等待、返回或处理拒绝 | `await` 或 `return`，让调用方负责完成与失败；确实要在后台运行时，显式处理拒绝，不要只加 `void` 消警。 |
+| `no-misused-promises` | 把 Promise 当作布尔条件，或把异步函数传给不会等待返回值的回调接口 | 先等待再判断；对事件监听器等同步接口，用同步回调启动任务，并显式处理拒绝。 |
+| `await-thenable` | 对同步返回值等非 thenable 值使用 `await` | 同步操作直接调用；如果本应等待异步工作，检查是否拿错了值或调用了错误的 API。 |
+
+`lint:types` 不启用 `--type-check`，不能代替 `tsc`。本地的 `npm run verify` 包含两项 `tsc` 检查，但不运行 lint；CI 另跑 `lint:types` 和 `lint:tests`。
 
 ### 测试同步规则
 
-CI 用 [Landmines](https://github.com/interfere-inc/landmines) 拦截对 spy 或请求记录的无信号轮询，问卷 Vitest 测试另禁止固定休眠。优先等待操作、回调信号或假时钟。外部进程没有事件时可有界检查就绪条件；真实计时测试可等待时间经过。保留故障超时和协议边界的离线替身。不启用其他上游规则。
+修改测试的等待、轮询或定时逻辑时，运行 `npm run lint:tests`。它不需要类型信息。CI 用 [Landmines](https://github.com/interfere-inc/landmines) 拦截对 spy 或请求记录的无信号轮询，问卷 Vitest 测试另禁止固定休眠。优先等待操作、回调信号或假时钟。外部进程没有事件时可有界检查就绪条件；真实计时测试可等待时间经过。保留故障超时和协议边界的离线替身。不启用其他上游规则。
 
 ## 重建 Pi SDK
 
