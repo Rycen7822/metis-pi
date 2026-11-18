@@ -1,7 +1,7 @@
 {
   "name": "@rycen7822/metis-pi",
-  "version": "0.22.0",
-  "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
+  "version": "0.23.0",
+  "description": "Codex-style terminal UI and workflow extensions for Pi, with context management, tool discovery, and subagents.",
   "type": "module",
   "license": "MIT",
   "repository": {
