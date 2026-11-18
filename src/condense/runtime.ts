@@ -3,7 +3,7 @@ import { estimateTokens, getAgentDir, type ExtensionAPI, type ExtensionContext }
 import { join } from "node:path";
 import { ModelPricing } from "./model-pricing.ts";
 import { priceRefreshMarker } from "./refresh-prices.mjs";
-import { readHistoryEntries, sourceEntryReference, type SessionEntryReference } from "../session-history.ts";
+import { readHistoryEntries, sourceEntryReference } from "../session-history.ts";
 import { customEntries, hasCustomEntryData } from "./custom-entries.ts";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";

@@ -16,7 +16,7 @@ function runEditor(command: string, file: string, signal?: AbortSignal): Promise
 	const [editor, ...args] = command.split(" ");
 	if (!editor) return Promise.reject(new Error("External editor command is empty"));
 
-	return new Promise((resolve, reject) => {
+	return new Promise(resolve => {
 		const child = spawn(editor, [...args, process.platform === "win32" ? `"${file}"` : file], {
 			stdio: "inherit",
 			shell: process.platform === "win32",
@@ -43,20 +43,16 @@ function runEditor(command: string, file: string, signal?: AbortSignal): Promise
 		signal?.addEventListener("abort", abort, { once: true });
 		if (signal?.aborted) abort();
 		child.once("error", (error) => { launchError = error; });
-		child.once("close", async (code, exitSignal) => {
+		child.once("close", (code, exitSignal) => {
 			signal?.removeEventListener("abort", abort);
 			clearTimeout(killTimer);
-			await aborting;
-			if (signal?.aborted || launchError) {
-				reject(signal?.aborted ? signal.reason : launchError);
-				return;
-			}
-			if (code === 0) {
-				resolve();
-				return;
-			}
-			const reason = exitSignal ? `signal ${exitSignal}` : `exit code ${code ?? "unknown"}`;
-			reject(new Error(`External editor exited with ${reason}`));
+			resolve(Promise.resolve(aborting).then(() => {
+				if (signal?.aborted) throw signal.reason;
+				if (launchError) throw launchError;
+				if (code === 0) return;
+				const reason = exitSignal ? `signal ${exitSignal}` : `exit code ${code ?? "unknown"}`;
+				throw new Error(`External editor exited with ${reason}`);
+			}));
 		});
 	});
 }

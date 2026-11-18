@@ -84,6 +84,7 @@ jobs:
       - run: npm run lint:tests
       - name: Prepare the shipped SDK without changing a managed Pi installation
         run: npm run prepare:pi-sdk
+      - run: npm run lint:types
       - name: Cache TypeScript build info
         uses: actions/cache@v4
         with:

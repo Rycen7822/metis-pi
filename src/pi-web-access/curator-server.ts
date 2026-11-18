@@ -322,8 +322,8 @@ export function startCuratorServer(
 		summaryModelError,
 	);
 
-	const server = http.createServer(async (req, res) => {
-		try {
+	const server = http.createServer((req, res) => {
+		(async () => {
 			const method = req.method || "GET";
 			const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
 
@@ -660,10 +660,11 @@ export function startCuratorServer(
 
 			res.writeHead(404, { "Content-Type": "text/plain" });
 			res.end("Not found");
-		} catch (err) {
-			const message = err instanceof Error ? err.message : "Server error";
-			sendJson(res, 500, { ok: false, error: message });
-		}
+		})().catch(err => {
+			const error = err instanceof Error ? err : new Error("Server error");
+			if (res.headersSent) res.destroy(error);
+			else sendJson(res, 500, { ok: false, error: error.message });
+		});
 	});
 
 	return new Promise((resolve, reject) => {

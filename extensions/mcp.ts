@@ -138,7 +138,8 @@ export default function mcp(pi: ExtensionAPI) {
       return names.filter(name => word.startsWith(`${mcpNamespace(name)}__`))
         .sort((left, right) => mcpNamespace(right).length - mcpNamespace(left).length).slice(0, 1);
     }))];
-    await runtime.waitFor(Promise.all(targets.map(name => ready.get(name))), ctx.signal);
+    const pending = targets.map(name => ready.get(name)).filter(promise => promise !== undefined);
+    await runtime.waitFor(Promise.all(pending), ctx.signal);
     sync();
   });
   pi.on("before_agent_start", async (_event, ctx) => {

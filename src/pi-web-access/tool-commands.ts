@@ -242,7 +242,12 @@ export function registerWebSearchCommand(pi: ExtensionAPI, buildSearchReturn: (o
 							}
 						});
 						if (!aborted && isCommandActive()) handle.searchesDone();
-					})();
+					})().catch(err => {
+						if (!isCommandActive()) return;
+						closeCurator(commandCallId);
+						const message = err instanceof Error ? err.message : String(err);
+						ctx.ui.notify(`Curator search failed: ${message}`, "error");
+					});
 				} else {
 					if (isCommandActive()) handle.searchesDone();
 				}

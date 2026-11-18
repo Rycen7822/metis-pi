@@ -1,0 +1,9 @@
+{
+  "categories": { "correctness": "off" },
+  "ignorePatterns": ["**/*.js", "**/*.mjs", "**/*.cjs"],
+  "rules": {
+    "typescript/await-thenable": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error"
+  }
+}
