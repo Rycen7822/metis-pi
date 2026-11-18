@@ -98,13 +98,25 @@
     {
       "file": "0024-bound-unknown-tool-previews.patch",
       "sha256": "1fb70a939a3a879f7725b9a8e389f53e307d1eb7649c531c799f071926fdfa17"
+    },
+    {
+      "file": "0025-scope-session-projection.patch",
+      "sha256": "b1bd7179303acab7a6d47f4ade745d866eafcf697328051116c3ce0ca9c0f665"
+    },
+    {
+      "file": "0026-insert-html-payload-last.patch",
+      "sha256": "ee99ce5d30748593d6973aef010405d166cbbdaecce234fc737b072e1b61d48d"
+    },
+    {
+      "file": "0027-load-resume-search-bodies-on-demand.patch",
+      "sha256": "a6a1b527820b2b1fca9bc63acb6159c441ad6b47e74135f0a24e3ec7b1270c64"
     }
   ],
-  "patchSet": "e3c40d3d15477443a95815a9d310b3d4fac876db4eea3749ebed1eebde5ed489",
+  "patchSet": "570080330f1d3f672db12a8d97938ac3d894d2c6e1d941e7f47052e58e5e81dd",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "789e446bdb3f6813a67988b816755e7bbd3ef8094df77358fd89e2f5592e7e5f",
-    "bytes": 6053961,
-    "unpackedBytes": 26807385
+    "sha256": "a9eb9bc356d08f27e56a468ae3016619eaa3281817afca00fddb35000054166a",
+    "bytes": 6057640,
+    "unpackedBytes": 26825375
   }
 }

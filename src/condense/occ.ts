@@ -81,7 +81,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     catch { /* UI teardown must not affect compaction or goal continuation. */ }
   };
   const persist = () => pi.appendEntry(STATE, { ...state });
-  const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection();
+  const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection({ entries: "message-sources" });
   const visible = (ctx: ExtensionContext) => {
     const projected = projection(ctx);
     const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages,
@@ -227,7 +227,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const source = signature(ctx);
       if ((running || event.reason !== "manual") && state.attemptedSource === source) return reject("same-source");
       const p = event.preparation;
-      const projected = projection(ctx);
+      // Pi can use a non-message entry as the compaction boundary.
+      const projected = ctx.sessionManager.buildSessionProjection();
       const cut = projected.entries.findIndex((e) => e.sourceEntry.id === p.firstKeptEntryId);
       if (cut < 1) return reject("no-safe-boundary");
       const discarded = projected.entries.slice(0, cut);

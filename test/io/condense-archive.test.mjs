@@ -98,7 +98,7 @@ test("cold directory preserves historical refs without retaining or loading payl
   assert.equal(f.indexer.getRecord("reused@5").resultText, second.resultText);
 });
 
-test("live archives release payloads outside the Native window without losing any publication path's recall", async t => {
+test("all archive publication paths preserve original evidence before and after Native compaction", async t => {
   const dir = temporaryDirectory(t, "condense-live-retention-");
   const sm = SessionManager.create(dir, dir), f = queryFixture([], sm);
   const appendEntry = (type, data) => sm.appendCustomEntry(type, data);
@@ -114,20 +114,13 @@ test("live archives release payloads outside the Native window without losing an
     else if (generation === 1) f.indexer.addBatch(batch(call), appendEntry);
     else f.indexer.registerDuplicate("live-2@5", "live-0@3", appendEntry, call);
     const key = `${call.toolCallId}@${call.resultTimestamp}`;
-    const active = [{ role: "toolResult", toolCallId: call.toolCallId, timestamp: call.resultTimestamp }];
-    f.indexer.retainForContext(active);
-    assert.deepEqual(f.indexer.getRecord(key).args, call.args);
-    const warmReads = reads.length;
-    f.indexer.getRecord(key);
-    assert.equal(reads.length, warmReads, "current-window planning must reuse its payload cache");
-    const kept = sm.appendMessage({ role: "user", content: "new window", timestamp: 100 + generation });
-    sm.appendCompaction("old work compacted", kept, 10000);
-    await f.indexer.prepareContext(sm.buildSessionProjection().messages, () => {});
+    const archiveId = sm.getLeafId();
     reads.length = 0;
     assert.deepEqual(f.indexer.getRecord(key).args, call.args);
-    assert.equal(reads.length, 1, "out-of-window recall must load the archived record, not hold its old payload");
-    assert.equal(f.indexer.getRecord(key).resultText, call.resultText);
-    assert.equal(reads.length, 2, "historical recall remains transient after a query");
+    const kept = sm.appendMessage({ role: "user", content: "new window", timestamp: 100 + generation });
+    sm.appendCompaction("old work compacted", kept, 10000);
+    assert.equal((await f.run({ toolCallIds: [key] })).details.results[0].text, call.resultText);
+    assert.deepEqual(reads, [archiveId, archiveId], "before and after compaction, recall reads the original archive");
     assert.equal([...f.indexer.directory()].length, generation + 1);
   }
 });

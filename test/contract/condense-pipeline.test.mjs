@@ -1803,6 +1803,51 @@ test("closed large write arguments become stable historical records with exact r
   assert.match(JSON.stringify(afterEdit), /CORRECTED/);
 });
 
+test("screening already stubbed write groups after recovery does not read their archive bodies", async (t) => {
+  const f = await fixture(t, { mode: "tui" });
+  const args = { path: "large.ts", content: "ORIGINAL_CODE\n".repeat(600) };
+  const assistant = {
+    role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+    content: [{ type: "toolCall", id: "archived-write", name: "write", arguments: args }],
+    stopReason: "toolUse", timestamp: f.nextTimestamp(),
+  };
+  f.sm.appendMessage(assistant);
+  const resultTimestamp = f.nextTimestamp(), resultText = "Successfully wrote file";
+  f.sm.appendMessage({
+    role: "toolResult", toolCallId: "archived-write", toolName: "write", isError: false,
+    content: [{ type: "text", text: resultText }], timestamp: resultTimestamp,
+  });
+  const archiveId = f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{
+    toolCallId: "archived-write", toolName: "write", args, resultText, resultTimestamp,
+    isError: false, turnIndex: 0, timestamp: assistant.timestamp,
+  }] });
+  f.add("Recent evidence stays inline", "echo recent");
+  await f.emit("session_start");
+
+  const getEntry = f.sm.getEntryForScan.bind(f.sm);
+  let archiveReads = 0;
+  t.mock.method(f.sm, "getEntryForScan", (id) => {
+    if (id === archiveId) archiveReads++;
+    return getEntry(id);
+  });
+  const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+  const stub = projected.find((message) => message.toolCallId === "archived-write");
+  assert.match(stub.content[0].text, /recover|retrieve/i);
+  assert.notEqual(stub.content[0].text, resultText);
+  archiveReads = 0;
+  await f.finish(false);
+  await f.finish(false);
+  assert.equal(f.sm.getBranchMetadata().filter((entry) => entry.customType === "context-prune-arguments").length, 0);
+  assert.equal(archiveReads, 0, "screening a rejected rewrite must not decode the archived body");
+
+  const query = f.tools.get("context_tree_query");
+  const recall = await query.execute("exact", {
+    toolCallIds: [`archived-write@${resultTimestamp}`], component: "arguments",
+  }, undefined, undefined, f.ctx);
+  assert.deepEqual(JSON.parse(recall.details.results[0].text), args);
+  assert.ok(archiveReads > 0, "explicit recall still reads the archived arguments");
+});
+
 for (const kind of ["failed", "protected", "mixed", "recent", "fusion-failed"]) {
   test(`argument compaction keeps ${kind} tool groups verbatim`, async (t) => {
     const f = await fixture(t);

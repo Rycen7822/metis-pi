@@ -1,0 +1,646 @@
+diff --git a/packages/coding-agent/src/cli/session-picker.ts b/packages/coding-agent/src/cli/session-picker.ts
+index 268a28c..1261045 100644
+--- a/packages/coding-agent/src/cli/session-picker.ts
++++ b/packages/coding-agent/src/cli/session-picker.ts
+@@ -4,17 +4,15 @@
+ 
+ import { setKeybindings } from "@earendil-works/pi-tui";
+ import { KeybindingsManager } from "../core/keybindings.ts";
+-import type { SessionInfo, SessionListProgress } from "../core/session-manager.ts";
++import { SessionManager } from "../core/session-manager.ts";
+ import type { SettingsManager } from "../core/settings-manager.ts";
+ import { SessionSelectorComponent } from "../modes/interactive/components/session-selector.ts";
+ import { createStartupTui, startStartupTui } from "./startup-ui.ts";
+ 
+-type SessionsLoader = (onProgress?: SessionListProgress, signal?: AbortSignal) => Promise<SessionInfo[]>;
+-
+ /** Show TUI session selector and return selected session path or null if cancelled */
+ export async function selectSession(
+-	currentSessionsLoader: SessionsLoader,
+-	allSessionsLoader: SessionsLoader,
++	cwd: string,
++	sessionDir: string | undefined,
+ 	settingsManager: SettingsManager,
+ ): Promise<string | null> {
+ 	const ui = await createStartupTui(settingsManager);
+@@ -23,9 +21,10 @@ export async function selectSession(
+ 		setKeybindings(keybindings);
+ 		let resolved = false;
+ 
++		const listOptions = { includeMessageText: false };
+ 		const selector = new SessionSelectorComponent(
+-			currentSessionsLoader,
+-			allSessionsLoader,
++			(onProgress, signal) => SessionManager.list(cwd, sessionDir, onProgress, signal, listOptions),
++			(onProgress, signal) => SessionManager.listAll(sessionDir, onProgress, signal, listOptions),
+ 			(path: string) => {
+ 				if (!resolved) {
+ 					resolved = true;
+@@ -45,7 +44,7 @@ export async function selectSession(
+ 				process.exit(0);
+ 			},
+ 			() => ui.requestRender(),
+-			{ showRenameHint: false, keybindings },
++			{ showRenameHint: false, keybindings, readSearchText: SessionManager.readSearchText },
+ 		);
+ 
+ 		ui.addChild(selector);
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 58859b6..0e15aef 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -617,11 +617,18 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined
+ 	return Number.isNaN(t) ? undefined : t;
+ }
+ 
++interface SessionListOptions {
++	/** Keep the first user message for the preview, without retaining the complete search text. */
++	includeMessageText?: boolean;
++}
++
+ async function buildSessionInfo(
+ 	filePath: string,
+ 	signal?: AbortSignal,
+ 	fileStats?: Stats,
++	includeMessageText = true,
+ ): Promise<SessionInfo | null> {
++	let input: ReturnType<typeof createReadStream> | undefined;
+ 	try {
+ 		const stats = fileStats ?? (await stat(filePath));
+ 		let header: SessionHeader | null = null;
+@@ -631,10 +638,8 @@ async function buildSessionInfo(
+ 		let name: string | undefined;
+ 		let lastActivityTime: number | undefined;
+ 
+-		const rl = createInterface({
+-			input: createReadStream(filePath, { encoding: "utf8", signal }),
+-			crlfDelay: Infinity,
+-		});
++		input = createReadStream(filePath, { encoding: "utf8", signal });
++		const rl = createInterface({ input, crlfDelay: Infinity });
+ 
+ 		for await (const line of rl) {
+ 			const entry = parseSessionEntryLine(line);
+@@ -662,11 +667,12 @@ async function buildSessionInfo(
+ 			const message = entry.message;
+ 			if (!isMessageWithContent(message)) continue;
+ 			if (message.role !== "user" && message.role !== "assistant") continue;
++			if (!includeMessageText && (firstMessage || message.role !== "user")) continue;
+ 
+ 			const textContent = extractTextContent(message);
+ 			if (!textContent) continue;
+ 
+-			allMessages.push(textContent);
++			if (includeMessageText) allMessages.push(textContent);
+ 			if (!firstMessage && message.role === "user") {
+ 				firstMessage = textContent;
+ 			}
+@@ -699,6 +705,8 @@ async function buildSessionInfo(
+ 	} catch {
+ 		signal?.throwIfAborted();
+ 		return null;
++	} finally {
++		input?.destroy();
+ 	}
+ }
+ 
+@@ -746,12 +754,13 @@ function buildSessionInfosWithConcurrency(
+ 	files: SessionFileCandidate[],
+ 	onLoaded: (info: SessionInfo | null, index: number) => void,
+ 	signal?: AbortSignal,
++	options?: SessionListOptions,
+ ): Promise<(SessionInfo | null)[]> {
+ 	return mapWithConcurrency(
+ 		files,
+ 		MAX_CONCURRENT_SESSION_INFO_LOADS,
+ 		async (file, index) => {
+-			const info = await buildSessionInfo(file.path, signal, file.stats);
++			const info = await buildSessionInfo(file.path, signal, file.stats, options?.includeMessageText);
+ 			onLoaded(info, index);
+ 			return info;
+ 		},
+@@ -763,6 +772,7 @@ async function listSessionsFromDir(
+ 	dir: string,
+ 	onProgress?: SessionListProgress,
+ 	signal?: AbortSignal,
++	options?: SessionListOptions,
+ ): Promise<SessionInfo[]> {
+ 	signal?.throwIfAborted();
+ 	if (!existsSync(dir)) return [];
+@@ -786,6 +796,7 @@ async function listSessionsFromDir(
+ 				onProgress?.(loaded, total, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+ 			},
+ 			signal,
++			options,
+ 		);
+ 		return results.filter((info): info is SessionInfo => info !== null);
+ 	} catch {
+@@ -1877,6 +1888,12 @@ export class SessionManager {
+ 		return undefined;
+ 	}
+ 
++	/** Read the same searchable message text as list(), without retaining a directory of session bodies. */
++	static async readSearchText(filePath: string, signal: AbortSignal): Promise<string | undefined> {
++		signal.throwIfAborted();
++		return (await buildSessionInfo(filePath, signal))?.allMessagesText;
++	}
++
+ 	/**
+ 	 * List all sessions for a directory.
+ 	 * @param cwd Working directory (used to compute default session directory)
+@@ -1888,6 +1905,7 @@ export class SessionManager {
+ 		sessionDir?: string,
+ 		onProgress?: SessionListProgress,
+ 		signal?: AbortSignal,
++		options?: SessionListOptions,
+ 	): Promise<SessionInfo[]> {
+ 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
+ 		const filterCwd = sessionDir !== undefined && !pathsEqual(dir, getDefaultSessionDirPath(cwd));
+@@ -1896,7 +1914,7 @@ export class SessionManager {
+ 		const progress: SessionListProgress | undefined = onProgress
+ 			? (loaded, total, partialSessions) => onProgress(loaded, total, partialSessions?.filter(includeSession))
+ 			: undefined;
+-		const sessions = (await listSessionsFromDir(dir, progress, signal)).filter(includeSession);
++		const sessions = (await listSessionsFromDir(dir, progress, signal, options)).filter(includeSession);
+ 		return sortSessionInfos(sessions);
+ 	}
+ 
+@@ -1909,11 +1927,13 @@ export class SessionManager {
+ 		sessionDir?: string,
+ 		onProgress?: SessionListProgress,
+ 		signal?: AbortSignal,
++		options?: SessionListOptions,
+ 	): Promise<SessionInfo[]>;
+ 	static async listAll(
+ 		sessionDirOrOnProgress?: string | SessionListProgress,
+ 		onProgressOrSignal?: SessionListProgress | AbortSignal,
+ 		signal?: AbortSignal,
++		options?: SessionListOptions,
+ 	): Promise<SessionInfo[]> {
+ 		const customSessionDir =
+ 			typeof sessionDirOrOnProgress === "string" ? normalizePath(sessionDirOrOnProgress) : undefined;
+@@ -1929,7 +1949,7 @@ export class SessionManager {
+ 				: (onProgressOrSignal ?? signal);
+ 		abortSignal?.throwIfAborted();
+ 		if (customSessionDir) {
+-			return sortSessionInfos(await listSessionsFromDir(customSessionDir, progress, abortSignal));
++			return sortSessionInfos(await listSessionsFromDir(customSessionDir, progress, abortSignal, options));
+ 		}
+ 
+ 		const sessionsDir = getSessionsDir();
+@@ -1988,6 +2008,7 @@ export class SessionManager {
+ 					progress?.(loaded, totalFiles, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+ 				},
+ 				abortSignal,
++				options,
+ 			);
+ 
+ 			return sortSessionInfos(results.filter((info): info is SessionInfo => info !== null));
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 04a0a77..06893a1 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -461,11 +461,7 @@ export async function createSessionManager(
+ 
+ 	if (parsed.resume) {
+ 		try {
+-			const selectedPath = await selectSession(
+-				(onProgress, signal) => SessionManager.list(cwd, sessionDir, onProgress, signal),
+-				(onProgress, signal) => SessionManager.listAll(sessionDir, onProgress, signal),
+-				settingsManager,
+-			);
++			const selectedPath = await selectSession(cwd, sessionDir, settingsManager);
+ 			if (!selectedPath) {
+ 				console.log(chalk.dim("No session selected"));
+ 				process.exit(0);
+diff --git a/packages/coding-agent/src/modes/interactive/components/session-selector-search.ts b/packages/coding-agent/src/modes/interactive/components/session-selector-search.ts
+index 5b3317f..138a3a8 100644
+--- a/packages/coding-agent/src/modes/interactive/components/session-selector-search.ts
++++ b/packages/coding-agent/src/modes/interactive/components/session-selector-search.ts
+@@ -233,28 +233,43 @@ export function filterAndSortSessions(
+ 	const parsed = parseSearchQuery(query);
+ 	if (parsed.error) return [];
+ 
+-	// Recent mode: filter only, keep incoming order.
+-	if (sortMode === "recent") {
+-		const filtered: SessionInfo[] = [];
+-		for (const s of nameFiltered) {
+-			const res = matchSession(s, parsed);
+-			if (res.matches) filtered.push(s);
+-		}
+-		return filtered;
++	const scored: ScoredSession[] = [];
++	for (const session of nameFiltered) {
++		const result = matchSession(session, parsed);
++		if (result.matches) scored.push({ session, score: result.score });
+ 	}
++	return orderMatches(scored, sortMode);
++}
+ 
+-	// Relevance mode: sort by score, tie-break by modified desc.
+-	const scored: { session: SessionInfo; score: number }[] = [];
+-	for (const s of nameFiltered) {
+-		const res = matchSession(s, parsed);
+-		if (!res.matches) continue;
+-		scored.push({ session: s, score: res.score });
+-	}
++export type SessionSearchReader = (path: string, signal: AbortSignal) => Promise<string | undefined>;
+ 
+-	scored.sort((a, b) => {
+-		if (a.score !== b.score) return a.score - b.score;
+-		return b.session.modified.getTime() - a.session.modified.getTime();
+-	});
++type ScoredSession = { session: SessionInfo; score: number };
++
++function orderMatches(scored: ScoredSession[], sortMode: SortMode): SessionInfo[] {
++	if (sortMode !== "recent") {
++		scored.sort((a, b) => a.score - b.score || b.session.modified.getTime() - a.session.modified.getTime());
++	}
++	return scored.map(({ session }) => session);
++}
+ 
+-	return scored.map((r) => r.session);
++/** Score one complete session at a time. Return the original previews, never the temporary bodies. */
++export async function searchSessionFiles(
++	sessions: SessionInfo[],
++	query: string,
++	sortMode: SortMode,
++	readText: SessionSearchReader,
++	signal: AbortSignal,
++): Promise<SessionInfo[]> {
++	const parsed = parseSearchQuery(query);
++	if (parsed.error) return [];
++	const scored: ScoredSession[] = [];
++	for (const session of sessions) {
++		signal.throwIfAborted();
++		const allMessagesText = await readText(session.path, signal);
++		signal.throwIfAborted();
++		if (allMessagesText === undefined) continue;
++		const result = matchSession({ ...session, allMessagesText }, parsed);
++		if (result.matches) scored.push({ session, score: result.score });
++	}
++	return orderMatches(scored, sortMode);
+ }
+diff --git a/packages/coding-agent/src/modes/interactive/components/session-selector.ts b/packages/coding-agent/src/modes/interactive/components/session-selector.ts
+index 4d6d6c0..41fc209 100644
+--- a/packages/coding-agent/src/modes/interactive/components/session-selector.ts
++++ b/packages/coding-agent/src/modes/interactive/components/session-selector.ts
+@@ -18,7 +18,14 @@ import { canonicalizePath, getPathComparisonKey, shortenHomePath } from "../../.
+ import { theme } from "../theme/theme.ts";
+ import { DynamicBorder } from "./dynamic-border.ts";
+ import { keyHint, keyText } from "./keybinding-hints.ts";
+-import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
++import {
++	filterAndSortSessions,
++	hasSessionName,
++	type NameFilter,
++	type SessionSearchReader,
++	type SortMode,
++	searchSessionFiles,
++} from "./session-selector-search.ts";
+ 
+ type SessionScope = "current" | "all";
+ 
+@@ -267,6 +274,13 @@ function flattenSessionTree(roots: SessionTreeNode[]): FlatSessionNode[] {
+ 	return result;
+ }
+ 
++interface SessionSearch {
++	controller: AbortController;
++	sessions: SessionInfo[];
++	query: string;
++	selectedPath?: string;
++}
++
+ /**
+  * Custom session list component with multi-line items and search
+  */
+@@ -280,6 +294,10 @@ class SessionList implements Component, Focusable {
+ 	private selectedIndex: number = 0;
+ 	private selectionTouched = false;
+ 	private searchInput: Input;
++	private search?: SessionSearch;
++	private searchRunning = false;
++	private sessionsComplete = false;
++	private readSearchText?: SessionSearchReader;
+ 	private showCwd = false;
+ 	private sortMode: SortMode = "threaded";
+ 	private nameFilter: NameFilter = "all";
+@@ -298,6 +316,7 @@ class SessionList implements Component, Focusable {
+ 	public onDeleteSession?: (sessionPath: string) => Promise<void>;
+ 	public onRenameSession?: (sessionPath: string) => void;
+ 	public onError?: (message: string) => void;
++	public onSearchUpdate?: () => void;
+ 	private maxVisible: number = 10; // Max sessions visible (one line each)
+ 
+ 	// Focusable implementation - propagate to searchInput for IME cursor positioning
+@@ -317,7 +336,9 @@ class SessionList implements Component, Focusable {
+ 		nameFilter: NameFilter,
+ 		keybindings: KeybindingsManager,
+ 		currentSessionFilePath?: string,
++		readSearchText?: SessionSearchReader,
+ 	) {
++		this.readSearchText = readSearchText;
+ 		this.allSessions = sessions;
+ 		this.filteredSessions = [];
+ 		this.searchInput = new Input();
+@@ -349,39 +370,87 @@ class SessionList implements Component, Focusable {
+ 		this.filterSessions(this.searchInput.getValue());
+ 	}
+ 
+-	setSessions(sessions: SessionInfo[], showCwd: boolean): void {
++	setSessions(sessions: SessionInfo[], showCwd: boolean, complete = true): void {
+ 		const selectedPath = this.selectionTouched ? this.getSelectedSessionPath() : undefined;
+ 		this.allSessions = sessions;
+ 		this.showCwd = showCwd;
+-		this.filterSessions(this.searchInput.getValue());
+-		if (!this.selectionTouched) {
+-			this.selectedIndex = 0;
+-		} else if (selectedPath) {
+-			const selectedIndex = this.filteredSessions.findIndex((node) => node.session.path === selectedPath);
+-			if (selectedIndex >= 0) this.selectedIndex = selectedIndex;
+-		}
++		this.sessionsComplete = complete;
++		if (!this.selectionTouched) this.selectedIndex = 0;
++		this.filterSessions(this.searchInput.getValue(), selectedPath);
++	}
++
++	cancelSearch(): void {
++		this.search?.controller.abort();
++		this.search = undefined;
+ 	}
+ 
+-	private filterSessions(query: string): void {
++	private filterSessions(query: string, selectedPath?: string): void {
++		this.cancelSearch();
+ 		const trimmed = query.trim();
+ 		const nameFiltered =
+ 			this.nameFilter === "all" ? this.allSessions : this.allSessions.filter((session) => hasSessionName(session));
+ 
++		if (trimmed && this.readSearchText) {
++			// Don't allow selection from a previous query or scope while scanning.
++			this.filteredSessions = [];
++			if (!this.sessionsComplete || !nameFiltered.length) return;
++			this.search = { controller: new AbortController(), sessions: nameFiltered, query: trimmed, selectedPath };
++			if (!this.searchRunning) void this.runSearch(this.readSearchText);
++			return;
++		}
++
+ 		if (this.sortMode === "threaded" && !trimmed) {
+-			// Threaded mode without search: show tree structure
+-			const roots = buildSessionTree(nameFiltered);
+-			this.filteredSessions = flattenSessionTree(roots);
++			this.filteredSessions = flattenSessionTree(buildSessionTree(nameFiltered));
+ 		} else {
+-			// Other modes or with search: flat list
+-			const filtered = filterAndSortSessions(nameFiltered, query, this.sortMode, "all");
+-			this.filteredSessions = filtered.map((session) => ({
+-				session,
+-				depth: 0,
+-				isLast: true,
+-				ancestorContinues: [],
+-			}));
++			this.setFlatResults(filterAndSortSessions(nameFiltered, query, this.sortMode));
+ 		}
+-		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1));
++		this.updateSelection(selectedPath);
++	}
++
++	private async runSearch(readText: SessionSearchReader): Promise<void> {
++		// Finish closing the previous reader before opening one for the latest query.
++		this.searchRunning = true;
++		try {
++			while (this.search) {
++				const request = this.search;
++				try {
++					const results = await searchSessionFiles(
++						request.sessions,
++						request.query,
++						this.sortMode,
++						readText,
++						request.controller.signal,
++					);
++					if (this.search !== request) continue;
++					this.setFlatResults(results);
++					this.updateSelection(request.selectedPath);
++				} catch (error) {
++					if (this.search !== request) continue;
++					this.onError?.(error instanceof Error ? error.message : String(error));
++				}
++				this.search = undefined;
++				this.onSearchUpdate?.();
++			}
++		} finally {
++			this.searchRunning = false;
++		}
++	}
++
++	private setFlatResults(sessions: SessionInfo[]): void {
++		this.filteredSessions = sessions.map((session) => ({ session, depth: 0, isLast: true, ancestorContinues: [] }));
++	}
++
++	private updateSelection(selectedPath?: string): void {
++		const index = selectedPath ? this.filteredSessions.findIndex(({ session }) => session.path === selectedPath) : -1;
++		this.selectedIndex =
++			index >= 0 ? index : Math.max(0, Math.min(this.selectedIndex, this.filteredSessions.length - 1));
++	}
++
++	private handleSearchInput(data: string): void {
++		const previous = this.searchInput.getValue();
++		this.searchInput.handleInput(data);
++		const query = this.searchInput.getValue();
++		if (query !== previous) this.filterSessions(query);
+ 	}
+ 
+ 	private setConfirmingDeletePath(path: string | null): void {
+@@ -418,7 +487,11 @@ class SessionList implements Component, Focusable {
+ 
+ 		if (this.filteredSessions.length === 0) {
+ 			let emptyMessage: string;
+-			if (this.nameFilter === "named") {
++			if (this.search) {
++				emptyMessage = "  Searching session messages…";
++			} else if (!this.sessionsComplete && this.searchInput.getValue().trim()) {
++				emptyMessage = "  Waiting for the session list…";
++			} else if (this.nameFilter === "named") {
+ 				const toggleKey = keyText("app.session.toggleNamedFilter");
+ 				if (this.showCwd) {
+ 					emptyMessage = `  No named sessions found. Press ${toggleKey} to show all.`;
+@@ -589,8 +662,7 @@ class SessionList implements Component, Focusable {
+ 		// Only triggers deletion when the query is empty; otherwise it is forwarded to the input
+ 		if (kb.matches(keyData, "app.session.deleteNoninvasive")) {
+ 			if (this.searchInput.getValue().length > 0) {
+-				this.searchInput.handleInput(keyData);
+-				this.filterSessions(this.searchInput.getValue());
++				this.handleSearchInput(keyData);
+ 				return;
+ 			}
+ 
+@@ -630,8 +702,7 @@ class SessionList implements Component, Focusable {
+ 		}
+ 		// Pass everything else to search input
+ 		else {
+-			this.searchInput.handleInput(keyData);
+-			this.filterSessions(this.searchInput.getValue());
++			this.handleSearchInput(keyData);
+ 		}
+ 	}
+ }
+@@ -759,6 +830,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
+ 			renameSession?: (sessionPath: string, currentName: string | undefined) => Promise<void>;
+ 			showRenameHint?: boolean;
+ 			keybindings?: KeybindingsManager;
++			readSearchText?: SessionSearchReader;
+ 		},
+ 		currentSessionFilePath?: string,
+ 	) {
+@@ -781,7 +853,9 @@ export class SessionSelectorComponent extends Container implements Focusable {
+ 			this.nameFilter,
+ 			this.keybindings,
+ 			currentSessionFilePath,
++			options?.readSearchText,
+ 		);
++		this.sessionList.onSearchUpdate = requestRender;
+ 
+ 		this.buildBaseLayout(this.sessionList);
+ 
+@@ -864,6 +938,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
+ 	}
+ 
+ 	private cancelLoads(): void {
++		this.sessionList.cancelSearch();
+ 		if (this.currentLoad) {
+ 			this.currentLoad.abort();
+ 			this.currentLoad = null;
+@@ -956,7 +1031,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
+ 				} else {
+ 					this.allSessions = sessions;
+ 				}
+-				if (scope === this.scope) this.sessionList.setSessions(sessions, showCwd);
++				if (scope === this.scope) this.sessionList.setSessions(sessions, showCwd, false);
+ 			}
+ 			if (scope !== this.scope) return;
+ 			this.header.setProgress(loaded, total);
+@@ -1028,7 +1103,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
+ 		const loading = (this.scope === "current" ? this.currentLoad : this.allLoad) !== null;
+ 		this.header.setScope(this.scope);
+ 		this.header.setLoading(loading);
+-		this.sessionList.setSessions(sessions ?? [], this.scope === "all");
++		this.sessionList.setSessions(sessions ?? [], this.scope === "all", !loading && sessions !== null);
+ 		this.requestRender();
+ 		if (sessions === null && !loading) void this.loadScope(this.scope);
+ 	}
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 30c3dd7..f79e498 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -5911,6 +5911,7 @@ export class InteractiveMode {
+ 
+ 	private showSessionSelector(): void {
+ 		this.showSelector((done) => {
++			const listOptions = { includeMessageText: false };
+ 			const selector = new SessionSelectorComponent(
+ 				(onProgress, signal) =>
+ 					SessionManager.list(
+@@ -5918,11 +5919,15 @@ export class InteractiveMode {
+ 						this.sessionManager.getSessionDir(),
+ 						onProgress,
+ 						signal,
++						listOptions,
+ 					),
+ 				(onProgress, signal) =>
+-					this.sessionManager.usesDefaultSessionDir()
+-						? SessionManager.listAll(onProgress, signal)
+-						: SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress, signal),
++					SessionManager.listAll(
++						this.sessionManager.usesDefaultSessionDir() ? undefined : this.sessionManager.getSessionDir(),
++						onProgress,
++						signal,
++						listOptions,
++					),
+ 				async (sessionPath) => {
+ 					done();
+ 					await this.handleResumeSession(sessionPath);
+@@ -5944,6 +5949,7 @@ export class InteractiveMode {
+ 					},
+ 					showRenameHint: true,
+ 					keybindings: this.keybindings,
++					readSearchText: SessionManager.readSearchText,
+ 				},
+ 
+ 				this.sessionManager.getSessionFile(),
+diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
+index 3974e5a..d005a85 100644
+--- a/packages/coding-agent/test/session-manager/file-operations.test.ts
++++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
+@@ -430,6 +430,22 @@ describe("SessionManager custom flat session directory", () => {
+ 		expect(continuedA.getSessionFile()).toBe(sessionA);
+ 	});
+ 
++	it("lists previews without retaining message bodies, but reads the original searchable text on demand", async () => {
++		const file = createPersistedSession(projectA, "from A");
++		const [preview] = await SessionManager.list(projectA, tempDir, undefined, undefined, {
++			includeMessageText: false,
++		});
++		const [full] = await SessionManager.list(projectA, tempDir);
++		expect(preview).toEqual({ ...full, path: file, firstMessage: "from A", allMessagesText: "" });
++		expect(full?.allMessagesText).toBe("from A reply to from A");
++		const controller = new AbortController();
++		await expect(SessionManager.readSearchText(file, controller.signal)).resolves.toBe("from A reply to from A");
++
++		const reading = SessionManager.readSearchText(file, controller.signal);
++		controller.abort();
++		await expect(reading).rejects.toMatchObject({ name: "AbortError" });
++	});
++
+ 	it("rejects a cancelled session listing", async () => {
+ 		createPersistedSession(projectA, "from A");
+ 		createPersistedSession(projectB, "from B");
+diff --git a/packages/coding-agent/test/session-selector-rename.test.ts b/packages/coding-agent/test/session-selector-rename.test.ts
+index d535496..4340c57 100644
+--- a/packages/coding-agent/test/session-selector-rename.test.ts
++++ b/packages/coding-agent/test/session-selector-rename.test.ts
+@@ -76,6 +76,43 @@ describe("session selector rename", () => {
+ 		expect(output).not.toContain("rename");
+ 	});
+ 
++	it("only lets the latest search select a session, after the previous reader has closed", async () => {
++		const current = makeSession({ id: "current", allMessagesText: "" });
++		const global = makeSession({ id: "global", allMessagesText: "" });
++		const selection = vi.fn();
++		let releaseCurrent!: (text: string) => void;
++		const currentRead = new Promise<string>((resolve) => {
++			releaseCurrent = resolve;
++		});
++		const readText = vi.fn((path: string, _signal: AbortSignal) =>
++			path === current.path ? currentRead : Promise.resolve("some rare\n phrase"),
++		);
++		const selector = new SessionSelectorComponent(
++			async () => [current],
++			async () => [global],
++			selection,
++			() => {},
++			() => {},
++			() => {},
++			{ readSearchText: readText },
++		);
++		await flushPromises();
++
++		selector.handleInput('\x1b[200~"rare phrase"\x1b[201~');
++		await vi.waitFor(() => expect(readText).toHaveBeenCalledWith(current.path, expect.any(AbortSignal)));
++		selector.handleInput("\t");
++		await flushPromises();
++		expect(readText.mock.calls[0]?.[1].aborted).toBe(true);
++		expect(readText).toHaveBeenCalledTimes(1);
++		selector.handleInput("\r");
++		expect(selection).not.toHaveBeenCalled();
++
++		releaseCurrent("old rare phrase");
++		await vi.waitFor(() => expect(selector.getSessionList().getSelectedSessionPath()).toBe(global.path));
++		selector.handleInput("\r");
++		expect(selection.mock.calls).toEqual([[global.path]]);
++	});
++
+ 	it("enters rename mode on Ctrl+R and submits with Enter", async () => {
+ 		const sessions = [makeSession({ id: "a", name: "Old" })];
+ 		const renameSession = vi.fn(async () => {});
