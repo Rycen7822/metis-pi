@@ -102,13 +102,17 @@
     {
       "file": "0025-scope-session-projection.patch",
       "sha256": "b1bd7179303acab7a6d47f4ade745d866eafcf697328051116c3ce0ca9c0f665"
+    },
+    {
+      "file": "0026-insert-html-payload-last.patch",
+      "sha256": "ee99ce5d30748593d6973aef010405d166cbbdaecce234fc737b072e1b61d48d"
     }
   ],
-  "patchSet": "41cdad21051c792195106198f3a07c0c56938683d48f5478cfc034ac4f8a73b2",
+  "patchSet": "59a57bbb5083e642eda0a9cd079eb662675e3230a3a1ed988af0de6f341013c3",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "a91a1fe5792e634862b62e68895531948a6d555f7cc998487a30a8550d0119fb",
-    "bytes": 6055258,
-    "unpackedBytes": 26809868
+    "sha256": "8d5bd863f3fc4e38f696e1097dda6bf8c41a3c7e8f030a9dfef94f4bebce30b8",
+    "bytes": 6055084,
+    "unpackedBytes": 26810050
   }
 }
