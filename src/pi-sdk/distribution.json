@@ -110,13 +110,17 @@
     {
       "file": "0027-load-resume-search-bodies-on-demand.patch",
       "sha256": "a6a1b527820b2b1fca9bc63acb6159c441ad6b47e74135f0a24e3ec7b1270c64"
+    },
+    {
+      "file": "0028-reuse-stable-streaming-markdown.patch",
+      "sha256": "ed376b9636e13365d914d802b8e02ef0292285616747011f316932e16400752a"
     }
   ],
-  "patchSet": "570080330f1d3f672db12a8d97938ac3d894d2c6e1d941e7f47052e58e5e81dd",
+  "patchSet": "49c25ba7b02ad940a99ced40b560ef3cbf4724931776fe52a6c92a147bc819ea",
   "archive": {
     "file": "pi-1.5.2.tgz",
-    "sha256": "a9eb9bc356d08f27e56a468ae3016619eaa3281817afca00fddb35000054166a",
-    "bytes": 6057640,
-    "unpackedBytes": 26825375
+    "sha256": "6fa34805e0f8259043750ce803f20b223df96e38c4fb8f372de1cd07a5d4e9ef",
+    "bytes": 6059567,
+    "unpackedBytes": 26829003
   }
 }
