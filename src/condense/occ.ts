@@ -227,7 +227,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const source = signature(ctx);
       if ((running || event.reason !== "manual") && state.attemptedSource === source) return reject("same-source");
       const p = event.preparation;
-      const projected = projection(ctx);
+      // Pi can use a non-message entry as the compaction boundary.
+      const projected = ctx.sessionManager.buildSessionProjection();
       const cut = projected.entries.findIndex((e) => e.sourceEntry.id === p.firstKeptEntryId);
       if (cut < 1) return reject("no-safe-boundary");
       const discarded = projected.entries.slice(0, cut);
