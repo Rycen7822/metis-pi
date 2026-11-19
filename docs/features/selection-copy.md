@@ -9,6 +9,8 @@
 | 剪贴板写入失败 | 保留选区与草稿。 |
 | 表格、图片或无法匹配原文的行 | 交给 Pi 提取显示文本；可能保留屏幕换行。 |
 
+正文流式输出时，精确复制所需的文字映射按需生成，不必等待回复结束再复制。
+
 用 `[appearance.selectionCopy]` 中的 `enabled` 控制逻辑提取，`ctrlC` 控制快捷键。`/codex-ui` 报告 `exact`、`mixed` 或 `native-fallback`，见[诊断](../diagnostics.md)。
 
 ## 删除输入框选区

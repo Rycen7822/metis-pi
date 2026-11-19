@@ -1,7 +1,7 @@
 import { Box, Container, getKeybindings, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { AltScreenLike } from "../../selection-copy/index.ts";
 import type { LayoutBoxLike } from "../../selection-copy/serialize.ts";
-import { productFor, publishRows, registerProduct, type CopyProduct } from "../../selection-copy/model.ts";
+import { copySourceFor, publishRows, registerProduct, type CopyProduct } from "../../selection-copy/model.ts";
 import { wrapBoxPrototype, wrapContainerPrototype } from "../../selection-copy/structure.ts";
 
 interface VisualLine { logicalLine: number; startCol: number; length: number; }
@@ -112,10 +112,10 @@ export class EditorSelection {
       const row = this.resolveRow(child, point);
       if (row) return row;
     }
-    let product = productFor(box.lines);
+    let product = copySourceFor(box.lines);
     let row = point.row - box.rect.y + (box.lineOffset ?? 0), left = box.rect.x;
     const visited = new Set<CopyProduct>();
-    while (product && !visited.has(product)) {
+    while (product && !("resolve" in product) && !visited.has(product)) {
       visited.add(product);
       const frame = this.frames.get(product);
       if (frame) {

@@ -5,8 +5,7 @@
 // line (with the wrapper's bridge whitespace), hard line breaks otherwise,
 // native per-row extraction for anything unmapped.
 
-import { productFor } from "./model.ts";
-import type { CopyProduct, CopyRow } from "./model.ts";
+import { productFor, resolveCopyProduct, type CopyRow } from "./model.ts";
 
 export interface LayoutRect {
   x: number;
@@ -204,17 +203,15 @@ export class SelectionSerializer {
   }
 
   #resolveProductRow(hit: LeafHit): ResolvedPiece | undefined {
-    const product = productFor(hit.box.lines);
-    if (!product) return undefined;
-    let current: CopyProduct = product;
+    let current = productFor(hit.box.lines);
     let index = hit.lineIndex;
     let shift = 0;
-    for (let depth = 0; depth < MAX_CHAIN_DEPTH; depth++) {
+    for (let depth = 0; current && depth < MAX_CHAIN_DEPTH; depth++) {
       if (current.children) {
         const placement = current.children[index];
         if (!placement) return undefined;
         shift += placement.colShift;
-        current = placement.product;
+        current = resolveCopyProduct(placement.product);
         index = placement.rowIndex;
         continue;
       }

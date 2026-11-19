@@ -1,25 +1,19 @@
 // Text/Markdown provenance adapters. Both wrap prototype.render: the host
-// render runs untouched (its output is the truth on screen), then a mirror
-// pipeline rebuilds the same rows WITH copy provenance. The mirror's rows are
-// diffed against the host's real rows positionally; any mismatch drops the
-// product for that render (native extraction instead) — host drift or exotic
-// content degrades rather than corrupts.
-//
-// The Markdown mirror reuses the live instance for everything textual
-// (renderInlineTokens, theme painters, highlightCode, and renderToken itself
-// for token types without a provenance mirror — tables, unknown nodes) and
-// replicates only the structural pipeline: transform → tab normalization →
-// lexer → per-token line assembly → wrap layers (outer at contentWidth; list
-// items at itemWidth; blockquote content at width-2).
+// render runs untouched. It publishes a derivation bound to the returned rows;
+// extraction builds the mirror only when needed. The mirror uses the host's
+// textual methods on frame inputs, then verifies row-by-row visible output.
+// A mismatch falls back to the displayed rows instead of copying stale text.
 
 import {
   decorationRow,
+  deferCopyProduct,
   publishRows,
   registerProduct,
   registerCacheReleaser,
   type BreakBefore,
   type CopyProduct,
   type CopyRow,
+  type CopySource,
 } from "./model.ts";
 import { stripAnsi, wrapWithProvenance } from "./wrap.ts";
 import type { AdapterHostFns } from "./serialize.ts";
@@ -50,9 +44,6 @@ export interface MarkdownDiagnostics {
   markdownDegraded: number;
   textBuilt: number;
   textDegraded: number;
-  /** Builds skipped by the streaming throttle (frame had no product → native copy). */
-  markdownThrottled: number;
-  textThrottled: number;
   lastDegradedReason: string;
 }
 
@@ -462,36 +453,25 @@ export interface WrapDeps {
   lexer: CopyLexer;
   hostWrap: (text: string, width: number) => string[];
   diagnostics: MarkdownDiagnostics;
-  /** Clock for the streaming throttle (tests inject a fake). */
-  now?: () => number;
 }
 
-/**
- * Streaming throttle: while a component's text keeps CHANGING at an unchanged
- * width (the streaming case), rebuild the mirror at most once per interval
- * instead of on every frame — a full rebuild costs several times the host's
- * own render. Skipped frames publish no product, so a copy taken from exactly
- * that frame degrades to native extraction (never corrupt). The first build,
- * any width change and any render where the text has STOPPED changing build
- * immediately, so the final frame of a stream always gets a product on its
- * next render. The interval is measured from the last build ATTEMPT (failed
- * builds count too — an always-degrading component never retries per frame).
- */
-export const MIRROR_REBUILD_INTERVAL_MS = 200;
+interface MirrorFrame {
+  lines: readonly string[];
+  start: number;
+  total: number;
+  codeRows?: WeakRef<NonNullable<CodeCapture["rows"]>>;
+}
 
-/** Shared render-prototype wrapper: the host render runs untouched, then the
- * mirror builds (and verifies) a provenance product for the returned array.
- * Cache hits rebind successful products to fresh arrays; failed decisions keep
- * native extraction. Products resolve by the actual render-array identity. */
+/** Stable rows share one copy derivation, including a cached native-fallback decision. */
 function wrapRenderPrototype<INST extends { text: string }>(
   prototype: object,
   key: symbol,
   deps: WrapDeps,
-  build: (instance: INST, width: number, hostRows: readonly string[], deps: WrapDeps) => CopyProduct | undefined,
+  snapshot: (instance: INST, width: number) => INST,
+  build: (snapshot: INST, width: number, frame: MirrorFrame, deps: WrapDeps) => CopyProduct | undefined,
   counters: {
     built: "markdownBuilt" | "textBuilt";
     degraded: "markdownDegraded" | "textDegraded";
-    throttled: "markdownThrottled" | "textThrottled";
     fallback: string;
   },
   captureCode = false,
@@ -502,12 +482,25 @@ function wrapRenderPrototype<INST extends { text: string }>(
     return false;
   }
   const original = descriptor.value as (this: INST, width: number) => string[];
-  const cache = new WeakMap<object, { text: string; width: number; rows: readonly string[]; product?: CopyProduct }>();
-  /** Per-component stream state: the text/width seen on the last miss render
-   * and the time of the last build ATTEMPT (success or failure — an
-   * always-degrading component must not retry the full mirror per frame). */
-  const seen = new WeakMap<object, { text: string; width: number; attemptAt: number }>();
-  const now = deps.now ?? (() => Date.now());
+  const cache = new WeakMap<object, { text: string; width: number; rows: readonly string[]; source: CopySource }>();
+  function recordFailure(error: unknown) {
+    deps.diagnostics[counters.degraded] += 1;
+    deps.diagnostics.lastDegradedReason = error instanceof Error ? error.message : counters.fallback;
+  }
+  function sourceFor(input: INST, width: number, frame: MirrorFrame): CopySource {
+    return deferCopyProduct(width, () => {
+      try {
+        const product = build(input, width, frame, deps);
+        deps.diagnostics[product ? counters.built : counters.degraded] += 1;
+        return product;
+      } catch (error) {
+        recordFailure(error);
+        return undefined;
+      }
+    }, (start, end) => sourceFor(input, width, {
+      ...frame, start: frame.start + start, lines: frame.lines.slice(start, end),
+    }));
+  }
   const wrapper = function (this: INST, width: number): string[] {
     const previousCapture = activeCodeRows.get(this);
     const captured: CodeCapture | undefined = captureCode ? {} : undefined;
@@ -524,34 +517,26 @@ function wrapRenderPrototype<INST extends { text: string }>(
     if (captured?.rows) codeRowsFor.set(rows, captured.rows);
     try {
       publishRows(this, rows);
+      if (!rows.length) {
+        cache.delete(this);
+        registerProduct(rows, { width, rows: [] });
+        return rows;
+      }
       const cached = cache.get(this);
-      if (cached && cached.text === this.text && cached.width === width
-          && (cached.rows === rows || (cached.rows.length === rows.length && rows.every((row, i) => row === cached.rows[i])))) {
-        if (cached.product) registerProduct(rows, cached.product);
+      if (cached?.rows === rows && cached.width === width) return rows;
+      const input = snapshot(this, width);
+      if (cached && cached.text === input.text && cached.width === width
+          && cached.rows.length === rows.length && rows.every((row, i) => row === cached.rows[i])) {
+        registerProduct(rows, cached.source);
         return rows;
       }
-      const previous = seen.get(this);
-      if (!previous) registerCacheReleaser(this, () => { cache.delete(this); seen.delete(this); });
-      const changing = previous !== undefined && previous.width === width && previous.text !== this.text;
-      const throttled = changing && now() - previous.attemptAt < MIRROR_REBUILD_INTERVAL_MS;
-      seen.set(this, { text: this.text, width, attemptAt: throttled ? previous.attemptAt : now() });
-      if (throttled) {
-        deps.diagnostics[counters.throttled] += 1;
-        return rows;
-      }
-      const product = build(this, width, rows, deps);
-      // A stable host mismatch also has a reusable decision: preserve native
-      // extraction without re-running the mirror/highlighter every frame.
-      cache.set(this, { text: this.text, width, rows, product });
-      if (product) {
-        registerProduct(rows, product);
-        deps.diagnostics[counters.built] += 1;
-      } else {
-        deps.diagnostics[counters.degraded] += 1;
-      }
+      const code = codeRowsFor.get(rows);
+      const source = sourceFor(input, width, { lines: rows, start: 0, total: rows.length, codeRows: code && new WeakRef(code) });
+      if (!cached) registerCacheReleaser(this, () => { cache.delete(this); });
+      cache.set(this, { text: input.text, width, rows, source });
+      registerProduct(rows, source);
     } catch (error) {
-      deps.diagnostics[counters.degraded] += 1;
-      deps.diagnostics.lastDegradedReason = error instanceof Error ? error.message : counters.fallback;
+      recordFailure(error);
     }
     return rows;
   };
@@ -567,8 +552,7 @@ export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolea
   const tokenDescriptor = Object.getOwnPropertyDescriptor(prototype, "renderToken");
   const capture = tokenDescriptor && typeof tokenDescriptor.value === "function" && tokenDescriptor.configurable && tokenDescriptor.writable;
   const wrapped = wrapRenderPrototype<MarkdownInstance>(prototype, MARKDOWN_COPY_OWNER, deps,
-    buildMarkdownProduct,
-    { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" }, !!capture);
+    snapshotMarkdown, buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", fallback: "mirror failed" }, !!capture);
   if (wrapped && capture) {
     const original = tokenDescriptor.value as NonNullable<MarkdownInstance["renderToken"]>;
     Object.defineProperty(prototype, "renderToken", { ...tokenDescriptor,
@@ -588,24 +572,13 @@ export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolea
 function buildMarkdownProduct(
   instance: MarkdownInstance,
   width: number,
-  hostRows: readonly string[],
+  frame: MirrorFrame,
   deps: WrapDeps,
 ): CopyProduct | undefined {
-  const fns = deps.fns;
-  if (hostRows.length === 0) {
-    return { width, rows: [] };
-  }
   const contentWidth = Math.max(1, width - instance.paddingX * 2);
-  const text = transformText(instance, contentWidth);
-  if (text === undefined) {
-    deps.diagnostics.lastDegradedReason = "transform failed";
-    return undefined;
-  }
-  if (!text || !text.trim()) {
-    return undefined;
-  }
-  const normalized = text.replace(/\t/g, "   ");
-  const ctx: MirrorContext = { instance, fns, codeRows: codeRowsFor.get(hostRows) };
+  if (!instance.text.trim()) return undefined;
+  const normalized = instance.text.replace(/\t/g, "   ");
+  const ctx: MirrorContext = { instance, fns: deps.fns, codeRows: frame.codeRows?.deref() };
   const native = instance.cachedTokens instanceof WeakRef
     ? instance.cachedTokens.deref() as { source?: unknown; tokens?: MarkdownToken[] } | undefined : undefined;
   const tokens = native?.source === normalized && Array.isArray(native.tokens) ? native.tokens : deps.lexer.lexer(normalized);
@@ -615,33 +588,22 @@ function buildMarkdownProduct(
     logicalLines.push(...renderTokenMirror(ctx, tokens[i]!, contentWidth, tokens[i + 1]?.type, styleContext));
   }
   const output = assembleRows(ctx, logicalLines, contentWidth, deps.hostWrap);
-  const padY = instance.paddingY;
-  const padX = instance.paddingX;
-  if (hostRows.length !== padY * 2 + output.styledRows.length) {
-    deps.diagnostics.lastDegradedReason = "row count mismatch";
-    return undefined;
-  }
-  for (let i = 0; i < output.styledRows.length; i++) {
-    const hostRow = hostRows[padY + i]!;
-    if (hostRowInner(hostRow, padX, contentWidth, fns).trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
-      deps.diagnostics.lastDegradedReason = `content mismatch at row ${i}`;
-      return undefined;
-    }
-  }
-  const rows: CopyRow[] = [];
-  for (let i = 0; i < padY; i++) rows.push(decorationRow(width));
-  for (const row of output.copyRows) rows.push(marginRow(row, padX, width, contentWidth));
-  for (let i = 0; i < padY; i++) rows.push(decorationRow(width));
-  return { width, rows };
+  return verifyRows(frame, output, { width, contentWidth, padX: instance.paddingX, padY: instance.paddingY }, deps);
 }
 
-function transformText(instance: MarkdownInstance, contentWidth: number): string | undefined {
-  const options = instance.options as { transform?: (text: string, width: number) => string } | undefined;
-  try {
-    return options?.transform ? options.transform(instance.text, contentWidth) : instance.text;
-  } catch {
-    return undefined;
-  }
+function snapshotMarkdown(instance: MarkdownInstance, width: number): MarkdownInstance {
+  const options = instance.options as (MarkdownInstance["options"] & { transform?: (text: string, width: number) => string });
+  const native = instance.cachedTokens instanceof WeakRef
+    ? instance.cachedTokens.deref() as { source?: string } | undefined : undefined;
+  // Prefer the text used by the host; never call a dynamic transformer at
+  // copy time. Keep neither the mutable component nor a strong token tree.
+  const text = options?.transform
+    ? native?.source ?? options.transform(instance.text, Math.max(1, width - instance.paddingX * 2)) ?? instance.text
+    : instance.text;
+  return Object.assign(Object.create(Object.getPrototypeOf(instance)), {
+    text, paddingX: instance.paddingX, paddingY: instance.paddingY, theme: instance.theme,
+    defaultTextStyle: instance.defaultTextStyle, options: { renderLatex: options?.renderLatex }, cachedTokens: instance.cachedTokens,
+  });
 }
 
 /**
@@ -675,46 +637,44 @@ function marginRow(row: CopyRow, padX: number, width: number, contentWidth: numb
 
 export function wrapTextPrototype(prototype: object, deps: WrapDeps): boolean {
   return wrapRenderPrototype<TextInstance>(prototype, TEXT_COPY_OWNER, deps,
-    buildTextProduct, { built: "textBuilt", degraded: "textDegraded", throttled: "textThrottled", fallback: "text mirror failed" });
+    ({ text, paddingX, paddingY }) => ({ text, paddingX, paddingY }), buildTextProduct,
+    { built: "textBuilt", degraded: "textDegraded", fallback: "text mirror failed" });
 }
 
-function buildTextProduct(
-  instance: TextInstance,
-  width: number,
-  hostRows: readonly string[],
-  deps: WrapDeps,
-): CopyProduct | undefined {
-  const fns = deps.fns;
-  if (hostRows.length === 0) {
-    return { width, rows: [] };
-  }
-  if (!instance.text || !instance.text.trim()) {
-    return undefined;
-  }
-  const paddingX = Math.min(instance.paddingX, Math.max(0, Math.floor((width - 1) / 2)));
-  const contentWidth = Math.max(1, width - paddingX * 2);
+function buildTextProduct(instance: TextInstance, width: number, frame: MirrorFrame, deps: WrapDeps): CopyProduct | undefined {
+  if (!instance.text.trim()) return undefined;
+  const padX = Math.min(instance.paddingX, Math.max(0, Math.floor((width - 1) / 2)));
+  const contentWidth = Math.max(1, width - padX * 2);
   const normalized = instance.text.replace(/\t/g, "   ");
-  const ctx: MirrorContext = { instance, fns };
-  const output = assembleRows(
-    ctx,
-    [{ segments: [{ styled: normalized, kind: "content" }] }],
-    contentWidth,
-    deps.hostWrap,
-  );
-  if (hostRows.length !== instance.paddingY * 2 + output.styledRows.length) {
-    deps.diagnostics.lastDegradedReason = "text row count mismatch";
+  const output = assembleRows({ instance, fns: deps.fns },
+    [{ segments: [{ styled: normalized, kind: "content" }] }], contentWidth, deps.hostWrap);
+  return verifyRows(frame, output, { width, contentWidth, padX, padY: instance.paddingY }, deps);
+}
+
+/** Verify only the rows the frame kept, with their original position and total height. */
+function verifyRows(
+  frame: MirrorFrame,
+  output: MirrorOutput,
+  { width, contentWidth, padX, padY }: { width: number; contentWidth: number; padX: number; padY: number },
+  { fns, diagnostics }: WrapDeps,
+): CopyProduct | undefined {
+  if (frame.total !== padY * 2 + output.styledRows.length) {
+    diagnostics.lastDegradedReason = "row count mismatch";
     return undefined;
-  }
-  for (let i = 0; i < output.styledRows.length; i++) {
-    const hostRow = hostRows[instance.paddingY + i]!;
-    if (hostRowInner(hostRow, paddingX, contentWidth, fns).trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
-      deps.diagnostics.lastDegradedReason = `text content mismatch at row ${i}`;
-      return undefined;
-    }
   }
   const rows: CopyRow[] = [];
-  for (let i = 0; i < instance.paddingY; i++) rows.push(decorationRow(width));
-  for (const row of output.copyRows) rows.push(marginRow(row, paddingX, width, contentWidth));
-  for (let i = 0; i < instance.paddingY; i++) rows.push(decorationRow(width));
+  for (let i = 0; i < frame.lines.length; i++) {
+    const row = frame.start + i - padY;
+    if (row < 0 || row >= output.copyRows.length) {
+      rows.push(decorationRow(width));
+      continue;
+    }
+    const visible = hostRowInner(frame.lines[i]!, padX, contentWidth, fns).trimEnd();
+    if (visible !== stripAnsi(output.styledRows[row]!).trimEnd()) {
+      diagnostics.lastDegradedReason = `content mismatch at row ${row}`;
+      return undefined;
+    }
+    rows.push(marginRow(output.copyRows[row]!, padX, width, contentWidth));
+  }
   return { width, rows };
 }

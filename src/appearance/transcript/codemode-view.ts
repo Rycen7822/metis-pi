@@ -5,7 +5,7 @@ import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext
 import { MouseRegion } from "@earendil-works/pi-tui";
 import { shellTitle } from "../../presentation/terminal-text.ts";
 import { stackComponents } from "../../selection-copy/stack.ts";
-import { productFor, registerProduct } from "../../selection-copy/model.ts";
+import { copySourceFor, deferCopyProduct, resolveCopyProduct, registerProduct, sliceCopySource } from "../../selection-copy/model.ts";
 import { CODEMODE_ORANGE, detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "../../presentation/palette.ts";
 
 interface CodemodeTimerState {
@@ -242,13 +242,14 @@ function scriptBody(component: Component, glyph: string, preview: boolean): Comp
       if (cache?.width === width && cache.source === all) return cache.rows;
       const startRow = preview ? Math.max(0, all.length - SCRIPT_PREVIEW_ROWS) : 0;
       const body = startRow ? all.slice(startRow) : all;
-      let product = productFor(all);
+      let product = copySourceFor(all);
       if (startRow) {
-        if (product && !product.children) {
-          const copy = product.rows.slice(startRow);
-          copy[0] = { ...copy[0]!, breakBefore: "gap" };
-          product = { width: inner, rows: copy };
-        } else product = undefined;
+        const fragment = sliceCopySource(product, startRow, all.length);
+        product = fragment && deferCopyProduct(inner, () => {
+          const copy = resolveCopyProduct(fragment);
+          if (!copy || copy.children || !copy.rows[0]) return undefined;
+          return { width: inner, rows: [{ ...copy.rows[0], breakBefore: "gap" }, ...copy.rows.slice(1)] };
+        });
       }
       const prefix = shift ? `${glyph}${shift === 2 ? " " : ""}` : "";
       const rows = body.map(line => `${prefix}${line}`);

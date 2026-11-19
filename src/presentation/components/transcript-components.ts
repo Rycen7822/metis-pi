@@ -7,7 +7,7 @@
 // injects the pipeline ColorLevel, so this module never imports the host
 // packages (src/ rule) while rendering exactly what it rendered before.
 
-import { decorationRow, registerProduct, productFor, publishRows } from "../../selection-copy/model.ts";
+import { decorationRow, registerProduct, copySourceFor, publishRows } from "../../selection-copy/model.ts";
 import { clipLine, formatDuration } from "../segments.ts";
 import { stripAnsi } from "../../selection-copy/wrap.ts";
 import type { CopyRow } from "../../selection-copy/model.ts";
@@ -207,17 +207,13 @@ export class ThinkingRailComponent implements Component {
     // Provenance: every rail row is the child's row shifted right by its rail
     // cells (the rail itself is decoration). Resolves through the child
     // product via array identity when one exists.
-    const childProduct = productFor(childLines);
+    const childProduct = copySourceFor(childLines);
     if (childProduct) {
       registerProduct(this.#cache, {
 
         width,
         rows: [],
-        children: this.#cache.map((_, i) => childProduct.children
-          ? childProduct.children[i]
-            ? { ...childProduct.children[i]!, colShift: childProduct.children[i]!.colShift + shifts[i]! }
-            : undefined
-          : { product: childProduct, rowIndex: i, colShift: shifts[i]! }),
+        children: this.#cache.map((_, i) => ({ product: childProduct, rowIndex: i, colShift: shifts[i]! })),
       });
     }
     this.#lastWidth = width;
@@ -303,7 +299,7 @@ export class ThinkingPeekComponent implements Component {
     const rows = clipped
       ? [this.#paintHint(peekHintText(window.above, window.below, lines.length)), ...body]
       : body;
-    const childProduct = productFor(lines);
+    const childProduct = copySourceFor(lines);
     if (childProduct) {
       registerProduct(rows, {
 
@@ -312,9 +308,7 @@ export class ThinkingPeekComponent implements Component {
         children: rows.map((_, index) => {
           if (clipped && index === 0) return undefined; // hint row = decoration, copied natively
           const source = window.top + index - (clipped ? 1 : 0);
-          return childProduct.children
-            ? childProduct.children[source]
-            : { product: childProduct, rowIndex: source, colShift: 0 };
+          return { product: childProduct, rowIndex: source, colShift: 0 };
         }),
       });
     }

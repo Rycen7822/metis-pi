@@ -288,7 +288,6 @@ const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {
       : "installed-but-inert"
     : `not-installed (${d.installBlocker})`;
   const degraded = m.markdownDegraded + m.textDegraded;
-  const throttled = m.markdownThrottled + m.textThrottled;
   const lastReason = m.lastDegradedReason ? ` (${m.lastDegradedReason})` : "";
   return [
     "  selection-copy: serializer=" +
@@ -299,9 +298,7 @@ const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {
       `${m.textBuilt}` +
       " built, " +
       `${degraded}` +
-      " degraded, " +
-      `${throttled}` +
-      " throttled" +
+      " degraded" +
       `${lastReason}` +
       " other-wrapper=" +
       `${d.externalPatch ?? "none"}`,

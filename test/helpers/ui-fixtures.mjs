@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
-import { productFor } from "../../src/selection-copy/model.ts";
+import { copySourceFor } from "../../src/selection-copy/model.ts";
 import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
 import { fakeTerminal, sgr } from "./terminal.mjs";
 
@@ -53,7 +53,7 @@ export function installCopyPrototypes(t, names = ["Text", "Markdown", "Box", "Co
 
 export function copyFrame(component, width) {
   const lines = component.render(width);
-  assert.ok(productFor(lines), "render publishes a copy product");
+  assert.ok(copySourceFor(lines), "render publishes copy metadata");
   const rect = { x: 0, y: 0, width, height: lines.length };
   return { root: { component, rect, clip: rect, children: [], lines } };
 }

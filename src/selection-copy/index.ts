@@ -73,8 +73,6 @@ const mirrors: MarkdownDiagnostics = {
   markdownDegraded: 0,
   textBuilt: 0,
   textDegraded: 0,
-  markdownThrottled: 0,
-  textThrottled: 0,
   lastDegradedReason: "",
 };
 

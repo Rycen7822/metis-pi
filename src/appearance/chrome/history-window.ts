@@ -1,4 +1,6 @@
-import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyProduct, type ChildPlacement } from "../../selection-copy/model.ts";
+import {
+  copySourceFor, sliceCopySource, publishRows, registerProduct, releaseCopyCache, type ChildPlacement,
+} from "../../selection-copy/model.ts";
 import { safeText } from "../../presentation/terminal-text.ts";
 
 export const HISTORY_ROW_BUDGET = 5000;
@@ -47,19 +49,6 @@ type PageBoundary = Cursor & { direction: "backward" | "forward" };
 type RowOrigin = Cursor & { height: number; index: number };
 type CachedBlock = { rows?: string[]; offset: number; height: number; unwatch: () => void };
 type WindowPiece = { component: Component; rows: string[]; index: number; offset: number; height: number; start: number; end: number };
-
-/** Copy only retained product rows. Referencing an unsliced parent product
- * would retain all of a giant boundary block's provenance after eviction. */
-function sliceProduct(product: CopyProduct, start: number, end: number): CopyProduct {
-  return {
-    ...product,
-    rows: product.rows.slice(start, end),
-    children: product.children?.slice(start, end).map((placement) => placement && ({
-      colShift: placement.colShift, rowIndex: 0,
-      product: sliceProduct(placement.product, placement.rowIndex, placement.rowIndex + 1),
-    })),
-  };
-}
 
 function descendants(root: Component): Component[] {
   const result: Component[] = [];
@@ -317,8 +306,8 @@ export class HistoryWindow {
     if (this.#older) notice("[Earlier history: scroll up to load | 5000-row window]");
     for (const piece of pieces) {
       const from = piece.start - piece.offset, to = piece.end - piece.offset;
-      const sourceProduct = productFor(piece.rows);
-      const product = sourceProduct && (from === 0 && to === piece.rows.length ? sourceProduct : sliceProduct(sourceProduct, from, to));
+      const source = copySourceFor(piece.rows);
+      const product = from === 0 && to === piece.rows.length ? source : sliceCopySource(source, from, to);
       for (let row = piece.start; row < piece.end; row++) {
         rows.push(piece.rows[row - piece.offset]!);
         this.#origins.push({ component: piece.component, row, height: piece.height, index: piece.index });

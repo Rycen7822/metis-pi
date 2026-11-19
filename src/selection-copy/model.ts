@@ -32,8 +32,15 @@ export interface CopyProduct {
   children?: readonly (ChildPlacement | undefined)[];
 }
 
+/** Width is available during composition; leaf spans are built only on demand. */
+export type CopySource = CopyProduct | {
+  width: number;
+  resolve(): CopyProduct | undefined;
+  slice(start: number, end: number): CopySource | undefined;
+};
+
 export interface ChildPlacement {
-  product: CopyProduct;
+  product: CopySource;
   rowIndex: number;
   colShift: number;
 }
@@ -42,13 +49,61 @@ export function decorationRow(cols: number): CopyRow {
   return { spans: [{ colStart: 0, colEnd: cols, kind: "decoration" }], breakBefore: "hard" };
 }
 
-const byArray = new WeakMap<object, CopyProduct>();
+const byArray = new WeakMap<object, CopySource>();
 const cacheReleasers = new WeakMap<object, () => void>();
 let hits = 0;
 let misses = 0;
 
-export function registerProduct(lines: readonly string[], product: CopyProduct): void {
-  byArray.set(lines, product);
+export function registerProduct(lines: readonly string[], source: CopySource): void {
+  byArray.set(lines, source);
+}
+
+export function deferCopyProduct(
+  width: number,
+  build: () => CopyProduct | undefined,
+  project?: (start: number, end: number) => CopySource,
+): CopySource {
+  let pending: typeof build | undefined = build;
+  let product: CopyProduct | undefined;
+  function resolve() {
+    const run = pending;
+    pending = undefined;
+    project = undefined;
+    if (run) product = run();
+    return product;
+  }
+  return { width, resolve, slice: (start, end) => project ? project(start, end) : sliceCopySource(resolve(), start, end) };
+}
+
+export function resolveCopyProduct(source: CopySource | undefined): CopyProduct | undefined {
+  return source && ("resolve" in source ? source.resolve() : source);
+}
+
+/** Detach a history fragment without retaining the omitted display rows.
+ * Group adjacent child rows so copying N rows resolves one child mirror, not N. */
+export function sliceCopySource(source: CopySource | undefined, start: number, end: number): CopySource | undefined {
+  if (!source) return undefined;
+  if ("resolve" in source) return source.slice(start, end);
+  const { width, rows, children } = source;
+  const sliced = rows.slice(start, end);
+  if (!children) return { width, rows: sliced };
+  const placements = children.slice(start, end);
+  for (let i = 0; i < placements.length;) {
+    const first = placements[i];
+    if (!first) { i++; continue; }
+    let next = i + 1;
+    while (next < placements.length) {
+      const child = placements[next];
+      if (child?.product !== first.product || child.rowIndex !== first.rowIndex + next - i) break;
+      next++;
+    }
+    const product = sliceCopySource(first.product, first.rowIndex, first.rowIndex + next - i);
+    for (let at = i; at < next; at++) {
+      placements[at] = product && { product, rowIndex: at - i, colShift: placements[at]!.colShift };
+    }
+    i = next;
+  }
+  return { width, rows: sliced, children: placements };
 }
 
 /** Eviction drops instance-owned mirrors, not products belonging to an already
@@ -84,9 +139,12 @@ export function publishedRowsOf(component: unknown): readonly string[] | undefin
   return Array.isArray(rows) ? (rows as readonly string[]) : undefined;
 }
 
+export function copySourceFor(lines: unknown): CopySource | undefined {
+  return typeof lines === "object" && lines !== null ? byArray.get(lines) : undefined;
+}
+
 export function productFor(lines: unknown): CopyProduct | undefined {
-  if (typeof lines !== "object" || lines === null) return undefined;
-  const found = byArray.get(lines);
+  const found = resolveCopyProduct(copySourceFor(lines));
   if (found) hits += 1;
   else misses += 1;
   return found;

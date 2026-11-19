@@ -268,19 +268,24 @@ test("content reflow restores the reading anchor after the new content and viewp
   assert.equal(view.scroll.isFollowingEnd, false, "clamping during shrink must not resume following");
 });
 
-test("giant boundary block is sliced with collectible native/mirror caches and exact selected text", (t) => {
-  installCopyPrototypes(t);
+test("giant boundary block is sliced without building a mirror before selection", (t) => {
+  const copy = installCopyPrototypes(t);
+  const initial = copy.diagnostics().mirrors.textBuilt;
   const text = Array.from({ length: 6000 }, (_, i) => `line ${i}`).join("\n");
-  const block = new Tui.Text(text, 0, 0);
+  const child = new Tui.Text(text, 0, 0);
+  const block = new Tui.Box(1, 0);
+  block.addChild(child);
   const view = setup(t, [block]);
   assert.equal(view.lines().at(-1).trim(), "line 5999");
+  assert.equal(copy.diagnostics().mirrors.textBuilt, initial);
   assert.equal(view.system.status().cachedBlocks, 0, "an oversized full native block is not retained");
-  assert.ok(!block.cachedLines, "native rows evicted");
+  assert.ok(!child.cachedLines, "native rows evicted");
   const rows = view.lines();
   assert.ok(productFor(rows));
   const result = select(view.tui.currentLayout, rows.length - 2);
   assert.equal(result.text, "line 5998\nline 5999");
   assert.equal(result.nativeRows, 0);
+  assert.equal(copy.diagnostics().mirrors.textBuilt, initial + 1, "selected rows share one fragment mirror");
 });
 
 test("selection holds an uncommitted page position until its new rows can be laid out", (t) => {

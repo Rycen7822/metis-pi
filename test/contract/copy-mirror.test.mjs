@@ -14,7 +14,7 @@ const theme = {
   strikethrough: (t) => `\x1b[9m${t}\x1b[29m`,
 };
 
-test("collected host tokens and a throttled stream rebuild exact fallback provenance", t => {
+test("collected host tokens preserve exact provenance, including an earlier streaming frame", t => {
   const cases = [
     ["cjk", "**这是测试。**后面还有中文需要折行", "这是测试。后面还有中文需要折行", 16],
     ["ascii flanking", "**end.**Then next", "**end.**Then next", 40],
@@ -55,20 +55,16 @@ test("collected host tokens and a throttled stream rebuild exact fallback proven
       assert.match(copied.text, /│ A │/); assert.match(copied.text, /│ 1 │/);
     }
   }
-  let now = 10000;
-  t.mock.method(Date, "now", () => now);
   const stream = new Tui.Markdown("initial", 0, 0, theme);
   copyFrame(stream, 16);
-  now += 10;
-  const throttled = sys.diagnostics().mirrors.markdownThrottled;
   stream.setText("**新的中文。**后面还有中文");
-  stream.render(16);
-  assert.equal(sys.diagnostics().mirrors.markdownThrottled, throttled + 1);
-  stream.cachedTokens = undefined;
-  now += 10;
-  const rebuilt = select(copyFrame(stream, 16));
+  const active = copyFrame(stream, 16);
+  stream.setText("**新的中文。**后面还有中文，还有更多");
+  const final = copyFrame(stream, 24);
+  const rebuilt = select(active);
   assert.equal(rebuilt.text, "新的中文。后面还有中文");
   assert.equal(rebuilt.nativeRows, 0);
+  assert.equal(select(final).text, "新的中文。后面还有中文，还有更多");
   assert.equal(sys.diagnostics().mirrors.markdownDegraded, 0);
 });
 

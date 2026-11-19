@@ -1,6 +1,6 @@
 import { Container, MouseRegion } from "@earendil-works/pi-tui";
 import type { Component } from "../presentation/contracts.ts";
-import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow, type ChildPlacement } from "./model.ts";
+import { copySourceFor, productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow, type ChildPlacement } from "./model.ts";
 
 /** Native stacking owns mouse geometry; copy provenance remains an explicit caller policy. */
 export function stackComponents(components: Component[], composition: "flat-rows" | "child-placements"): Component {
@@ -19,8 +19,8 @@ export function stackComponents(components: Component[], composition: "flat-rows
     render(width) {
       const lines = container.render(width), rows: CopyRow[] = [], children: (ChildPlacement | undefined)[] = [];
       for (const rendered of snapshots) {
-        const product = productFor(rendered);
         if (composition === "flat-rows") {
+          const product = productFor(rendered);
           // Fusion takes rows only, never follows a child's placement chain. A
           // container child publishes a placement chain with no flat rows, so
           // those lines fall back to native extraction instead of shifting every
@@ -34,9 +34,8 @@ export function stackComponents(components: Component[], composition: "flat-rows
               }))),
           );
         } else {
-          for (let i = 0; i < rendered.length; i++) children.push(product?.children
-            ? product.children[i]
-            : product ? { product, rowIndex: i, colShift: 0 } : undefined);
+          const product = copySourceFor(rendered);
+          for (let i = 0; i < rendered.length; i++) children.push(product ? { product, rowIndex: i, colShift: 0 } : undefined);
         }
       }
       registerProduct(lines, { width, rows, ...(composition === "child-placements" ? { children } : {}) });

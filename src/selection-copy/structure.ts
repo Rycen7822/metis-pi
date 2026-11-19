@@ -5,8 +5,8 @@
 // is structural (child heights must match the host's own mouseLayout), and
 // any mismatch simply leaves rows unmapped → native extraction.
 
-import { productFor, publishRows, publishedRowsOf, registerProduct } from "./model.ts";
-import type { ChildPlacement, CopyProduct } from "./model.ts";
+import { copySourceFor, publishRows, publishedRowsOf, registerProduct } from "./model.ts";
+import type { ChildPlacement, CopySource } from "./model.ts";
 
 interface MouseChild {
   component: unknown;
@@ -95,17 +95,19 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
       // Resolve child products first; allocate the placements table only when
       // at least one child actually has a product (otherwise the whole array
       // would be undefined — the same native outcome with no allocation).
-      const childProducts: (CopyProduct | undefined)[] = new Array(mouse.children.length);
+      const childProducts: (CopySource | undefined)[] = new Array(mouse.children.length);
       let anyProduct = false;
       for (let c = 0; c < mouse.children.length; c++) {
         const child = mouse.children[c]!;
         let childRows = publishedRowsOf(child.component);
         if (!childRows) childRows = childRowsOf(child.component, contentWidth);
         if (!childRows || childRows.length !== child.height) return rows;
-        const product = productFor(childRows);
+        const product = copySourceFor(childRows);
         // A shared component may have published another occurrence at a different width.
-        childProducts[c] = product?.width === contentWidth ? product : undefined;
-        if (product) anyProduct = true;
+        if (product?.width === contentWidth) {
+          childProducts[c] = product;
+          anyProduct = true;
+        }
       }
       if (!anyProduct) return rows;
       const placements: (ChildPlacement | undefined)[] = new Array(rows.length).fill(undefined);

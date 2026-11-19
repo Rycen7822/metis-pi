@@ -2,7 +2,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createCodemodeObserver } from "./codemode-observer.ts";
 import { asRecord, TOOL_NAMES, type ToolName } from "../presentation/tool-names.ts";
 import type { Component, Palette, Renderers, ViewContext, ViewOptions } from "../presentation/contracts.ts";
-import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "../selection-copy/model.ts";
+import { decorationRow, copySourceFor, publishRows, publishedRowsOf, registerProduct, releaseCopyCache } from "../selection-copy/model.ts";
 import { toolPresentation } from "../presentation/tool-source.mjs";
 import { selectToolPresentation, type OwnedCommandStyle } from "./transcript/tool-presentation.ts";
 import type { NestedRendererLookup } from "./transcript/codemode-view.ts";
@@ -331,7 +331,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
           const row = asRecord(this);
           if (typeof row.getRenderShell === "function" && row.getRenderShell() === "self") {
             const content = publishedRowsOf(row.selfRenderContainer);
-            const product = content && productFor(content);
+            const product = content && copySourceFor(content);
             // The native self-shell composes a blank prefix, its text subtree,
             // then image rows. Bind only the verified text region; never re-render
             // it or pretend that unknown/image rows have text provenance.
