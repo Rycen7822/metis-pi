@@ -1,9 +1,10 @@
 import { CODEMODE_HELPERS, readCodemodeActions, type CodemodeAction } from "./codemode-actions.ts";
 import { asRecord } from "../../presentation/tool-names.ts";
-import { safeText } from "../../presentation/terminal-text.ts";
+import { safeText, shellTitle } from "../../presentation/terminal-text.ts";
 import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext, ViewOptions } from "../../presentation/contracts.ts";
 import { MouseRegion } from "@earendil-works/pi-tui";
-import { shellTitle } from "../../presentation/terminal-text.ts";
+import { createHangingText } from "../../presentation/components/rows.ts";
+import { toolResultBody } from "../../presentation/components/tool-layout.ts";
 import { stackComponents } from "../../selection-copy/stack.ts";
 import { copySourceFor, deferCopyProduct, resolveCopyProduct, registerProduct, sliceCopySource } from "../../selection-copy/model.ts";
 import { CODEMODE_ORANGE, detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "../../presentation/palette.ts";
@@ -339,7 +340,7 @@ export function makeCodemodeRenderers(input: {
         } else styled = input.highlight?.(script, "javascript") ?? script;
         component = stackComponents([
           component, scriptBody(input.makeText(styled), scriptGlyph, receiving && !expanded),
-        ], "child-placements");
+        ]);
       }
       let phase: string | undefined;
       if (receiving) phase = "Receiving script from model (not running)";
@@ -347,7 +348,7 @@ export function makeCodemodeRenderers(input: {
         if (context.executionStarted) phase = "Running script";
         else if (context.argsComplete) phase = "Waiting to run script";
       }
-      if (phase) component = stackComponents([component, input.makeText(theme.fg("dim", `• ${phase}`))], "child-placements");
+      if (phase) component = stackComponents([component, input.makeText(theme.fg("dim", `• ${phase}`))]);
       return clickRegion(component, context, () => { view.script = !expanded; });
     },
     renderResult: livePreviews(input.makeText, (result, options, theme, context, timerText) => {
@@ -421,7 +422,7 @@ export function makeCodemodeRenderers(input: {
         if (step.kind === "helper") {
           const action = step.call;
           const expanded = view.slots.get(action.id)?.expanded ?? view.expanded;
-          parts.push(clickRegion(input.makeText(helperSummary(action, theme, expanded)), context, () => {
+          parts.push(clickRegion(helperSummary(action, theme, expanded), context, () => {
             const slot = view.slots.get(action.id) ?? { state: {} };
             slot.expanded = !expanded;
             view.slots.set(action.id, slot);
@@ -466,8 +467,8 @@ export function makeCodemodeRenderers(input: {
             const { bullet, title } = shellTitle({ isPartial: partial, isError }, theme);
             callComponent = input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`);
             if (expanded && call.error)
-              resultComponent = input.makeText(theme.fg("error", safeText(String(call.error))));
-          } else callComponent = input.makeText(summary(call, theme, expanded));
+              resultComponent = toolResultBody(theme.fg("error", safeText(String(call.error))), theme);
+          } else callComponent = summary(call, theme, expanded);
         } else {
           const nestedContext: ViewContext = {
             ...context,
@@ -502,7 +503,7 @@ export function makeCodemodeRenderers(input: {
             callComponent = slot.call;
             resultComponent = slot.result;
           } catch {
-            callComponent = input.makeText(summary(call, theme, expanded));
+            callComponent = summary(call, theme, expanded);
           }
         }
         const toggle = preview ? undefined : () => { slot.expanded = !expanded; };
@@ -513,7 +514,7 @@ export function makeCodemodeRenderers(input: {
             args === undefined ? "Full arguments unavailable; expand codemode to inspect the script." : "",
             missingResult ? "Nested output was not retained; no saved diff/output to expand." : "",
           ].filter(Boolean).join("\n");
-          if (unavailable) parts.push(clickRegion(input.makeText(theme.fg("dim", unavailable)), context, toggle));
+          if (unavailable) parts.push(clickRegion(toolResultBody(theme.fg("dim", unavailable), theme), context, toggle));
         }
       }
       if (missingResults)
@@ -537,14 +538,14 @@ export function makeCodemodeRenderers(input: {
           }));
           if (typeof details.fullOutputPath === "string")
             outputParts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
-          parts.push(clickRegion(stackComponents(outputParts, "child-placements"), context, toggleOutput));
+          parts.push(clickRegion(stackComponents(outputParts), context, toggleOutput));
         }
       }
       if (timerText || toggleOutput || context.isError) {
         const footer = label(timerText ?? "Took —");
         parts.push(clickRegion(input.makeText(context.isError ? `${footer} ${theme.fg("error", "[error]")}` : footer), context, toggleOutput));
       }
-      return clickRegion(stackComponents(parts, "child-placements"), context);
+      return clickRegion(stackComponents(parts), context);
     }),
   };
 }
@@ -564,7 +565,12 @@ function commandSteps(calls: Readonly<Record<string, unknown>>[], helpers: Codem
   return steps;
 }
 
-function helperSummary(action: CodemodeAction, theme: Palette, expanded: boolean): string {
+function summaryWithDetails(title: string, details: string[], theme: Palette): Component {
+  const heading = createHangingText(title);
+  return details.length ? stackComponents([heading, toolResultBody(details.join("\n"), theme)]) : heading;
+}
+
+function helperSummary(action: CodemodeAction, theme: Palette, expanded: boolean): Component {
   const failed = action.status === "error" || action.status === "cancelled";
   const icon = failed ? theme.fg("error", "✗") : theme.fg("dim", action.status === "running" ? "…" : "•");
   const target = safeText(action.arguments.join(" "));
@@ -573,33 +579,33 @@ function helperSummary(action: CodemodeAction, theme: Palette, expanded: boolean
   const title = theme.fg("toolTitle", theme.bold(CODEMODE_HELPERS[action.name]));
   const discovery = action.discovery;
   const count = discovery ? theme.fg("dim", ` · ${discovery.count} ${discovery.count === 1 ? "tool" : "tools"}`) : "";
-  let details = expanded ? `\n  ${theme.fg("dim", `Status: ${action.status}`)}` : "";
+  const details = expanded ? [theme.fg("dim", `Status: ${action.status}`)] : [];
   if (expanded && discovery?.names.length) {
     let names = safeText(discovery.names.join(", "));
     const omitted = discovery.count - discovery.names.length;
     if (omitted) names += `, … ${omitted} more`;
-    details += `\n  ${theme.fg("dim", `Tools: ${names}`)}`;
+    details.push(theme.fg("dim", `Tools: ${names}`));
   }
-  const error = expanded && action.error ? `\n  ${theme.fg("error", safeText(action.error))}` : "";
-  return `${icon} ${title}${preview ? ` ${preview}` : ""}${count}${details}${error}`;
+  if (expanded && action.error) details.push(theme.fg("error", safeText(action.error)));
+  return summaryWithDetails(`${icon} ${title}${preview ? ` ${preview}` : ""}${count}`, details, theme);
 }
 
-function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expanded: boolean): string {
+function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expanded: boolean): Component {
   const failed = ["error", "cancelled", "unfinished"].includes(String(call.status));
   const icon = call.status === "running" ? "…" : call.status === "unfinished" ? "?" : failed ? "✗" : "✓";
   const rawArgs = typeof call.args === "string" ? safeText(call.args) : "";
   const args = !expanded && rawArgs.length > 80 ? `${rawArgs.slice(0, 77)}…` : rawArgs;
   const cost = typeof call.cost === "number" && call.cost > 0 ? ` $${call.cost.toPrecision(2)}` : "";
   const duration = typeof call.durationMs === "number" ? ` ${(call.durationMs / 1000).toFixed(2)}s` : "";
-  const error = expanded && call.error ? `\n  ${theme.fg("error", safeText(String(call.error)))}` : "";
-  return (
+  const details = expanded && call.error ? [theme.fg("error", safeText(String(call.error)))] : [];
+  const title = (
     `${theme.fg(failed ? "error" : call.status === "running" ? "dim" : "success", icon)}` +
     " " +
     `${theme.fg("toolTitle", safeText(String(call.name)))}` +
     `${args ? ` ${args}` : ""}` +
     `${duration}` +
     `${cost}` +
-    `${call.status === "unfinished" ? " (external result unknown)" : ""}` +
-    `${error}`
+    `${call.status === "unfinished" ? " (external result unknown)" : ""}`
   );
+  return summaryWithDetails(title, details, theme);
 }

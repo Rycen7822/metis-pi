@@ -6,7 +6,8 @@ import { runWithProxy } from "./proxy-transport.ts";
 
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Text, truncateToWidth, type KeyId } from "@earendil-works/pi-tui";
-import { webToolBody, webToolCall } from "./tool-layout.ts";
+import { toolCall, toolGutter } from "../presentation/components/tool-layout.ts";
+import { safeText } from "../presentation/terminal-text.ts";
 import { Type, type TSchema } from "typebox";
 import type { ExtractedContent } from "./content.ts";
 import { normalizeFetchContentParams } from "./fetch-params.ts";
@@ -337,7 +338,9 @@ export default function (pi: ExtensionAPI, options: {
 	const initConfig = loadConfigForExtensionInit();
 	const registerTool = <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => {
 		const render = tool.renderResult;
-		if (render) tool.renderResult = (...args) => webToolBody(render.apply(tool, args));
+		if (render) tool.renderResult = (result, options, theme, context) =>
+			toolGutter(render(result, options, theme, context), theme);
+		tool.renderShell = "self";
 		if (options.registerTool) options.registerTool(action, tool);
 		else pi.registerTool(tool);
 	};
@@ -1102,19 +1105,19 @@ export default function (pi: ExtensionAPI, options: {
 			}));
 		},
 
-		renderCall(args, theme) {
+		renderCall(args, theme, context) {
 			const input = args as { query?: unknown; queries?: unknown };
 			const rawQueryList: unknown[] = Array.isArray(input.queries)
 				? input.queries
 				: (input.query !== undefined ? expandQueryString(input.query) : []);
 			const queryList = normalizeQueryList(rawQueryList);
 			const title = theme.fg("toolTitle", theme.bold("search "));
-			if (queryList.length === 0) return webToolCall(title, [theme.fg("error", "(no query)")]);
+			if (queryList.length === 0) return toolCall(title, [theme.fg("error", "(no query)")], theme, context);
 			const count = `${queryList.length} ${queryList.length === 1 ? "query" : "queries"}`;
 			const color = queryList.length === 1 ? "accent" : "muted";
 			const lines = queryList.slice(0, 5).map(q => theme.fg(color, `"${q}"`));
 			if (queryList.length > 5) lines.push(theme.fg("muted", `... and ${queryList.length - 5} more`));
-			return webToolCall(title + theme.fg("accent", count), lines);
+			return toolCall(title + theme.fg("accent", count), lines, theme, context);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme) {
@@ -1368,6 +1371,14 @@ export default function (pi: ExtensionAPI, options: {
 		async execute(_callId, params, signal, _onUpdate, ctx) {
 			return markToolError(await core.sourceCheck(params, signal, { extensionContext: ctx }));
 		},
+		renderCall(args, theme, context) {
+			const claim = typeof args.claim === "string" ? safeText(args.claim) : "";
+			return toolCall(theme.fg("toolTitle", theme.bold("source_check")), claim ? [theme.fg("accent", claim)] : [], theme, context);
+		},
+		renderResult(result, _options, theme, context) {
+			const text = result.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
+			return new Text(theme.fg(context?.isError ? "error" : "toolOutput", safeText(text)), 0, 0);
+		},
 	});
 
 	if (fetchContentEnabled) registerTool("fetch", {
@@ -1419,17 +1430,17 @@ export default function (pi: ExtensionAPI, options: {
 			return markToolError(await core.fetchContent(params, signal, { extensionContext: ctx, onUpdate }));
 		},
 
-		renderCall(args, theme) {
+		renderCall(args, theme, context) {
 			let normalized: ReturnType<typeof normalizeFetchContentParams>;
 			try {
 				normalized = normalizeFetchContentParams(args);
 			} catch {
-				return webToolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")]);
+				return toolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")], theme, context);
 			}
 			const { urlList, options } = normalized;
 			const { prompt, timestamp, frames, model, mode, answerModel, auth } = options;
 			const title = theme.fg("toolTitle", theme.bold("fetch "));
-			if (urlList.length === 0) return webToolCall(title, [theme.fg("error", "(no URL)")]);
+			if (urlList.length === 0) return toolCall(title, [theme.fg("error", "(no URL)")], theme, context);
 			const count = `${urlList.length} ${urlList.length === 1 ? "URL" : "URLs"}`;
 			const color = urlList.length === 1 ? "accent" : "muted";
 			const lines = urlList.slice(0, 5).map(url => theme.fg(color, url));
@@ -1456,7 +1467,7 @@ export default function (pi: ExtensionAPI, options: {
 			if (auth !== undefined) {
 				lines.push(theme.fg("dim", "auth: ") + theme.fg("warning", auth === true ? "true" : auth));
 			}
-			return webToolCall(title + theme.fg("accent", count), lines);
+			return toolCall(title + theme.fg("accent", count), lines, theme, context);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme) {
@@ -1574,7 +1585,7 @@ export default function (pi: ExtensionAPI, options: {
 			return markToolError(await core.getSearchContent(rawParams));
 		},
 
-		renderCall(args, theme) {
+		renderCall(args, theme, context) {
 			const { responseId, query, queryIndex, url, urlIndex, offset, findText } = args as {
 				responseId: string;
 				query?: string;
@@ -1595,7 +1606,7 @@ export default function (pi: ExtensionAPI, options: {
 				target += `${target ? " · " : ""}find ${queries.length}`;
 			}
 			const label = target || (typeof responseId === "string" ? responseId.slice(0, 8) : "(waiting for responseId)");
-			return webToolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)]);
+			return toolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)], theme, context);
 		},
 
 		renderResult(result, { expanded }, theme) {

@@ -33,14 +33,14 @@ test("fetch_content renderCall falls back to url when urls is empty", () => {
 		model: "",
 	}, theme).render(120).map(line => line.trimEnd());
 
-	assert.deepEqual(lines, ["fetch 1 URL", "  https://example.com/docs"]);
+	assert.deepEqual(lines, ["• fetch 1 URL", "  │ https://example.com/docs"]);
 });
 
 test("fetch_content renderCall tolerates invalid normalized parameters", () => {
 	const tool = getTool("fetch_content");
 	for (const args of [{ auth: 1 }, { mode: "invalid" }, { proxy: null }]) {
 		const lines = tool.renderCall(args, theme).render(120).map(line => line.trimEnd());
-		assert.deepEqual(lines, ["fetch", "  (invalid parameters)"]);
+		assert.deepEqual(lines, ["• fetch", "  │ (invalid parameters)"]);
 	}
 });
 
@@ -48,45 +48,50 @@ test("search queries and fetch URLs remain complete in wide tool-call labels", (
 	const query = "Google Cloud API key best practices restrict HTTP referrers and APIs";
 	const url = "https://developers.google.com/maps/api-security-best-practices";
 	assert.deepEqual(getTool("web_search").renderCall({ query }, theme).render(200).map(line => line.trimEnd()), [
-		"search 1 query", `  "${query}"`,
+		"• search 1 query", `  │ "${query}"`,
 	]);
 	assert.deepEqual(getTool("fetch_content").renderCall({ url }, theme).render(200).map(line => line.trimEnd()), [
-		"fetch 1 URL", `  ${url}`,
+		"• fetch 1 URL", `  │ ${url}`,
 	]);
 	assert.deepEqual(getTool("web_search").renderCall({ queries: [query, query] }, theme).render(200).map(line => line.trimEnd()), [
-		"search 2 queries", `  "${query}"`, `  "${query}"`,
+		"• search 2 queries", `  │ "${query}"`, `  │ "${query}"`,
 	]);
 	assert.deepEqual(getTool("fetch_content").renderCall({ urls: [url, `${url}?ref=docs`] }, theme).render(200).map(line => line.trimEnd()), [
-		"fetch 2 URLs", `  ${url}`, `  ${url}?ref=docs`,
+		"• fetch 2 URLs", `  │ ${url}`, `  │ ${url}?ref=docs`,
 	]);
 });
 
 const longUrl = "https://example.com/" + "long-path/".repeat(20) + "page";
 
-function assertIndented(rows, width) {
+function assertIndented(rows, width, call = false) {
 	const visible = rows.map(stripVTControlCharacters).filter(line => line.trim());
 	assert.ok(visible.length, "the renderer must produce content rows");
-	assert.match(visible[0], /^ {2}\S/, "peer fields start at the two-cell baseline, without double padding");
-	for (const row of visible) {
-		assert.match(row, /^ {2}/, `expected a two-cell content inset: ${JSON.stringify(row)}`);
+	for (const [index, row] of visible.entries()) {
+		const prefix = call ? "  │ " : index === 0 ? "  └ " : "    ";
+		assert.ok(row.startsWith(prefix), `expected ${JSON.stringify(prefix)}: ${JSON.stringify(row)}`);
 		assert.ok(visibleWidth(row) <= width, `row exceeds ${width} columns`);
 	}
 }
 
-test("web tool arguments retain a two-cell inset on wrapped rows", () => {
+test("every Web Access action uses the command columns, including wrapped arguments", () => {
 	for (const width of [12, 40, 120]) {
 		for (const [name, args] of [
 			["fetch_content", { urls: [longUrl, "https://short.test"], mode: "raw" }],
 			["web_search", { queries: ["long query ".repeat(20), "short query"] }],
 			["get_search_content", { responseId: "stored-id", query: "stored query" }],
+			["source_check", { claim: "长查询：" + "证据".repeat(20) }],
 		]) {
 			const rows = getTool(name).renderCall(args, theme).render(width);
 			assert.ok(rows.length > 1, "arguments occupy an indented area below the title");
-			assertIndented(rows.slice(1), width);
+			assert.match(stripVTControlCharacters(rows[0]), /^• \S/);
+			assertIndented(rows.slice(1), width, true);
 		}
 		const rows = getTool("fetch_content").renderCall({ url: longUrl }, theme).render(width);
-		assertIndented(rows.slice(1), width);
-		assert.equal(rows.slice(1).map(row => row.slice(2).trimEnd()).join(""), longUrl, "wrapping preserves the complete URL");
+		assertIndented(rows.slice(1), width, true);
+		assert.equal(rows.slice(1).map(row => row.slice(4).trimEnd()).join(""), longUrl, "wrapping preserves the complete URL");
+		for (const row of getTool("fetch_content").renderCall({ url: longUrl }, theme).render(4)) {
+			assert.ok(visibleWidth(row) <= 4 && !row.includes("│"), "drop the rail before it crowds out the body");
+		}
 	}
 });
 
@@ -96,6 +101,7 @@ test("web tool results share the same inset across success, progress, error and 
 		["fetch_content", { urlCount: 4, successful: 2 }],
 		["fetch_content", { urlCount: 1, title: "Fetched page", totalChars: 200 }],
 		["get_search_content", { title: "Stored page", contentLength: 200 }],
+		["source_check", { sourceCount: 2, passageCount: 4 }],
 	];
 	for (const width of [12, 40, 120]) for (const expanded of [false, true]) {
 		for (const [name, details] of outcomes) {

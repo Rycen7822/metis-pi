@@ -8,7 +8,7 @@ import { loadSemanticRequestSettings } from "../config.ts";
 import { ensureSemanticRuntime } from "../runtime/install.mjs";
 import { HOME_DIR, scanOptOutReason } from "../native/paths.ts";
 import type { SearchRuntime } from "../session.ts";
-import { safeText } from "../../presentation/terminal-text.ts";
+import { safeText, toolBullet } from "../../presentation/terminal-text.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
 
 const OUTPUT_BYTES = 50_000;
@@ -108,7 +108,7 @@ export function createSemanticAction(runtime: SearchRuntime, toolName: string): 
       } finally { clearTimeout(timer); }
     },
     renderCall(args, theme, context) {
-      const bullet = theme.fg(context.isError ? "error" : context.isPartial === false ? "success" : "dim", "•");
+      const bullet = toolBullet(context, theme);
       return new CollapsedText(`${bullet} ${theme.fg("toolTitle", theme.bold("Semantic"))} `
         + theme.fg("text", safeText(`${args.query ?? ""} in ${args.path ?? "."}`)), "", theme.fg("muted", "..."));
     },

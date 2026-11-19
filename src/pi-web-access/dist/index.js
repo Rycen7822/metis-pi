@@ -10166,20 +10166,12 @@ var init_extract = __esm({
 // src/pi-web-access/index.ts
 init_media_errors();
 init_proxy_transport();
-import { Box as Box2, Text as Text2, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { toolCall, toolGutter } from "../../presentation/components/tool-layout.ts";
 
-// src/pi-web-access/tool-layout.ts
-import { Box, Text, TruncatedText } from "@earendil-works/pi-tui";
-function webToolBody(component) {
-  const box = new Box(2, 0);
-  box.addChild(component);
-  return box;
-}
-function webToolCall(title, details) {
-  const box = new Box(0, 0);
-  box.addChild(new TruncatedText(title, 0, 0));
-  if (details.length) box.addChild(webToolBody(new Text(details.join("\n"), 0, 0)));
-  return box;
+// src/presentation/terminal-text.ts
+function safeText(text) {
+  return text.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b[P^_X][\s\S]*?\x1b\\/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b[@-_]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
 // src/pi-web-access/index.ts
@@ -20178,8 +20170,8 @@ data: ${JSON.stringify(data)}
     defaultSummaryModel,
     summaryModelError
   );
-  const server = http.createServer(async (req, res) => {
-    try {
+  const server = http.createServer((req, res) => {
+    (async () => {
       const method = req.method || "GET";
       const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
       if (method === "GET" && url.pathname === "/") {
@@ -20501,10 +20493,11 @@ data: ${JSON.stringify(data)}
       }
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Server error";
-      sendJson(res, 500, { ok: false, error: message });
-    }
+    })().catch((err) => {
+      const error = err instanceof Error ? err : new Error("Server error");
+      if (res.headersSent) res.destroy(error);
+      else sendJson(res, 500, { ok: false, error: error.message });
+    });
   });
   return new Promise((resolve2, reject) => {
     const onError = (err) => {
@@ -23181,7 +23174,12 @@ function registerWebSearchCommand(pi, buildSearchReturn) {
               }
             });
             if (!aborted && isCommandActive()) handle.searchesDone();
-          })();
+          })().catch((err) => {
+            if (!isCommandActive()) return;
+            closeCurator(commandCallId);
+            const message = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Curator search failed: ${message}`, "error");
+          });
         } else {
           if (isCommandActive()) handle.searchesDone();
         }
@@ -23388,15 +23386,15 @@ var fetchContentOutputSchema = Type2.Object({
 });
 function renderSearchErrorPlan(plan, expanded, theme) {
   if (expanded) {
-    return new Text2(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
+    return new Text(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
   }
-  const box = new Box2(0, 0, (t) => theme.bg("toolErrorBg", t));
-  box.addChild(new Text2(theme.fg("error", plan.expanded[0]), 0, 0));
+  const box = new Box(0, 0, (t) => theme.bg("toolErrorBg", t));
+  box.addChild(new Text(theme.fg("error", plan.expanded[0]), 0, 0));
   for (const line of plan.collapsed) {
-    box.addChild(new Text2(theme.fg("dim", line), 0, 0));
+    box.addChild(new Text(theme.fg("dim", line), 0, 0));
   }
   if (plan.expandHint) {
-    box.addChild(new Text2(theme.fg("muted", plan.expandHint), 0, 0));
+    box.addChild(new Text(theme.fg("muted", plan.expandHint), 0, 0));
   }
   return box;
 }
@@ -23552,7 +23550,8 @@ function index_default(pi, options = {}) {
   const initConfig = loadConfigForExtensionInit();
   const registerTool = (action, tool) => {
     const render = tool.renderResult;
-    if (render) tool.renderResult = (...args) => webToolBody(render.apply(tool, args));
+    if (render) tool.renderResult = (result, options2, theme, context) => toolGutter(render(result, options2, theme, context), theme);
+    tool.renderShell = "self";
     if (options.registerTool) options.registerTool(action, tool);
     else pi.registerTool(tool);
   };
@@ -24238,17 +24237,17 @@ Open manually: ${handle.url}` }],
         return core.webSearch(params, signal, { extensionContext: ctx, onUpdate, summarize, awaitContent: nested });
       }));
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const input = args;
       const rawQueryList = Array.isArray(input.queries) ? input.queries : input.query !== void 0 ? expandQueryString(input.query) : [];
       const queryList = normalizeQueryList(rawQueryList);
       const title = theme.fg("toolTitle", theme.bold("search "));
-      if (queryList.length === 0) return webToolCall(title, [theme.fg("error", "(no query)")]);
+      if (queryList.length === 0) return toolCall(title, [theme.fg("error", "(no query)")], theme, context);
       const count = `${queryList.length} ${queryList.length === 1 ? "query" : "queries"}`;
       const color = queryList.length === 1 ? "accent" : "muted";
       const lines = queryList.slice(0, 5).map((q) => theme.fg(color, `"${q}"`));
       if (queryList.length > 5) lines.push(theme.fg("muted", `... and ${queryList.length - 5} more`));
-      return webToolCall(title + theme.fg("accent", count), lines);
+      return toolCall(title + theme.fg("accent", count), lines, theme, context);
     },
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details;
@@ -24260,7 +24259,7 @@ Open manually: ${handle.url}` }],
           const timeout = typeof details?.timeoutSeconds === "number" ? details.timeoutSeconds : void 0;
           const shortcut = typeof details?.shortcut === "string" ? details.shortcut : curateKey;
           lines2.push(theme.fg("dim", timeout ? `auto-submits after ${timeout}s idle; ${shortcut} reopens` : `${shortcut} reopens`));
-          return new Text2(lines2.join("\n"), 0, 0);
+          return new Text(lines2.join("\n"), 0, 0);
         }
         if (details?.phase === "curating" || details?.phase === "waiting-for-approval" || details?.phase === "generating-summary") {
           const phaseText = details?.phase === "generating-summary" ? "generating summary draft..." : details?.phase === "waiting-for-approval" ? "summary draft ready; approve in browser..." : "waiting for summary approval in browser...";
@@ -24275,23 +24274,23 @@ Open manually: ${handle.url}` }],
           } else {
             lines2.push(theme.fg("dim", `${shortcut} reopens`));
           }
-          return new Text2(lines2.join("\n"), 0, 0);
+          return new Text(lines2.join("\n"), 0, 0);
         }
         if (details?.phase === "searching") {
           const progress2 = details?.progress ?? 0;
           const bar2 = "\u2588".repeat(Math.floor(progress2 * 10)) + "\u2591".repeat(10 - Math.floor(progress2 * 10));
           const query = details?.currentQuery || "";
           const display = query.length > 40 ? query.slice(0, 37) + "..." : query;
-          return new Text2(theme.fg("accent", `[${bar2}] ${display}`), 0, 0);
+          return new Text(theme.fg("accent", `[${bar2}] ${display}`), 0, 0);
         }
         const progress = details?.progress ?? 0;
         const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
-        return new Text2(theme.fg("accent", `[${bar}] ${details?.phase || "searching"}`), 0, 0);
+        return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "searching"}`), 0, 0);
       }
       if (details?.error) {
         const plan = buildSearchErrorPlan(details);
         if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-        return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
+        return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
       }
       let statusLine;
       const queryInfo = details?.queryCount === 1 ? "" : `${details?.successfulQueries}/${details?.queryCount} queries, `;
@@ -24378,24 +24377,24 @@ Open manually: ${handle.url}` }],
       }
       const totalLines = lines.length;
       if (!expanded) {
-        const box = new Box2(0, 0);
-        box.addChild(new Text2(statusLine, 0, 0));
+        const box = new Box(0, 0);
+        box.addChild(new Text(statusLine, 0, 0));
         let collapsedLines = 1;
         const summaryPreview = details?.summary?.text?.trim() || "";
         if (summaryPreview) {
           const preview = summaryPreview.length > 120 ? summaryPreview.slice(0, 117) + "..." : summaryPreview;
-          box.addChild(new Text2(theme.fg("dim", preview), 0, 0));
+          box.addChild(new Text(theme.fg("dim", preview), 0, 0));
           collapsedLines++;
         } else if (details?.curatedQueries?.length) {
           for (const cq of details.curatedQueries.slice(0, 3)) {
             const dq = cq.query.length > 55 ? cq.query.slice(0, 52) + "..." : cq.query;
             const srcCount = cq.sources?.length ?? 0;
             const suffix = cq.error ? theme.fg("error", " (error)") : theme.fg("dim", ` \xB7 ${srcCount} sources`);
-            box.addChild(new Text2(theme.fg("accent", `"${dq}"`) + suffix, 0, 0));
+            box.addChild(new Text(theme.fg("accent", `"${dq}"`) + suffix, 0, 0));
             collapsedLines++;
           }
           if (details.curatedQueries.length > 3) {
-            box.addChild(new Text2(theme.fg("dim", `... and ${details.curatedQueries.length - 3} more`), 0, 0));
+            box.addChild(new Text(theme.fg("dim", `... and ${details.curatedQueries.length - 3} more`), 0, 0));
             collapsedLines++;
           }
         } else {
@@ -24407,18 +24406,18 @@ Open manually: ${handle.url}` }],
           const fallbackLine = (firstContentLine?.trim() || "").replace(/\*\*/g, "");
           if (fallbackLine) {
             const preview = fallbackLine.length > 120 ? fallbackLine.slice(0, 117) + "..." : fallbackLine;
-            box.addChild(new Text2(theme.fg("dim", preview), 0, 0));
+            box.addChild(new Text(theme.fg("dim", preview), 0, 0));
             collapsedLines++;
           }
         }
         const moreLines = Math.max(0, totalLines - collapsedLines);
         if (moreLines > 0) {
-          box.addChild(new Text2(theme.fg("muted", `
+          box.addChild(new Text(theme.fg("muted", `
 ... (${moreLines} more lines, ${totalLines} total, ctrl+o to expand)`), 0, 0));
         }
         return box;
       }
-      return new Text2(lines.join("\n"), 0, 0);
+      return new Text(lines.join("\n"), 0, 0);
     }
   });
   if (sourceCheckEnabled) registerTool("source_check", {
@@ -24440,6 +24439,14 @@ Open manually: ${handle.url}` }],
     }),
     async execute(_callId, params, signal, _onUpdate, ctx) {
       return markToolError(await core.sourceCheck(params, signal, { extensionContext: ctx }));
+    },
+    renderCall(args, theme, context) {
+      const claim = typeof args.claim === "string" ? safeText(args.claim) : "";
+      return toolCall(theme.fg("toolTitle", theme.bold("source_check")), claim ? [theme.fg("accent", claim)] : [], theme, context);
+    },
+    renderResult(result, _options, theme, context) {
+      const text = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+      return new Text(theme.fg(context?.isError ? "error" : "toolOutput", safeText(text)), 0, 0);
     }
   });
   if (fetchContentEnabled) registerTool("fetch", {
@@ -24486,17 +24493,17 @@ Open manually: ${handle.url}` }],
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       return markToolError(await core.fetchContent(params, signal, { extensionContext: ctx, onUpdate }));
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       let normalized;
       try {
         normalized = normalizeFetchContentParams(args);
       } catch {
-        return webToolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")]);
+        return toolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")], theme, context);
       }
       const { urlList, options: options2 } = normalized;
       const { prompt, timestamp, frames, model, mode, answerModel, auth } = options2;
       const title = theme.fg("toolTitle", theme.bold("fetch "));
-      if (urlList.length === 0) return webToolCall(title, [theme.fg("error", "(no URL)")]);
+      if (urlList.length === 0) return toolCall(title, [theme.fg("error", "(no URL)")], theme, context);
       const count = `${urlList.length} ${urlList.length === 1 ? "URL" : "URLs"}`;
       const color = urlList.length === 1 ? "accent" : "muted";
       const lines = urlList.slice(0, 5).map((url) => theme.fg(color, url));
@@ -24523,14 +24530,14 @@ Open manually: ${handle.url}` }],
       if (auth !== void 0) {
         lines.push(theme.fg("dim", "auth: ") + theme.fg("warning", auth === true ? "true" : auth));
       }
-      return webToolCall(title + theme.fg("accent", count), lines);
+      return toolCall(title + theme.fg("accent", count), lines, theme, context);
     },
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details;
       if (isPartial) {
         const progress = details?.progress ?? 0;
         const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
-        return new Text2(theme.fg("accent", `[${bar}] ${details?.phase || "fetching"}`), 0, 0);
+        return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "fetching"}`), 0, 0);
       }
       if (details?.error) {
         const fd = details;
@@ -24545,7 +24552,7 @@ Open manually: ${handle.url}` }],
         }
         const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
         if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-        return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
+        return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
       }
       if (details?.urlCount === 1) {
         const title = details?.title || "Untitled";
@@ -24561,7 +24568,7 @@ Open manually: ${handle.url}` }],
         const textContent2 = result.content.find((c) => c.type === "text")?.text || "";
         if (!expanded) {
           const brief = textContent2.length > 200 ? textContent2.slice(0, 200) + "..." : textContent2;
-          return new Text2(statusLine2 + "\n" + theme.fg("dim", brief), 0, 0);
+          return new Text(statusLine2 + "\n" + theme.fg("dim", brief), 0, 0);
         }
         const lines = [statusLine2];
         if (details?.prompt) {
@@ -24576,16 +24583,16 @@ Open manually: ${handle.url}` }],
         }
         const preview2 = textContent2.length > 500 ? textContent2.slice(0, 500) + "..." : textContent2;
         lines.push(theme.fg("dim", preview2));
-        return new Text2(lines.join("\n"), 0, 0);
+        return new Text(lines.join("\n"), 0, 0);
       }
       const countColor = (details?.successful ?? 0) > 0 ? "success" : "error";
       const statusLine = theme.fg(countColor, `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", getSearchContentEnabled ? " (content stored)" : " (content fetched)");
       if (!expanded) {
-        return new Text2(statusLine, 0, 0);
+        return new Text(statusLine, 0, 0);
       }
       const textContent = result.content.find((c) => c.type === "text")?.text || "";
       const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-      return new Text2(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+      return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
     }
   });
   if (getSearchContentEnabled) {
@@ -24612,7 +24619,7 @@ Open manually: ${handle.url}` }],
       async execute(_toolCallId, rawParams) {
         return markToolError(await core.getSearchContent(rawParams));
       },
-      renderCall(args, theme) {
+      renderCall(args, theme, context) {
         const { responseId, query, queryIndex, url, urlIndex, offset, findText } = args;
         let target = "";
         if (query) target = `query="${query}"`;
@@ -24625,7 +24632,7 @@ Open manually: ${handle.url}` }],
           target += `${target ? " \xB7 " : ""}find ${queries.length}`;
         }
         const label = target || (typeof responseId === "string" ? responseId.slice(0, 8) : "(waiting for responseId)");
-        return webToolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)]);
+        return toolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)], theme, context);
       },
       renderResult(result, { expanded }, theme) {
         const details = result.details;
@@ -24636,7 +24643,7 @@ Open manually: ${handle.url}` }],
           else if (details.title) extras.push(`resource: ${details.title}`);
           const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
           if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-          return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
+          return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
         }
         let statusLine;
         if (typeof details?.matchCount === "number") {
@@ -24651,11 +24658,11 @@ Open manually: ${handle.url}` }],
           statusLine = theme.fg("success", details?.title || "Content") + theme.fg("muted", ` (${details?.contentLength ?? 0} chars${slice})`);
         }
         if (!expanded) {
-          return new Text2(statusLine, 0, 0);
+          return new Text(statusLine, 0, 0);
         }
         const textContent = result.content.find((c) => c.type === "text")?.text || "";
         const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-        return new Text2(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+        return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
       }
     });
   }

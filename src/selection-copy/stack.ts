@@ -1,9 +1,9 @@
 import { Container, MouseRegion } from "@earendil-works/pi-tui";
 import type { Component } from "../presentation/contracts.ts";
-import { copySourceFor, productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow, type ChildPlacement } from "./model.ts";
+import { copySourceFor, publishRows, registerProduct, releaseCopyCache, type ChildPlacement } from "./model.ts";
 
-/** Native stacking owns mouse geometry; copy provenance remains an explicit caller policy. */
-export function stackComponents(components: Component[], composition: "flat-rows" | "child-placements"): Component {
+/** Preserve native mouse geometry and resolve copy from the displayed child rows. */
+export function stackComponents(components: Component[]): Component {
   const container = new Container(), snapshots: string[][] = [];
   for (const [index, component] of components.entries()) {
     const region = new MouseRegion(component, () => undefined);
@@ -17,28 +17,12 @@ export function stackComponents(components: Component[], composition: "flat-rows
   }
   return {
     render(width) {
-      const lines = container.render(width), rows: CopyRow[] = [], children: (ChildPlacement | undefined)[] = [];
+      const lines = container.render(width), children: (ChildPlacement | undefined)[] = [];
       for (const rendered of snapshots) {
-        if (composition === "flat-rows") {
-          const product = productFor(rendered);
-          // Fusion takes rows only, never follows a child's placement chain. A
-          // container child publishes a placement chain with no flat rows, so
-          // those lines fall back to native extraction instead of shifting every
-          // later row onto a sibling's provenance.
-          const flat = product && product.rows.length === rendered.length ? product.rows : undefined;
-          rows.push(
-            ...(flat ??
-              rendered.map(() => ({
-                spans: [{ colStart: 0, colEnd: width, kind: "unknown" as const }],
-                breakBefore: "hard" as const,
-              }))),
-          );
-        } else {
-          const product = copySourceFor(rendered);
-          for (let i = 0; i < rendered.length; i++) children.push(product ? { product, rowIndex: i, colShift: 0 } : undefined);
-        }
+        const product = copySourceFor(rendered);
+        for (let i = 0; i < rendered.length; i++) children.push(product ? { product, rowIndex: i, colShift: 0 } : undefined);
       }
-      registerProduct(lines, { width, rows, ...(composition === "child-placements" ? { children } : {}) });
+      registerProduct(lines, { width, rows: [], children });
       publishRows(this, lines);
       return lines;
     },

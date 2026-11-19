@@ -15,6 +15,8 @@ Metis 格式化命令、文件修改、Codemode 和思考块。工具入参、�
 
 `read`、`grep`、`find`、`ls` 与 `neural_search` 显示为 `Exploring` 或 `Explored`。能确定参数的只读 Shell 命令也会显示为 `Read`、`Find` 或 `Search`。有变量展开、通配符等动态参数，或不能识别实际 Shell 时，显示原命令。PowerShell 与 CMD 也显示原命令。
 
+Web Access 的搜索、抓取、取回内容和来源检查，与命令共用标题和结果的列位：同级工具标题从 `•` 开始，参数续行用 `│`，结果从 `└` 开始，换行对齐到结果正文。直接调用和 Codemode 内的子调用使用同一布局。
+
 Bash 标题默认显示两行，结果预览显示五行。用宿主的展开键查看可用的完整输出。`exec_command` 的灰、绿、红点依次表示尚在运行、成功退出和失败；`write_stdin` 的输出也按命令结果排版。运行时截断的输出需从工具回执中的路径[读取](../execution.md)。图片使用 Pi 的显示协议与 `terminal.showImages` 设置。
 
 ## Codemode

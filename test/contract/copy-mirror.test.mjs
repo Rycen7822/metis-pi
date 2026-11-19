@@ -131,36 +131,34 @@ test("oversized display math copies raw source without adding hard breaks", t =>
 
 test("stack copy uses the displayed render pass without rerendering dynamic children", (t) => {
   installCopyPrototypes(t, ["Text", "Markdown", "Container", "Box", "MouseRegion"]);
-  for (const composition of ["flat-rows", "child-placements"]) {
-    let renders = 0;
-    const changing = {
-      render: width => new Tui.Text(`frame ${++renders}`, 0, 0).render(width),
-      invalidate() {},
-    };
-    const stack = stackComponents([changing, new Tui.Text("following block", 0, 0)], composition);
-    const first = copyFrame(stack, 40);
-    assert.equal(select(first).text, "frame 1\nfollowing block", `${composition}: copy matches the displayed frame`);
-    assert.equal(renders, 1, "copy alignment consumes published rows from the existing render pass");
-    stack.invalidate();
-    const next = copyFrame(stack, 40);
-    assert.equal(select(next).text, "frame 2\nfollowing block");
-    assert.equal(renders, 2);
-    assert.equal(select(first).text, "frame 1\nfollowing block", "a committed earlier frame retains its own provenance");
-  }
+  let renders = 0;
+  const changing = {
+    render: width => new Tui.Text(`frame ${++renders}`, 0, 0).render(width),
+    invalidate() {},
+  };
+  const stack = stackComponents([changing, new Tui.Text("following block", 0, 0)]);
+  const first = copyFrame(stack, 40);
+  assert.equal(select(first).text, "frame 1\nfollowing block");
+  assert.equal(renders, 1, "copy alignment consumes published rows from the existing render pass");
+  stack.invalidate();
+  const next = copyFrame(stack, 40);
+  assert.equal(select(next).text, "frame 2\nfollowing block");
+  assert.equal(renders, 2);
+  assert.equal(select(first).text, "frame 1\nfollowing block", "a committed earlier frame retains its own provenance");
 });
 
-test("flat-rows keeps later rows aligned after a container child", (t) => {
+test("nested container rows copy without their displayed gutters and keep later rows aligned", (t) => {
   installCopyPrototypes(t, ["Text", "Markdown", "Container", "Box", "MouseRegion"]);
   // Fusion stacks a mutation result, a shell call and a shell result; any of them
   // may be a Box/Container, whose product is a placement chain with no flat rows.
   const boxed = new Tui.Box(1, 0);
   boxed.addChild(new Tui.Text("BOX-A", 0, 0));
   boxed.addChild(new Tui.Text("BOX-B", 0, 0));
-  const stack = stackComponents([boxed, new Tui.Text("TAIL", 0, 0)], "flat-rows");
+  const stack = stackComponents([boxed, new Tui.Text("TAIL", 0, 0)]);
   const frame = copyFrame(stack, 20);
   const displayed = frame.root.lines.map((line) => Tui.stripTerminalSequences(line).trimEnd());
   assert.deepEqual(displayed, [" BOX-A", " BOX-B", "TAIL"]);
-  assert.equal(select(frame, 0, 0).text, " BOX-A", "the first row is the container child, not a later sibling");
+  assert.deepEqual(select(frame), { text: "BOX-A\nBOX-B\nTAIL", mappedRows: 3, nativeRows: 0 });
   assert.equal(select(frame, 2, 2).text, "TAIL", "the last row is the last displayed line");
 });
 

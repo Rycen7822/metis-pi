@@ -4,13 +4,12 @@
 
 import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
 import { styleToolOutputLine } from "./output-style.ts";
-import { OUTPUT_INITIAL_PREFIX, OUTPUT_SUBSEQUENT_PREFIX } from "./terminal-text.ts";
+import { COMMAND_CONTINUATION_PREFIX, OUTPUT_INITIAL_PREFIX, OUTPUT_SUBSEQUENT_PREFIX } from "./terminal-text.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
 import { stripAnsi, styledParts, wrapWithProvenance } from "../selection-copy/wrap.ts";
 import { truncateToWidth as truncateStyled } from "@earendil-works/pi-tui";
 
-export const COMMAND_CONTINUATION_PREFIX = "  │ ";
 export const COMMAND_CONTINUATION_MAX_ROWS = 2;
 export const OUTPUT_MAX_ROWS = 5;
 

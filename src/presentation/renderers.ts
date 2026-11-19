@@ -14,8 +14,9 @@ import {
 } from "./explore.ts";
 import { summarizeShellCommand } from "../execution/shell/summary.ts";
 import { createHangingText } from "./components/rows.ts";
+import { toolGutter } from "./components/tool-layout.ts";
 import { asRecord, TOOL_NAMES, isExplorationTool, type ToolName } from "./tool-names.ts";
-import { safeText, toolOutputGutter as gutter } from "./terminal-text.ts";
+import { COMMAND_CONTINUATION_PREFIX, safeText, shellTitle, toolBullet } from "./terminal-text.ts";
 import type {
   Palette, ViewContext, ViewOptions, TextFactory, Highlight, Renderers,
   DiffFactory, Component, TextComponent, DiffLayoutOps, ExplorationPlan, WritePreviewInput, ShellFactories,
@@ -23,7 +24,6 @@ import type {
 import { parseDisplayDiff, diffStatsFromRows } from "./diff.ts";
 import type { WriteDiff, DiffStats, DiffRow } from "../file-changes/diff.ts";
 import { resolveWriteStage } from "./write-preview.ts";
-import { shellTitle } from "./terminal-text.ts";
 
 const PREVIEW_LINES = 5;
 const COMMAND_LINES = 2;
@@ -179,7 +179,7 @@ export function shellCallText(
   const [head = "…", ...rest] = visible;
   return (
     `${bullet} ${theme.fg("toolTitle", theme.bold(title))} ${highlight(head, "bash", theme, paint)}` +
-    rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("")
+    rest.map(line => `\n${theme.fg("dim", COMMAND_CONTINUATION_PREFIX)}${highlight(line, "bash", theme, paint)}`).join("")
   );
 }
 
@@ -203,43 +203,29 @@ export function formatResult(
   const sections: string[] = [];
   const foldedExploration = isExplorationTool(name, ctx.args) && !expanded && !error && !options.isPartial;
   if (lines.length && !foldedExploration) {
-    sections.push(
-      gutter(
-        preview(lines, PREVIEW_LINES, expanded, hint, SHELL.has(name) ? (options.isPartial ? "tail" : "both") : "head"),
-        theme,
-        error ? "error" : "toolOutput",
-      ),
-    );
+    const kept = preview(lines, PREVIEW_LINES, expanded, hint, SHELL.has(name) ? (options.isPartial ? "tail" : "both") : "head");
+    sections.push(theme.fg(error ? "error" : "toolOutput", kept.join("\n")));
   }
-  if (!lines.length && error) sections.push(gutter(["Tool failed (no text output)"], theme, "error"));
-  if (!lines.length && !error && options.isPartial) sections.push(gutter(["Running…"], theme, "dim"));
+  if (!lines.length && error) sections.push(theme.fg("error", "Tool failed (no text output)"));
+  if (!lines.length && !error && options.isPartial) sections.push(theme.fg("dim", "Running…"));
   if (SHELL.has(name) && !lines.length && !error && !options.isPartial)
-    sections.push(gutter(["(no output)"], theme, "dim"));
+    sections.push(theme.fg("dim", "(no output)"));
   const images = blocks.filter((block) => block.type === "image").length;
   // Grouped members don't repeat the image notice; the group aggregates it once (call region).
   const groupedMember = isExplorationTool(name, ctx.args) && ctx.explorationPlan !== undefined;
-  if (images && !groupedMember)
-    sections.push(
-      gutter(
-        [
-          `${images}` +
-            " image" +
-            `${images === 1 ? "" : "s"}` +
-            `${ctx.showImages === false ? " (TUI preview disabled)" : ""}`,
-        ],
-        theme,
-        "dim",
-      ),
-    );
+  if (images && !groupedMember) {
+    const label = `${images} image${images === 1 ? "" : "s"}${ctx.showImages === false ? " (TUI preview disabled)" : ""}`;
+    sections.push(theme.fg("dim", label));
+  }
   const other = blocks.filter((block) => block.type !== "text" && block.type !== "image");
-  if (other.length) sections.push(gutter([`${other.length} additional non-text content block(s)`], theme, "dim"));
+  if (other.length) sections.push(theme.fg("dim", `${other.length} additional non-text content block(s)`));
   return sections.filter(Boolean).join("\n");
 }
 
 function editCall(input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats): string {
   const args = asRecord(input);
   const done = ctx.isPartial === false;
-  const marker = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
+  const marker = toolBullet(ctx, theme);
   const label = ctx.isError ? "Failed" : done ? "Edited" : "Editing";
   let suffix = "";
   if (stats && ctx.isError !== true)
@@ -320,14 +306,12 @@ export function makeRenderers(
       const blocks = Array.isArray(asRecord(result).content) ? (asRecord(result).content as unknown[]).map(asRecord) : [];
       const text = blocks.filter((block) => block.type === "text").map((block) => string(block.text)).join("\n");
       const lines = cleanLines(text);
-      const head = gutter(["write failed"], theme, "error");
-      const body = lines.length ? gutter(preview(lines, PREVIEW_LINES, expanded, hint), theme, "error") : "";
-      const attempted = contentArg
-        ? gutter(expanded
-            ? ["attempted content (not written):", ...numberedLines(cleanLines(contentArg))]
-            : ["attempted content (not written) — expand to view"], theme, "muted")
-        : "";
-      return component([head, body, attempted].filter(Boolean).join("\n"), ctx);
+      const body = ["write failed", ...preview(lines, PREVIEW_LINES, expanded, hint)];
+      if (!contentArg) return toolGutter(component(theme.fg("error", body.join("\n")), ctx), theme);
+      const attempted = expanded ? ["attempted content (not written):", ...numberedLines(cleanLines(contentArg))]
+        : ["attempted content (not written) — expand to view"];
+      const message = `${theme.fg("error", body.join("\n"))}\n${theme.fg("muted", attempted.join("\n"))}`;
+      return toolGutter(component(message, ctx), theme);
     }
 
     const change = writeChangeFor(ctx);
@@ -342,9 +326,9 @@ export function makeRenderers(
     const label = change?.kind === "unchanged"
       ? "written content (unchanged)"
       : `written content (${lines.length} lines)`;
-    const head = gutter([label], theme, "muted");
-    const body = gutter(preview(numbered, PREVIEW_LINES, expanded, hint), theme);
-    return component([head, body].filter(Boolean).join("\n"), ctx);
+    const body = preview(numbered, PREVIEW_LINES, expanded, hint).join("\n");
+    const text = [theme.fg("muted", label), body && theme.fg("toolOutput", body)].filter(Boolean).join("\n");
+    return toolGutter(component(text, ctx), theme);
   }
 
   return Object.fromEntries<Renderers>(
@@ -472,7 +456,8 @@ export function makeRenderers(
               colorLevel: colorFor(ctx),
             });
           }
-          return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
+          const text = formatResult(name, result, options, theme, ctx, expandHint());
+          return toolGutter(component(text, ctx), theme);
         },
       },
     ]),

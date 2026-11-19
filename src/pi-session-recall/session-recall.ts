@@ -37,6 +37,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
+import { toolGutter } from "../presentation/components/tool-layout.ts";
 import { createRecallRequest } from "./context.ts";
 import { searchFiles, searchLines } from "./search.ts";
 import { readSessionLines } from "./session-file.ts";
@@ -148,6 +149,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 	toolName?: string;
 } = {}) {
 	const registerTool = <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => {
+		const result = tool.renderResult;
+		if (result) tool.renderResult = (value, options, theme, context) => toolGutter(result(value, options, theme, context), theme);
 		if (options.registerTool) options.registerTool(action, tool);
 		else pi.registerTool(tool);
 	};

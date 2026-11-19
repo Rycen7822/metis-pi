@@ -7,7 +7,7 @@ import { buildQuery, hasGlobSyntax } from "../native/query.ts";
 import { contentPage, searchContent, multilineOrError, MATCHES_PER_FILE } from "../native/content.ts";
 import { FIND_SNAPSHOT_LIMIT } from "../cursors.ts";
 import { CollapsedText, renderTextResult } from "../ui/render.ts";
-import { safeText } from "../../presentation/terminal-text.ts";
+import { safeText, toolBullet } from "../../presentation/terminal-text.ts";
 import type { SearchLease, SearchRuntime } from "../session.ts";
 import { createSemanticAction } from "./semantic.ts";
 
@@ -129,8 +129,9 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         });
       } finally { lease.release(); }
     },
-    renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("Find")) + " " + theme.fg("accent", safeText(args.pattern ?? "")) + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`));
+    renderCall(args, theme, context) {
+      let text = `${toolBullet(context, theme)} ` + theme.fg("toolTitle", theme.bold("Find")) + " "
+        + theme.fg("accent", safeText(args.pattern ?? "")) + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`));
       if (args.limit !== undefined) text += theme.fg("toolOutput", safeText(` (limit ${args.limit})`));
       if (args.cursor) text += theme.fg("muted", " (page)");
       return new CollapsedText(text, "", theme.fg("muted", "..."));
@@ -189,8 +190,9 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         return textResult(output, { ...formatted.details, root: lease.root, cursor });
       } finally { lease.release(); }
     },
-    renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("Search")) + " " + theme.fg("accent", safeText(`/${args.pattern ?? ""}/`)) + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`));
+    renderCall(args, theme, context) {
+      let text = `${toolBullet(context, theme)} ` + theme.fg("toolTitle", theme.bold("Search")) + " "
+        + theme.fg("accent", safeText(`/${args.pattern ?? ""}/`)) + theme.fg("toolOutput", safeText(` in ${args.path ?? "."}`));
       const options: string[] = [];
       if (args.limit !== undefined) options.push(`limit ${args.limit}`);
       if (args.context !== undefined) options.push(`context ${args.context}`);
@@ -239,8 +241,9 @@ export function createSearchActions(runtime: SearchRuntime, toolName: string): R
         });
       } finally { lease.release(); }
     },
-    renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("Search")) + " " + theme.fg("accent", (args.patterns ?? []).map(pattern => safeText(JSON.stringify(pattern))).join(", "));
+    renderCall(args, theme, context) {
+      let text = `${toolBullet(context, theme)} ` + theme.fg("toolTitle", theme.bold("Search")) + " "
+        + theme.fg("accent", (args.patterns ?? []).map(pattern => safeText(JSON.stringify(pattern))).join(", "));
       if (args.path) text += theme.fg("toolOutput", safeText(` in ${args.path}`));
       if (args.constraints) text += theme.fg("toolOutput", safeText(` (${args.constraints})`));
       if (args.cursor) text += theme.fg("muted", " (page)");

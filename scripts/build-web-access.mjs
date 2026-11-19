@@ -21,12 +21,12 @@ const externals = [
   "@earendil-works/*",
 ];
 
-const configModules = {
-  name: "metis-config-origin",
+const extensionSources = {
+  name: "metis-extension-sources",
   setup(build) {
-    build.onResolve({ filter: /^\.\.\/configuration\/(store|web-access)\.ts$/ }, ({ path }) => ({
-      path: `../../${path.slice(3)}`,
-      external: true,
+    // Keep config source URLs and the host's copy-provenance registry shared.
+    build.onResolve({ filter: /^\.\.\/(configuration\/(store|web-access)|presentation\/components\/tool-layout)\.ts$/ }, ({ path }) => ({
+      path: `../${path}`, external: true,
     }));
   },
 };
@@ -49,8 +49,8 @@ const standaloneConfig = {
 const options = {
   bundle: true, format: "esm", platform: "node", target: "node22.19",
   absWorkingDir: root, outdir: "src/pi-web-access/dist", outbase: "src/pi-web-access",
-  logLevel: "info", plugins: [configModules],
+  logLevel: "info",
 };
-await build({ ...options, entryPoints: ["src/pi-web-access/index.ts"], external: externals });
+await build({ ...options, plugins: [extensionSources], entryPoints: ["src/pi-web-access/index.ts"], external: externals });
 await build({ ...options, plugins: [standaloneConfig], entryPoints: ["src/pi-web-access/mcp-cli.ts"], external: externals.filter((name) => name !== "typebox") });
 chmodSync(new URL("../src/pi-web-access/dist/mcp-cli.js", import.meta.url), 0o755);

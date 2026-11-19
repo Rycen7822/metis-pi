@@ -1,6 +1,7 @@
 import type { Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { safeText, toolOutputGutter } from "../../presentation/terminal-text.ts";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { toolGutter, toolResultBody } from "../../presentation/components/tool-layout.ts";
+import { safeText } from "../../presentation/terminal-text.ts";
 
 export class CollapsedText implements Component {
   constructor(private readonly preview: string, private readonly suffix = "", private readonly marker = "...") {}
@@ -21,10 +22,11 @@ export function renderTextResult(
   context: { isError: boolean },
 ): Component {
   const output = safeText(result.content?.filter(item => item.type === "text").map(item => item.text ?? "").join("\n") ?? "");
-  if (!output.trim()) return new Text(toolOutputGutter(["No output"], theme, "muted"), 0, 0);
+  if (!output.trim()) return toolResultBody(theme.fg("muted", "No output"), theme);
   const color = context.isError ? "error" : "toolOutput";
+  if (options.expanded) return toolResultBody(theme.fg(color, output), theme);
   const lines = output.split("\n");
-  if (options.expanded) return new Text(toolOutputGutter(lines, theme, color), 0, 0);
-  return new CollapsedText(toolOutputGutter([lines[0]!], theme, color),
+  const preview = new CollapsedText(theme.fg(color, lines[0]!),
     lines.length > 1 ? theme.fg("muted", `... (${lines.length - 1} more lines)`) : "", theme.fg("muted", "..."));
+  return toolGutter(preview, theme);
 }

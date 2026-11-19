@@ -52,7 +52,7 @@ function fusionResult(mutation: Renderers, shell: Renderers): Renderers["renderR
       mutation.renderResult(mutationResult, { ...options, isPartial: false }, theme, mutationCtx),
       shell.renderCall(shellCtx.args, theme, shellCtx),
       shell.renderResult(commandResult, { ...options, isPartial: running }, theme, shellCtx),
-    ], "flat-rows");
+    ]);
   };
   resultRenderers.set(mutation, {
     shell, mutationResult: mutation.renderResult, shellCall: shell.renderCall, shellResult: shell.renderResult, render,

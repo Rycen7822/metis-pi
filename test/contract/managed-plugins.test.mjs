@@ -6,10 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stringify } from "smol-toml";
-import { createAgentSession, DefaultResourceLoader, SettingsManager, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, initTheme, SettingsManager,
+  SessionManager, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { disableNetwork } from "../helpers/native-provider.mjs";
 
+initTheme("dark", false);
 test.beforeEach(disableNetwork);
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const webTools = ["web_access"];
@@ -119,9 +122,18 @@ test("owned web entrypoint registers tools from the existing Metis TOML", async 
     web.renderResult(fetched, { expanded: false, isPartial: false }, theme, {}),
   ]) {
     const rows = component.render(40).filter(row => row.trim());
-    assert.match(rows[0], /^ {2}\S/, "grouped fallback and action results use exactly one content inset");
-    assert.ok(rows.every(row => /^ {2}/.test(row)), "continuations retain their inset through the real entrypoint");
+    assert.match(rows[0], /^  └ \S/, "grouped fallback and action results use exactly one result gutter");
+    assert.ok(rows.slice(1).every(row => row.startsWith("    ")), "continuations align under the first result");
   }
+  const row = new ToolExecutionComponent("web_access", "fetch", { action: "fetch", params: { url, mode: "raw" } },
+    { outputPad: 4, showImages: false }, web, { requestRender() {} }, root);
+  row.markExecutionStarted();
+  row.updateResult(fetched);
+  const rendered = row.render(80).map(line => stripVTControlCharacters(line).trimEnd()).filter(Boolean);
+  assert.equal(rendered[0], "• fetch 1 URL", "the host does not add padding in front of managed headers");
+  assert.equal(rendered[1], `  │ ${url}`);
+  assert.equal(rendered[2], "  │ mode: raw");
+  assert.match(rendered[3], /^  └ \S/);
   const text = fetched.content.filter(item => item.type === "text").map(item => item.text).join("\n");
   assert.match(text, /tools\.web_access\(\{ action: "content", params:/);
   assert.doesNotMatch(text, /get_search_content\(/);

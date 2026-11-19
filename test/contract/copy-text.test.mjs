@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { copyFrame as renderFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 import { makeRenderers } from "../../src/presentation/renderers.ts";
+import { toolResultBody } from "../../src/presentation/components/tool-layout.ts";
 import { fusionRenderers } from "../../src/appearance/transcript/fusion-view.ts";
 import { theme as toolTheme } from "../helpers/presentation.mjs";
 
@@ -28,6 +29,23 @@ test("copy provenance: dropped spaces bridge selected rows, never shift partial 
     });
     assert.equal(select(frame, 1, 1, () => ({ start: 0, end: 2 })).text, "be", "no bridge without the preceding row");
     assert.equal(select(frame, 2, 2, () => ({ start: 5, end: 7 })).text, "  ", "selected trailing spaces are content");
+  }
+});
+
+test("tool result gutter stays aligned after wrapping and is excluded from exact copy", () => {
+  const source = "a wide 中文 result with  original  spaces\nnext line keeps its  spacing";
+  const component = toolResultBody(source, toolTheme);
+  for (const width of [4, 16, 80]) {
+    const frame = renderFrame(component, width);
+    const lines = frame.root.lines.map(Tui.stripTerminalSequences);
+    assert.ok(lines.every(line => Tui.visibleWidth(line) <= width));
+    if (width > 4) {
+      assert.match(lines[0], /^  └ a/);
+      assert.ok(lines.slice(1).every(line => line.startsWith("    ")));
+    } else assert.ok(lines.every(line => !line.includes("└")));
+    const copied = select(frame);
+    assert.equal(copied.text, source);
+    assert.equal(copied.nativeRows, 0);
   }
 });
 

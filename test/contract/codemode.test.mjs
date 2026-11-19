@@ -112,7 +112,7 @@ test("native helper execution records actual actions, preserves output and repla
   assert.match(plain(row), /Describe namespace fixtures[\s\S]*Describe tool read[\s\S]*Search tools read file limit=2/);
   assert.doesNotMatch(plain(row), /UNEXECUTED|const namespace|Promise\.all|Script output|Nested results unavailable/);
   clickRow(row, "Describe tool read");
-  assert.match(plain(row), /Describe tool read\n  Status: ok/);
+  assert.match(plain(row), /Describe tool read\n  └ Status: ok/);
   const replay = new row.constructor("codemode", context.getRegisteredToolDefinition("codemode"), { code: script });
   replay.updateResult(JSON.parse(JSON.stringify(result)), false);
   assert.match(plain(replay), /Describe namespace fixtures/);

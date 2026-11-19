@@ -1,7 +1,7 @@
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { renderCodexToolCell } from "./tool-cell.ts";
+import { toolCall, toolResultBody } from "../../presentation/components/tool-layout.ts";
 import { renderTextWithImages } from "./media.ts";
 
 interface AuxiliaryToolPresentation {
@@ -22,7 +22,8 @@ export function auxiliaryToolRenderers(
 		renderCall(args, theme, context) {
 			const view = present(displayRecord(args));
 			const title = context.isError ? theme.fg("error", failureTitle) : context.isPartial ? view.active : view.complete;
-			return renderCodexToolCell(title, inlineToolText(view.target), theme);
+			const target = inlineToolText(view.target);
+			return toolCall(theme.fg("toolTitle", theme.bold(title)), target ? [theme.fg("accent", target)] : [], theme, context);
 		},
 		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text("", 0, 0);
@@ -42,7 +43,7 @@ export function auxiliaryToolRenderers(
 						if (preview && preview.skippedCount > 0) lines.push(theme.fg("muted", `… ${preview.skippedCount} more lines · ${hint}`));
 					} else if (body && body !== summary) lines.push(theme.fg("dim", hint));
 					const text = lines.filter(Boolean).join("\n");
-					return renderTextWithImages(text, context.showImages ? result.content : [], theme, { paddingX: text ? 2 : 0 }).render(width);
+					return renderTextWithImages(toolResultBody(text, theme), context.showImages ? result.content : [], theme).render(width);
 				},
 				invalidate() {},
 			};

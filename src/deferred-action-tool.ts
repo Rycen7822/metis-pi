@@ -1,6 +1,7 @@
 import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import { toolCall, toolResultBody } from "./presentation/components/tool-layout.ts";
+import { safeText } from "./presentation/terminal-text.ts";
 import { Type } from "typebox";
 
 export type ActionTool = ToolDefinition<any, any>;
@@ -9,7 +10,6 @@ export function createDeferredActionTool(
   name: string,
   description: string,
   actions: ReadonlyMap<string, ActionTool>,
-  layoutFallbackResult?: (body: Component) => Component,
 ) {
   const names = [...actions.keys()];
   const parameters = Type.Object({
@@ -25,6 +25,7 @@ export function createDeferredActionTool(
     parameters,
     outputSchema: Type.Unknown(),
     exposure: "deferred",
+    renderShell: "self",
     async execute(id, input, signal, onUpdate, ctx) {
       const action = input.action === "describe" ? input.target : input.action;
       const definition = action ? actions.get(action) : undefined;
@@ -60,7 +61,8 @@ export function createDeferredActionTool(
     renderCall(input, theme, ctx) {
       const definition = actions.get(input.action);
       if (definition?.renderCall) return definition.renderCall(input.params ?? {}, theme, ctx);
-      return new Text(theme.fg("toolTitle", `${name} ${input.action}`), 0, 0);
+      return toolCall(theme.fg("toolTitle", safeText(`${name} ${input.action ?? ""}`)),
+        input.target ? [theme.fg("accent", safeText(input.target))] : [], theme, ctx);
     },
     renderResult(result, options, theme, ctx) {
       const action = result.details?.metisAction;
@@ -70,8 +72,7 @@ export function createDeferredActionTool(
       const text = action === "describe" && !options.expanded
         ? `${name}: ${target} parameters`
         : result.content.filter(item => item.type === "text").map(item => item.text).join("\n");
-      const body = new Text(theme.fg(ctx?.isError ? "error" : "toolOutput", text), 0, 0);
-      return layoutFallbackResult ? layoutFallbackResult(body) : body;
+      return toolResultBody(theme.fg(ctx?.isError ? "error" : "toolOutput", safeText(text)), theme);
     },
   };
   return tool;

@@ -1,6 +1,7 @@
 import { Container, Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { auxiliaryToolRenderers, displayRecord, inlineToolText } from "../../execution/ui/auxiliary-tool.ts";
+import { toolGutter } from "../../presentation/components/tool-layout.ts";
 
 const titles: Record<string, [string, string]> = {
   subagents_spawn_agent: ["Starting subagent", "Started subagent"],
@@ -102,7 +103,7 @@ export function subagentToolRenderers(
       if (!context.expanded) return head;
       const box = new Container();
       box.addChild(head);
-      box.addChild(new Text(theme.fg("dim", JSON.stringify(args, null, 2) ?? ""), 2, 0));
+      box.addChild(toolGutter(new Text(theme.fg("dim", JSON.stringify(args, null, 2) ?? ""), 0, 0), theme, "args"));
       return box;
     },
   };

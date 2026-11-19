@@ -1,4 +1,4 @@
-import { Container, Image, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Image, Spacer, type Component } from "@earendil-works/pi-tui";
 
 interface ImageContentLike {
 	type: "image";
@@ -13,16 +13,15 @@ function isImageContent(item: ToolContentLike): item is ImageContentLike {
 }
 
 export function renderTextWithImages(
-	text: string,
+	body: Component,
 	content: ToolContentLike[],
 	theme: { fg(role: string, text: string): string },
-	options: { paddingX?: number | undefined } = {},
-): Text | Container {
+): Component {
 	const images = content.filter(isImageContent);
-	if (!images.length) return new Text(text, options.paddingX ?? 0, 0);
+	if (!images.length) return body;
 
 	const box = new Container();
-	box.addChild(new Text(text, options.paddingX ?? 0, 0));
+	box.addChild(body);
 	for (const image of images) {
 		box.addChild(new Spacer(1));
 		box.addChild(new Image(image.data, image.mimeType, { fallbackColor: (value) => theme.fg("dim", value) }, { maxWidthCells: 60 }));

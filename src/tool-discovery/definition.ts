@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { renderToolSignature, resolveSchemaRef } from "@earendil-works/pi-codemode";
-import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
-import { safeText, toolOutputGutter } from "../presentation/terminal-text.ts";
+import { createHangingText } from "../presentation/components/rows.ts";
+import { toolResultBody } from "../presentation/components/tool-layout.ts";
+import { safeText, toolBullet } from "../presentation/terminal-text.ts";
 import {
   DEFAULT_TOOL_SEARCH_LIMIT, TOOL_SEARCH_NAME, describeToolText, isCallable, isLoadable, isVisible,
   rankTools, scriptName,
@@ -143,6 +144,7 @@ export function createToolSearchDefinition(
     parameters,
     outputSchema,
     exposure: "codemode",
+    renderShell: "self",
     reachesTools: () => "all",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(_id, input) {
@@ -154,14 +156,13 @@ export function createToolSearchDefinition(
       const limit = input.limit === undefined ? "" : ` limit=${input.limit}`;
       const offset = input.offset === undefined ? "" : ` offset=${input.offset}`;
       const content = safeText(`${label}${scope}${limit}${offset}`.trim());
-      const bullet = theme.fg(context.isError ? "error" : context.isPartial === false ? "success" : "dim", "•");
-      return new Text(`${bullet} ${theme.fg("toolTitle", TOOL_SEARCH_NAME)} ${theme.fg("text", content)}`, 0, 0);
+      return createHangingText(`${toolBullet(context, theme)} ${theme.fg("toolTitle", TOOL_SEARCH_NAME)} ${theme.fg("text", content)}`);
     },
     renderResult(result, options, theme) {
       const details = result.details;
       if (!details || !Array.isArray(details.matches) || !Array.isArray(details.activated)) {
         const message = safeText(result.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n"));
-        return new Text(message ? toolOutputGutter(message.split("\n"), theme) : "", 0, 0);
+        return toolResultBody(theme.fg("toolOutput", message), theme);
       }
       const lines = [renderSummary(details)];
       if (options.expanded && details.matches.length > 0)
@@ -173,7 +174,7 @@ export function createToolSearchDefinition(
         if (tool?.parameters) lines.push(JSON.stringify(tool.parameters, null, 2));
       }
       const color = options.expanded || details.matches.length === 0 ? "toolOutput" : "muted";
-      return new Text(toolOutputGutter(safeText(lines.join("\n")).split("\n"), theme, color), 0, 0);
+      return toolResultBody(theme.fg(color, safeText(lines.join("\n"))), theme);
     },
   };
 }
