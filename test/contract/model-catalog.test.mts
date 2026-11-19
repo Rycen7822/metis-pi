@@ -129,6 +129,119 @@ test("the shipped entry refreshes the two OAuth lists and restores the same acco
   assert.ok((await restarted.getAllAvailable("openai")).some(model => model.type === "classifier"));
 });
 
+async function responsesFixture(t: TestContext) {
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("openai", async () => ({ type: "api_key", key: "synthetic-key" }));
+  const runtime = await loadExtension(temporaryDirectory(t), credentials, new InMemoryModelsStore());
+  const model = runtime.getProvider("openai")?.getModels().find(model => model.api === "openai-responses");
+  assert.ok(model);
+
+  const user = new AbortController();
+  t.after(() => user.abort());
+  let body: ReadableStreamDefaultController<string> | undefined;
+  const send = (event: object) => {
+    assert.ok(body);
+    body.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const add = (index: number) => send({ type: "response.output_item.added", output_index: index,
+    item: { type: "function_call", id: `fc${index}`, call_id: `call${index}`, name: "codemode", arguments: "" } });
+  const delta = (index: number, text: string) => {
+    send({ type: "response.function_call_arguments.delta", output_index: index, delta: text });
+  };
+  const requests = t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    assert.ok(init?.signal);
+    const signal = init.signal;
+    const source = new ReadableStream<string>({
+      start(controller) {
+        body = controller;
+        signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        send({ type: "response.created", response: { id: "fixture" } });
+      },
+    });
+    return new Response(source.pipeThrough(new TextEncoderStream()), { headers: { "content-type": "text/event-stream" } });
+  });
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  t.mock.method(performance, "now", () => Date.now());
+  const parsed = new Map<string, () => void>();
+  const nextRaw = (type: string) => new Promise<void>(resolve => { parsed.set(type, resolve); });
+  const response = runtime.streamSimple(model, {
+    systemPrompt: "Test", messages: [{ role: "user", content: "Test", timestamp: Date.now() }],
+  }, { signal: user.signal, timeoutMs: 600_000, maxRetries: 0, onProviderStreamEvent(event) {
+    if (!event || typeof event !== "object" || !("type" in event) || typeof event.type !== "string") return;
+    const resolve = parsed.get(event.type);
+    parsed.delete(event.type);
+    resolve?.();
+  } });
+  const output = response[Symbol.asyncIterator]();
+  assert.equal((await output.next()).value?.type, "start");
+  return { add, delta, send, nextRaw, response, output, user, requests,
+    heartbeat: () => { body?.enqueue(": keep-alive\n\n"); send({ type: "ping" }); },
+    close: () => body?.close() };
+}
+
+test("Responses tracks each unfinished tool's parameters, not keep-alives or other calls", { timeout: 5000 }, async t => {
+  const f = await responsesFixture(t);
+  f.add(0);
+  f.delta(0, '{"code":"text(');
+  assert.equal((await f.output.next()).value?.type, "toolcall_start");
+  assert.equal((await f.output.next()).value?.type, "toolcall_delta");
+  t.mock.timers.tick(119_000);
+  f.delta(0, "1");
+  assert.equal((await f.output.next()).value?.type, "toolcall_delta", "real argument progress keeps the stream alive");
+  t.mock.timers.tick(119_000);
+  f.add(1);
+  f.delta(1, '{"code":"text(');
+  assert.equal((await f.output.next()).value?.type, "toolcall_start");
+  assert.equal((await f.output.next()).value?.type, "toolcall_delta");
+  const ping = f.nextRaw("ping");
+  f.heartbeat();
+  await ping;
+  t.mock.timers.tick(1_000);
+
+  const result = await f.response.result();
+  assert.equal(result.stopReason, "error");
+  assert.match(result.errorMessage ?? "", /OpenAI Responses stream stalled.*tool arguments.*120s/);
+  assert.deepEqual(result.content[0], { type: "toolCall", id: "call0|fc0", name: "codemode", arguments: { code: "text(1" } });
+  assert.equal(f.user.signal.aborted, false);
+  assert.equal(f.requests.mock.callCount(), 1);
+});
+
+test("encrypted reasoning and finished arguments do not impose a deadline on the rest of the response", { timeout: 5000 }, async t => {
+  const f = await responsesFixture(t);
+  const message = { type: "message", id: "msg", content: [{ type: "output_text", text: "Working" }] };
+  f.send({ type: "response.output_item.added", output_index: 0, item: { ...message, content: [] } });
+  f.send({ type: "response.output_text.delta", output_index: 0, delta: "Working" });
+  assert.equal((await f.output.next()).value?.type, "text_start");
+  assert.equal((await f.output.next()).value?.type, "text_delta");
+  f.send({ type: "response.output_item.done", output_index: 0, item: message });
+  assert.equal((await f.output.next()).value?.type, "text_end");
+
+  const reasoning = { type: "reasoning", id: "rs1", summary: [], encrypted_content: "fixture-ciphertext" };
+  f.send({ type: "response.output_item.added", output_index: 1, item: reasoning });
+  assert.equal((await f.output.next()).value?.type, "thinking_start");
+  t.mock.timers.tick(121_000);
+  f.send({ type: "response.output_item.done", output_index: 1, item: reasoning });
+  assert.equal((await f.output.next()).value?.type, "thinking_end");
+
+  f.add(2);
+  f.delta(2, '{"code":"text(1)"}');
+  assert.equal((await f.output.next()).value?.type, "toolcall_start");
+  assert.equal((await f.output.next()).value?.type, "toolcall_delta");
+  const item = { type: "function_call", id: "fc2", call_id: "call2", name: "codemode", arguments: '{"code":"text(1)"}' };
+  const argsDone = f.nextRaw("response.function_call_arguments.done");
+  f.send({ type: "response.function_call_arguments.done", output_index: 2, arguments: item.arguments });
+  await argsDone;
+  t.mock.timers.tick(121_000);
+  f.send({ type: "response.output_item.done", output_index: 2, item });
+  f.send({ type: "response.completed", response: { status: "completed", output: [message, reasoning, item] } });
+  f.close();
+  const result = await f.response.result();
+  assert.equal(result.stopReason, "toolUse");
+  assert.deepEqual(result.content.at(-1), { type: "toolCall", id: "call2|fc2", name: "codemode", arguments: { code: "text(1)" } });
+});
+
 test("offline startup can restore the saved model after Pi rotates the OAuth tokens", async t => {
   const dir = temporaryDirectory(t), credentials = new InMemoryCredentialStore(), store = new InMemoryModelsStore();
   const provider = "openai", id = visibleSol.slug;

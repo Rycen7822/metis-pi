@@ -51,9 +51,14 @@ export function selectToolPresentation(input: {
     };
   }
   if (name === "codemode" && kind === "builtin" && codemode) return {
-    renderCall: codemode.renderCall,
-    renderResult: (value, opts, theme, ctx) => codemode.renderResult(
-      { ...asRecord(value), nestedCalls: asRecord(result()).nestedCalls }, opts, theme, ctx),
+    renderCall(args, theme, ctx) {
+      return codemode.renderCall(args, theme, { ...ctx, hasResult: result() !== undefined });
+    },
+    renderResult(value, opts, theme, ctx) {
+      // Pi passes only content/details into renderResult, even for saved tool messages.
+      const { nestedCalls, toolCallId } = asRecord(result());
+      return codemode.renderResult({ ...asRecord(value), nestedCalls, toolCallId }, opts, theme, ctx);
+    }
   };
   if (name === "neural_search") {
     if (kind !== "neural") return;

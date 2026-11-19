@@ -11,9 +11,16 @@
 | 用量或速度不符合预期 | 先比对[统计口径](features/interface.md#统计口径)。状态栏的估算不用于计费。 |
 | 缓存命中突然下降 | 用 [请求前缀诊断](#请求前缀诊断) 对照复现前后的请求。 |
 | 模型、指令或整理状态有误 | 用 `/model` 核对当前模型；用 `/dynamic-agents` 或 `/pruner status` 查看策略。 |
+| Codemode 停在 `Receiving script from model` | 脚本仍是模型输出，尚未执行；可用 Esc 中断。[OpenAI 流停滞](#openai-流停滞)说明何时会自动报错。 |
 | 工具未注册或不可用 | 用 [tool_search](features/tool-discovery.md) 核对目录；再检查 `/mcp`、`/lsp`、`/neural-search health` 或 `/metis-subagents`。 |
 
 报告问题时附上 Pi 与 Metis 版本、终端模式、复现步骤和相关诊断字段。发送前移除密钥、私人路径和会话正文。
+
+## OpenAI 流停滞
+
+Metis 接管的 `openai` 提供商使用 HTTP Responses API。某个工具调用开始收到参数后，若连续 120 秒没有该调用的新参数、也未收到完成事件，Metis 会取消该响应并报告 `OpenAI Responses stream stalled`。连接心跳、正文、思考和其他调用不会替它续期。
+
+参数收齐后停止计时，不必等整个响应完成。没有未收齐参数时，正文和隐藏推理仍沿用 Pi 的 HTTP 超时；`openai-codex` 的传输策略不变。Codemode 卡片显示 `Receiving script from model` 时还未执行脚本；中断或超时不会运行半截脚本。
 
 ## 请求前缀诊断
 

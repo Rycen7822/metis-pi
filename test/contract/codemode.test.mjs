@@ -185,7 +185,8 @@ test("generation streams a bounded source preview, then folds it without overwri
   });
   row.updateArgs({ code: 'const EARLY_SOURCE_MARKER = 1;\n' + code });
   assert.match(plain(row), /JS_ONLY_MARKER/, "source streams without an explicit expansion");
-  assert.doesNotMatch(plain(row), /EARLY_SOURCE_MARKER|Preparing script/, "the automatic preview shows only the source tail");
+  assert.doesNotMatch(plain(row), /EARLY_SOURCE_MARKER|Running script/, "the automatic preview shows only the source tail");
+  assert.match(plain(row), /Receiving script from model \(not running\)/);
   const sourceRows = plain(row).split("\n").filter(line => /^\s*[│|]/.test(line));
   assert.equal(sourceRows.length, 12, "the automatic preview is bounded to twelve visual source rows");
   const wrapped = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), {
@@ -226,15 +227,26 @@ test("generation streams a bounded source preview, then folds it without overwri
   assert.match(frame(), /tools\.read/, "each arriving source update is visible before completion");
   folded.setArgsComplete();
   assert.doesNotMatch(frame(), /JS_ONLY_MARKER/, "source folds as soon as generation ends, before execution starts");
-  assert.match(frame(), /Preparing script/);
+  assert.match(frame(), /Waiting to run script/);
+  assert.doesNotMatch(frame(), /Receiving script from model|Running script/);
   folded.markExecutionStarted();
+  assert.match(frame(), /Running script/, "execution starts before the first result");
   folded.updateResult({ content: [], details: { calls: [] } }, true);
-  assert.match(frame(), /Running script/);
+  assert.equal(frame().match(/Running script/g)?.length, 1);
   folded.updateResult({ content: [], details: { calls: [] } }, false);
   assert.match(frame(), /Ran script/);
   assert.doesNotMatch(frame(), /JS_ONLY_MARKER/);
   history.dispose();
   assert.equal(folded.updateArgs, updateArgs, "unmount restores the native argument updater");
+
+  const interrupted = new StreamingHost("codemode", context.getRegisteredToolDefinition("codemode"), { code: "node -p" });
+  interrupted.updateResult({ content: [{ type: "text", text: "OpenAI Responses stream stalled" }], isError: true });
+  const failed = plain(interrupted);
+  assert.match(failed, /Model response interrupted; script not run *\nOpenAI Responses stream stalled/);
+  assert.doesNotMatch(failed, /Receiving script|Running script|Script failed|Script output|Took/);
+
+  interrupted.updateResult({ toolCallId: parent, content: [{ type: "text", text: "Tool failed" }], isError: true });
+  assert.match(plain(interrupted), /Script failed/, "a saved tool result is not a model-stream error");
 });
 
 test("codemode streams gray text inside the unchanged orange rail with terminal color fallbacks", (t) => {
@@ -257,7 +269,7 @@ test("codemode streams gray text inside the unchanged orange rail with terminal 
     } };
     const streaming = { state: {}, argsComplete: false, executionStarted: false, isPartial: true };
     assert.equal(render(codemode.renderCall({ code: "text(1)" }, streamTheme, streaming)),
-      `${colored("codemode")}\n${rail} ${gray ? `${gray}text(1)\x1b[39m` : "text(1)"}`,
+      `${colored("codemode")}\n${rail} ${gray ? `${gray}text(1)\x1b[39m` : "text(1)"}\n• Receiving script from model (not running)`,
       "generation uses gray source, not syntax highlighting");
     assert.equal(render(codemode.renderCall({ code: "text(1)" }, theme, context)), colored("codemode"), kind);
     const expanded = render(codemode.renderCall({ code: "text(1)" }, theme, { ...context, expanded: true }));

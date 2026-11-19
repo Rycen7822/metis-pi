@@ -1,6 +1,7 @@
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { ModelRuntime, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withAccountCatalog } from "../src/model-catalog/provider.ts";
+import { withResponsesProgress } from "../src/model-catalog/responses-progress.ts";
 
 export default async function (pi: ExtensionAPI) {
   // Obtain Pi's stock catalog delegates, including their pi.dev fallback.
@@ -9,6 +10,8 @@ export default async function (pi: ExtensionAPI) {
   });
   for (const [id, api] of [["openai", "openai-responses"], ["openai-codex", "openai-codex-responses"]] as const) {
     const provider = builtins.getProvider(id);
-    if (provider) pi.registerProvider(withAccountCatalog(provider, api));
+    if (!provider) continue;
+    const catalog = withAccountCatalog(provider, api);
+    pi.registerProvider(api === "openai-responses" ? withResponsesProgress(catalog) : catalog);
   }
 }

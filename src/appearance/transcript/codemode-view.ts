@@ -324,15 +324,14 @@ export function makeCodemodeRenderers(input: {
       const timer = timerState(context);
       if (timer && context.executionStarted && timer.startedAt === undefined) timer.startedAt = Date.now();
       const title = label(theme.bold("codemode")), view = expansion(context);
-      const receiving = context.argsComplete === false && !context.executionStarted
-        && context.isPartial !== false && !context.hasResult && !context.isError;
+      const pending = !context.hasResult && !context.isError;
+      const receiving = pending && context.argsComplete === false && !context.executionStarted && context.isPartial !== false;
       const code = asRecord(args).code;
-      if (typeof code !== "string")
-        return clickRegion(input.makeText(receiving ? title : `${title} ${theme.fg("error", "[invalid arg]")}`), context);
       const expanded = view.script ?? view.expanded;
       // Automatic streaming visibility ends with generation, without resetting explicit expansion choices.
-      const script = (receiving || expanded) && code ? safeText(code) : "";
-      let component: Component = input.makeText(title);
+      const script = typeof code === "string" && (receiving || expanded) && code ? safeText(code) : "";
+      const invalid = typeof code !== "string" && !receiving && !context.isError;
+      let component: Component = input.makeText(invalid ? `${title} ${theme.fg("error", "[invalid arg]")}` : title);
       if (script) {
         let styled = script;
         if (receiving) {
@@ -342,14 +341,26 @@ export function makeCodemodeRenderers(input: {
           component, scriptBody(input.makeText(styled), scriptGlyph, receiving && !expanded),
         ], "child-placements");
       }
-      const preparing = receiving || context.argsComplete === true && context.executionStarted === false;
-      if (!script && preparing && context.isPartial !== false && !context.isError)
-        component = stackComponents([component, input.makeText(`${theme.fg("dim", "•")} Preparing script`)], "child-placements");
+      let phase: string | undefined;
+      if (receiving) phase = "Receiving script from model (not running)";
+      else if (pending && context.isPartial) {
+        if (context.executionStarted) phase = "Running script";
+        else if (context.argsComplete) phase = "Waiting to run script";
+      }
+      if (phase) component = stackComponents([component, input.makeText(theme.fg("dim", `• ${phase}`))], "child-placements");
       return clickRegion(component, context, () => { view.script = !expanded; });
     },
     renderResult: livePreviews(input.makeText, (result, options, theme, context, timerText) => {
-      const view = expansion(context, options.expanded === true);
-      const value = asRecord(result), details = asRecord(value.details);
+      const value = asRecord(result);
+      // Pi gives pending rows a synthetic error result when the model stream fails.
+      // A replayed toolResult has a toolCallId but no live execution-start signal.
+      if (context.isError && context.executionStarted === false && context.durationMs === undefined
+          && value.toolCallId === undefined && value.details === undefined) {
+        const error = Array.isArray(value.content) ? value.content.map(asRecord).find(block => block.type === "text")?.text : undefined;
+        const heading = theme.fg("error", "• Model response interrupted; script not run");
+        return input.makeText(typeof error === "string" && error ? `${heading}\n${safeText(error)}` : heading);
+      }
+      const view = expansion(context, options.expanded === true), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
       const parent = context.toolCallId ?? "", previewId = `${parent}/?`;
       const history = asRecord(value.nestedCalls ?? input.store.history(parent));
