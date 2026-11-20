@@ -1,4 +1,4 @@
-import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import { normalizeHostname } from "./hostname.ts";
 import { resolveWebProxy, webFetch, type ProxiedRequestInit } from "./proxy-transport.ts";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -13,7 +13,7 @@ export type LookupAddress = { address: string; family: number };
 export type Lookup = (hostname: string) => Promise<LookupAddress[]>;
 type Fetch = typeof fetch;
 
-const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
+const WEB_PREFERENCES_PATH = webPreferencesPath();
 
 export interface SsrfConfig {
 	allowRanges: string[];
@@ -32,12 +32,12 @@ export function loadFetchContentDomainPolicy(): DomainPolicy {
 	const fetchContent = parsed.fetchContent;
 	if (fetchContent === undefined || fetchContent === null) return { ...DEFAULT_DOMAIN_POLICY };
 	if (typeof fetchContent !== "object" || Array.isArray(fetchContent)) {
-		throw new Error(`fetchContent in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+		throw new Error(`fetchContent in ${WEB_PREFERENCES_PATH} must be an object`);
 	}
 	const policy = (fetchContent as { domainPolicy?: unknown }).domainPolicy;
 	if (policy === undefined || policy === null) return { ...DEFAULT_DOMAIN_POLICY };
 	if (typeof policy !== "object" || Array.isArray(policy)) {
-		throw new Error(`fetchContent.domainPolicy in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+		throw new Error(`fetchContent.domainPolicy in ${WEB_PREFERENCES_PATH} must be an object`);
 	}
 	const config = policy as { allow?: unknown; deny?: unknown };
 	return {
@@ -49,15 +49,16 @@ export function loadFetchContentDomainPolicy(): DomainPolicy {
 function parseDomainEntries(value: unknown, field: "allow" | "deny"): string[] {
 	if (value === undefined || value === null) return [];
 	if (!Array.isArray(value)) {
-		throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_SEARCH_CONFIG_PATH} must be an array of hostnames`);
+		throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_PREFERENCES_PATH} must be an array of hostnames`);
 	}
 	return value.map((entry, index) => {
 		if (typeof entry !== "string") {
-			throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_SEARCH_CONFIG_PATH} must contain only hostnames; entry ${index + 1} is ${typeof entry}`);
+			throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_PREFERENCES_PATH} must contain only hostnames; `
+				+ `entry ${index + 1} is ${typeof entry}`);
 		}
 		const hostname = normalizeDomainEntry(entry);
 		if (!hostname) {
-			throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_SEARCH_CONFIG_PATH} contains an invalid hostname: ${JSON.stringify(entry)}`);
+			throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_PREFERENCES_PATH} contains an invalid hostname: ${JSON.stringify(entry)}`);
 		}
 		return hostname;
 	});
@@ -76,19 +77,19 @@ export function loadSsrfConfig(): SsrfConfig {
 	const ssrf = parsed.ssrf;
 	if (ssrf === undefined || ssrf === null) return { allowRanges: [], trustEnvProxy: false };
 	if (typeof ssrf !== "object" || Array.isArray(ssrf)) {
-		throw new Error(`ssrf in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+		throw new Error(`ssrf in ${WEB_PREFERENCES_PATH} must be an object`);
 	}
 	const config = ssrf as { allowRanges?: unknown; trustEnvProxy?: unknown };
 	if (config.allowRanges !== undefined && config.allowRanges !== null && !Array.isArray(config.allowRanges)) {
-		throw new Error(`ssrf.allowRanges in ${WEB_SEARCH_CONFIG_PATH} must be an array of CIDR strings`);
+		throw new Error(`ssrf.allowRanges in ${WEB_PREFERENCES_PATH} must be an array of CIDR strings`);
 	}
 	if (config.trustEnvProxy !== undefined && typeof config.trustEnvProxy !== "boolean") {
-		throw new Error(`ssrf.trustEnvProxy in ${WEB_SEARCH_CONFIG_PATH} must be a boolean`);
+		throw new Error(`ssrf.trustEnvProxy in ${WEB_PREFERENCES_PATH} must be a boolean`);
 	}
 	const allowRangesValue: unknown[] = Array.isArray(config.allowRanges) ? config.allowRanges : [];
 	const allowRanges = allowRangesValue.map((entry, index) => {
 		if (typeof entry !== "string") {
-			throw new Error(`ssrf.allowRanges in ${WEB_SEARCH_CONFIG_PATH} must contain only CIDR strings; entry ${index + 1} is ${typeof entry}`);
+			throw new Error(`ssrf.allowRanges in ${WEB_PREFERENCES_PATH} must contain only CIDR strings; entry ${index + 1} is ${typeof entry}`);
 		}
 		return entry.trim();
 	}).filter(Boolean);

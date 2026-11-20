@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { isLoopbackHostname } from "./hostname.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
@@ -10,7 +10,7 @@ import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { loadSsrfConfig, validateRemoteUrl, fetchRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const DEFAULT_API_VERSION = "v2";
 const EXTRACT_TIMEOUT_MS = 60_000;
 const SEARCH_TIMEOUT_MS = 60_000;
@@ -82,13 +82,13 @@ function normalizeBaseUrl(value: unknown): string | null {
 	try {
 		parsed = new URL(trimmed);
 	} catch {
-		throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+		throw new Error(`Invalid Firecrawl base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
 	}
 	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-		throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+		throw new Error(`Invalid Firecrawl base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
 	}
 	if (parsed.username || parsed.password) {
-		throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
+		throw new Error(`Invalid Firecrawl base URL in ${webPreferencesPath()}: URL credentials are not allowed`);
 	}
 	parsed.pathname = parsed.pathname.replace(/\/+$/, "");
 	parsed.search = "";
@@ -105,7 +105,7 @@ function requireBaseUrl(): string {
 	if (!baseUrl) {
 		throw new Error(
 			"Firecrawl base URL not configured. Either:\n" +
-			`  1. Set firecrawlBaseUrl in ${getWebAccessConfigPath()}\n` +
+			`  1. Set firecrawlBaseUrl in ${webPreferencesPath()}\n` +
 			"  2. Set FIRECRAWL_BASE_URL environment variable",
 		);
 	}
@@ -119,7 +119,7 @@ function getApiVersion(): FirecrawlApiVersion {
 	const raw = environmentValue || loadConfig().firecrawlApiVersion;
 	if (raw === undefined || raw === null) return DEFAULT_API_VERSION;
 	if (typeof raw !== "string") {
-		throw new Error(`firecrawlApiVersion in ${getWebAccessConfigPath()} must be a string ("v1" or "v2")`);
+		throw new Error(`firecrawlApiVersion in ${webPreferencesPath()} must be a string ("v1" or "v2")`);
 	}
 	const normalized = raw.trim().toLowerCase();
 	if (!normalized) return DEFAULT_API_VERSION;
@@ -134,7 +134,7 @@ function allowFreshScrape(): boolean {
 	if (environmentValue !== undefined) return environmentValue === "1" || environmentValue.toLowerCase() === "true";
 	const configured = loadConfig().firecrawlFreshScrape;
 	if (configured === undefined || configured === null) return false;
-	if (typeof configured !== "boolean") throw new Error(`firecrawlFreshScrape in ${getWebAccessConfigPath()} must be a boolean`);
+	if (typeof configured !== "boolean") throw new Error(`firecrawlFreshScrape in ${webPreferencesPath()} must be a boolean`);
 	return configured;
 }
 
@@ -142,11 +142,11 @@ function pdfParserOptions(): { parsers?: Array<{ type: "pdf"; maxPages: number }
 	const configured = loadConfig().firecrawlPdfMaxPages;
 	if (configured === undefined || configured === null) return {};
 	if (typeof configured !== "number" || !Number.isInteger(configured) || configured < 1) {
-		throw new Error(`firecrawlPdfMaxPages in ${getWebAccessConfigPath()} must be a positive integer`);
+		throw new Error(`firecrawlPdfMaxPages in ${webPreferencesPath()} must be a positive integer`);
 	}
 	if (getApiVersion() === "v1") {
 		throw new Error(
-			`firecrawlPdfMaxPages in ${getWebAccessConfigPath()} requires Firecrawl API v2; v1 has no PDF page cap. ` +
+			`firecrawlPdfMaxPages in ${webPreferencesPath()} requires Firecrawl API v2; v1 has no PDF page cap. ` +
 			"Use firecrawlApiVersion \"v2\" or remove firecrawlPdfMaxPages",
 		);
 	}

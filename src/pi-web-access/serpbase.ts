@@ -2,14 +2,15 @@ import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { GOOGLE_RECENCY_TBS, loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { GOOGLE_RECENCY_TBS, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const SERPBASE_API_URL = "https://api.serpbase.dev/google/search";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 

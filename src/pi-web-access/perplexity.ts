@@ -1,4 +1,5 @@
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { SearchHttpError, type SearchResult, type SearchResponse, type SearchOptions } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -8,7 +9,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 
 const PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
 const PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const REQUEST_TIMEOUT_MS = 60_000;
 
 const RATE_LIMIT = {

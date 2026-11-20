@@ -1,7 +1,7 @@
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomain, matchesDomainFilter } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
@@ -27,7 +27,7 @@ function credentialOptions(config: Record<string, unknown>) {
 function endpointUrl(config: Record<string, unknown>): string {
 	const endpoint = config.zaiEndpoint ?? "global";
 	if (endpoint !== "global" && endpoint !== "china") {
-		throw new Error(`zaiEndpoint in ${getWebAccessConfigPath()} must be "global" or "china"`);
+		throw new Error(`zaiEndpoint in ${webPreferencesPath()} must be "global" or "china"`);
 	}
 	return MCP_URLS[endpoint];
 }

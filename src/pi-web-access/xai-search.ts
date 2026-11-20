@@ -1,5 +1,6 @@
 import { extractAnswer, extractSnippetAround } from "./search-answer-formatting.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
@@ -26,7 +27,7 @@ import { forEachCitationAnnotation, forEachSearchCallSource } from "./responses-
 // default; sources may also come back in a search call's `action.sources`.
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 // Ordered best-first. pi's builtin xai catalog is small and xAI retires models
@@ -63,7 +64,7 @@ function loadConfig(): WebSearchConfig {
 function resolveConfiguredSearchModel(value: unknown): string | undefined {
 	if (value == null) return undefined;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`xaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
+		throw new Error(`xaiSearchModel in ${webPreferencesPath()} must be a non-empty string`);
 	}
 	return value.trim();
 }
@@ -71,16 +72,16 @@ function resolveConfiguredSearchModel(value: unknown): string | undefined {
 function resolveConfiguredSearchTools(value: unknown): XaiSearchTool[] {
 	if (value === undefined) return [...DEFAULT_XAI_SEARCH_TOOLS];
 	if (!Array.isArray(value) || value.length === 0) {
-		throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must be a non-empty array containing only web_search or x_search`);
+		throw new Error(`xaiSearchTools in ${webPreferencesPath()} must be a non-empty array containing only web_search or x_search`);
 	}
 
 	const tools: XaiSearchTool[] = [];
 	for (const tool of value) {
 		if (tool !== "web_search" && tool !== "x_search") {
-			throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} may only contain web_search or x_search`);
+			throw new Error(`xaiSearchTools in ${webPreferencesPath()} may only contain web_search or x_search`);
 		}
 		if (tools.includes(tool)) {
-			throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must not contain duplicates: ${tool}`);
+			throw new Error(`xaiSearchTools in ${webPreferencesPath()} must not contain duplicates: ${tool}`);
 		}
 		tools.push(tool);
 	}

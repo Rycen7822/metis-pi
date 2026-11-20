@@ -2,7 +2,8 @@ import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
-import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath, resolveApiBaseUrl } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects, resolveApiBaseUrl } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { BraveRateLimitCoordinator } from "./brave-rate-limit.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
@@ -10,7 +11,7 @@ import type { SearchOptions, SearchResult, SearchResponse } from "./search-types
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 30_000;
 const braveRateLimit = new BraveRateLimitCoordinator();
 

@@ -12,9 +12,9 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import initializeExtension from "../index.ts";
 import { buildSearchErrorPlan } from "../render-search-error.ts";
 
 // --- fixture: a stale cancel with partial results, mirroring the user's report
@@ -122,27 +122,27 @@ test("non-error result yields null so the caller falls through to the success re
 	assert.equal(buildSearchErrorPlan(null), null);
 });
 
-// --- source-contract guard: index.ts web_search renderResult must DELEGATE to
-// buildSearchErrorPlan on the error path (mutation-proof against reverting the
-// integration back to the dead-end single-line return). ---
-const indexPath = fileURLToPath(new URL("../index.ts", import.meta.url));
-const indexSrc = readFileSync(indexPath, "utf8");
+test("registered search, fetch and retrieval actions reveal error diagnostics when expanded", () => {
+	const tools = new Map();
+	initializeExtension({
+		registerTool(tool) { tools.set(tool.name, tool); },
+		registerCommand() {}, registerShortcut() {}, on() {}, appendEntry() {},
+	});
+	const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
+	for (const [name, details, diagnostic] of [
+		["web_search", staleCancel, /5 sources/],
+		["fetch_content", { error: "Fetch failed", urlCount: 2, successful: 1 }, /urls: 1\/2 succeeded/],
+		["get_search_content", { error: "Not found", query: "sample query" }, /query: sample query/],
+	]) {
+		const tool = tools.get(name);
+		const render = expanded => tool.renderResult({ content: [], details }, { expanded, isPartial: false }, theme).render(120).join("\n");
+		assert.match(render(false), /ctrl\+o to expand/i, name);
+		assert.match(render(true), diagnostic, name);
+	}
+});
 
-test("index.ts imports buildSearchErrorPlan and wires it into the web_search error path", () => {
-	assert.match(indexSrc, /import \{ buildSearchErrorPlan, type SearchErrorDetails, type SearchErrorPlan \} from "\.\/render-search-error\.ts";/);
-	// The web_search renderResult error branch must call buildSearchErrorPlan.
-	// (Mutation: reverting renderResult to `return new Text(error...)` drops this.)
-	assert.match(indexSrc, /buildSearchErrorPlan\(details as SearchErrorDetails\)/);
-	// buildCurationCancelledReturn must now carry partial diagnostics into details
-	// (mutation: dropping the partial arg reverts to the discarded-results bug).
-	assert.match(indexSrc, /buildCurationCancelledReturn\(reason, \{/);
-	assert.match(indexSrc, /cancelledQueries/);
-	// the 2 other tools must also delegate to buildSearchErrorPlan (mutation-proof:
-	// reverting any of them to the bare single-line drops its buildSearchErrorPlan call).
-	// Count call sites: web_search + fetch_content + get_search_content = 3.
-	const callSiteCount = (indexSrc.match(/const plan = buildSearchErrorPlan\(/g) || []).length;
-	assert.equal(callSiteCount, 3, `expected 3 buildSearchErrorPlan call sites, got ${callSiteCount}`);
-	// renderSearchErrorPlan shared renderer is used by all 3.
-	const renderCount = (indexSrc.match(/return renderSearchErrorPlan\(plan, expanded, theme\)/g) || []).length;
-	assert.equal(renderCount, 3, `expected 3 renderSearchErrorPlan returns, got ${renderCount}`);
+test("curation cancellation carries partial results into its return", () => {
+	const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+	assert.match(source, /buildCurationCancelledReturn\(reason, \{/);
+	assert.match(source, /cancelledQueries/);
 });

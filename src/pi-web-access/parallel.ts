@@ -1,5 +1,6 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
@@ -8,7 +9,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 
 const PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search";
 const PARALLEL_EXTRACT_URL = "https://api.parallel.ai/v1/extract";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const MIN_PARALLEL_API_KEY_LENGTH = 8;
 const MIN_USEFUL_CONTENT = 500;
 const SEARCH_TIMEOUT_MS = 60_000;

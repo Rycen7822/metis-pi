@@ -3,14 +3,14 @@ import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const BOCHA_SEARCH_URL = "https://api.bochaai.com/v1/web-search";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 interface WebSearchConfig {

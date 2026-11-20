@@ -42,9 +42,8 @@ export interface ExtractOptions {
 	toolNames?: RegisteredToolNames;
 	/** Optional HTTP(S) or SOCKS proxy URL; routed through the curl-backed transport. */
 	proxy?: string;
-	/** Reject direct image URLs with this error instead of decoding them with Pi's
-	 * resizeImage. Hosts without the Pi runtime set it; Pi leaves it unset. */
-	rejectDirectImages?: string;
+	/** Text-only hosts reject unsupported sources before media analysis or decoding. */
+	textOnly?: { localFile: string; video: string; image: string };
 	/** Custom DNS resolver used for SSRF validation. Primarily a test seam. */
 	lookup?: Lookup;
 	/** Request injection; URL checks and redirect policy remain owned by extraction. */

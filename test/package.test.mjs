@@ -80,6 +80,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "only the supported SDK patch release is distributed");
   assert.ok([...files].every((path) => !path.startsWith("references/")));
   assert.ok([...files].every((path) => !path.startsWith("benchmarks/")));
+  assert.ok([...files].every((path) => !path.startsWith("test/")), "repository tests and their fixtures are not shipped");
   for (const path of files) {
     if (!path.startsWith("src/")) continue;
     assert.ok(!path.startsWith("src/neural-search/engine/"), path);

@@ -1,7 +1,8 @@
 import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, getWebAccessConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath, webPreferencesPath } from "./config.ts";
+import { normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
@@ -9,7 +10,7 @@ import type { SearchOptions, SearchResult, SearchResponse } from "./search-types
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 // degoog is a self-hosted metasearch front end. The public instance keeps the
 // provider usable without configuration; DEGOOG_URL or degoogBaseUrl point it at
 // a private deployment, which is what SSRF-guarded internal hosts require.
@@ -72,7 +73,7 @@ function requireBaseUrl(): string {
 	if (!baseUrl) {
 		throw new Error(
 			"degoog base URL is invalid or missing. Either:\n" +
-			`  1. Set webAccess.degoogBaseUrl = "https://degoog.example.com" in ${getWebAccessConfigPath()}\n` +
+			`  1. Set webAccess.degoogBaseUrl = "https://degoog.example.com" in ${webPreferencesPath()}\n` +
 			"  2. Set DEGOOG_URL to an HTTP(S) URL\n" +
 			"  3. Remove the override to use the public instance at https://degoog.org",
 		);

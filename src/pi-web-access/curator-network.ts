@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 
 export interface CuratorNetworkConfig {
 	/** Whether remote access was opted into via curatorRemote. */

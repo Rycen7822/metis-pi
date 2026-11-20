@@ -1,7 +1,7 @@
-import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import { normalizeHostname } from "./hostname.ts";
 
-const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
+const WEB_PREFERENCES_PATH = webPreferencesPath();
 const AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 export type AuthFetchRequest = true | string;
@@ -18,7 +18,7 @@ export interface AuthFetchProfile {
 export function resolveAuthFetchProfile(request: AuthFetchRequest): AuthFetchProfile {
 	const profiles = loadAuthFetchProfiles();
 	if (profiles.length === 0) {
-		throw new Error(`auth requires at least one authFetch profile in ${WEB_SEARCH_CONFIG_PATH}`);
+		throw new Error(`auth requires at least one authFetch profile in ${WEB_PREFERENCES_PATH}`);
 	}
 	if (request === true) {
 		if (profiles.length !== 1) {
@@ -58,7 +58,7 @@ function loadAuthFetchProfiles(): AuthFetchProfile[] {
 	const parsed = loadWebAccessConfig();
 	if (parsed.authFetch === undefined || parsed.authFetch === null) return [];
 	if (typeof parsed.authFetch !== "object" || Array.isArray(parsed.authFetch)) {
-		throw new Error(`authFetch in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+		throw new Error(`authFetch in ${WEB_PREFERENCES_PATH} must be an object`);
 	}
 	return Object.entries(parsed.authFetch as Record<string, unknown>).map(([name, value]) => parseProfile(name, value));
 }
@@ -71,19 +71,19 @@ function parseProfile(name: string, value: unknown): AuthFetchProfile {
 		return { name, hosts: parseHosts(value, `authFetch.${name}`), redirects: "same-origin", cache: "session" };
 	}
 	if (!value || typeof value !== "object") {
-		throw new Error(`authFetch.${name} in ${WEB_SEARCH_CONFIG_PATH} must be an array of hosts or an object`);
+		throw new Error(`authFetch.${name} in ${WEB_PREFERENCES_PATH} must be an array of hosts or an object`);
 	}
 	const config = value as Record<string, unknown>;
 	if (!Array.isArray(config.hosts)) {
-		throw new Error(`authFetch.${name}.hosts in ${WEB_SEARCH_CONFIG_PATH} must be a non-empty array of hostnames`);
+		throw new Error(`authFetch.${name}.hosts in ${WEB_PREFERENCES_PATH} must be a non-empty array of hostnames`);
 	}
 	const redirects = config.redirects ?? "same-origin";
 	if (redirects !== "same-origin") {
-		throw new Error(`authFetch.${name}.redirects in ${WEB_SEARCH_CONFIG_PATH} must be "same-origin"`);
+		throw new Error(`authFetch.${name}.redirects in ${WEB_PREFERENCES_PATH} must be "same-origin"`);
 	}
 	const cache = config.cache ?? "session";
 	if (cache !== "session" && cache !== "off") {
-		throw new Error(`authFetch.${name}.cache in ${WEB_SEARCH_CONFIG_PATH} must be "session" or "off"`);
+		throw new Error(`authFetch.${name}.cache in ${WEB_PREFERENCES_PATH} must be "session" or "off"`);
 	}
 	const chromeProfile = parseChromeProfile(config.chromeProfile, `authFetch.${name}.chromeProfile`);
 	return {
@@ -96,9 +96,9 @@ function parseProfile(name: string, value: unknown): AuthFetchProfile {
 }
 
 function parseHosts(value: unknown[], label: string): string[] {
-	if (value.length === 0) throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} must be a non-empty array of hostnames`);
+	if (value.length === 0) throw new Error(`${label} in ${WEB_PREFERENCES_PATH} must be a non-empty array of hostnames`);
 	const hosts = value.map((entry) => {
-		if (typeof entry !== "string") throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} must contain only hostnames`);
+		if (typeof entry !== "string") throw new Error(`${label} in ${WEB_PREFERENCES_PATH} must contain only hostnames`);
 		return parseHost(entry, label);
 	});
 	return [...new Set(hosts)];
@@ -107,20 +107,20 @@ function parseHosts(value: unknown[], label: string): string[] {
 function parseHost(value: string, label: string): string {
 	const host = normalizeHostname(value.trim());
 	if (!host || host.startsWith(".") || host.endsWith(".") || /\s|[\\/?:#@*]/.test(host)) {
-		throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} contains an invalid hostname: ${JSON.stringify(value)}`);
+		throw new Error(`${label} in ${WEB_PREFERENCES_PATH} contains an invalid hostname: ${JSON.stringify(value)}`);
 	}
 	if (host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(host)) {
-		throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} contains an invalid hostname: ${JSON.stringify(value)}`);
+		throw new Error(`${label} in ${WEB_PREFERENCES_PATH} contains an invalid hostname: ${JSON.stringify(value)}`);
 	}
 	return host;
 }
 
 function parseChromeProfile(value: unknown, label: string): string | undefined {
 	if (value === undefined || value === null) return undefined;
-	if (typeof value !== "string") throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} must be a string`);
+	if (typeof value !== "string") throw new Error(`${label} in ${WEB_PREFERENCES_PATH} must be a string`);
 	const normalized = value.trim();
 	if (!normalized || normalized === "." || normalized === ".." || normalized.includes("/") || normalized.includes("\\")) {
-		throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH} must be a profile directory name, not a path`);
+		throw new Error(`${label} in ${WEB_PREFERENCES_PATH} must be a profile directory name, not a path`);
 	}
 	return normalized;
 }

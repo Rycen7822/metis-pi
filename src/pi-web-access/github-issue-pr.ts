@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import { execFile } from "node:child_process";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { checkGhAvailable, showGhHint } from "./github-api.ts";
@@ -77,7 +77,7 @@ function loadConfig(): GitHubPrIssueConfig {
 	const root = loadWebAccessConfig();
 	const value = root.githubPrIssue;
 	if (value !== undefined && (typeof value !== "object" || value === null || Array.isArray(value))) {
-		throw new Error(`githubPrIssue in ${getWebAccessConfigPath()} must be an object`);
+		throw new Error(`githubPrIssue in ${webPreferencesPath()} must be an object`);
 	}
 	const enabled = typeof (value as { enabled?: unknown } | undefined)?.enabled === "boolean"
 		? (value as { enabled: boolean }).enabled

@@ -1,7 +1,8 @@
 import { errorMessage, redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError, SearchUnsupportedFilterError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";
@@ -9,7 +10,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const CERAMIC_SEARCH_URL = "https://api.ceramic.ai/search";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 30_000;
 const MAX_REQUEST_RESULTS = 20;
 // Descriptions default to 3,000 characters; 1,000 is the smallest the API accepts. Results

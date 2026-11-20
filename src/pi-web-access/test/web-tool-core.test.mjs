@@ -178,6 +178,29 @@ test("standalone direct image fetch fails clearly without loading Pi or Pi-only 
 	assert.deepEqual(piOnly, []);
 });
 
+test("standalone rejects local files and YouTube analysis before using a media backend", () => {
+	const { out, requests } = runStandalone(`
+		const { writeFileSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const { default: dns } = await import("node:dns/promises");
+		const { syncBuiltinESMExports } = await import("node:module");
+		dns.lookup = async () => { throw new Error("Unexpected external DNS lookup"); };
+		syncBuiltinESMExports();
+		const local = join(process.env.PI_CODING_AGENT_DIR, "fixture.mp4");
+		writeFileSync(local, "not a real video");
+		const core = createStandaloneWebToolCore(globalThis.fetch);
+		return {
+			local: await core.fetchContent({ url: local }),
+			youtube: await core.fetchContent({ url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }),
+		};
+	`, { config: { video: { enabled: true }, youtube: { enabled: true } } });
+	assert.deepEqual(requests, []);
+	assert.equal(out.local.isError, true);
+	assert.match(out.local.content[0].text, /local files are not supported over MCP/i);
+	assert.equal(out.youtube.isError, true);
+	assert.match(out.youtube.content[0].text, /YouTube analysis is not supported over MCP/i);
+});
+
 test("standalone store evicts the oldest stored result past its bound", () => {
 	const { out } = runStandalone(`
 		const core = createStandaloneWebToolCore(globalThis.fetch);

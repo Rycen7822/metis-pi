@@ -1,7 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import {
-	loadWebAccessConfig,
-} from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { formatSeconds, readExecError, isTimeoutError, trimErrorText, mapFfmpegError } from "./media-errors.ts";
 import { execFile } from "node:child_process";

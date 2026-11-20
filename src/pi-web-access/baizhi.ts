@@ -1,7 +1,7 @@
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import { isIP } from "node:net";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";

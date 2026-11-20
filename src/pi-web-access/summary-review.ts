@@ -3,7 +3,7 @@ import type { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AmbiguousModelError, findModelWithProviderRouting, isModelInScope, splitThinkingSuffix, type SummaryThinkingLevel } from "./summary-model-scope.ts";
 import type { QueryResultData } from "./search-types.ts";
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 
 type ProviderHeaders = Record<string, string | null>;
 type CompleteFunction = typeof complete;

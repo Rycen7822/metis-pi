@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
@@ -12,7 +12,7 @@ import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateR
 
 const OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
 const OLLAMA_FETCH_URL = "https://ollama.com/api/web_fetch";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 interface WebSearchConfig {

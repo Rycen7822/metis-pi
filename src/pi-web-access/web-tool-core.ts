@@ -1,4 +1,4 @@
-import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import { runWithProxy } from "./proxy-transport.ts";
 // Host-neutral execution core for web_search (non-curator path), fetch_content,
 // get_search_content, and source_check. The Pi extension (index.ts) and the MCP
@@ -42,7 +42,6 @@ import type {
 	WebToolResult,
 } from "./web-tool-contract.ts";
 
-export const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
 
 export interface WebSearchConfig {
 	anysearchApiKey?: unknown;
@@ -126,16 +125,16 @@ export type FetchModeConfig = { defaultMode: FetchMode; allowedModes: FetchMode[
 export function resolveFetchModeConfig(config: WebSearchConfig): FetchModeConfig {
 	const configuredModes = config.fetch?.allowedModes ?? FETCH_MODES;
 	if (!Array.isArray(configuredModes) || configuredModes.length === 0 || configuredModes.some(mode => !FETCH_MODES.includes(mode as FetchMode))) {
-		throw new Error(`fetch.allowedModes in ${WEB_SEARCH_CONFIG_PATH} must be a non-empty array containing only "readable", "raw", or "answer"`);
+		throw new Error(`fetch.allowedModes in ${webPreferencesPath()} must be a non-empty array containing only "readable", "raw", or "answer"`);
 	}
 	const allowedModes = configuredModes as FetchMode[];
 	const duplicateMode = allowedModes.find((mode, index) => allowedModes.indexOf(mode) !== index);
 	if (duplicateMode) {
-		throw new Error(`fetch.allowedModes in ${WEB_SEARCH_CONFIG_PATH} must not contain duplicates: "${duplicateMode}"`);
+		throw new Error(`fetch.allowedModes in ${webPreferencesPath()} must not contain duplicates: "${duplicateMode}"`);
 	}
 	const defaultMode = config.fetch?.defaultMode ?? "readable";
 	if (!allowedModes.includes(defaultMode as FetchMode)) {
-		throw new Error(`fetch.defaultMode in ${WEB_SEARCH_CONFIG_PATH} must be one of fetch.allowedModes`);
+		throw new Error(`fetch.defaultMode in ${webPreferencesPath()} must be one of fetch.allowedModes`);
 	}
 	return { defaultMode: defaultMode as FetchMode, allowedModes };
 }
@@ -146,10 +145,18 @@ export function runSearchQueries<T>(queries: string[], run: (query: string, inde
 	return Promise.all(queries.map((query, index) => limit(() => run(query, index))));
 }
 
-export function isToolEnabled(config: WebSearchConfig, key: keyof ToolNames): boolean {
-	const override = config.tools?.[key]?.enabled;
-	if (typeof override === "boolean") return override;
-	return key !== "webSearch" && key !== "sourceCheck" || config.webSearch?.enabled !== false;
+export function resolveEnabledTools(config: WebSearchConfig): WebToolCoreSettings["enabledTools"] {
+	const searchEnabled = config.webSearch?.enabled !== false;
+	const enabled = (key: keyof ToolNames, fallback: boolean) => {
+		const override = config.tools?.[key]?.enabled;
+		return typeof override === "boolean" ? override : fallback;
+	};
+	return {
+		webSearch: enabled("webSearch", searchEnabled),
+		sourceCheck: enabled("sourceCheck", searchEnabled),
+		fetchContent: enabled("fetchContent", true),
+		getSearchContent: enabled("getSearchContent", true),
+	};
 }
 
 function joinToolNames(names: string[]): string {
@@ -171,8 +178,9 @@ export function resolveRequestedProvider(requested: unknown): SearchProviderSele
 		return normalizedRequested;
 	}
 	const config = loadConfig();
-	const provider = normalizeProviderInput(config.searchProvider ?? config.provider, `provider in ${WEB_SEARCH_CONFIG_PATH}`) ?? "auto";
-	assertSearchProviderSelectionAllowed(provider, `configured provider in ${WEB_SEARCH_CONFIG_PATH}`);
+	const path = webPreferencesPath();
+	const provider = normalizeProviderInput(config.searchProvider ?? config.provider, `provider in ${path}`) ?? "auto";
+	assertSearchProviderSelectionAllowed(provider, `configured provider in ${path}`);
 	return provider;
 }
 
@@ -505,7 +513,7 @@ export interface WebToolCoreHost {
 	/** Answers fetch_content mode "answer"; requires the host's model access. */
 	answerFromPage?(request: PageAnswerRequest, extensionContext: ExtensionContext | undefined, signal?: AbortSignal): Promise<{ text: string }>;
 	/** Extraction options every fetch in this host adds (for example direct-image policy). */
-	extractOptions?: Pick<ExtractOptions, "rejectDirectImages" | "fetch">;
+	extractOptions?: Pick<ExtractOptions, "textOnly" | "fetch">;
 }
 
 export type WebToolUpdate = (update: { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }) => void;

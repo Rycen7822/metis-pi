@@ -1,7 +1,8 @@
 import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
@@ -10,7 +11,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const VALYU_SEARCH_URL = "https://api.valyu.ai/v1/search";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 const MAX_SNIPPET_CHARS = 2_500;
 const MAX_CONTENT_CHARS = 4_000;

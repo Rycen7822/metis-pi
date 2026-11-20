@@ -19,12 +19,16 @@ npm run prepare:subagents
 | 规则与渲染 | `npm run test:fast`、`npm run test:chrome` |
 | 宿主、包内容与协议 | `npm run test:host`、`npm run test:protocol` |
 | 存储与资源释放 | `npm run test:io`、`npm run test:resource` |
-| 扩展和子代理 | `npm run test:lsp`、`npm run test:ask-user-question`、`npm run test:plugins`、`npm run test:subagents` |
+| 扩展和子代理 | `npm run test:lsp`、`npm run test:ask-user-question`、`npm run test:web-access`、`npm run test:subagents` |
 | 常规完整检查 | `npm run verify` |
 | 实际终端交互 | `npm run test:pty:strict`；开发中可用 `npm run test:pty -- --journey=E3` 跑单个场景。 |
 | Condense 状态模型 | `npm run test:formal`，需要 Java 与 TLC。见[模型说明](https://github.com/Rycen7822/metis-pi/blob/main/test/formal/README.md)。 |
 
-`test/core/` 放纯逻辑与渲染规则，`test/contract/` 放真实宿主和扩展入口契约；存储、协议与资源生命周期分在 `test/io/`、`test/protocol/` 和 `test/resource/`。LSP、子代理及形式化验证有专门目录。共享夹具放 `test/helpers/`，专用替身就近放在套件内。
+`test/core/` 放纯逻辑与渲染规则，`test/contract/` 放真实宿主和扩展入口契约；存储、协议与资源生命周期分在 `test/io/`、`test/protocol/` 和 `test/resource/`。LSP、子代理及形式化验证有专门目录。共享夹具放 `test/helpers/`，专用替身就近放在套件内。问卷 Vitest 与私有夹具放 `test/ask-user-question/`；真实 Pi 问卷契约仍放 `test/contract/`。
+
+Web Access 的测试留在 `src/pi-web-access/test/`，由独立命令运行，以保留 Web 工作目录和隔离预加载。修改 Web 源码后先运行 `npm run build:web-access`，再运行 `npm run test:web-access`；测试直接消费两份现有 bundle，Linux CI 核对重建产物与提交一致。
+
+`npm test` 运行根 Node 测试和问卷 Vitest，不运行 Web、pytest、Cargo、TLC 或 PTY。`npm run verify` 加入 Web 与 pytest；CI 另外运行严格 PTY 和 Neural Search engine 的 Rust 库测试。原生工具测试、语义 CLI 测试和形式化验证各有独立入口；基准自检见 [语义搜索基准](../benchmarks/semantic/README.md)，不属于产品套件。
 
 一次性测试、临时复现脚本及结果放 `.work/`，不加入正式套件发现。子代理的 pytest 缓存在 `.work/test-cache/subagents/`。
 
@@ -40,7 +44,7 @@ PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 
 | --- | --- | --- |
 | 修改 TypeScript 源码、公开类型、依赖声明或 `tsconfig` | `npm run check` | 用 `tsc` 检查核心、执行模块、Condense、插件和扩展入口的类型契约。只改 Condense 等单一模块时，可先用 `npm run check:condense` 快速反馈。 |
 | 修改 TypeScript 测试、测试夹具，或改变测试依赖的接口 | `npm run check:test` | 用 `tsc` 检查 `test/**/*.mts`、问卷 Vitest 测试及其夹具；不执行测试。 |
-| 修改 `src/` 或 `extensions/` 的 TypeScript，尤其是 Promise、事件回调或后台任务 | `npm run lint:types` | 用 Oxlint `--type-aware` 和 `tsrs` 检查类型正确但用法容易出错的代码。默认扫这两个目录，不检查 JavaScript。 |
+| 修改源码或问卷用例中的 TypeScript，尤其是 Promise、事件回调或后台任务 | `npm run lint:types` | 用 Oxlint `--type-aware` 和 `tsrs` 检查类型正确但用法容易出错的代码。默认扫描 `src/`、`extensions/` 和 `test/ask-user-question/`，不检查 JavaScript。 |
 
 开发中可以先定向检查改过的文件，例如 `npm run lint:types -- extensions/mcp.ts`。CI 会运行全范围 lint；改动跨模块接口时，不要用定向 lint 代替 `npm run check`。
 

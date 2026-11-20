@@ -2,7 +2,7 @@ import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -10,7 +10,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const XCRAWL_API_URL = "https://run.xcrawl.com/v1/serp";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 // The SERP API is usually fast (a few seconds, cached responses are quicker),
 // but leave generous headroom before treating a slow job as a provider failure.
 const SEARCH_TIMEOUT_MS = 60_000;

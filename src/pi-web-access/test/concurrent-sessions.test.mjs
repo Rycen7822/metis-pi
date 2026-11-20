@@ -23,7 +23,7 @@ afterEach(async () => {
 	clearResults();
 });
 
-function startInstance(entries = []) {
+function startInstance(entries = [], chooseStoredResult = choices => choices[0]) {
 	const tools = new Map();
 	const commands = new Map();
 	const handlers = new Map();
@@ -49,15 +49,17 @@ function startInstance(entries = []) {
 			// This fixture journals custom state only; it contributes no model messages.
 			buildSessionProjection: () => ({ entries: [], messages: [], model: null, thinkingLevel: "off" }),
 		},
-		// `/search` picks the first stored result, then Delete.
-		ui: { setWidget() {}, notify() {}, select: async (title, choices) => (title.startsWith("Result ") ? "Delete" : choices[0]) },
+		ui: {
+			setWidget() {}, notify() {},
+			select: async (title, choices) => title.startsWith("Result ") ? "Delete" : chooseStoredResult(choices),
+		},
 	};
 	const emit = async (event) => {
 		for (const handler of handlers.get(event) ?? []) await handler({ type: event }, ctx);
 	};
 	const call = (name, params) => tools.get(name).execute(`${name}-call`, params, undefined, undefined, ctx);
-	const deleteFirstResult = () => commands.get("search").handler("", ctx);
-	const instance = { emit, call, deleteFirstResult, entries };
+	const deleteSelectedResult = () => commands.get("search").handler("", ctx);
+	const instance = { emit, call, deleteSelectedResult, entries };
 	started.push(instance);
 	return instance;
 }
@@ -152,7 +154,7 @@ test("deleting a shared result in one session leaves it with the other sessions 
 	const thread = startInstance([...room.entries]);
 	await thread.emit("session_start");
 
-	await room.deleteFirstResult();
+	await room.deleteSelectedResult();
 	assert.match(await retrieve(thread, shared), /Kept content/);
 
 	// A later session over the same history, then the thread ending, must not drop it.
@@ -160,6 +162,22 @@ test("deleting a shared result in one session leaves it with the other sessions 
 	await later.emit("session_start");
 	await thread.emit("session_shutdown");
 	assert.match(await retrieve(later, shared), /Kept content/);
+});
+
+test("deleting the second choice keeps the first even when their display ID prefixes match", async () => {
+	const now = Date.now();
+	const entries = ["abc123first", "abc123second"].map((id, index) => ({
+		type: "custom", customType: "web-search-results",
+		data: { id, type: "search", queries: [{ query: `Query ${index + 1}`, results: [] }], timestamp: now },
+	}));
+	const instance = startInstance(entries, choices => {
+		assert.match(choices[1], /Query 2/);
+		return choices[1];
+	});
+	await instance.emit("session_start");
+	await instance.deleteSelectedResult();
+	assert.equal(getResult("abc123first")?.id, "abc123first");
+	assert.equal(getResult("abc123second"), null);
 });
 
 test("a session forked from history keeps the clones its results point at after the original session ends", { skip: process.platform === "win32" }, async () => {

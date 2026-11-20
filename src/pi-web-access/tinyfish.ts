@@ -1,5 +1,6 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
@@ -10,7 +11,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 
 const TINYFISH_SEARCH_URL = "https://api.search.tinyfish.ai";
 const TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 const FETCH_TIMEOUT_MS = 150_000;
 const MAX_FETCH_URLS = 10;

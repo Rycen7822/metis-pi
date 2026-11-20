@@ -7,13 +7,16 @@ import { search } from "./search-router.ts";
 import type { SearchProviderSelection } from "./search-providers.ts";
 import type { QueryResultData } from "./search-types.ts";
 import { getAllResults, deleteHeldResult } from "./storage.ts";
-import { loadWebAccessConfig, saveWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig, saveWebAccessConfig, webPreferencesPath } from "./config.ts";
 import { runWithProxy } from "./proxy-transport.ts";
 import { generateCuratorSummary, buildCuratedSearchOptions, curatorResultIndex, curatorResultIndexCapacity, toCuratorSearchEntries, indexedCuratorEntryToQueryResult, loadCuratorBootstrap, resolveCuratorSearchProvider, saveDefaultSearchProvider, type CuratorBootstrap } from "./curator-workflow.ts";
 import { loadSummaryModelChoices, type SummaryGenerationContext } from "./summary-review.ts";
 import { rewriteSearchQuery } from "./query-rewrite.ts";
 import { openCuratorBrowserWindow, shouldAutoOpenCuratorBrowser, type GlimpseWindow } from "./curator-browser.ts";
-import { normalizeProviderInput, normalizeQueryList, resolveRequestedProvider, runSearchQueries, toCuratorProvider, WEB_SEARCH_CONFIG_PATH, type SearchReturnOptions } from "./web-tool-core.ts";
+import {
+	normalizeProviderInput, normalizeQueryList, resolveRequestedProvider, runSearchQueries,
+	toCuratorProvider, type SearchReturnOptions,
+} from "./web-tool-core.ts";
 import { resolveWebSearchWorkflow, type WebSearchWorkflow } from "./curator-run.ts";
 import type { WebToolResult } from "./web-tool-contract.ts";
 import { isBrowserCookieAccessAllowed } from "./gemini-web-config.ts";
@@ -56,7 +59,7 @@ export function registerWebSearchCommand(pi: ExtensionAPI, buildSearchReturn: (o
 			const commandConfig = loadWebAccessConfig();
 			const rawSearchProvider = normalizeProviderInput(
 				commandConfig.searchProvider ?? commandConfig.provider ?? "auto",
-				`provider in ${WEB_SEARCH_CONFIG_PATH}`,
+				`provider in ${webPreferencesPath()}`,
 			) ?? "auto";
 			let currentSearchProvider: SearchProviderSelection = Array.isArray(rawSearchProvider)
 				? rawSearchProvider
@@ -262,7 +265,7 @@ export function registerWebSearchCommand(pi: ExtensionAPI, buildSearchReturn: (o
 	return () => { generation++; for (const callId of runs.keys()) closeCurator(callId); };
 }
 
-export function registerCuratorCommand(pi: ExtensionAPI, webSearchToolName: string): void {
+export function registerCuratorCommand(pi: ExtensionAPI, webSearchToolName: string | undefined): void {
 	pi.registerCommand("curator", {
 		description: "Toggle or configure the search curator workflow",
 		handler: async (args, ctx) => {
@@ -293,7 +296,8 @@ export function registerCuratorCommand(pi: ExtensionAPI, webSearchToolName: stri
 				return;
 			}
 
-			const label = newWorkflow === "none"
+			const label = webSearchToolName === undefined ? `Curator workflow saved: ${newWorkflow}`
+				: newWorkflow === "none"
 				? `Curator disabled — ${webSearchToolName} will return raw results`
 				: newWorkflow === "auto-summary"
 					? `Auto-summary enabled — ${webSearchToolName} will generate a summary without opening the curator`
@@ -316,7 +320,10 @@ export function registerGoogleAccountCommand(pi: ExtensionAPI): void {
 			if (!isBrowserCookieAccessAllowed()) {
 				pi.sendMessage({
 					customType: "google-account",
-					content: [{ type: "text", text: `Gemini Web browser cookie access is disabled. Set allowBrowserCookies: true in ${WEB_SEARCH_CONFIG_PATH} to enable it.` }],
+					content: [{
+						type: "text",
+						text: `Gemini Web browser cookie access is disabled. Set allowBrowserCookies: true in ${webPreferencesPath()} to enable it.`,
+					}],
 					display: true,
 					details: { available: false, cookieAccessAllowed: false },
 				}, { triggerTurn: true, deliverAs: "followUp" });
@@ -372,26 +379,24 @@ export function registerStoredSearchCommand(pi: ExtensionAPI, ownedResults: Set<
 				return;
 			}
 
-			const options = results.map((r) => {
+			const options = results.map((r, index) => {
+				const label = `${index + 1}. [${r.id.slice(0, 6)}]`;
 				const age = Math.floor((Date.now() - r.timestamp) / 60000);
 				const ageStr = age < 60 ? `${age}m ago` : `${Math.floor(age / 60)}h ago`;
 				if (r.type === "search" && r.queries) {
 					const query = r.queries[0]?.query || "unknown";
-					return `[${r.id.slice(0, 6)}] "${query}" (${r.queries.length} queries) - ${ageStr}`;
+					return `${label} "${query}" (${r.queries.length} queries) - ${ageStr}`;
 				}
 				if (r.type === "fetch" && (r.urls || r.urlMetadata)) {
-					return `[${r.id.slice(0, 6)}] ${(r.urls ?? r.urlMetadata ?? []).length} URLs fetched - ${ageStr}`;
+					return `${label} ${(r.urls ?? r.urlMetadata ?? []).length} URLs fetched - ${ageStr}`;
 				}
-				return `[${r.id.slice(0, 6)}] ${r.type} - ${ageStr}`;
+				return `${label} ${r.type} - ${ageStr}`;
 			});
 
 			const choice = await ctx.ui.select("Stored Search Results", options);
-			if (!choice) return;
+			if (choice === undefined) return;
 
-			const match = choice.match(/^\[([a-z0-9]+)\]/);
-			if (!match) return;
-
-			const selected = results.find((r) => r.id.startsWith(match[1]));
+			const selected = results[options.indexOf(choice)];
 			if (!selected) return;
 
 			const actions = ["View details", "Delete"];

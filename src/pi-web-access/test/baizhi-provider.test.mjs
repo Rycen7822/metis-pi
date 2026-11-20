@@ -12,8 +12,13 @@ const originalFetch = globalThis.fetch;
 const originalTimeout = AbortSignal.timeout;
 const savedEnv = { ...process.env };
 let home, server, origin, searchWithBaizhi, isBaizhiAvailable;
-let calls = [], mode = "json";
+let calls = [], mode = "json", onHang;
 const payload = { status: "success", results: [{ unknown_service_field: "opaque search result; https://example.com/reference" }] };
+const stalledBodies = {
+	"hang-init-body": { method: "initialize", reader: "json" },
+	"hang-body": { method: "tools/call", reader: "json" },
+	"hang-error-body": { method: "tools/call", reader: "text" },
+};
 
 before(async () => {
 	home = await mkdtemp(join(tmpdir(), "pi-web-baizhi-"));
@@ -30,14 +35,14 @@ before(async () => {
 		if (req.method === "DELETE") { res.writeHead(200); res.end(); return; }
 		if (mode === "redirect") { res.writeHead(307, { location: "https://untrusted.example/mcp" }); res.end(); return; }
 		if (rpc.method === "initialize") {
-			if (mode === "hang-init") return;
+			if (mode === "hang-init") { onHang?.(); return; }
 			res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "synthetic-session" });
 			if (mode === "hang-init-body") { res.flushHeaders(); return; }
 			res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "synthetic-only", version: "1.0.0" } } })); return;
 		}
 		assert.equal(req.headers["mcp-session-id"], "synthetic-session");
 		assert.equal(req.headers["mcp-protocol-version"], "2025-11-25");
-		if (rpc.method === "notifications/initialized" && mode === "hang-initialized") return;
+		if (rpc.method === "notifications/initialized" && mode === "hang-initialized") { onHang?.(); return; }
 		if (!rpc.id && rpc.id !== 0) { res.writeHead(202); res.end(); return; }
 		assert.equal(rpc.method, "tools/call");
 		assert.equal(rpc.params.name, "websearch_search");
@@ -56,7 +61,18 @@ before(async () => {
 	globalThis.fetch = async (url, init) => {
 		assert.equal(String(url), endpoint, "unexpected external network request");
 		assert.equal(init.redirect, "error");
-		return originalFetch(origin, init);
+		const response = await originalFetch(origin, init);
+		const stall = stalledBodies[mode];
+		if (onHang && stall && typeof init.body === "string" && JSON.parse(init.body).method === stall.method) {
+			// Let the transport consume the response headers before interrupting its body read.
+			const read = response[stall.reader].bind(response);
+			response[stall.reader] = () => {
+				const body = read();
+				onHang?.();
+				return body;
+			};
+		}
+		return response;
 	};
 	({ searchWithBaizhi, isBaizhiAvailable } = await import("../baizhi.ts"));
 });
@@ -106,10 +122,13 @@ test("Baizhi rejects redirects without contacting a second origin", async () => 
 for (const variant of ["hang-init", "hang-init-body", "hang-initialized", "hang-body", "hang-error-body"]) test(`Baizhi caller cancellation interrupts ${variant}`, async () => {
 	reset(variant);
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(new Error(`caller ${key}`)), 60);
+	let reached = false;
+	onHang = () => { reached = true; controller.abort(new Error(`caller ${key}`)); };
+	const timer = setTimeout(() => controller.abort(), 5_000);
 	try { await assert.rejects(searchWithBaizhi("q", { signal: controller.signal }), /^Error: Aborted$/); }
-	finally { clearTimeout(timer); }
-	if (variant !== "hang-init") assert.equal(calls.at(-1).method, "DELETE");
+	finally { clearTimeout(timer); onHang = undefined; }
+	assert.ok(reached, `did not reach ${variant}`);
+	if (variant !== "hang-init") assert.equal(calls.at(-1)?.method, "DELETE");
 });
 for (const variant of ["hang-init", "hang-init-body", "hang-initialized", "hang-body", "hang-error-body"]) test(`Baizhi shared deadline covers ${variant}`, async () => {
 	reset(variant);

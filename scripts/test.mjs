@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const webRoot = new URL("../src/pi-web-access/", import.meta.url);
-const root = process.argv[2] === "plugins" ? new URL("test/", webRoot) : new URL("../test/", import.meta.url);
+const suite = process.argv[2];
+const webAccess = suite === "web-access";
+const root = webAccess ? new URL("test/", webRoot) : new URL("../test/", import.meta.url);
 const files = (dir = root, prefix = "") => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
   const name = `${prefix}${entry.name}`;
   if (entry.isDirectory()) return files(new URL(`${entry.name}/`, dir), `${name}/`);
@@ -15,7 +17,7 @@ const files = (dir = root, prefix = "") => readdirSync(dir, { withFileTypes: tru
 
 const suites = {
   all: () => true,
-  plugins: () => true,
+  "web-access": () => true,
   core: (file) => file.startsWith("core/"),
   host: (file) => file.startsWith("contract/") || file === "package.test.mjs",
   lsp: (file) => file.startsWith("lsp/"),
@@ -31,7 +33,6 @@ const suites = {
   ].some((owner) => file.startsWith(`${owner}.test.`)),
 };
 
-const suite = process.argv[2];
 if (process.argv.length !== 3 || !Object.hasOwn(suites, suite)) {
   console.error(`Usage: node scripts/test.mjs <${Object.keys(suites).join("|")}>`);
   process.exit(2);
@@ -44,9 +45,9 @@ if (selected.length === 0) {
 const child = spawnSync(
   process.execPath,
   ["--experimental-strip-types",
-    ...(suite === "plugins" ? ["--import", new URL("test/isolate-env.mjs", webRoot).href] : []),
+    ...(webAccess ? ["--import", new URL("test/isolate-env.mjs", webRoot).href] : []),
     "--test", ...selected.map((file) => join(fileURLToPath(root), file))],
-  { stdio: "inherit", ...(suite === "plugins" ? { cwd: fileURLToPath(webRoot) } : {}) },
+  { stdio: "inherit", ...(webAccess ? { cwd: fileURLToPath(webRoot) } : {}) },
 );
 if (child.error) console.error(child.error);
 process.exitCode = child.status ?? 1;

@@ -6,7 +6,7 @@ const root = new URL("../", import.meta.url);
 const backend = process.platform === "win32" ? "scripts/tsrs-lint.cmd" : "node_modules/tsrs/bin/tsrs-lint";
 const lint = spawnSync(process.execPath, [
   "node_modules/oxlint/bin/oxlint", "--config", ".oxlintrc.types.jsonc", "--type-aware",
-  ...(process.argv.length > 2 ? process.argv.slice(2) : ["src", "extensions"]),
+  ...(process.argv.length > 2 ? process.argv.slice(2) : ["src", "extensions", "test/ask-user-question"]),
 ], {
   cwd: fileURLToPath(root),
   env: { ...process.env, OXLINT_TSGOLINT_PATH: fileURLToPath(new URL(backend, root)) },

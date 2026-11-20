@@ -1,29 +1,6 @@
-import { join } from "node:path";
-import { metisConfigPath } from "../configuration/store.ts";
-import { readWebAccessConfig, updateWebAccessConfig } from "../configuration/web-access.ts";
-import { webAccessAgentDir, WEB_CREDENTIALS_FILE } from "../configuration/web-access.ts";
-import { webFetch } from "./proxy-transport.ts";
+import { webPreferencesPath } from "./config.ts";
 import { isLoopbackHostname } from "./hostname.ts";
-
-export function getWebSearchConfigDir(): string {
-	return webAccessAgentDir();
-}
-
-export function getWebSearchConfigPath(): string {
-	return join(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
-}
-
-export function getWebAccessConfigPath(): string {
-	return metisConfigPath(getWebSearchConfigDir());
-}
-
-export function loadWebAccessConfig(): Record<string, any> {
-	return readWebAccessConfig(getWebSearchConfigDir());
-}
-
-export function saveWebAccessConfig(patch: Record<string, unknown>): void {
-	updateWebAccessConfig(getWebSearchConfigDir(), patch);
-}
+import { webFetch } from "./proxy-transport.ts";
 
 export function normalizeSearchBaseUrl(value: unknown): string | null {
 	if (typeof value !== "string") return null;
@@ -82,7 +59,7 @@ export function resolveApiBaseUrl(options: ApiBaseUrlOptions): string {
 
 	const source = fromEnvironment
 		? options.environmentKey
-		: `webAccess.${options.configKey} in ${getWebAccessConfigPath()}`;
+		: `webAccess.${options.configKey} in ${webPreferencesPath()}`;
 	if (typeof value !== "string" || value.trim().length === 0) {
 		throw new Error(`${source} must be an absolute HTTP(S) URL`);
 	}

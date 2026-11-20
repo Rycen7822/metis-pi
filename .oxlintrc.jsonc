@@ -6,7 +6,7 @@
   "rules": { "landmines-testing/no-unsignaled-poll": "error" },
   "overrides": [
     {
-      "files": ["src/ask-user-question/**/*.test.ts"],
+      "files": ["test/ask-user-question/**/*.test.ts"],
       "rules": { "landmines-testing/no-fixed-sleep": "error" }
     }
   ]

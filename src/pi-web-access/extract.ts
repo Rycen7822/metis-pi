@@ -2,7 +2,7 @@ import { errorMessage } from "./search-error-redaction.ts";
 import { extractHeadingTitle, type ExtractedContent, type ExtractOptions, type RegisteredToolNames } from "./content.ts";
 import { webFetch as fetch, type ProxiedRequestInit } from "./proxy-transport.ts";
 import { extractMediaFrames } from "./media-frames.ts";
-import { getWebSearchConfigPath, loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { webCredentialsPath, loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import type TurndownService from "turndown";
 import pLimit from "p-limit";
 import { activityMonitor } from "./activity.ts";
@@ -34,24 +34,25 @@ import { sanitizeInlineDataUris } from "./data-uri-sanitize.ts";
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_CONFIGURED_TIMEOUT_MS = 2_147_483_647;
 const CONCURRENT_LIMIT = 3;
-const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
+const WEB_PREFERENCES_PATH = webPreferencesPath();
 
 function loadFetchTimeoutMs(): number {
 	const raw = loadWebAccessConfig();
 	const fetchConfig = (raw as Record<string, unknown>).fetch;
 	if (fetchConfig === undefined) return DEFAULT_TIMEOUT_MS;
 	if (!fetchConfig || typeof fetchConfig !== "object" || Array.isArray(fetchConfig)) {
-		throw new Error(`fetch in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+		throw new Error(`fetch in ${WEB_PREFERENCES_PATH} must be an object`);
 	}
 
 	const value = (fetchConfig as Record<string, unknown>).timeout;
 	if (value === undefined) return DEFAULT_TIMEOUT_MS;
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-		throw new Error(`Invalid fetch.timeout in ${WEB_SEARCH_CONFIG_PATH}: expected a positive finite number of seconds, got ${JSON.stringify(value)}`);
+		throw new Error(`Invalid fetch.timeout in ${WEB_PREFERENCES_PATH}: expected a positive finite number of seconds, got ${JSON.stringify(value)}`);
 	}
 	const timeoutMs = Math.ceil(value * 1000);
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_CONFIGURED_TIMEOUT_MS) {
-		throw new Error(`Invalid fetch.timeout in ${WEB_SEARCH_CONFIG_PATH}: converted timeout must be a finite safe integer from 1 through ${MAX_CONFIGURED_TIMEOUT_MS} milliseconds`);
+		throw new Error(`Invalid fetch.timeout in ${WEB_PREFERENCES_PATH}: converted timeout must be a finite safe integer `
+			+ `from 1 through ${MAX_CONFIGURED_TIMEOUT_MS} milliseconds`);
 	}
 	return Math.max(1, timeoutMs);
 }
@@ -192,7 +193,7 @@ function loadFetchRouting(): FetchRouting {
 	}
 	const routing = raw.fetchRouting;
 	if (!routing || typeof routing !== "object" || Array.isArray(routing)) {
-		throw new Error(`fetchRouting in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+		throw new Error(`fetchRouting in ${WEB_PREFERENCES_PATH} must be an object`);
 	}
 
 	const routingConfig = routing as Record<string, unknown>;
@@ -200,17 +201,17 @@ function loadFetchRouting(): FetchRouting {
 	let providers = DEFAULT_FETCH_PROVIDER_ORDER;
 	if (providersValue !== undefined) {
 		if (!Array.isArray(providersValue) || providersValue.length === 0) {
-			throw new Error(`fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH} must be a non-empty array`);
+			throw new Error(`fetchRouting.providers in ${WEB_PREFERENCES_PATH} must be a non-empty array`);
 		}
 
 		providers = [];
 		for (const provider of providersValue) {
 			const normalized = typeof provider === "string" ? provider.trim().toLowerCase() : "";
 			if (!FETCH_PROVIDERS.includes(normalized as FetchProvider)) {
-				throw new Error(`fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH} contains an invalid provider: ${String(provider)}`);
+				throw new Error(`fetchRouting.providers in ${WEB_PREFERENCES_PATH} contains an invalid provider: ${String(provider)}`);
 			}
 			if (providers.includes(normalized as FetchProvider)) {
-				throw new Error(`fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH} must not contain duplicates: ${normalized}`);
+				throw new Error(`fetchRouting.providers in ${WEB_PREFERENCES_PATH} must not contain duplicates: ${normalized}`);
 			}
 			providers.push(normalized as FetchProvider);
 		}
@@ -218,7 +219,7 @@ function loadFetchRouting(): FetchRouting {
 
 	const allowRemoteHostedProvidersValue = routingConfig.allowRemoteHostedProviders;
 	if (allowRemoteHostedProvidersValue !== undefined && typeof allowRemoteHostedProvidersValue !== "boolean") {
-		throw new Error(`fetchRouting.allowRemoteHostedProviders in ${WEB_SEARCH_CONFIG_PATH} must be a boolean`);
+		throw new Error(`fetchRouting.allowRemoteHostedProviders in ${WEB_PREFERENCES_PATH} must be a boolean`);
 	}
 
 	return { providers, allowRemoteHostedProviders: allowRemoteHostedProvidersValue === true };
@@ -252,11 +253,13 @@ function jinaReaderGuidance(routing: FetchRouting, providerOrder: FetchProvider[
 	const privacy = "target URLs are fetched through Jina's infrastructure";
 	const optInCaveat = "this also allows the other hosted providers in your fetch provider order";
 	if (routing.providers.includes("jina")) {
-		return `  • Enable the keyless Jina Reader fallback: set fetchRouting.allowRemoteHostedProviders to true in ${WEB_SEARCH_CONFIG_PATH} (Jina is already in your fetch provider order; ${optInCaveat}; ${privacy})`;
+		return `  • Enable the keyless Jina Reader fallback: set fetchRouting.allowRemoteHostedProviders to true in ${WEB_PREFERENCES_PATH} `
+			+ `(Jina is already in your fetch provider order; ${optInCaveat}; ${privacy})`;
 	}
 	return needsRemoteOptIn
-		? `  • Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers and set fetchRouting.allowRemoteHostedProviders to true in ${WEB_SEARCH_CONFIG_PATH} (${optInCaveat}; ${privacy})`
-		: `  • Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH} (${privacy})`;
+		? `  • Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers `
+			+ `and set fetchRouting.allowRemoteHostedProviders to true in ${WEB_PREFERENCES_PATH} (${optInCaveat}; ${privacy})`
+		: `  • Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers in ${WEB_PREFERENCES_PATH} (${privacy})`;
 }
 function abortedResult(url: string): ExtractedContent {
 	return { url, title: "", content: "", error: "Aborted" };
@@ -278,7 +281,7 @@ function getTurndown(): Promise<TurndownService> {
 
 const fetchLimit = pLimit(CONCURRENT_LIMIT);
 
-type HttpFailure = { kind: "pdf-size-limit"; limitMB: number };
+type HttpFailure = "pdf-size-limit" | "host-rejected";
 type HttpExtractedContent = ExtractedContent & { declaredLinks?: DeclaredWebLink[]; failure?: HttpFailure };
 
 class PDFSizeLimitError extends Error {
@@ -391,6 +394,13 @@ export async function extractContent(
 		if (parsed.protocol === "http:" || parsed.protocol === "https:") remoteUrl = parsed;
 	} catch {
 	}
+	if (options?.textOnly) {
+		if (!remoteUrl) return { url, title: "", content: "", error: options.textOnly.localFile };
+		const wantsMediaAnalysis = options.frames || options.timestamp || (options.mode !== "raw" && isYouTubeURL(url).isYouTube);
+		if (wantsMediaAnalysis) {
+			return { url, title: "", content: "", error: options.textOnly.video };
+		}
+	}
 	if (remoteUrl) {
 		try {
 			const ssrf = loadSsrfConfig();
@@ -437,7 +447,7 @@ export async function extractContent(
 				url, title: "", content: "",
 				error: "Video analysis requires Gemini access. Either:\n" +
 					"  1. Sign into gemini.google.com in Chrome (free, uses cookies)\n" +
-					`  2. Set geminiApiKey in ${getWebSearchConfigPath()} or GEMINI_API_KEY`,
+					`  2. Set geminiApiKey in ${webCredentialsPath()} or GEMINI_API_KEY`,
 			};
 		} catch (err) {
 			if (isAbortError(err)) return abortedResult(url);
@@ -550,8 +560,8 @@ export async function extractContent(
 		if (!httpResult.error) return httpResult;
 		// PDF maxSizeMB bounds the direct download. Preserve the existing
 		// downstream-provider policy using this fact, independent of its prose.
-		if (httpFailure?.kind === "pdf-size-limit") return null;
-		if (isNonRecoverableHttpError(httpResult.error) || httpResult.error === options?.rejectDirectImages) {
+		if (httpFailure === "pdf-size-limit") return null;
+		if (httpFailure === "host-rejected" || isNonRecoverableHttpError(httpResult.error)) {
 			return httpResult;
 		}
 		return null;
@@ -799,17 +809,17 @@ export async function extractContent(
 		"",
 		"Fallback options:",
 		...(jinaHint ? [jinaHint] : []),
-		`  • Set firecrawlBaseUrl in ${WEB_SEARCH_CONFIG_PATH} to a self-hosted Firecrawl instance`,
-		`  • Set crawl4aiBaseUrl in ${WEB_SEARCH_CONFIG_PATH} to a self-hosted Crawl4AI instance`,
-		`  • Set tinyfishApiKey in ${getWebSearchConfigPath()} or TINYFISH_API_KEY`,
-		`  • Set search1apiApiKey in ${getWebSearchConfigPath()} or SEARCH1API_KEY`,
-		`  • Set queritApiKey in ${getWebSearchConfigPath()} or QUERIT_API_KEY`,
-		`  • Set kagiApiKey in ${getWebSearchConfigPath()} or KAGI_API_KEY`,
-		`  • Set ollamaApiKey in ${getWebSearchConfigPath()} or OLLAMA_API_KEY`,
-		`  • Set parallelApiKey in ${getWebSearchConfigPath()} or PARALLEL_API_KEY`,
-		`  • Set brightdataApiKey in ${getWebSearchConfigPath()} and ` +
-			`webAccess.brightdataUnlockerZone in ${WEB_SEARCH_CONFIG_PATH}, or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
-		`  • Set geminiApiKey in ${getWebSearchConfigPath()} or GEMINI_API_KEY`,
+		`  • Set firecrawlBaseUrl in ${WEB_PREFERENCES_PATH} to a self-hosted Firecrawl instance`,
+		`  • Set crawl4aiBaseUrl in ${WEB_PREFERENCES_PATH} to a self-hosted Crawl4AI instance`,
+		`  • Set tinyfishApiKey in ${webCredentialsPath()} or TINYFISH_API_KEY`,
+		`  • Set search1apiApiKey in ${webCredentialsPath()} or SEARCH1API_KEY`,
+		`  • Set queritApiKey in ${webCredentialsPath()} or QUERIT_API_KEY`,
+		`  • Set kagiApiKey in ${webCredentialsPath()} or KAGI_API_KEY`,
+		`  • Set ollamaApiKey in ${webCredentialsPath()} or OLLAMA_API_KEY`,
+		`  • Set parallelApiKey in ${webCredentialsPath()} or PARALLEL_API_KEY`,
+		`  • Set brightdataApiKey in ${webCredentialsPath()} and ` +
+			`webAccess.brightdataUnlockerZone in ${WEB_PREFERENCES_PATH}, or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
+		`  • Set geminiApiKey in ${webCredentialsPath()} or GEMINI_API_KEY`,
 		"  • Sign into gemini.google.com in Chrome",
 		...(searchToolName ? [`  • Use ${searchToolName} to find content about this topic`] : []),
 	].join("\n");
@@ -1006,7 +1016,7 @@ async function extractViaHttp(
 					error: pdfConfig
 						? new PDFSizeLimitError(pdfConfig.maxSizeMB).message
 						: `Response too large (${Math.round(contentLength / 1024 / 1024)}MB)`,
-					...(pdfConfig ? { failure: { kind: "pdf-size-limit" as const, limitMB: pdfConfig.maxSizeMB } } : {}),
+					failure: pdfConfig ? "pdf-size-limit" : undefined,
 				};
 			}
 		}
@@ -1022,14 +1032,14 @@ async function extractViaHttp(
 		}
 
 		if (SUPPORTED_IMAGE_TYPES.has(mimeType)) {
-			const disabled = imageGateError();
-			if (disabled) {
+			const hostRejection = options?.textOnly?.image;
+			const rejection = hostRejection ?? imageGateError();
+			if (rejection) {
 				activityMonitor.logComplete(activityId, response.status);
-				return { url, title: "", content: "", error: disabled, mimeType, status: response.status };
-			}
-			if (options?.rejectDirectImages) {
-				activityMonitor.logComplete(activityId, response.status);
-				return { url, title: "", content: "", error: options.rejectDirectImages, mimeType, status: response.status };
+				return {
+					url, title: "", content: "", error: rejection, mimeType, status: response.status,
+					failure: hostRejection ? "host-rejected" : undefined,
+				};
 			}
 			try {
 				const buffer = await readResponseBufferWithLimit(response, maxResponseSize, () => responseSizeLimitError(maxResponseSize));
@@ -1072,7 +1082,7 @@ async function extractViaHttp(
 				const message = err instanceof Error ? err.message : String(err);
 				activityMonitor.logError(activityId, message);
 				if (err instanceof PDFSizeLimitError) {
-					return { url, title: "", content: "", error: message, failure: { kind: "pdf-size-limit", limitMB: err.limitMB } };
+					return { url, title: "", content: "", error: message, failure: "pdf-size-limit" };
 				}
 				if (err instanceof CredentialResolutionError || isConfigParseError(err)) {
 					return { url, title: "", content: "", error: message };

@@ -1,4 +1,5 @@
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import {
 	isGeminiAdcAvailable,
@@ -12,7 +13,7 @@ import {
 const DEFAULT_API_HOST = "https://generativelanguage.googleapis.com";
 const API_VERSION = "v1beta";
 export const API_BASE = `${DEFAULT_API_HOST}/${API_VERSION}`;
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 export const DEFAULT_MODEL = "gemini-3.6-flash";
 
 interface GeminiApiConfig {

@@ -1,5 +1,6 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { GOOGLE_RECENCY_TBS, getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { GOOGLE_RECENCY_TBS } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery, type DomainFilters } from "./domain-filter-normalization.ts";
@@ -9,7 +10,7 @@ import { SearchHttpError, type SearchOptions, type SearchResponse } from "./sear
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 // Bright Data proxies a real Google SERP through a provisioned "zone" and bills
@@ -100,7 +101,7 @@ function serpZoneSetting(): ZoneSetting | null {
 	}
 	const configured = loadConfig().brightdataSerpZone;
 	if (typeof configured === "string" && configured.trim()) {
-		return { raw: configured.trim(), label: `brightdataSerpZone in ${getWebAccessConfigPath()}` };
+		return { raw: configured.trim(), label: `brightdataSerpZone in ${webPreferencesPath()}` };
 	}
 	return null;
 }
@@ -129,7 +130,7 @@ function requireSerpZone(): string {
 	}
 	throw new Error(
 		"Bright Data SERP zone is invalid or missing. Either:\n" +
-		`  1. Set webAccess.brightdataSerpZone = "your_serp_zone" in ${getWebAccessConfigPath()}\n` +
+		`  1. Set webAccess.brightdataSerpZone = "your_serp_zone" in ${webPreferencesPath()}\n` +
 		"  2. Set BRIGHTDATA_SERP_ZONE environment variable\n" +
 		"The zone must be of Bright Data type `serp`; a Web Unlocker zone is a different product and does not return SERP JSON.\n" +
 		"Create one at https://brightdata.com/cp/zones",

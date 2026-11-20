@@ -1,11 +1,11 @@
 import { stringify } from "smol-toml";
 import { splitWebAccessConfig } from "../../configuration/web-access.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { appendFile, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { appendFile, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -16,7 +16,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../mcp-server.ts";
 import { initializeMetisConfig } from "../../configuration/store.ts";
 
-const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const webRoot = fileURLToPath(new URL("..", import.meta.url));
+const repoRoot = join(webRoot, "..", "..");
 const TOOL_NAMES = ["fetch_content", "get_search_content", "source_check", "web_search"];
 
 function fakeCore(overrides = {}) {
@@ -184,38 +185,41 @@ globalThis.fetch = async (input, init) => {
 };
 `;
 
-let binDir;
-async function builtBinDir() {
-	if (binDir) return binDir;
-	const build = spawnSync("npm", ["run", "build:plugins"], { cwd: join(repoRoot, "..", ".."), encoding: "utf8", shell: process.platform === "win32" });
-	assert.equal(build.status, 0, `${build.stdout}${build.stderr}`);
-	const dir = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-bin-"));
+let binDir, binFixture;
+async function prepareBin() {
+	const dir = binDir = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-bin-"));
 	const root = packagedRoot(dir), cliDir = join(root, "src", "pi-web-access", "dist");
 	await mkdir(cliDir, { recursive: true });
 	await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
-	await copyFile(join(repoRoot, "dist", "mcp-cli.js"), join(cliDir, "mcp-cli.js"));
+	await copyFile(join(webRoot, "dist", "mcp-cli.js"), join(cliDir, "mcp-cli.js"));
 	await mkdir(join(root, "src", "configuration"), { recursive: true });
 	for (const name of ["store.ts", "web-access.ts"]) {
-		await copyFile(join(repoRoot, "..", "configuration", name), join(root, "src", "configuration", name));
+		await copyFile(join(repoRoot, "src", "configuration", name), join(root, "src", "configuration", name));
 	}
 	for (const name of ["metis-pi.toml", "metis-pi-config.md"]) {
-		await copyFile(join(repoRoot, "..", "..", name), join(root, name));
+		await copyFile(join(repoRoot, name), join(root, name));
 	}
 	await writeFile(join(dir, "mock-fetch.mjs"), fetchMock);
-	const modules = join(packagedRoot(dir), "node_modules");
-	await mkdir(modules);
-	const dependencies = join(repoRoot, "..", "..", "node_modules");
-	for (const entry of await readdir(dependencies)) {
-		if (entry === "typebox" || entry === "@earendil-works" || entry.startsWith(".")) continue;
-		await symlink(join(dependencies, entry), join(modules, entry), process.platform === "win32" ? "junction" : "dir");
+	// Use only installed runtime packages from the lock, preserving each nested
+	// package path while ruling out resolution to the developer checkout.
+	const { packages } = JSON.parse(await readFile(join(repoRoot, "package-lock.json"), "utf8"));
+	for (const [path, entry] of Object.entries(packages)) {
+		if (!path || entry.dev || /(?:^|\/)node_modules\/(?:typebox|@earendil-works)(?:\/|$)/.test(path)) continue;
+		const source = join(repoRoot, path);
+		if ((entry.optional || entry.devOptional || entry.peer) && !existsSync(source)) continue;
+		const target = join(root, path);
+		await mkdir(dirname(target), { recursive: true });
+		await cp(source, target, {
+			recursive: true, dereference: true,
+			filter: path => !relative(source, path).split(sep).includes("node_modules"),
+		});
 	}
-	binDir = dir;
 	return dir;
 }
 after(async () => { if (binDir) await rm(binDir, { recursive: true, force: true }); });
 
 async function startBin(t, config) {
-	const dir = await builtBinDir();
+	const dir = await (binFixture ??= prepareBin());
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-home-"));
 	{
 		const { preferences, credentials } = splitWebAccessConfig(config);
@@ -269,7 +273,7 @@ async function startBin(t, config) {
 
 const text = (result) => result.content.map((part) => part.text ?? "").join("\n");
 
-test("built pi-web-access-mcp bin runs the real tools over stdio without Pi packages", { timeout: 30_000 }, async (t) => {
+test("built pi-web-access-mcp bin runs the real tools over stdio without Pi packages", { timeout: 60_000 }, async (t) => {
 	const bin = await startBin(t, { ssrf: { allowRanges: ["127.0.0.1/32"] } });
 	const { client, articleUrl, imageUrl } = bin;
 	assert.equal(client.getServerVersion().name, "pi-web-access");

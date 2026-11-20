@@ -111,6 +111,9 @@ jobs:
       - run: npm run verify
         env:
           NODE_COMPILE_CACHE: ${{ runner.temp }}/metis-pi-node-compile-cache
+      - name: Require rebuilt Web Access bundles to match the checkout
+        if: runner.os == 'Linux'
+        run: git diff --exit-code -- src/pi-web-access/dist
       - name: Ensure tmux is available
         if: runner.os == 'Linux'
         run: |

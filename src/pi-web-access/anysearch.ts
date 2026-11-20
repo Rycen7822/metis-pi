@@ -2,7 +2,7 @@ import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError, SearchUnsupportedFilterError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";

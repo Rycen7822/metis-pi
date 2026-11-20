@@ -1,11 +1,11 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { validateRemoteUrl, fetchRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request";
 const EXTRACT_TIMEOUT_MS = 60_000;
 const ZONE_PATTERN = /^[a-z0-9_-]+$/i;
@@ -51,7 +51,7 @@ function zoneSetting(): ZoneSetting | null {
 	if (typeof fromEnv === "string" && fromEnv.trim()) return { raw: fromEnv.trim(), label: "BRIGHTDATA_UNLOCKER_ZONE" };
 	const configured = loadConfig().brightdataUnlockerZone;
 	if (typeof configured === "string" && configured.trim()) {
-		return { raw: configured.trim(), label: `brightdataUnlockerZone in ${getWebAccessConfigPath()}` };
+		return { raw: configured.trim(), label: `brightdataUnlockerZone in ${webPreferencesPath()}` };
 	}
 	return null;
 }
@@ -77,7 +77,7 @@ function requireZone(): string {
 	}
 	throw new Error(
 		"Bright Data Web Unlocker zone not configured. Either:\n" +
-		`  1. Set brightdataUnlockerZone in ${getWebAccessConfigPath()}\n` +
+		`  1. Set brightdataUnlockerZone in ${webPreferencesPath()}\n` +
 		"  2. Set BRIGHTDATA_UNLOCKER_ZONE environment variable\n" +
 		"The zone must be of type \"unblocker\"; a SERP zone will not serve Web Unlocker requests.",
 	);

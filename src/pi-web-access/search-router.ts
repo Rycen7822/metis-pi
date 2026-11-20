@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CredentialResolutionError } from "./credential-source.ts";
 import { isGeminiApiAvailable } from "./gemini-api.ts";
@@ -107,7 +107,7 @@ export interface AttributedSearchResponse extends SearchResponse {
 	providerErrors?: ProviderSearchFailure[];
 }
 
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const VALID_ROUTING_KINDS = ["transient", "quota", "network", "invalid-response", "unsupported"] as const;
 
 type SearchConfig = {
@@ -122,7 +122,7 @@ let cachedSearchConfig: SearchConfig | null = null;
 function getSearchConfig(): SearchConfig {
 	if (cachedSearchConfig) return cachedSearchConfig;
 	const raw = loadWebAccessConfig();
-	const path = getWebAccessConfigPath();
+	const path = webPreferencesPath();
 
 	const webSearch = raw.webSearch;
 	if (webSearch !== undefined && (!webSearch || typeof webSearch !== "object" || Array.isArray(webSearch))) {
@@ -153,7 +153,7 @@ function getSearchConfig(): SearchConfig {
 }
 
 function normalizeSearchRouting(value: unknown): SearchRoutingConfig {
-	const path = getWebAccessConfigPath();
+	const path = webPreferencesPath();
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`searchRouting in ${path} must be an object`);
 	}
@@ -325,6 +325,10 @@ function classifyProviderError(provider: ResolvedSearchProvider, err: unknown): 
 	return new SearchProviderError(provider, kind, message, status, err);
 }
 
+function unhandledProvider(provider: never): never {
+	throw new Error(`Unhandled search provider: ${provider}`);
+}
+
 async function searchWithResolvedProvider(
 	provider: ResolvedSearchProvider,
 	query: string,
@@ -382,9 +386,12 @@ async function searchWithResolvedProvider(
 			"  4. Sign into gemini.google.com in a supported Chromium-based browser",
 		);
 	}
-	const result = await searchWithExa(query, options);
-	if (result) return { ...result, provider };
-	throw new Error("Exa search returned no results.");
+	if (provider === "exa") {
+		const result = await searchWithExa(query, options);
+		if (result) return { ...result, provider };
+		throw new Error("Exa search returned no results.");
+	}
+	return unhandledProvider(provider);
 }
 
 async function isResolvedProviderAvailable(provider: ResolvedSearchProvider, options: FullSearchOptions, useCurrentModel = false): Promise<boolean> {
@@ -428,7 +435,8 @@ async function isResolvedProviderAvailable(provider: ResolvedSearchProvider, opt
 	if (provider === "duckduckgo") return isDuckDuckGoAvailable();
 	if (provider === "gemini") return isGeminiApiAvailable() || await isGeminiWebOptionallyAvailable();
 	if (provider === "kimi") return isKimiSearchAvailable(options.extensionContext);
-	return isExaAvailable();
+	if (provider === "exa") return isExaAvailable();
+	return unhandledProvider(provider);
 }
 
 /** Availability for the public catalogue; `all` admits Gemini API, never cookie-only Gemini. */

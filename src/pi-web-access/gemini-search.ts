@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { CredentialResolutionError } from "./credential-source.ts";

@@ -9,7 +9,7 @@ import type { QueryResultData } from "./search-types.ts";
 import { ALL_SEARCH_PROVIDERS, RESOLVED_SEARCH_PROVIDERS, type ProviderAvailability, type ResolvedSearchProvider, type SearchProvider, type SearchProviderSelection } from "./search-providers.ts";
 import { getAllowedSearchProviders, getConfiguredSearchRouting, getProviderAvailability, normalizeSearchProviderSelection } from "./search-router.ts";
 import { isCurrentModelHostedSearchEligible, isOpenAISubscriptionModelSelected } from "./openai-search.ts";
-import { loadWebAccessConfig, saveWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig, saveWebAccessConfig } from "./config.ts";
 import { resolveCuratorNetworkConfig } from "./curator-network.ts";
 import { buildDeterministicSummary, generateSummaryDraft, SUMMARY_GENERATION_DEADLINE_MS, type SummaryGenerationContext, type SummaryMeta } from "./summary-review.ts";
 

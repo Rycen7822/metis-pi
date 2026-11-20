@@ -1,7 +1,8 @@
 import { errorMessage, redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, fetchWithCredentialRedirects } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer, normalizeSearchText } from "./search-answer-formatting.ts";

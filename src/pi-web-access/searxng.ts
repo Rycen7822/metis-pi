@@ -1,13 +1,14 @@
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebAccessConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
+import { normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
 import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { redactCredential } from "./credential-source.ts";
 
-const CONFIG_PATH = getWebAccessConfigPath();
+const CONFIG_PATH = webPreferencesPath();
 const SEARCH_TIMEOUT_MS = 30_000;
 
 interface WebSearchConfig {

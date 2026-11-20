@@ -8,7 +8,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readHistoryEntries } from "../session-history.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { QueryResultData } from "./search-types.ts";
-import { getWebSearchConfigDir, loadWebAccessConfig } from "./utils.ts";
+import { webAccessAgentDir } from "../configuration/web-access.ts";
+import { loadWebAccessConfig } from "./config.ts";
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const FETCH_CACHE_DIR = "web-search-cache";
@@ -77,7 +78,7 @@ export function getFetchCacheDir(): string {
 	if (configured !== undefined && (typeof configured !== "string" || !configured.trim())) {
 		throw new Error("webAccess.cacheRoot must be a non-empty directory path");
 	}
-	return join(configured || getWebSearchConfigDir(), FETCH_CACHE_DIR);
+	return join(configured || webAccessAgentDir(), FETCH_CACHE_DIR);
 }
 
 function fetchCachePath(key: string): string | null {

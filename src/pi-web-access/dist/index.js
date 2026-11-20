@@ -13,48 +13,6 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// src/pi-web-access/media-errors.ts
-function formatSeconds(s) {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor(s % 3600 / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
-}
-function readExecError(err) {
-  if (!err || typeof err !== "object") {
-    return { stderr: "", message: String(err) };
-  }
-  const code = err.code;
-  const message = err.message ?? "";
-  const stderrRaw = err.stderr;
-  const stderr = Buffer.isBuffer(stderrRaw) ? stderrRaw.toString("utf-8") : typeof stderrRaw === "string" ? stderrRaw : "";
-  return { code, stderr, message };
-}
-function isTimeoutError(err) {
-  if (!err || typeof err !== "object") return false;
-  if (err.killed) return true;
-  const name = err.name;
-  const code = err.code;
-  const message = err.message ?? "";
-  return name === "AbortError" || code === "ETIMEDOUT" || message.toLowerCase().includes("timed out");
-}
-function trimErrorText(text) {
-  return text.replace(/\s+/g, " ").trim().slice(0, 200);
-}
-function mapFfmpegError(err) {
-  const { code, stderr, message } = readExecError(err);
-  if (code === "ENOENT") return "ffmpeg is not installed. Install with: brew install ffmpeg";
-  if (isTimeoutError(err)) return "ffmpeg timed out extracting frame";
-  if (stderr.includes("403")) return "Stream URL returned 403 \u2014 may have expired, try again";
-  const snippet = trimErrorText(stderr || message);
-  return snippet ? `ffmpeg failed: ${snippet}` : "ffmpeg failed";
-}
-var init_media_errors = __esm({
-  "src/pi-web-access/media-errors.ts"() {
-  }
-});
-
 // src/pi-web-access/hostname.ts
 import { isIP } from "node:net";
 function normalizeHostname(hostname2) {
@@ -412,135 +370,66 @@ var init_proxy_transport = __esm({
   }
 });
 
-// src/pi-web-access/utils.ts
+// src/pi-web-access/config.ts
 import { join as join2 } from "node:path";
 import { metisConfigPath } from "../../configuration/store.ts";
-import { readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../configuration/web-access.ts";
-import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../configuration/web-access.ts";
-function getWebSearchConfigDir() {
-  return webAccessAgentDir2();
+import { readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig, webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../configuration/web-access.ts";
+function webCredentialsPath() {
+  return join2(webAccessAgentDir2(), WEB_CREDENTIALS_FILE);
 }
-function getWebSearchConfigPath() {
-  return join2(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
-}
-function getWebAccessConfigPath() {
-  return metisConfigPath(getWebSearchConfigDir());
+function webPreferencesPath() {
+  return metisConfigPath(webAccessAgentDir2());
 }
 function loadWebAccessConfig() {
-  return readWebAccessConfig2(getWebSearchConfigDir());
+  return readWebAccessConfig2(webAccessAgentDir2());
 }
 function saveWebAccessConfig(patch) {
-  updateWebAccessConfig(getWebSearchConfigDir(), patch);
+  updateWebAccessConfig(webAccessAgentDir2(), patch);
 }
-function normalizeSearchBaseUrl(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    if (url.username || url.password) return null;
-    url.pathname = url.pathname.replace(/\/+$/, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    return null;
+var init_config = __esm({
+  "src/pi-web-access/config.ts"() {
   }
+});
+
+// src/pi-web-access/media-errors.ts
+function formatSeconds(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s % 3600 / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
 }
-function isValidHeaderValue(value) {
-  try {
-    new Headers({ "x-pi-web-access-validation": value });
-    return true;
-  } catch {
-    return false;
+function readExecError(err) {
+  if (!err || typeof err !== "object") {
+    return { stderr: "", message: String(err) };
   }
+  const code = err.code;
+  const message = err.message ?? "";
+  const stderrRaw = err.stderr;
+  const stderr = Buffer.isBuffer(stderrRaw) ? stderrRaw.toString("utf-8") : typeof stderrRaw === "string" ? stderrRaw : "";
+  return { code, stderr, message };
 }
-function normalizeSearchHeaders(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const headers = {};
-  for (const [key, headerValue] of Object.entries(value)) {
-    if (typeof headerValue !== "string") continue;
-    const name = key.trim();
-    if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
-    if (!isValidHeaderValue(headerValue)) continue;
-    headers[name] = headerValue.trim();
-  }
-  return headers;
+function isTimeoutError(err) {
+  if (!err || typeof err !== "object") return false;
+  if (err.killed) return true;
+  const name = err.name;
+  const code = err.code;
+  const message = err.message ?? "";
+  return name === "AbortError" || code === "ETIMEDOUT" || message.toLowerCase().includes("timed out");
 }
-function resolveApiBaseUrl(options) {
-  const fromEnvironment = options.environmentValue !== void 0;
-  const value = fromEnvironment ? options.environmentValue : options.configuredValue;
-  if (value === void 0) return options.defaultValue;
-  const source = fromEnvironment ? options.environmentKey : `webAccess.${options.configKey} in ${getWebAccessConfigPath()}`;
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${source} must be an absolute HTTP(S) URL`);
-  }
-  let url;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new Error(`${source} must be an absolute HTTP(S) URL`);
-  }
-  if (url.protocol !== "https:" && (url.protocol !== "http:" || !isLoopbackHostname(url.hostname))) {
-    throw new Error(`${source} must be an absolute HTTPS URL`);
-  }
-  if (url.username || url.password) {
-    throw new Error(`${source} must not include credentials`);
-  }
-  if (url.search || url.hash) {
-    throw new Error(`${source} must not include query parameters or fragments`);
-  }
-  url.search = "";
-  url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  return url.toString().replace(/\/+$/, "");
+function trimErrorText(text) {
+  return text.replace(/\s+/g, " ").trim().slice(0, 200);
 }
-async function fetchWithCredentialRedirects(url, init, credentialHeaders, credentialQueryParameters = []) {
-  let current = new URL(url);
-  let requestInit = init;
-  for (let redirects = 0; ; redirects++) {
-    const response = await webFetch(current, { ...requestInit, redirect: "manual" });
-    if (!API_REDIRECT_STATUSES.has(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!location) return response;
-    if (redirects === MAX_API_REDIRECTS) {
-      throw new Error(`Too many API redirects from ${url}`);
-    }
-    const next = new URL(location, current);
-    if (next.protocol !== "http:" && next.protocol !== "https:") {
-      throw new Error(`API redirect from ${current.origin} must use HTTP(S)`);
-    }
-    const method = requestInit.method?.toUpperCase() ?? "GET";
-    if ((response.status === 301 || response.status === 302) && method === "POST" || response.status === 303 && method !== "GET" && method !== "HEAD") {
-      const headers = new Headers(requestInit.headers);
-      for (const name of API_REQUEST_BODY_HEADERS) headers.delete(name);
-      const { body: _body, ...withoutBody } = requestInit;
-      requestInit = { ...withoutBody, method: "GET", headers };
-    }
-    if (next.origin !== current.origin) {
-      for (const name of credentialQueryParameters) next.searchParams.delete(name);
-      const headers = new Headers(requestInit.headers);
-      for (const name of credentialHeaders) headers.delete(name);
-      requestInit = { ...requestInit, headers };
-    }
-    current = next;
-  }
+function mapFfmpegError(err) {
+  const { code, stderr, message } = readExecError(err);
+  if (code === "ENOENT") return "ffmpeg is not installed. Install with: brew install ffmpeg";
+  if (isTimeoutError(err)) return "ffmpeg timed out extracting frame";
+  if (stderr.includes("403")) return "Stream URL returned 403 \u2014 may have expired, try again";
+  const snippet = trimErrorText(stderr || message);
+  return snippet ? `ffmpeg failed: ${snippet}` : "ffmpeg failed";
 }
-var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, GOOGLE_RECENCY_TBS;
-var init_utils = __esm({
-  "src/pi-web-access/utils.ts"() {
-    init_proxy_transport();
-    init_hostname();
-    API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
-    API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
-    MAX_API_REDIRECTS = 5;
-    GOOGLE_RECENCY_TBS = {
-      day: "qdr:d",
-      week: "qdr:w",
-      month: "qdr:m",
-      year: "qdr:y"
-    };
+var init_media_errors = __esm({
+  "src/pi-web-access/media-errors.ts"() {
   }
 });
 
@@ -1596,7 +1485,7 @@ function clearCloneCache() {
 var BINARY_EXTENSIONS, NOISE_DIRS, MAX_INLINE_FILE_CHARS2, MAX_TREE_ENTRIES2, CLONE_RUNTIME_OWNER_FILENAME, CLONE_RUNTIME_OWNER_VERSION, MAX_CLONE_RUNTIME_OWNER_BYTES, cloneCache, startedCloneRuntimeCleanups, cachedConfig, cloneRuntime, PROCESS_KILL_GRACE_MS;
 var init_github_extract = __esm({
   "src/pi-web-access/github-extract.ts"() {
-    init_utils();
+    init_config();
     init_activity();
     init_github_api();
     BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
@@ -1891,6 +1780,120 @@ var init_search_error_redaction = __esm({
   }
 });
 
+// src/pi-web-access/utils.ts
+function normalizeSearchBaseUrl(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.username || url.password) return null;
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+function isValidHeaderValue(value) {
+  try {
+    new Headers({ "x-pi-web-access-validation": value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function normalizeSearchHeaders(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const headers = {};
+  for (const [key, headerValue] of Object.entries(value)) {
+    if (typeof headerValue !== "string") continue;
+    const name = key.trim();
+    if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
+    if (!isValidHeaderValue(headerValue)) continue;
+    headers[name] = headerValue.trim();
+  }
+  return headers;
+}
+function resolveApiBaseUrl(options) {
+  const fromEnvironment = options.environmentValue !== void 0;
+  const value = fromEnvironment ? options.environmentValue : options.configuredValue;
+  if (value === void 0) return options.defaultValue;
+  const source = fromEnvironment ? options.environmentKey : `webAccess.${options.configKey} in ${webPreferencesPath()}`;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${source} must be an absolute HTTP(S) URL`);
+  }
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error(`${source} must be an absolute HTTP(S) URL`);
+  }
+  if (url.protocol !== "https:" && (url.protocol !== "http:" || !isLoopbackHostname(url.hostname))) {
+    throw new Error(`${source} must be an absolute HTTPS URL`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${source} must not include credentials`);
+  }
+  if (url.search || url.hash) {
+    throw new Error(`${source} must not include query parameters or fragments`);
+  }
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  return url.toString().replace(/\/+$/, "");
+}
+async function fetchWithCredentialRedirects(url, init, credentialHeaders, credentialQueryParameters = []) {
+  let current = new URL(url);
+  let requestInit = init;
+  for (let redirects = 0; ; redirects++) {
+    const response = await webFetch(current, { ...requestInit, redirect: "manual" });
+    if (!API_REDIRECT_STATUSES.has(response.status)) return response;
+    const location = response.headers.get("location");
+    if (!location) return response;
+    if (redirects === MAX_API_REDIRECTS) {
+      throw new Error(`Too many API redirects from ${url}`);
+    }
+    const next = new URL(location, current);
+    if (next.protocol !== "http:" && next.protocol !== "https:") {
+      throw new Error(`API redirect from ${current.origin} must use HTTP(S)`);
+    }
+    const method = requestInit.method?.toUpperCase() ?? "GET";
+    if ((response.status === 301 || response.status === 302) && method === "POST" || response.status === 303 && method !== "GET" && method !== "HEAD") {
+      const headers = new Headers(requestInit.headers);
+      for (const name of API_REQUEST_BODY_HEADERS) headers.delete(name);
+      const { body: _body, ...withoutBody } = requestInit;
+      requestInit = { ...withoutBody, method: "GET", headers };
+    }
+    if (next.origin !== current.origin) {
+      for (const name of credentialQueryParameters) next.searchParams.delete(name);
+      const headers = new Headers(requestInit.headers);
+      for (const name of credentialHeaders) headers.delete(name);
+      requestInit = { ...requestInit, headers };
+    }
+    current = next;
+  }
+}
+var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, GOOGLE_RECENCY_TBS;
+var init_utils = __esm({
+  "src/pi-web-access/utils.ts"() {
+    init_config();
+    init_hostname();
+    init_proxy_transport();
+    API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+    API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
+    MAX_API_REDIRECTS = 5;
+    GOOGLE_RECENCY_TBS = {
+      day: "qdr:d",
+      week: "qdr:w",
+      month: "qdr:m",
+      year: "qdr:y"
+    };
+  }
+});
+
 // src/pi-web-access/gemini-adc.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
 import { createSign } from "node:crypto";
@@ -2090,7 +2093,7 @@ function hasExplicitApiBase() {
 var DEFAULT_ADC_PATH, TOKEN_ENDPOINT, VERTEX_HOST, VERTEX_API_VERSION, REFRESH_SKEW_MS, cachedConfig2, cachedToken, OAUTH_CREDENTIAL_REJECTION_STATUSES;
 var init_gemini_adc = __esm({
   "src/pi-web-access/gemini-adc.ts"() {
-    init_utils();
+    init_config();
     init_proxy_transport();
     init_credential_source();
     DEFAULT_ADC_PATH = join4(homedir(), ".config", "gcloud", "application_default_credentials.json");
@@ -2326,13 +2329,14 @@ async function queryGeminiApiWithVideo(prompt, videoUri, options = {}) {
 var DEFAULT_API_HOST, API_VERSION, API_BASE, CONFIG_PATH, DEFAULT_MODEL, cachedConfig3, responseCredentials;
 var init_gemini_api = __esm({
   "src/pi-web-access/gemini-api.ts"() {
+    init_config();
     init_utils();
     init_credential_source();
     init_gemini_adc();
     DEFAULT_API_HOST = "https://generativelanguage.googleapis.com";
     API_VERSION = "v1beta";
     API_BASE = `${DEFAULT_API_HOST}/${API_VERSION}`;
-    CONFIG_PATH = getWebSearchConfigPath();
+    CONFIG_PATH = webCredentialsPath();
     DEFAULT_MODEL = "gemini-3.6-flash";
     cachedConfig3 = null;
     responseCredentials = /* @__PURE__ */ new WeakMap();
@@ -2348,28 +2352,28 @@ function normalizeChromeProfile(value) {
 function parseBrowserCookies(value) {
   if (value === void 0) return void 0;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`browserCookies in ${getWebAccessConfigPath()} must be an object`);
+    throw new Error(`browserCookies in ${webPreferencesPath()} must be an object`);
   }
   const raw = value;
   if ("profilePath" in raw) {
-    throw new Error(`browserCookies.profilePath is not supported; use a browser preset and profile directory name in ${getWebAccessConfigPath()}`);
+    throw new Error(`browserCookies.profilePath is not supported; use a browser preset and profile directory name in ${webPreferencesPath()}`);
   }
   let browser;
   if (raw.browser !== void 0) {
-    if (typeof raw.browser !== "string") throw new Error(`browserCookies.browser in ${getWebAccessConfigPath()} must be a supported browser name`);
+    if (typeof raw.browser !== "string") throw new Error(`browserCookies.browser in ${webPreferencesPath()} must be a supported browser name`);
     const normalized = raw.browser.trim().toLowerCase();
     const preset = BROWSER_COOKIE_PRESETS.find((candidate) => candidate === normalized);
     if (!preset) {
-      throw new Error(`Unsupported browserCookies.browser ${JSON.stringify(raw.browser)} in ${getWebAccessConfigPath()}`);
+      throw new Error(`Unsupported browserCookies.browser ${JSON.stringify(raw.browser)} in ${webPreferencesPath()}`);
     }
     browser = preset;
   }
   if (raw.profile !== void 0 && typeof raw.profile !== "string") {
-    throw new Error(`browserCookies.profile in ${getWebAccessConfigPath()} must be a profile directory name`);
+    throw new Error(`browserCookies.profile in ${webPreferencesPath()} must be a profile directory name`);
   }
   const profile = normalizeChromeProfile(raw.profile);
   if (profile && (profile === "." || profile === ".." || profile.includes("/") || profile.includes("\\"))) {
-    throw new Error(`browserCookies.profile in ${getWebAccessConfigPath()} must be a profile directory name, not a path`);
+    throw new Error(`browserCookies.profile in ${webPreferencesPath()} must be a profile directory name, not a path`);
   }
   return { ...browser ? { browser } : {}, ...profile ? { profile } : {} };
 }
@@ -2377,7 +2381,7 @@ function loadConfig3() {
   if (cachedConfig4) return cachedConfig4;
   const raw = loadWebAccessConfig();
   if (raw.chromeProfile !== void 0) {
-    throw new Error(`chromeProfile in ${getWebAccessConfigPath()} is no longer supported; use browserCookies.profile`);
+    throw new Error(`chromeProfile in ${webPreferencesPath()} is no longer supported; use browserCookies.profile`);
   }
   cachedConfig4 = {
     browserCookies: parseBrowserCookies(raw.browserCookies)
@@ -2395,7 +2399,7 @@ function isBrowserCookieAccessAllowed() {
 var BROWSER_COOKIE_PRESETS, cachedConfig4;
 var init_gemini_web_config = __esm({
   "src/pi-web-access/gemini-web-config.ts"() {
-    init_utils();
+    init_config();
     BROWSER_COOKIE_PRESETS = ["helium", "chrome", "brave", "arc", "chromium", "edge"];
     cachedConfig4 = null;
   }
@@ -3568,6 +3572,7 @@ async function askPerplexity(prompt, options = {}) {
 var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH2, REQUEST_TIMEOUT_MS, RATE_LIMIT, requestTimestamps, cachedConfig5;
 var init_perplexity = __esm({
   "src/pi-web-access/perplexity.ts"() {
+    init_config();
     init_utils();
     init_activity();
     init_search_types();
@@ -3577,7 +3582,7 @@ var init_perplexity = __esm({
     init_search_result_count_normalization();
     PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
     PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
-    CONFIG_PATH2 = getWebSearchConfigPath();
+    CONFIG_PATH2 = webCredentialsPath();
     REQUEST_TIMEOUT_MS = 6e4;
     RATE_LIMIT = {
       maxRequests: 10,
@@ -3819,6 +3824,7 @@ var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH6, MIN_PARALLEL_API_KE
 var init_parallel = __esm({
   "src/pi-web-access/parallel.ts"() {
     init_search_error_redaction();
+    init_config();
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -3826,7 +3832,7 @@ var init_parallel = __esm({
     init_credential_source();
     PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search";
     PARALLEL_EXTRACT_URL = "https://api.parallel.ai/v1/extract";
-    CONFIG_PATH6 = getWebSearchConfigPath();
+    CONFIG_PATH6 = webCredentialsPath();
     MIN_PARALLEL_API_KEY_LENGTH = 8;
     MIN_USEFUL_CONTENT = 500;
     SEARCH_TIMEOUT_MS3 = 6e4;
@@ -4029,9 +4035,9 @@ var init_parallel_mcp = __esm({
     init_domain_filter_normalization();
     init_parallel();
     init_search_types();
-    init_utils();
+    init_config();
     PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
-    CONFIG_PATH7 = getWebSearchConfigPath();
+    CONFIG_PATH7 = webCredentialsPath();
     REQUEST_TIMEOUT_MS2 = 6e4;
   }
 });
@@ -4276,6 +4282,7 @@ var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH8, SEARCH_TIMEOUT_MS4, F
 var init_tinyfish = __esm({
   "src/pi-web-access/tinyfish.ts"() {
     init_search_error_redaction();
+    init_config();
     init_utils();
     init_activity();
     init_domain_filter_normalization();
@@ -4285,7 +4292,7 @@ var init_tinyfish = __esm({
     init_credential_source();
     TINYFISH_SEARCH_URL = "https://api.search.tinyfish.ai";
     TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
-    CONFIG_PATH8 = getWebSearchConfigPath();
+    CONFIG_PATH8 = webCredentialsPath();
     SEARCH_TIMEOUT_MS4 = 6e4;
     FETCH_TIMEOUT_MS = 15e4;
     MAX_FETCH_URLS = 10;
@@ -4459,14 +4466,14 @@ var init_search1api = __esm({
     init_search_types();
     init_proxy_transport();
     init_domain_filter_normalization();
-    init_utils();
+    init_config();
     init_activity();
     init_credential_source();
     init_search_answer_formatting();
     init_search_result_count_normalization();
     SEARCH1API_SEARCH_URL = "https://api.search1api.com/search";
     SEARCH1API_CRAWL_URL = "https://api.search1api.com/crawl";
-    CONFIG_PATH9 = getWebSearchConfigPath();
+    CONFIG_PATH9 = webCredentialsPath();
     SEARCH_TIMEOUT_MS5 = 6e4;
     CRAWL_TIMEOUT_MS = 6e4;
     cachedConfig11 = null;
@@ -4718,7 +4725,7 @@ var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH11, SEARCH_TIMEOUT_MS7, C
 var init_querit = __esm({
   "src/pi-web-access/querit.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_proxy_transport();
     init_activity();
     init_domain_filter_normalization();
@@ -4728,7 +4735,7 @@ var init_querit = __esm({
     init_search_result_count_normalization();
     QUERIT_SEARCH_URL = "https://api.querit.ai/v1/search";
     QUERIT_CONTENTS_URL = "https://api.querit.ai/v1/contents";
-    CONFIG_PATH11 = getWebSearchConfigPath();
+    CONFIG_PATH11 = webCredentialsPath();
     SEARCH_TIMEOUT_MS7 = 6e4;
     CONTENTS_TIMEOUT_MS = 6e4;
     MAX_CONTENT_URLS = 10;
@@ -4745,12 +4752,12 @@ function loadFetchContentDomainPolicy() {
   const fetchContent = parsed.fetchContent;
   if (fetchContent === void 0 || fetchContent === null) return { ...DEFAULT_DOMAIN_POLICY };
   if (typeof fetchContent !== "object" || Array.isArray(fetchContent)) {
-    throw new Error(`fetchContent in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+    throw new Error(`fetchContent in ${WEB_PREFERENCES_PATH} must be an object`);
   }
   const policy = fetchContent.domainPolicy;
   if (policy === void 0 || policy === null) return { ...DEFAULT_DOMAIN_POLICY };
   if (typeof policy !== "object" || Array.isArray(policy)) {
-    throw new Error(`fetchContent.domainPolicy in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+    throw new Error(`fetchContent.domainPolicy in ${WEB_PREFERENCES_PATH} must be an object`);
   }
   const config = policy;
   return {
@@ -4761,15 +4768,15 @@ function loadFetchContentDomainPolicy() {
 function parseDomainEntries(value, field) {
   if (value === void 0 || value === null) return [];
   if (!Array.isArray(value)) {
-    throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_SEARCH_CONFIG_PATH} must be an array of hostnames`);
+    throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_PREFERENCES_PATH} must be an array of hostnames`);
   }
   return value.map((entry, index) => {
     if (typeof entry !== "string") {
-      throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_SEARCH_CONFIG_PATH} must contain only hostnames; entry ${index + 1} is ${typeof entry}`);
+      throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_PREFERENCES_PATH} must contain only hostnames; entry ${index + 1} is ${typeof entry}`);
     }
     const hostname2 = normalizeDomainEntry(entry);
     if (!hostname2) {
-      throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_SEARCH_CONFIG_PATH} contains an invalid hostname: ${JSON.stringify(entry)}`);
+      throw new Error(`fetchContent.domainPolicy.${field} in ${WEB_PREFERENCES_PATH} contains an invalid hostname: ${JSON.stringify(entry)}`);
     }
     return hostname2;
   });
@@ -4786,19 +4793,19 @@ function loadSsrfConfig() {
   const ssrf = parsed.ssrf;
   if (ssrf === void 0 || ssrf === null) return { allowRanges: [], trustEnvProxy: false };
   if (typeof ssrf !== "object" || Array.isArray(ssrf)) {
-    throw new Error(`ssrf in ${WEB_SEARCH_CONFIG_PATH} must be an object`);
+    throw new Error(`ssrf in ${WEB_PREFERENCES_PATH} must be an object`);
   }
   const config = ssrf;
   if (config.allowRanges !== void 0 && config.allowRanges !== null && !Array.isArray(config.allowRanges)) {
-    throw new Error(`ssrf.allowRanges in ${WEB_SEARCH_CONFIG_PATH} must be an array of CIDR strings`);
+    throw new Error(`ssrf.allowRanges in ${WEB_PREFERENCES_PATH} must be an array of CIDR strings`);
   }
   if (config.trustEnvProxy !== void 0 && typeof config.trustEnvProxy !== "boolean") {
-    throw new Error(`ssrf.trustEnvProxy in ${WEB_SEARCH_CONFIG_PATH} must be a boolean`);
+    throw new Error(`ssrf.trustEnvProxy in ${WEB_PREFERENCES_PATH} must be a boolean`);
   }
   const allowRangesValue = Array.isArray(config.allowRanges) ? config.allowRanges : [];
   const allowRanges = allowRangesValue.map((entry, index) => {
     if (typeof entry !== "string") {
-      throw new Error(`ssrf.allowRanges in ${WEB_SEARCH_CONFIG_PATH} must contain only CIDR strings; entry ${index + 1} is ${typeof entry}`);
+      throw new Error(`ssrf.allowRanges in ${WEB_PREFERENCES_PATH} must contain only CIDR strings; entry ${index + 1} is ${typeof entry}`);
     }
     return entry.trim();
   }).filter(Boolean);
@@ -5064,16 +5071,16 @@ function bytesMatchPrefix(addr, network, prefix) {
   }
   return true;
 }
-var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, WEB_SEARCH_CONFIG_PATH, DEFAULT_DOMAIN_POLICY;
+var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, WEB_PREFERENCES_PATH, DEFAULT_DOMAIN_POLICY;
 var init_ssrf_protection = __esm({
   "src/pi-web-access/ssrf-protection.ts"() {
-    init_utils();
+    init_config();
     init_hostname();
     init_proxy_transport();
     DEFAULT_MAX_REDIRECTS = 5;
     REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     LOOPBACK_ALLOW_RANGES = ["127.0.0.0/8", "::1", "::ffff:127.0.0.0/104"];
-    WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
+    WEB_PREFERENCES_PATH = webPreferencesPath();
     DEFAULT_DOMAIN_POLICY = { allow: [], deny: [] };
   }
 });
@@ -5090,13 +5097,13 @@ function normalizeBaseUrl2(value) {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Firecrawl base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Firecrawl base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.username || parsed.password) {
-    throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
+    throw new Error(`Invalid Firecrawl base URL in ${webPreferencesPath()}: URL credentials are not allowed`);
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.search = "";
@@ -5111,7 +5118,7 @@ function requireBaseUrl() {
   if (!baseUrl) {
     throw new Error(
       `Firecrawl base URL not configured. Either:
-  1. Set firecrawlBaseUrl in ${getWebAccessConfigPath()}
+  1. Set firecrawlBaseUrl in ${webPreferencesPath()}
   2. Set FIRECRAWL_BASE_URL environment variable`
     );
   }
@@ -5122,7 +5129,7 @@ function getApiVersion() {
   const raw = environmentValue || loadConfig15().firecrawlApiVersion;
   if (raw === void 0 || raw === null) return DEFAULT_API_VERSION;
   if (typeof raw !== "string") {
-    throw new Error(`firecrawlApiVersion in ${getWebAccessConfigPath()} must be a string ("v1" or "v2")`);
+    throw new Error(`firecrawlApiVersion in ${webPreferencesPath()} must be a string ("v1" or "v2")`);
   }
   const normalized = raw.trim().toLowerCase();
   if (!normalized) return DEFAULT_API_VERSION;
@@ -5136,18 +5143,18 @@ function allowFreshScrape() {
   if (environmentValue !== void 0) return environmentValue === "1" || environmentValue.toLowerCase() === "true";
   const configured = loadConfig15().firecrawlFreshScrape;
   if (configured === void 0 || configured === null) return false;
-  if (typeof configured !== "boolean") throw new Error(`firecrawlFreshScrape in ${getWebAccessConfigPath()} must be a boolean`);
+  if (typeof configured !== "boolean") throw new Error(`firecrawlFreshScrape in ${webPreferencesPath()} must be a boolean`);
   return configured;
 }
 function pdfParserOptions() {
   const configured = loadConfig15().firecrawlPdfMaxPages;
   if (configured === void 0 || configured === null) return {};
   if (typeof configured !== "number" || !Number.isInteger(configured) || configured < 1) {
-    throw new Error(`firecrawlPdfMaxPages in ${getWebAccessConfigPath()} must be a positive integer`);
+    throw new Error(`firecrawlPdfMaxPages in ${webPreferencesPath()} must be a positive integer`);
   }
   if (getApiVersion() === "v1") {
     throw new Error(
-      `firecrawlPdfMaxPages in ${getWebAccessConfigPath()} requires Firecrawl API v2; v1 has no PDF page cap. Use firecrawlApiVersion "v2" or remove firecrawlPdfMaxPages`
+      `firecrawlPdfMaxPages in ${webPreferencesPath()} requires Firecrawl API v2; v1 has no PDF page cap. Use firecrawlApiVersion "v2" or remove firecrawlPdfMaxPages`
     );
   }
   return { parsers: [{ type: "pdf", maxPages: configured }] };
@@ -5368,7 +5375,7 @@ var CONFIG_PATH14, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10,
 var init_firecrawl = __esm({
   "src/pi-web-access/firecrawl.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_hostname();
     init_activity();
     init_domain_filter_normalization();
@@ -5377,7 +5384,7 @@ var init_firecrawl = __esm({
     init_search_answer_formatting();
     init_search_result_count_normalization();
     init_ssrf_protection();
-    CONFIG_PATH14 = getWebSearchConfigPath();
+    CONFIG_PATH14 = webCredentialsPath();
     DEFAULT_API_VERSION = "v2";
     EXTRACT_TIMEOUT_MS = 6e4;
     SEARCH_TIMEOUT_MS10 = 6e4;
@@ -5599,7 +5606,7 @@ var init_kagi = __esm({
     init_search_error_redaction();
     init_search_types();
     init_proxy_transport();
-    init_utils();
+    init_config();
     init_activity();
     init_search_answer_formatting();
     init_search_result_count_normalization();
@@ -5608,7 +5615,7 @@ var init_kagi = __esm({
     init_ssrf_protection();
     KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
     KAGI_EXTRACT_URL = "https://kagi.com/api/v1/extract";
-    CONFIG_PATH17 = getWebSearchConfigPath();
+    CONFIG_PATH17 = webCredentialsPath();
     SEARCH_TIMEOUT_MS13 = 6e4;
     cachedConfig19 = null;
   }
@@ -5783,7 +5790,7 @@ var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH19, SEARCH_TIMEOUT_MS15, cac
 var init_ollama = __esm({
   "src/pi-web-access/ollama.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_proxy_transport();
     init_activity();
     init_search_types();
@@ -5794,7 +5801,7 @@ var init_ollama = __esm({
     init_ssrf_protection();
     OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
     OLLAMA_FETCH_URL = "https://ollama.com/api/web_fetch";
-    CONFIG_PATH19 = getWebSearchConfigPath();
+    CONFIG_PATH19 = webCredentialsPath();
     SEARCH_TIMEOUT_MS15 = 6e4;
     cachedConfig21 = null;
   }
@@ -5804,7 +5811,7 @@ var init_ollama = __esm({
 function resolveAuthFetchProfile(request) {
   const profiles = loadAuthFetchProfiles();
   if (profiles.length === 0) {
-    throw new Error(`auth requires at least one authFetch profile in ${WEB_SEARCH_CONFIG_PATH2}`);
+    throw new Error(`auth requires at least one authFetch profile in ${WEB_PREFERENCES_PATH2}`);
   }
   if (request === true) {
     if (profiles.length !== 1) {
@@ -5841,7 +5848,7 @@ function loadAuthFetchProfiles() {
   const parsed = loadWebAccessConfig();
   if (parsed.authFetch === void 0 || parsed.authFetch === null) return [];
   if (typeof parsed.authFetch !== "object" || Array.isArray(parsed.authFetch)) {
-    throw new Error(`authFetch in ${WEB_SEARCH_CONFIG_PATH2} must be an object`);
+    throw new Error(`authFetch in ${WEB_PREFERENCES_PATH2} must be an object`);
   }
   return Object.entries(parsed.authFetch).map(([name, value]) => parseProfile(name, value));
 }
@@ -5853,19 +5860,19 @@ function parseProfile(name, value) {
     return { name, hosts: parseHosts(value, `authFetch.${name}`), redirects: "same-origin", cache: "session" };
   }
   if (!value || typeof value !== "object") {
-    throw new Error(`authFetch.${name} in ${WEB_SEARCH_CONFIG_PATH2} must be an array of hosts or an object`);
+    throw new Error(`authFetch.${name} in ${WEB_PREFERENCES_PATH2} must be an array of hosts or an object`);
   }
   const config = value;
   if (!Array.isArray(config.hosts)) {
-    throw new Error(`authFetch.${name}.hosts in ${WEB_SEARCH_CONFIG_PATH2} must be a non-empty array of hostnames`);
+    throw new Error(`authFetch.${name}.hosts in ${WEB_PREFERENCES_PATH2} must be a non-empty array of hostnames`);
   }
   const redirects = config.redirects ?? "same-origin";
   if (redirects !== "same-origin") {
-    throw new Error(`authFetch.${name}.redirects in ${WEB_SEARCH_CONFIG_PATH2} must be "same-origin"`);
+    throw new Error(`authFetch.${name}.redirects in ${WEB_PREFERENCES_PATH2} must be "same-origin"`);
   }
   const cache = config.cache ?? "session";
   if (cache !== "session" && cache !== "off") {
-    throw new Error(`authFetch.${name}.cache in ${WEB_SEARCH_CONFIG_PATH2} must be "session" or "off"`);
+    throw new Error(`authFetch.${name}.cache in ${WEB_PREFERENCES_PATH2} must be "session" or "off"`);
   }
   const chromeProfile = parseChromeProfile(config.chromeProfile, `authFetch.${name}.chromeProfile`);
   return {
@@ -5877,9 +5884,9 @@ function parseProfile(name, value) {
   };
 }
 function parseHosts(value, label) {
-  if (value.length === 0) throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} must be a non-empty array of hostnames`);
+  if (value.length === 0) throw new Error(`${label} in ${WEB_PREFERENCES_PATH2} must be a non-empty array of hostnames`);
   const hosts = value.map((entry) => {
-    if (typeof entry !== "string") throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} must contain only hostnames`);
+    if (typeof entry !== "string") throw new Error(`${label} in ${WEB_PREFERENCES_PATH2} must contain only hostnames`);
     return parseHost(entry, label);
   });
   return [...new Set(hosts)];
@@ -5887,31 +5894,31 @@ function parseHosts(value, label) {
 function parseHost(value, label) {
   const host = normalizeHostname(value.trim());
   if (!host || host.startsWith(".") || host.endsWith(".") || /\s|[\\/?:#@*]/.test(host)) {
-    throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} contains an invalid hostname: ${JSON.stringify(value)}`);
+    throw new Error(`${label} in ${WEB_PREFERENCES_PATH2} contains an invalid hostname: ${JSON.stringify(value)}`);
   }
   if (host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(host)) {
-    throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} contains an invalid hostname: ${JSON.stringify(value)}`);
+    throw new Error(`${label} in ${WEB_PREFERENCES_PATH2} contains an invalid hostname: ${JSON.stringify(value)}`);
   }
   return host;
 }
 function parseChromeProfile(value, label) {
   if (value === void 0 || value === null) return void 0;
-  if (typeof value !== "string") throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} must be a string`);
+  if (typeof value !== "string") throw new Error(`${label} in ${WEB_PREFERENCES_PATH2} must be a string`);
   const normalized = value.trim();
   if (!normalized || normalized === "." || normalized === ".." || normalized.includes("/") || normalized.includes("\\")) {
-    throw new Error(`${label} in ${WEB_SEARCH_CONFIG_PATH2} must be a profile directory name, not a path`);
+    throw new Error(`${label} in ${WEB_PREFERENCES_PATH2} must be a profile directory name, not a path`);
   }
   return normalized;
 }
 function hostMatches(hostname2, allowedHost) {
   return hostname2 === allowedHost || hostname2.endsWith(`.${allowedHost}`);
 }
-var WEB_SEARCH_CONFIG_PATH2, AUTH_PROFILE_NAME_PATTERN;
+var WEB_PREFERENCES_PATH2, AUTH_PROFILE_NAME_PATTERN;
 var init_auth_fetch = __esm({
   "src/pi-web-access/auth-fetch.ts"() {
-    init_utils();
+    init_config();
     init_hostname();
-    WEB_SEARCH_CONFIG_PATH2 = getWebAccessConfigPath();
+    WEB_PREFERENCES_PATH2 = webPreferencesPath();
     AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
   }
 });
@@ -5944,7 +5951,7 @@ function canAttachImages() {
 }
 var init_feature_config = __esm({
   "src/pi-web-access/feature-config.ts"() {
-    init_utils();
+    init_config();
   }
 });
 
@@ -6223,7 +6230,7 @@ function extractVideoTitle(text, filePath) {
 var execFileAsync, DEFAULT_VIDEO_PROMPT, VIDEO_EXTENSIONS, VIDEO_CONFIG_DEFAULTS, cachedVideoConfig;
 var init_video_extract = __esm({
   "src/pi-web-access/video-extract.ts"() {
-    init_utils();
+    init_config();
     init_media_errors();
     init_activity();
     init_feature_config();
@@ -6482,7 +6489,7 @@ var execFileAsync2, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig36;
 var init_youtube_extract = __esm({
   "src/pi-web-access/youtube-extract.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_proxy_transport();
     init_media_errors();
     init_activity();
@@ -7292,7 +7299,7 @@ function datalabFilename(title) {
 var DEFAULT_API_HOST2, API_PREFIX, DEFAULT_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, MAX_RESPONSE_BYTES, MAX_ERROR_BODY_BYTES, CLEANUP_TIMEOUT_MS, DATALAB_MODE_VALUES, DATALAB_LOCATION_VALUES, DEFAULT_DATALAB_MODE, DEFAULT_PROCESSING_LOCATION, DEFAULT_DATALAB_TIMEOUT_MS, cachedConfig37;
 var init_datalab_pdf_extract = __esm({
   "src/pi-web-access/datalab-pdf-extract.ts"() {
-    init_utils();
+    init_config();
     init_proxy_transport();
     init_credential_source();
     DEFAULT_API_HOST2 = "https://www.datalab.to";
@@ -7619,7 +7626,7 @@ function isPDF(url, contentType) {
 var PDF_PROVIDER_VALUES, DEFAULT_PDF_MAX_SIZE_MB, MAX_PDF_MAX_SIZE_MB, MAX_DATALAB_TIMEOUT_MS, DEFAULT_MAX_PAGES, DEFAULT_OUTPUT_DIR, PAGE_MARKER_PATTERN2;
 var init_pdf_extract = __esm({
   "src/pi-web-access/pdf-extract.ts"() {
-    init_utils();
+    init_config();
     init_credential_source();
     init_datalab_pdf_extract();
     init_gemini_api();
@@ -7646,7 +7653,7 @@ function loadConfig37() {
   const root = loadWebAccessConfig();
   const value = root.githubPrIssue;
   if (value !== void 0 && (typeof value !== "object" || value === null || Array.isArray(value))) {
-    throw new Error(`githubPrIssue in ${getWebAccessConfigPath()} must be an object`);
+    throw new Error(`githubPrIssue in ${webPreferencesPath()} must be an object`);
   }
   const enabled = typeof value?.enabled === "boolean" ? value.enabled : true;
   cachedConfig38 = { enabled };
@@ -8215,7 +8222,7 @@ var GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMEN
 var init_github_issue_pr = __esm({
   "src/pi-web-access/github-issue-pr.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_github_api();
     init_ssrf_protection();
     GH_TIMEOUT_MS = 1e4;
@@ -8411,13 +8418,13 @@ function normalizeBaseUrl3(value) {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Crawl4AI base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Crawl4AI base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.username || parsed.password) {
-    throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
+    throw new Error(`Invalid Crawl4AI base URL in ${webPreferencesPath()}: URL credentials are not allowed`);
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.search = "";
@@ -8432,7 +8439,7 @@ function requireBaseUrl4() {
   if (!baseUrl) {
     throw new Error(
       `Crawl4AI base URL not configured. Either:
-  1. Set crawl4aiBaseUrl in ${getWebAccessConfigPath()}
+  1. Set crawl4aiBaseUrl in ${webPreferencesPath()}
   2. Set CRAWL4AI_BASE_URL environment variable`
     );
   }
@@ -8533,12 +8540,12 @@ var CONFIG_PATH33, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
   "src/pi-web-access/crawl4ai.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_hostname();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
-    CONFIG_PATH33 = getWebSearchConfigPath();
+    CONFIG_PATH33 = webCredentialsPath();
     EXTRACT_TIMEOUT_MS2 = 6e4;
     MARKDOWN_FILTER = "fit";
     cachedConfig39 = null;
@@ -8560,7 +8567,7 @@ function zoneSetting() {
   if (typeof fromEnv === "string" && fromEnv.trim()) return { raw: fromEnv.trim(), label: "BRIGHTDATA_UNLOCKER_ZONE" };
   const configured = loadConfig39().brightdataUnlockerZone;
   if (typeof configured === "string" && configured.trim()) {
-    return { raw: configured.trim(), label: `brightdataUnlockerZone in ${getWebAccessConfigPath()}` };
+    return { raw: configured.trim(), label: `brightdataUnlockerZone in ${webPreferencesPath()}` };
   }
   return null;
 }
@@ -8579,7 +8586,7 @@ function requireZone() {
   }
   throw new Error(
     `Bright Data Web Unlocker zone not configured. Either:
-  1. Set brightdataUnlockerZone in ${getWebAccessConfigPath()}
+  1. Set brightdataUnlockerZone in ${webPreferencesPath()}
   2. Set BRIGHTDATA_UNLOCKER_ZONE environment variable
 The zone must be of type "unblocker"; a SERP zone will not serve Web Unlocker requests.`
   );
@@ -8693,11 +8700,11 @@ var CONFIG_PATH34, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, ZONE_PATTERN2, c
 var init_brightdata_unlocker = __esm({
   "src/pi-web-access/brightdata-unlocker.ts"() {
     init_search_error_redaction();
-    init_utils();
+    init_config();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
-    CONFIG_PATH34 = getWebSearchConfigPath();
+    CONFIG_PATH34 = webCredentialsPath();
     BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request";
     EXTRACT_TIMEOUT_MS3 = 6e4;
     ZONE_PATTERN2 = /^[a-z0-9_-]+$/i;
@@ -9156,16 +9163,16 @@ function loadFetchTimeoutMs() {
   const fetchConfig = raw.fetch;
   if (fetchConfig === void 0) return DEFAULT_TIMEOUT_MS3;
   if (!fetchConfig || typeof fetchConfig !== "object" || Array.isArray(fetchConfig)) {
-    throw new Error(`fetch in ${WEB_SEARCH_CONFIG_PATH3} must be an object`);
+    throw new Error(`fetch in ${WEB_PREFERENCES_PATH3} must be an object`);
   }
   const value = fetchConfig.timeout;
   if (value === void 0) return DEFAULT_TIMEOUT_MS3;
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`Invalid fetch.timeout in ${WEB_SEARCH_CONFIG_PATH3}: expected a positive finite number of seconds, got ${JSON.stringify(value)}`);
+    throw new Error(`Invalid fetch.timeout in ${WEB_PREFERENCES_PATH3}: expected a positive finite number of seconds, got ${JSON.stringify(value)}`);
   }
   const timeoutMs = Math.ceil(value * 1e3);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_CONFIGURED_TIMEOUT_MS) {
-    throw new Error(`Invalid fetch.timeout in ${WEB_SEARCH_CONFIG_PATH3}: converted timeout must be a finite safe integer from 1 through ${MAX_CONFIGURED_TIMEOUT_MS} milliseconds`);
+    throw new Error(`Invalid fetch.timeout in ${WEB_PREFERENCES_PATH3}: converted timeout must be a finite safe integer from 1 through ${MAX_CONFIGURED_TIMEOUT_MS} milliseconds`);
   }
   return Math.max(1, timeoutMs);
 }
@@ -9264,30 +9271,30 @@ function loadFetchRouting() {
   }
   const routing = raw.fetchRouting;
   if (!routing || typeof routing !== "object" || Array.isArray(routing)) {
-    throw new Error(`fetchRouting in ${WEB_SEARCH_CONFIG_PATH3} must be an object`);
+    throw new Error(`fetchRouting in ${WEB_PREFERENCES_PATH3} must be an object`);
   }
   const routingConfig = routing;
   const providersValue = routingConfig.providers;
   let providers = DEFAULT_FETCH_PROVIDER_ORDER;
   if (providersValue !== void 0) {
     if (!Array.isArray(providersValue) || providersValue.length === 0) {
-      throw new Error(`fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH3} must be a non-empty array`);
+      throw new Error(`fetchRouting.providers in ${WEB_PREFERENCES_PATH3} must be a non-empty array`);
     }
     providers = [];
     for (const provider of providersValue) {
       const normalized = typeof provider === "string" ? provider.trim().toLowerCase() : "";
       if (!FETCH_PROVIDERS.includes(normalized)) {
-        throw new Error(`fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH3} contains an invalid provider: ${String(provider)}`);
+        throw new Error(`fetchRouting.providers in ${WEB_PREFERENCES_PATH3} contains an invalid provider: ${String(provider)}`);
       }
       if (providers.includes(normalized)) {
-        throw new Error(`fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH3} must not contain duplicates: ${normalized}`);
+        throw new Error(`fetchRouting.providers in ${WEB_PREFERENCES_PATH3} must not contain duplicates: ${normalized}`);
       }
       providers.push(normalized);
     }
   }
   const allowRemoteHostedProvidersValue = routingConfig.allowRemoteHostedProviders;
   if (allowRemoteHostedProvidersValue !== void 0 && typeof allowRemoteHostedProvidersValue !== "boolean") {
-    throw new Error(`fetchRouting.allowRemoteHostedProviders in ${WEB_SEARCH_CONFIG_PATH3} must be a boolean`);
+    throw new Error(`fetchRouting.allowRemoteHostedProviders in ${WEB_PREFERENCES_PATH3} must be a boolean`);
   }
   return { providers, allowRemoteHostedProviders: allowRemoteHostedProvidersValue === true };
 }
@@ -9311,9 +9318,9 @@ function jinaReaderGuidance(routing, providerOrder, needsRemoteOptIn) {
   const privacy = "target URLs are fetched through Jina's infrastructure";
   const optInCaveat = "this also allows the other hosted providers in your fetch provider order";
   if (routing.providers.includes("jina")) {
-    return `  \u2022 Enable the keyless Jina Reader fallback: set fetchRouting.allowRemoteHostedProviders to true in ${WEB_SEARCH_CONFIG_PATH3} (Jina is already in your fetch provider order; ${optInCaveat}; ${privacy})`;
+    return `  \u2022 Enable the keyless Jina Reader fallback: set fetchRouting.allowRemoteHostedProviders to true in ${WEB_PREFERENCES_PATH3} (Jina is already in your fetch provider order; ${optInCaveat}; ${privacy})`;
   }
-  return needsRemoteOptIn ? `  \u2022 Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers and set fetchRouting.allowRemoteHostedProviders to true in ${WEB_SEARCH_CONFIG_PATH3} (${optInCaveat}; ${privacy})` : `  \u2022 Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers in ${WEB_SEARCH_CONFIG_PATH3} (${privacy})`;
+  return needsRemoteOptIn ? `  \u2022 Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers and set fetchRouting.allowRemoteHostedProviders to true in ${WEB_PREFERENCES_PATH3} (${optInCaveat}; ${privacy})` : `  \u2022 Enable the keyless Jina Reader fallback: add "jina" to your existing fetchRouting.providers in ${WEB_PREFERENCES_PATH3} (${privacy})`;
 }
 function abortedResult(url) {
   return { url, title: "", content: "", error: "Aborted" };
@@ -9398,6 +9405,13 @@ async function extractContent(url, signal, options) {
     if (parsed.protocol === "http:" || parsed.protocol === "https:") remoteUrl = parsed;
   } catch {
   }
+  if (options?.textOnly) {
+    if (!remoteUrl) return { url, title: "", content: "", error: options.textOnly.localFile };
+    const wantsMediaAnalysis = options.frames || options.timestamp || options.mode !== "raw" && isYouTubeURL(url).isYouTube;
+    if (wantsMediaAnalysis) {
+      return { url, title: "", content: "", error: options.textOnly.video };
+    }
+  }
   if (remoteUrl) {
     try {
       const ssrf = loadSsrfConfig();
@@ -9442,7 +9456,7 @@ async function extractContent(url, signal, options) {
         content: "",
         error: `Video analysis requires Gemini access. Either:
   1. Sign into gemini.google.com in Chrome (free, uses cookies)
-  2. Set geminiApiKey in ${getWebSearchConfigPath()} or GEMINI_API_KEY`
+  2. Set geminiApiKey in ${webCredentialsPath()} or GEMINI_API_KEY`
       };
     } catch (err) {
       if (isAbortError6(err)) return abortedResult(url);
@@ -9539,8 +9553,8 @@ async function extractContent(url, signal, options) {
     }
     if (signal?.aborted) return abortedResult(url);
     if (!httpResult.error) return httpResult;
-    if (httpFailure?.kind === "pdf-size-limit") return null;
-    if (isNonRecoverableHttpError(httpResult.error) || httpResult.error === options?.rejectDirectImages) {
+    if (httpFailure === "pdf-size-limit") return null;
+    if (httpFailure === "host-rejected" || isNonRecoverableHttpError(httpResult.error)) {
       return httpResult;
     }
     return null;
@@ -9765,16 +9779,16 @@ async function extractContent(url, signal, options) {
     "",
     "Fallback options:",
     ...jinaHint ? [jinaHint] : [],
-    `  \u2022 Set firecrawlBaseUrl in ${WEB_SEARCH_CONFIG_PATH3} to a self-hosted Firecrawl instance`,
-    `  \u2022 Set crawl4aiBaseUrl in ${WEB_SEARCH_CONFIG_PATH3} to a self-hosted Crawl4AI instance`,
-    `  \u2022 Set tinyfishApiKey in ${getWebSearchConfigPath()} or TINYFISH_API_KEY`,
-    `  \u2022 Set search1apiApiKey in ${getWebSearchConfigPath()} or SEARCH1API_KEY`,
-    `  \u2022 Set queritApiKey in ${getWebSearchConfigPath()} or QUERIT_API_KEY`,
-    `  \u2022 Set kagiApiKey in ${getWebSearchConfigPath()} or KAGI_API_KEY`,
-    `  \u2022 Set ollamaApiKey in ${getWebSearchConfigPath()} or OLLAMA_API_KEY`,
-    `  \u2022 Set parallelApiKey in ${getWebSearchConfigPath()} or PARALLEL_API_KEY`,
-    `  \u2022 Set brightdataApiKey in ${getWebSearchConfigPath()} and webAccess.brightdataUnlockerZone in ${WEB_SEARCH_CONFIG_PATH3}, or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
-    `  \u2022 Set geminiApiKey in ${getWebSearchConfigPath()} or GEMINI_API_KEY`,
+    `  \u2022 Set firecrawlBaseUrl in ${WEB_PREFERENCES_PATH3} to a self-hosted Firecrawl instance`,
+    `  \u2022 Set crawl4aiBaseUrl in ${WEB_PREFERENCES_PATH3} to a self-hosted Crawl4AI instance`,
+    `  \u2022 Set tinyfishApiKey in ${webCredentialsPath()} or TINYFISH_API_KEY`,
+    `  \u2022 Set search1apiApiKey in ${webCredentialsPath()} or SEARCH1API_KEY`,
+    `  \u2022 Set queritApiKey in ${webCredentialsPath()} or QUERIT_API_KEY`,
+    `  \u2022 Set kagiApiKey in ${webCredentialsPath()} or KAGI_API_KEY`,
+    `  \u2022 Set ollamaApiKey in ${webCredentialsPath()} or OLLAMA_API_KEY`,
+    `  \u2022 Set parallelApiKey in ${webCredentialsPath()} or PARALLEL_API_KEY`,
+    `  \u2022 Set brightdataApiKey in ${webCredentialsPath()} and webAccess.brightdataUnlockerZone in ${WEB_PREFERENCES_PATH3}, or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
+    `  \u2022 Set geminiApiKey in ${webCredentialsPath()} or GEMINI_API_KEY`,
     "  \u2022 Sign into gemini.google.com in Chrome",
     ...searchToolName ? [`  \u2022 Use ${searchToolName} to find content about this topic`] : []
   ].join("\n");
@@ -9912,7 +9926,7 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
           title: "",
           content: "",
           error: pdfConfig ? new PDFSizeLimitError(pdfConfig.maxSizeMB).message : `Response too large (${Math.round(contentLength / 1024 / 1024)}MB)`,
-          ...pdfConfig ? { failure: { kind: "pdf-size-limit", limitMB: pdfConfig.maxSizeMB } } : {}
+          failure: pdfConfig ? "pdf-size-limit" : void 0
         };
       }
     }
@@ -9926,14 +9940,19 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
       return { url, title: extractTextTitle(text2, url), content: text2, error: null, mimeType, status: response.status };
     }
     if (SUPPORTED_IMAGE_TYPES.has(mimeType)) {
-      const disabled = imageGateError();
-      if (disabled) {
+      const hostRejection = options?.textOnly?.image;
+      const rejection = hostRejection ?? imageGateError();
+      if (rejection) {
         activityMonitor.logComplete(activityId, response.status);
-        return { url, title: "", content: "", error: disabled, mimeType, status: response.status };
-      }
-      if (options?.rejectDirectImages) {
-        activityMonitor.logComplete(activityId, response.status);
-        return { url, title: "", content: "", error: options.rejectDirectImages, mimeType, status: response.status };
+        return {
+          url,
+          title: "",
+          content: "",
+          error: rejection,
+          mimeType,
+          status: response.status,
+          failure: hostRejection ? "host-rejected" : void 0
+        };
       }
       try {
         const buffer = await readResponseBufferWithLimit(response, maxResponseSize, () => responseSizeLimitError(maxResponseSize));
@@ -9976,7 +9995,7 @@ Characters: ${result.chars}`,
         const message = err instanceof Error ? err.message : String(err);
         activityMonitor.logError(activityId, message);
         if (err instanceof PDFSizeLimitError) {
-          return { url, title: "", content: "", error: message, failure: { kind: "pdf-size-limit", limitMB: err.limitMB } };
+          return { url, title: "", content: "", error: message, failure: "pdf-size-limit" };
         }
         if (err instanceof CredentialResolutionError || isConfigParseError(err)) {
           return { url, title: "", content: "", error: message };
@@ -10104,14 +10123,14 @@ async function fetchAllContent(urls, signal, options) {
     return sanitized.omissions.length > 0 ? { ...result, content: sanitized.text } : result;
   });
 }
-var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_SEARCH_CONFIG_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, turndownInstance, fetchLimit, PDFSizeLimitError, JINA_READER_BASE, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
+var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_PREFERENCES_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, turndownInstance, fetchLimit, PDFSizeLimitError, JINA_READER_BASE, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
 var init_extract = __esm({
   "src/pi-web-access/extract.ts"() {
     init_search_error_redaction();
     init_content();
     init_proxy_transport();
     init_media_frames();
-    init_utils();
+    init_config();
     init_activity();
     init_rsc_extract();
     init_pdf_extract();
@@ -10141,7 +10160,7 @@ var init_extract = __esm({
     DEFAULT_TIMEOUT_MS3 = 3e4;
     MAX_CONFIGURED_TIMEOUT_MS = 2147483647;
     CONCURRENT_LIMIT = 3;
-    WEB_SEARCH_CONFIG_PATH3 = getWebAccessConfigPath();
+    WEB_PREFERENCES_PATH3 = webPreferencesPath();
     NON_RECOVERABLE_ERRORS = ["Unsupported content type", "Response too large", "PDF extraction is disabled", "Image fetching is disabled"];
     MIN_USEFUL_CONTENT2 = 500;
     SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
@@ -10164,10 +10183,9 @@ var init_extract = __esm({
 });
 
 // src/pi-web-access/index.ts
-init_media_errors();
 init_proxy_transport();
-import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { toolCall, toolGutter } from "../../presentation/components/tool-layout.ts";
+import { Box as Box2, Text as Text2, truncateToWidth } from "@earendil-works/pi-tui";
+import { toolCall as toolCall2, toolGutter } from "../../presentation/components/tool-layout.ts";
 
 // src/presentation/terminal-text.ts
 function safeText(text) {
@@ -10175,7 +10193,12 @@ function safeText(text) {
 }
 
 // src/pi-web-access/index.ts
+init_config();
 import { Type as Type2 } from "typebox";
+
+// src/pi-web-access/pi-tool-rendering.ts
+import { Box, Text } from "@earendil-works/pi-tui";
+import { toolCall } from "../../presentation/components/tool-layout.ts";
 
 // src/pi-web-access/fetch-params.ts
 init_proxy_transport();
@@ -10249,8 +10272,207 @@ function uniqueUrls(urls) {
   return [...new Set(urls)];
 }
 
+// src/pi-web-access/pi-tool-rendering.ts
+init_media_errors();
+
+// src/pi-web-access/render-search-error.ts
+function truncate(text, max) {
+  return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
+}
+function buildSearchErrorPlan(details) {
+  if (!details || !details.error && !details.cancelled) {
+    return null;
+  }
+  const headline = details.error ?? "Search cancelled.";
+  const queries = details.cancelledQueries ?? [];
+  const queryCount = typeof details.queryCount === "number" && details.queryCount > 0 ? details.queryCount : queries.length;
+  const done = queries.length;
+  const errored = queries.filter((q) => q.error).length;
+  const extras = details.extraLines ?? [];
+  const rich = details.cancelled === true || queries.length > 0 || extras.length > 0;
+  if (!rich) {
+    return { expanded: [headline], collapsed: [], expandHint: null };
+  }
+  const expanded = [headline, ""];
+  if (details.cancelled === true || queries.length > 0) {
+    const diag = [];
+    if (details.cancelled) {
+      diag.push(`cancel reason   : ${details.cancelReason ?? "unknown"}`);
+    }
+    const browserLabel = details.browserConnected === void 0 ? "unknown" : details.browserConnected ? "connected" : "never connected";
+    diag.push(`browser         : ${browserLabel}`);
+    if (typeof details.lastHeartbeatAgeMs === "number" && Number.isFinite(details.lastHeartbeatAgeMs)) {
+      diag.push(`last heartbeat  : ${Math.round(details.lastHeartbeatAgeMs / 1e3)}s ago`);
+    }
+    if (queryCount > 0) {
+      diag.push(`queries started : ${queryCount}`);
+      diag.push(`queries done    : ${done}`);
+      if (errored > 0) diag.push(`queries errored : ${errored}`);
+    }
+    expanded.push("Diagnostics:");
+    for (const line of diag) expanded.push(`  ${line}`);
+  }
+  if (queries.length > 0) {
+    expanded.push("");
+    expanded.push("Per-query results (gathered before cancel):");
+    for (const q of queries) {
+      const dq = truncate(q.query, 52);
+      const tag = q.error ? "[err] " : "[ok]  ";
+      const provider = q.provider ? ` (${q.provider})` : "";
+      const tail = q.error ? `\u2014 ${truncate(q.error, 60)}` : `\u2014 ${q.resultCount} source${q.resultCount === 1 ? "" : "s"}`;
+      expanded.push(`  ${tag}"${dq}"${provider} ${tail}`);
+    }
+  }
+  if (extras.length > 0) {
+    expanded.push("");
+    expanded.push("Details:");
+    for (const e of extras) expanded.push(`  ${e}`);
+  }
+  const collapsed = [];
+  const parts = [];
+  if (queryCount > 0) {
+    parts.push(`${done}/${queryCount} queries completed`);
+  }
+  if (errored > 0) {
+    parts.push(`${errored} errored`);
+  }
+  if (details.browserConnected === false) {
+    parts.push("browser never connected");
+  } else if (details.cancelReason) {
+    parts.push(`reason: ${details.cancelReason}`);
+  }
+  if (parts.length > 0) {
+    collapsed.push(parts.join("; ") + ".");
+  }
+  if (collapsed.length === 0 && extras.length > 0) {
+    for (const e of extras.slice(0, 2)) {
+      collapsed.push(truncate(e, 100));
+    }
+  }
+  const hiddenLines = Math.max(0, expanded.length - (1 + collapsed.length));
+  const expandHint = hiddenLines > 0 ? `... (${hiddenLines} more lines, ${expanded.length} total, ctrl+o to expand)` : null;
+  return { expanded, collapsed, expandHint };
+}
+
+// src/pi-web-access/pi-tool-rendering.ts
+function renderSearchErrorPlan(plan, expanded, theme) {
+  if (expanded) {
+    return new Text(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
+  }
+  const box = new Box(0, 0, (t) => theme.bg("toolErrorBg", t));
+  box.addChild(new Text(theme.fg("error", plan.expanded[0]), 0, 0));
+  for (const line of plan.collapsed) {
+    box.addChild(new Text(theme.fg("dim", line), 0, 0));
+  }
+  if (plan.expandHint) {
+    box.addChild(new Text(theme.fg("muted", plan.expandHint), 0, 0));
+  }
+  return box;
+}
+function renderFetchCall(args, theme, context) {
+  let normalized;
+  try {
+    normalized = normalizeFetchContentParams(args);
+  } catch {
+    return toolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")], theme, context);
+  }
+  const { urlList, options } = normalized;
+  const { prompt, timestamp, frames, model, mode, answerModel, auth } = options;
+  const title = theme.fg("toolTitle", theme.bold("fetch "));
+  if (urlList.length === 0) return toolCall(title, [theme.fg("error", "(no URL)")], theme, context);
+  const count = `${urlList.length} ${urlList.length === 1 ? "URL" : "URLs"}`;
+  const color = urlList.length === 1 ? "accent" : "muted";
+  const lines = urlList.slice(0, 5).map((url) => theme.fg(color, url));
+  if (urlList.length > 5) lines.push(theme.fg("muted", `... and ${urlList.length - 5} more`));
+  if (mode && mode !== "readable") {
+    lines.push(theme.fg("dim", "mode: ") + theme.fg("warning", mode));
+  }
+  if (timestamp) {
+    lines.push(theme.fg("dim", "timestamp: ") + theme.fg("warning", timestamp));
+  }
+  if (typeof frames === "number") {
+    lines.push(theme.fg("dim", "frames: ") + theme.fg("warning", String(frames)));
+  }
+  if (prompt) {
+    const display = prompt.length > 250 ? prompt.slice(0, 247) + "..." : prompt;
+    lines.push(theme.fg("dim", "prompt: ") + theme.fg("muted", `"${display}"`));
+  }
+  if (model) {
+    lines.push(theme.fg("dim", "model: ") + theme.fg("warning", model));
+  }
+  if (answerModel) {
+    lines.push(theme.fg("dim", "answer model: ") + theme.fg("warning", answerModel));
+  }
+  if (auth !== void 0) {
+    lines.push(theme.fg("dim", "auth: ") + theme.fg("warning", auth === true ? "true" : auth));
+  }
+  return toolCall(title + theme.fg("accent", count), lines, theme, context);
+}
+function renderFetchResult(result, { expanded, isPartial }, theme, getSearchContentEnabled) {
+  const details = result.details;
+  if (isPartial) {
+    const progress = details?.progress ?? 0;
+    const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
+    return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "fetching"}`), 0, 0);
+  }
+  if (details?.error) {
+    const fd = details;
+    const extras = [];
+    if (typeof fd.urlCount === "number" || typeof fd.successful === "number") {
+      extras.push(`urls: ${fd.successful ?? 0}/${fd.urlCount ?? 0} succeeded`);
+    }
+    if (fd.responseId) extras.push(`response id: ${fd.responseId}`);
+    if (fd.urls && fd.urls.length > 0) {
+      for (const u of fd.urls.slice(0, 8)) extras.push(`  \u25B8 ${u}`);
+      if (fd.urls.length > 8) extras.push(`  ... and ${fd.urls.length - 8} more`);
+    }
+    const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
+    if (plan) return renderSearchErrorPlan(plan, expanded, theme);
+    return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+  }
+  if (details?.urlCount === 1) {
+    const title = details?.title || "Untitled";
+    const imgCount = details?.imageCount ?? (details?.hasImage ? 1 : 0);
+    const imageBadge = imgCount > 1 ? theme.fg("accent", ` [${imgCount} images]`) : imgCount === 1 ? theme.fg("accent", " [image]") : "";
+    let statusLine2 = theme.fg("success", title) + theme.fg("muted", ` (${details?.totalChars ?? 0} chars)`) + imageBadge;
+    if (details?.truncated) {
+      statusLine2 += theme.fg("warning", " [truncated]");
+    }
+    if (typeof details?.duration === "number") {
+      statusLine2 += theme.fg("muted", ` | ${formatSeconds(Math.floor(details.duration))} total`);
+    }
+    const textContent2 = result.content.find((c) => c.type === "text")?.text || "";
+    if (!expanded) {
+      const brief = textContent2.length > 200 ? textContent2.slice(0, 200) + "..." : textContent2;
+      return new Text(statusLine2 + "\n" + theme.fg("dim", brief), 0, 0);
+    }
+    const lines = [statusLine2];
+    if (details?.prompt) {
+      const display = details.prompt.length > 250 ? details.prompt.slice(0, 247) + "..." : details.prompt;
+      lines.push(theme.fg("dim", `prompt: "${display}"`));
+    }
+    if (details?.timestamp) {
+      lines.push(theme.fg("dim", `timestamp: ${details.timestamp}`));
+    }
+    if (typeof details?.frames === "number") {
+      lines.push(theme.fg("dim", `frames: ${details.frames}`));
+    }
+    const preview2 = textContent2.length > 500 ? textContent2.slice(0, 500) + "..." : textContent2;
+    lines.push(theme.fg("dim", preview2));
+    return new Text(lines.join("\n"), 0, 0);
+  }
+  const countColor = (details?.successful ?? 0) > 0 ? "success" : "error";
+  const statusLine = theme.fg(countColor, `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", getSearchContentEnabled ? " (content stored)" : " (content fetched)");
+  if (!expanded) {
+    return new Text(statusLine, 0, 0);
+  }
+  const textContent = result.content.find((c) => c.type === "text")?.text || "";
+  const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
+  return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+}
+
 // src/pi-web-access/page-query.ts
-init_utils();
+init_config();
 
 // src/pi-web-access/summary-model-scope.ts
 var THINKING_LEVELS = /* @__PURE__ */ new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -10286,7 +10508,7 @@ var CHARS_PER_TOKEN = 3;
 var FALLBACK_CONTEXT_TOKENS = 8e4;
 var SAFETY_TOKENS = 4096;
 function loadConfiguredAnswerModel() {
-  const configPath = getWebAccessConfigPath();
+  const configPath = webPreferencesPath();
   const fetchConfig = loadWebAccessConfig().fetch;
   if (!fetchConfig || typeof fetchConfig !== "object" || Array.isArray(fetchConfig)) return void 0;
   const values = fetchConfig;
@@ -10320,7 +10542,7 @@ function resolveModel(ctx, override, configured) {
     if (override) throw new Error(`Answer model not found: ${override}`);
     if (configured) {
       throw new Error(
-        `Answer model not found: ${configured.provider}/${configured.id} (from fetch.answerProvider/fetch.answerModel in ${getWebAccessConfigPath()})`
+        `Answer model not found: ${configured.provider}/${configured.id} (from fetch.answerProvider/fetch.answerModel in ${webPreferencesPath()})`
       );
     }
     throw new Error("No current model available for page answering");
@@ -10467,13 +10689,13 @@ function providerLabel(provider) {
 
 // src/pi-web-access/search-router.ts
 init_search_error_redaction();
-init_utils();
+init_config();
 init_credential_source();
 init_gemini_api();
 
 // src/pi-web-access/gemini-search.ts
 init_search_error_redaction();
-init_utils();
+init_config();
 init_proxy_transport();
 init_activity();
 init_credential_source();
@@ -10686,6 +10908,7 @@ init_perplexity();
 init_search_types();
 
 // src/pi-web-access/exa.ts
+init_config();
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -10693,7 +10916,7 @@ init_search_types();
 init_credential_source();
 var EXA_API_BASE_URL = "https://api.exa.ai";
 var EXA_MCP_URL = "https://mcp.exa.ai/mcp";
-var CONFIG_PATH3 = getWebSearchConfigPath();
+var CONFIG_PATH3 = webCredentialsPath();
 var EXA_MCP_ADVANCED_TOOL = "web_search_advanced_exa";
 var EXA_MCP_BASIC_TOOL = "web_search_exa";
 var cachedConfig6 = null;
@@ -11057,6 +11280,7 @@ init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_search_answer_formatting();
+init_config();
 init_utils();
 init_activity();
 
@@ -11200,7 +11424,7 @@ var BraveRateLimitCoordinator = class {
 init_search_result_count_normalization();
 init_credential_source();
 var BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1";
-var CONFIG_PATH4 = getWebSearchConfigPath();
+var CONFIG_PATH4 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS = 3e4;
 var braveRateLimit = new BraveRateLimitCoordinator();
 var cachedConfig7 = null;
@@ -11335,6 +11559,7 @@ Get a key at https://brave.com/search/api/`
 
 // src/pi-web-access/openai-search.ts
 init_search_answer_formatting();
+init_config();
 init_utils();
 init_activity();
 init_domain_filter_normalization();
@@ -11376,7 +11601,7 @@ function forEachSearchCallSource(output, callTypes, add) {
 // src/pi-web-access/openai-search.ts
 var OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 var CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-var CONFIG_PATH5 = getWebSearchConfigPath();
+var CONFIG_PATH5 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS2 = 6e4;
 var EXCLUDED_MODEL_SEGMENTS = /* @__PURE__ */ new Set(["pro", "ultra"]);
 var MODEL_PREFERENCE = [
@@ -11474,19 +11699,19 @@ function extractAccountId(token) {
 function resolveConfiguredResponsesUrl(value) {
   if (value === void 0) return OPENAI_RESPONSES_URL;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
+    throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must be an absolute http(s) URL`);
   }
   let url;
   try {
     url = new URL(value.trim());
   } catch {
-    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
+    throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must be an absolute http(s) URL`);
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use http or https`);
+    throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must use http or https`);
   }
   if (url.hostname === "opencode.ai" && url.protocol !== "https:") {
-    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use HTTPS for opencode.ai`);
+    throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must use HTTPS for opencode.ai`);
   }
   return url.toString();
 }
@@ -11495,7 +11720,7 @@ function resolveUseProviderBaseUrl(config) {
   const value = config.openaiUseProviderBaseUrl;
   if (value === void 0) return false;
   if (typeof value !== "boolean") {
-    throw new Error(`openaiUseProviderBaseUrl in ${getWebAccessConfigPath()} must be a boolean`);
+    throw new Error(`openaiUseProviderBaseUrl in ${webPreferencesPath()} must be a boolean`);
   }
   return value;
 }
@@ -11524,14 +11749,14 @@ function resolveProviderResponsesUrl(baseUrl, useCodexEndpoint) {
 function resolveConfiguredSearchProviders(value) {
   if (value === void 0) return DEFAULT_SEARCH_PROVIDERS;
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.trim().length === 0)) {
-    throw new Error(`openaiSearchProviders in ${getWebAccessConfigPath()} must be an array of non-empty Pi provider ids`);
+    throw new Error(`openaiSearchProviders in ${webPreferencesPath()} must be an array of non-empty Pi provider ids`);
   }
   return value.map((entry) => entry.trim());
 }
 function resolveConfiguredSearchModel(value) {
   if (value == null) return void 0;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`openaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
+    throw new Error(`openaiSearchModel in ${webPreferencesPath()} must be a non-empty string`);
   }
   return value.trim();
 }
@@ -11572,7 +11797,7 @@ async function resolvePiAuth(ctx, responsesUrl, providers, modelOverride, hasExp
     const useCodexEndpoint = provider === "openai-codex" || !isOfficialBaseUrl && isCodexJwt(resolved.apiKey);
     if (!hasExplicitResponsesUrl && !useProviderBaseUrl && !useCodexEndpoint && baseUrl !== void 0 && !isOfficialBaseUrl) {
       throw new CustomOpenAIBaseUrlError(
-        `OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. Set openaiResponsesUrl in ${getWebAccessConfigPath()} to the full Responses endpoint for this credential.`
+        `OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. Set openaiResponsesUrl in ${webPreferencesPath()} to the full Responses endpoint for this credential.`
       );
     }
     let providerResponsesUrl = responsesUrl;
@@ -11814,7 +12039,7 @@ function isAlphaSearchEnabled() {
   const value = loadConfig7().openaiUseAlphaSearch;
   if (value === void 0) return false;
   if (typeof value !== "boolean") {
-    throw new Error(`openaiUseAlphaSearch in ${getWebAccessConfigPath()} must be a boolean`);
+    throw new Error(`openaiUseAlphaSearch in ${webPreferencesPath()} must be a boolean`);
   }
   return value;
 }
@@ -11997,13 +12222,13 @@ init_search_error_redaction();
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
-init_utils();
+init_config();
 init_activity();
 init_credential_source();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 var SEARCHINFINITY_SEARCH_URL = "https://torchlight.byteintlapi.com/search_api/web_search";
-var CONFIG_PATH10 = getWebSearchConfigPath();
+var CONFIG_PATH10 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS6 = 3e4;
 var cachedConfig12 = null;
 function loadConfig11() {
@@ -12143,12 +12368,13 @@ init_querit();
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_result_count_normalization();
 init_credential_source();
 var TAVILY_API_BASE_URL = "https://api.tavily.com";
-var CONFIG_PATH12 = getWebSearchConfigPath();
+var CONFIG_PATH12 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS8 = 6e4;
 var cachedConfig14 = null;
 function loadConfig13() {
@@ -12329,13 +12555,14 @@ async function tavilyRequest(apiUrl, apiKey, body, signal) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var YOU_SEARCH_URL = "https://ydc-index.io/v1/search";
-var CONFIG_PATH13 = getWebSearchConfigPath();
+var CONFIG_PATH13 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS9 = 6e4;
 var cachedConfig15 = null;
 function loadConfig14() {
@@ -12442,7 +12669,7 @@ init_firecrawl();
 
 // src/pi-web-access/jina-search.ts
 init_search_error_redaction();
-init_utils();
+init_config();
 init_proxy_transport();
 init_activity();
 init_credential_source();
@@ -12451,7 +12678,7 @@ init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 var JINA_SEARCH_BASE_URL = "https://s.jina.ai/";
-var CONFIG_PATH15 = getWebSearchConfigPath();
+var CONFIG_PATH15 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS11 = 6e4;
 var cachedConfig17 = null;
 function loadConfig16() {
@@ -12612,12 +12839,12 @@ init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
 init_search_answer_formatting();
-init_utils();
+init_config();
 init_activity();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPDIVE_API_URL = "https://api.serpdive.com/v1/search";
-var CONFIG_PATH16 = getWebSearchConfigPath();
+var CONFIG_PATH16 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS12 = 6e4;
 var MODELS = ["krill", "mako", "moby"];
 var DEFAULT_MODEL2 = "krill";
@@ -12769,12 +12996,12 @@ init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
-init_utils();
+init_config();
 init_activity();
 init_search_answer_formatting();
 init_credential_source();
 var BOCHA_SEARCH_URL = "https://api.bochaai.com/v1/web-search";
-var CONFIG_PATH18 = getWebSearchConfigPath();
+var CONFIG_PATH18 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS14 = 6e4;
 var cachedConfig20 = null;
 function loadConfig19() {
@@ -12896,12 +13123,13 @@ init_ollama();
 // src/pi-web-access/searxng.ts
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_ssrf_protection();
 init_search_result_count_normalization();
 init_credential_source();
-var CONFIG_PATH20 = getWebAccessConfigPath();
+var CONFIG_PATH20 = webPreferencesPath();
 var SEARCH_TIMEOUT_MS16 = 3e4;
 var cachedConfig22 = null;
 function loadConfig21() {
@@ -13011,13 +13239,14 @@ Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.ur
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_credential_source();
 init_ssrf_protection();
 init_search_answer_formatting();
 init_search_result_count_normalization();
-var CONFIG_PATH21 = getWebSearchConfigPath();
+var CONFIG_PATH21 = webCredentialsPath();
 var DEFAULT_BASE_URL = "https://degoog.org";
 var SEARCH_TIMEOUT_MS17 = 3e4;
 var cachedConfig23 = null;
@@ -13055,7 +13284,7 @@ function requireBaseUrl3() {
   if (!baseUrl) {
     throw new Error(
       `degoog base URL is invalid or missing. Either:
-  1. Set webAccess.degoogBaseUrl = "https://degoog.example.com" in ${getWebAccessConfigPath()}
+  1. Set webAccess.degoogBaseUrl = "https://degoog.example.com" in ${webPreferencesPath()}
   2. Set DEGOOG_URL to an HTTP(S) URL
   3. Remove the override to use the public instance at https://degoog.org`
     );
@@ -13259,7 +13488,7 @@ init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_proxy_transport();
-init_utils();
+init_config();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
@@ -13381,13 +13610,13 @@ init_search_error_redaction();
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
-init_utils();
+init_config();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var XCRAWL_API_URL = "https://run.xcrawl.com/v1/serp";
-var CONFIG_PATH22 = getWebSearchConfigPath();
+var CONFIG_PATH22 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS20 = 6e4;
 var cachedConfig25 = null;
 function loadConfig24() {
@@ -13523,13 +13752,14 @@ async function searchWithXCrawl(query, options = {}) {
 
 // src/pi-web-access/xai-search.ts
 init_search_answer_formatting();
+init_config();
 init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_types();
 init_credential_source();
 var XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
-var CONFIG_PATH23 = getWebSearchConfigPath();
+var CONFIG_PATH23 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS21 = 6e4;
 var WEB_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.5", "grok-4.3", "grok-build-0.1"];
 var X_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.6", ...WEB_SEARCH_AUTH_MODEL_CANDIDATES];
@@ -13541,22 +13771,22 @@ function loadConfig25() {
 function resolveConfiguredSearchModel2(value) {
   if (value == null) return void 0;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`xaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
+    throw new Error(`xaiSearchModel in ${webPreferencesPath()} must be a non-empty string`);
   }
   return value.trim();
 }
 function resolveConfiguredSearchTools(value) {
   if (value === void 0) return [...DEFAULT_XAI_SEARCH_TOOLS];
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must be a non-empty array containing only web_search or x_search`);
+    throw new Error(`xaiSearchTools in ${webPreferencesPath()} must be a non-empty array containing only web_search or x_search`);
   }
   const tools = [];
   for (const tool of value) {
     if (tool !== "web_search" && tool !== "x_search") {
-      throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} may only contain web_search or x_search`);
+      throw new Error(`xaiSearchTools in ${webPreferencesPath()} may only contain web_search or x_search`);
     }
     if (tools.includes(tool)) {
-      throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must not contain duplicates: ${tool}`);
+      throw new Error(`xaiSearchTools in ${webPreferencesPath()} must not contain duplicates: ${tool}`);
     }
     tools.push(tool);
   }
@@ -13762,6 +13992,7 @@ async function searchWithXai(query, options = {}, ctx) {
 
 // src/pi-web-access/brightdata.ts
 init_search_error_redaction();
+init_config();
 init_utils();
 init_proxy_transport();
 init_activity();
@@ -13771,7 +14002,7 @@ init_search_result_count_normalization();
 init_search_types();
 init_credential_source();
 var BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
-var CONFIG_PATH24 = getWebSearchConfigPath();
+var CONFIG_PATH24 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS22 = 6e4;
 var ZONE_PATTERN = /^[A-Za-z0-9_-]+$/;
 var cachedConfig27 = null;
@@ -13808,7 +14039,7 @@ function serpZoneSetting() {
   }
   const configured = loadConfig26().brightdataSerpZone;
   if (typeof configured === "string" && configured.trim()) {
-    return { raw: configured.trim(), label: `brightdataSerpZone in ${getWebAccessConfigPath()}` };
+    return { raw: configured.trim(), label: `brightdataSerpZone in ${webPreferencesPath()}` };
   }
   return null;
 }
@@ -13829,7 +14060,7 @@ Create or rename one at https://brightdata.com/cp/zones`
   }
   throw new Error(
     `Bright Data SERP zone is invalid or missing. Either:
-  1. Set webAccess.brightdataSerpZone = "your_serp_zone" in ${getWebAccessConfigPath()}
+  1. Set webAccess.brightdataSerpZone = "your_serp_zone" in ${webPreferencesPath()}
   2. Set BRIGHTDATA_SERP_ZONE environment variable
 The zone must be of Bright Data type \`serp\`; a Web Unlocker zone is a different product and does not return SERP JSON.
 Create one at https://brightdata.com/cp/zones`
@@ -13992,12 +14223,13 @@ init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_credential_source();
 var SERPBASE_API_URL = "https://api.serpbase.dev/google/search";
-var CONFIG_PATH25 = getWebSearchConfigPath();
+var CONFIG_PATH25 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS23 = 6e4;
 var cachedConfig28 = null;
 function loadConfig27() {
@@ -14097,13 +14329,14 @@ async function searchWithSerpBase(query, options = {}) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPAPI_SEARCH_URL = "https://serpapi.com/search.json";
-var CONFIG_PATH26 = getWebSearchConfigPath();
+var CONFIG_PATH26 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS24 = 6e4;
 var cachedConfig29 = null;
 function loadConfig28() {
@@ -14201,13 +14434,14 @@ async function searchWithSerpApi(query, options = {}) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPER_SEARCH_URL = "https://google.serper.dev/search";
-var CONFIG_PATH27 = getWebSearchConfigPath();
+var CONFIG_PATH27 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS25 = 6e4;
 var cachedConfig30 = null;
 function loadConfig29() {
@@ -14306,13 +14540,14 @@ async function searchWithSerper(query, options = {}) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPLY_SEARCH_URL = "https://api.serply.io/v1/search";
-var CONFIG_PATH28 = getWebSearchConfigPath();
+var CONFIG_PATH28 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS26 = 6e4;
 var cachedConfig31 = null;
 function loadConfig30() {
@@ -14415,7 +14650,7 @@ async function searchWithSerply(query, options = {}) {
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
-init_utils();
+init_config();
 init_activity();
 init_credential_source();
 init_search_result_count_normalization();
@@ -14520,7 +14755,7 @@ async function searchWithBaizhi(query, options = {}) {
 init_search_types();
 init_proxy_transport();
 init_domain_filter_normalization();
-init_utils();
+init_config();
 init_activity();
 init_credential_source();
 init_search_answer_formatting();
@@ -14540,7 +14775,7 @@ function credentialOptions2(config) {
 function endpointUrl(config) {
   const endpoint = config.zaiEndpoint ?? "global";
   if (endpoint !== "global" && endpoint !== "china") {
-    throw new Error(`zaiEndpoint in ${getWebAccessConfigPath()} must be "global" or "china"`);
+    throw new Error(`zaiEndpoint in ${webPreferencesPath()} must be "global" or "china"`);
   }
   return MCP_URLS[endpoint];
 }
@@ -14658,13 +14893,14 @@ async function searchWithZai(query, options = {}) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var VALYU_SEARCH_URL = "https://api.valyu.ai/v1/search";
-var CONFIG_PATH29 = getWebSearchConfigPath();
+var CONFIG_PATH29 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS29 = 6e4;
 var MAX_SNIPPET_CHARS = 2500;
 var MAX_CONTENT_CHARS = 4e3;
@@ -14775,6 +15011,7 @@ async function searchWithValyu(query, options = {}) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
@@ -14909,13 +15146,14 @@ async function searchWithKeenable(query, options = {}) {
 init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
+init_config();
 init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var CERAMIC_SEARCH_URL = "https://api.ceramic.ai/search";
-var CONFIG_PATH30 = getWebSearchConfigPath();
+var CONFIG_PATH30 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS31 = 3e4;
 var MAX_REQUEST_RESULTS2 = 20;
 var REQUEST_DESCRIPTION_CHARS = 1e3;
@@ -15189,7 +15427,7 @@ async function searchWithKimi(query, options = {}, ctx) {
 
 // src/pi-web-access/mistral-search.ts
 init_search_error_redaction();
-init_utils();
+init_config();
 init_proxy_transport();
 init_activity();
 init_domain_filter_normalization();
@@ -15197,7 +15435,7 @@ init_search_types();
 init_credential_source();
 init_search_result_count_normalization();
 var MISTRAL_CONVERSATIONS_URL = "https://api.mistral.ai/v1/conversations";
-var CONFIG_PATH31 = getWebSearchConfigPath();
+var CONFIG_PATH31 = webCredentialsPath();
 var SEARCH_TIMEOUT_MS33 = 6e4;
 var DEFAULT_SEARCH_MODEL = "mistral-small-latest";
 var DEFAULT_SEARCH_TOOL = "web_search";
@@ -15208,14 +15446,14 @@ function loadConfig35() {
 function resolveSearchModel(value) {
   if (value === void 0) return DEFAULT_SEARCH_MODEL;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`mistralSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
+    throw new Error(`mistralSearchModel in ${webPreferencesPath()} must be a non-empty string`);
   }
   return value.trim();
 }
 function resolveSearchTool(value) {
   if (value === void 0) return DEFAULT_SEARCH_TOOL;
   if (value !== "web_search" && value !== "web_search_premium") {
-    throw new Error(`mistralSearchTool in ${getWebAccessConfigPath()} must be either web_search or web_search_premium`);
+    throw new Error(`mistralSearchTool in ${webPreferencesPath()} must be either web_search or web_search_premium`);
   }
   return value;
 }
@@ -15392,13 +15630,13 @@ var SearchProviderError = class extends Error {
     this.causeError = cause;
   }
 };
-var CONFIG_PATH32 = getWebSearchConfigPath();
+var CONFIG_PATH32 = webCredentialsPath();
 var VALID_ROUTING_KINDS = ["transient", "quota", "network", "invalid-response", "unsupported"];
 var cachedSearchConfig = null;
 function getSearchConfig() {
   if (cachedSearchConfig) return cachedSearchConfig;
   const raw = loadWebAccessConfig();
-  const path = getWebAccessConfigPath();
+  const path = webPreferencesPath();
   const webSearch = raw.webSearch;
   if (webSearch !== void 0 && (!webSearch || typeof webSearch !== "object" || Array.isArray(webSearch))) {
     throw new Error(`webSearch in ${path} must be an object`);
@@ -15425,7 +15663,7 @@ function getSearchConfig() {
   return cachedSearchConfig;
 }
 function normalizeSearchRouting(value) {
-  const path = getWebAccessConfigPath();
+  const path = webPreferencesPath();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`searchRouting in ${path} must be an object`);
   }
@@ -15561,10 +15799,13 @@ function classifyProviderError(provider, err) {
   }
   return new SearchProviderError(provider, kind, message, status, err);
 }
+function unhandledProvider(provider) {
+  throw new Error(`Unhandled search provider: ${provider}`);
+}
 async function searchWithResolvedProvider(provider, query, options, useCurrentModel = false) {
   if (provider === "openai") {
-    const result2 = useCurrentModel ? await searchWithCurrentModelOpenAI(query, options, options.extensionContext) : await searchWithOpenAI(query, options, options.extensionContext);
-    return { ...result2, provider };
+    const result = useCurrentModel ? await searchWithCurrentModelOpenAI(query, options, options.extensionContext) : await searchWithOpenAI(query, options, options.extensionContext);
+    return { ...result, provider };
   }
   if (provider === "brave") return { ...await searchWithBrave(query, options), provider };
   if (provider === "parallel") return { ...await searchWithParallel(query, options), provider };
@@ -15601,8 +15842,8 @@ async function searchWithResolvedProvider(provider, query, options, useCurrentMo
   if (provider === "duckduckgo") return { ...await searchWithDuckDuckGo(query, options), provider };
   if (provider === "kimi") return { ...await searchWithKimi(query, options, options.extensionContext), provider };
   if (provider === "gemini") {
-    const result2 = await searchWithGemini(query, options, true);
-    if (result2) return { ...result2, provider };
+    const result = await searchWithGemini(query, options, true);
+    if (result) return { ...result, provider };
     throw new Error(
       `Gemini search unavailable. Either:
   1. Configure geminiApiKey in ${CONFIG_PATH32} or set GEMINI_API_KEY
@@ -15611,9 +15852,12 @@ async function searchWithResolvedProvider(provider, query, options, useCurrentMo
   4. Sign into gemini.google.com in a supported Chromium-based browser`
     );
   }
-  const result = await searchWithExa(query, options);
-  if (result) return { ...result, provider };
-  throw new Error("Exa search returned no results.");
+  if (provider === "exa") {
+    const result = await searchWithExa(query, options);
+    if (result) return { ...result, provider };
+    throw new Error("Exa search returned no results.");
+  }
+  return unhandledProvider(provider);
 }
 async function isResolvedProviderAvailable(provider, options, useCurrentModel = false) {
   if (provider === "openai") {
@@ -15654,7 +15898,8 @@ async function isResolvedProviderAvailable(provider, options, useCurrentModel = 
   if (provider === "duckduckgo") return isDuckDuckGoAvailable();
   if (provider === "gemini") return isGeminiApiAvailable() || await isGeminiWebOptionallyAvailable();
   if (provider === "kimi") return isKimiSearchAvailable(options.extensionContext);
-  return isExaAvailable();
+  if (provider === "exa") return isExaAvailable();
+  return unhandledProvider(provider);
 }
 async function getProviderAvailability(ctx) {
   const allowed = new Set(getAllowedSearchProviders());
@@ -15992,7 +16237,8 @@ function* readHistoryEntries(reader, scope, select, options) {
 }
 
 // src/pi-web-access/storage.ts
-init_utils();
+init_config();
+import { webAccessAgentDir as webAccessAgentDir3 } from "../../configuration/web-access.ts";
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 var FETCH_CACHE_DIR = "web-search-cache";
 var FETCH_CACHE_VERSION = 1;
@@ -16013,7 +16259,7 @@ function getFetchCacheDir() {
   if (configured !== void 0 && (typeof configured !== "string" || !configured.trim())) {
     throw new Error("webAccess.cacheRoot must be a non-empty directory path");
   }
-  return join6(configured || getWebSearchConfigDir(), FETCH_CACHE_DIR);
+  return join6(configured || webAccessAgentDir3(), FETCH_CACHE_DIR);
 }
 function fetchCachePath(key) {
   if (!CACHE_KEY_PATTERN.test(key)) return null;
@@ -19926,7 +20172,7 @@ ${CURATOR_PAGE_SCRIPT.replace("__INLINE_DATA__", () => inlineData)}
 }
 
 // src/pi-web-access/curator-network.ts
-init_utils();
+init_config();
 import { hostname } from "node:os";
 var LOCAL_CURATOR_NETWORK_DEFAULTS = { enabled: false, host: "localhost", bind: "127.0.0.1" };
 function trimmedString(value) {
@@ -20571,7 +20817,7 @@ data: ${JSON.stringify(data)}
 }
 
 // src/pi-web-access/summary-review.ts
-init_utils();
+init_config();
 var PREFERRED_SUMMARY_MODELS = [
   { provider: "anthropic", id: "claude-haiku-4-5" },
   { provider: "openai-codex", id: "gpt-5.6-luna" },
@@ -20987,85 +21233,6 @@ function parseStringifiedArrays(args, keys) {
   return output ?? args;
 }
 
-// src/pi-web-access/render-search-error.ts
-function truncate(text, max) {
-  return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
-}
-function buildSearchErrorPlan(details) {
-  if (!details || !details.error && !details.cancelled) {
-    return null;
-  }
-  const headline = details.error ?? "Search cancelled.";
-  const queries = details.cancelledQueries ?? [];
-  const queryCount = typeof details.queryCount === "number" && details.queryCount > 0 ? details.queryCount : queries.length;
-  const done = queries.length;
-  const errored = queries.filter((q) => q.error).length;
-  const extras = details.extraLines ?? [];
-  const rich = details.cancelled === true || queries.length > 0 || extras.length > 0;
-  if (!rich) {
-    return { expanded: [headline], collapsed: [], expandHint: null };
-  }
-  const expanded = [headline, ""];
-  if (details.cancelled === true || queries.length > 0) {
-    const diag = [];
-    if (details.cancelled) {
-      diag.push(`cancel reason   : ${details.cancelReason ?? "unknown"}`);
-    }
-    const browserLabel = details.browserConnected === void 0 ? "unknown" : details.browserConnected ? "connected" : "never connected";
-    diag.push(`browser         : ${browserLabel}`);
-    if (typeof details.lastHeartbeatAgeMs === "number" && Number.isFinite(details.lastHeartbeatAgeMs)) {
-      diag.push(`last heartbeat  : ${Math.round(details.lastHeartbeatAgeMs / 1e3)}s ago`);
-    }
-    if (queryCount > 0) {
-      diag.push(`queries started : ${queryCount}`);
-      diag.push(`queries done    : ${done}`);
-      if (errored > 0) diag.push(`queries errored : ${errored}`);
-    }
-    expanded.push("Diagnostics:");
-    for (const line of diag) expanded.push(`  ${line}`);
-  }
-  if (queries.length > 0) {
-    expanded.push("");
-    expanded.push("Per-query results (gathered before cancel):");
-    for (const q of queries) {
-      const dq = truncate(q.query, 52);
-      const tag = q.error ? "[err] " : "[ok]  ";
-      const provider = q.provider ? ` (${q.provider})` : "";
-      const tail = q.error ? `\u2014 ${truncate(q.error, 60)}` : `\u2014 ${q.resultCount} source${q.resultCount === 1 ? "" : "s"}`;
-      expanded.push(`  ${tag}"${dq}"${provider} ${tail}`);
-    }
-  }
-  if (extras.length > 0) {
-    expanded.push("");
-    expanded.push("Details:");
-    for (const e of extras) expanded.push(`  ${e}`);
-  }
-  const collapsed = [];
-  const parts = [];
-  if (queryCount > 0) {
-    parts.push(`${done}/${queryCount} queries completed`);
-  }
-  if (errored > 0) {
-    parts.push(`${errored} errored`);
-  }
-  if (details.browserConnected === false) {
-    parts.push("browser never connected");
-  } else if (details.cancelReason) {
-    parts.push(`reason: ${details.cancelReason}`);
-  }
-  if (parts.length > 0) {
-    collapsed.push(parts.join("; ") + ".");
-  }
-  if (collapsed.length === 0 && extras.length > 0) {
-    for (const e of extras.slice(0, 2)) {
-      collapsed.push(truncate(e, 100));
-    }
-  }
-  const hiddenLines = Math.max(0, expanded.length - (1 + collapsed.length));
-  const expandHint = hiddenLines > 0 ? `... (${hiddenLines} more lines, ${expanded.length} total, ctrl+o to expand)` : null;
-  return { expanded, collapsed, expandHint };
-}
-
 // src/pi-web-access/curator-run.ts
 function resolveWebSearchWorkflow(input, hasUI) {
   const normalized = typeof input === "string" ? input.trim().toLowerCase() : "";
@@ -21216,11 +21383,11 @@ function registerWebToolActivation(pi, tools, mode) {
 
 // src/pi-web-access/tool-commands.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
-init_utils();
+init_config();
 init_proxy_transport();
 
 // src/pi-web-access/curator-workflow.ts
-init_utils();
+init_config();
 function saveDefaultSearchProvider(provider) {
   saveWebAccessConfig({ searchProvider: provider, provider });
 }
@@ -21362,7 +21529,7 @@ function indexedCuratorEntryToQueryResult(entry) {
 }
 
 // src/pi-web-access/curator-browser.ts
-init_utils();
+init_config();
 import { execFileSync, spawn as spawn3 } from "node:child_process";
 import { createRequire } from "node:module";
 import { platform } from "node:os";
@@ -21468,7 +21635,7 @@ async function openCuratorBrowserWindow(pi, url) {
 }
 
 // src/pi-web-access/web-tool-core.ts
-init_utils();
+init_config();
 init_proxy_transport();
 import pLimit2 from "p-limit";
 init_auth_fetch();
@@ -21850,7 +22017,6 @@ function getResearchArtifact(id) {
 }
 
 // src/pi-web-access/web-tool-core.ts
-var WEB_SEARCH_CONFIG_PATH4 = getWebAccessConfigPath();
 function loadConfig40() {
   return loadWebAccessConfig();
 }
@@ -21865,16 +22031,16 @@ var FETCH_MODES = ["readable", "raw", "answer"];
 function resolveFetchModeConfig(config) {
   const configuredModes = config.fetch?.allowedModes ?? FETCH_MODES;
   if (!Array.isArray(configuredModes) || configuredModes.length === 0 || configuredModes.some((mode) => !FETCH_MODES.includes(mode))) {
-    throw new Error(`fetch.allowedModes in ${WEB_SEARCH_CONFIG_PATH4} must be a non-empty array containing only "readable", "raw", or "answer"`);
+    throw new Error(`fetch.allowedModes in ${webPreferencesPath()} must be a non-empty array containing only "readable", "raw", or "answer"`);
   }
   const allowedModes = configuredModes;
   const duplicateMode = allowedModes.find((mode, index) => allowedModes.indexOf(mode) !== index);
   if (duplicateMode) {
-    throw new Error(`fetch.allowedModes in ${WEB_SEARCH_CONFIG_PATH4} must not contain duplicates: "${duplicateMode}"`);
+    throw new Error(`fetch.allowedModes in ${webPreferencesPath()} must not contain duplicates: "${duplicateMode}"`);
   }
   const defaultMode = config.fetch?.defaultMode ?? "readable";
   if (!allowedModes.includes(defaultMode)) {
-    throw new Error(`fetch.defaultMode in ${WEB_SEARCH_CONFIG_PATH4} must be one of fetch.allowedModes`);
+    throw new Error(`fetch.defaultMode in ${webPreferencesPath()} must be one of fetch.allowedModes`);
   }
   return { defaultMode, allowedModes };
 }
@@ -21882,10 +22048,18 @@ function runSearchQueries(queries, run) {
   const limit = pLimit2(SEARCH_QUERY_CONCURRENCY);
   return Promise.all(queries.map((query, index) => limit(() => run(query, index))));
 }
-function isToolEnabled(config, key) {
-  const override = config.tools?.[key]?.enabled;
-  if (typeof override === "boolean") return override;
-  return key !== "webSearch" && key !== "sourceCheck" || config.webSearch?.enabled !== false;
+function resolveEnabledTools(config) {
+  const searchEnabled = config.webSearch?.enabled !== false;
+  const enabled = (key, fallback) => {
+    const override = config.tools?.[key]?.enabled;
+    return typeof override === "boolean" ? override : fallback;
+  };
+  return {
+    webSearch: enabled("webSearch", searchEnabled),
+    sourceCheck: enabled("sourceCheck", searchEnabled),
+    fetchContent: enabled("fetchContent", true),
+    getSearchContent: enabled("getSearchContent", true)
+  };
 }
 function joinToolNames(names) {
   if (names.length === 0) return "stored content";
@@ -21904,8 +22078,9 @@ function resolveRequestedProvider(requested) {
     return normalizedRequested;
   }
   const config = loadConfig40();
-  const provider = normalizeProviderInput(config.searchProvider ?? config.provider, `provider in ${WEB_SEARCH_CONFIG_PATH4}`) ?? "auto";
-  assertSearchProviderSelectionAllowed(provider, `configured provider in ${WEB_SEARCH_CONFIG_PATH4}`);
+  const path = webPreferencesPath();
+  const provider = normalizeProviderInput(config.searchProvider ?? config.provider, `provider in ${path}`) ?? "auto";
+  assertSearchProviderSelectionAllowed(provider, `configured provider in ${path}`);
   return provider;
 }
 function toCuratorProvider(provider) {
@@ -22980,7 +23155,7 @@ function registerWebSearchCommand(pi, buildSearchReturn) {
       const commandConfig = loadWebAccessConfig();
       const rawSearchProvider = normalizeProviderInput(
         commandConfig.searchProvider ?? commandConfig.provider ?? "auto",
-        `provider in ${WEB_SEARCH_CONFIG_PATH4}`
+        `provider in ${webPreferencesPath()}`
       ) ?? "auto";
       let currentSearchProvider = Array.isArray(rawSearchProvider) ? rawSearchProvider : rawSearchProvider === "auto" ? "auto" : initialProvider;
       const summaryContext = {
@@ -23220,7 +23395,7 @@ function registerCuratorCommand(pi, webSearchToolName) {
         ctx.ui.notify(`Failed to save config: ${message}`, "error");
         return;
       }
-      const label = newWorkflow === "none" ? `Curator disabled \u2014 ${webSearchToolName} will return raw results` : newWorkflow === "auto-summary" ? `Auto-summary enabled \u2014 ${webSearchToolName} will generate a summary without opening the curator` : `Curator enabled \u2014 ${webSearchToolName} will open curator and auto-generate a summary draft`;
+      const label = webSearchToolName === void 0 ? `Curator workflow saved: ${newWorkflow}` : newWorkflow === "none" ? `Curator disabled \u2014 ${webSearchToolName} will return raw results` : newWorkflow === "auto-summary" ? `Auto-summary enabled \u2014 ${webSearchToolName} will generate a summary without opening the curator` : `Curator enabled \u2014 ${webSearchToolName} will open curator and auto-generate a summary draft`;
       pi.sendMessage({
         customType: "curator-config",
         content: [{ type: "text", text: label }],
@@ -23237,7 +23412,10 @@ function registerGoogleAccountCommand(pi) {
       if (!isBrowserCookieAccessAllowed()) {
         pi.sendMessage({
           customType: "google-account",
-          content: [{ type: "text", text: `Gemini Web browser cookie access is disabled. Set allowBrowserCookies: true in ${WEB_SEARCH_CONFIG_PATH4} to enable it.` }],
+          content: [{
+            type: "text",
+            text: `Gemini Web browser cookie access is disabled. Set allowBrowserCookies: true in ${webPreferencesPath()} to enable it.`
+          }],
           display: true,
           details: { available: false, cookieAccessAllowed: false }
         }, { triggerTurn: true, deliverAs: "followUp" });
@@ -23281,23 +23459,22 @@ function registerStoredSearchCommand(pi, ownedResults) {
         ctx.ui.notify("No stored search results", "info");
         return;
       }
-      const options = results.map((r) => {
+      const options = results.map((r, index) => {
+        const label = `${index + 1}. [${r.id.slice(0, 6)}]`;
         const age = Math.floor((Date.now() - r.timestamp) / 6e4);
         const ageStr = age < 60 ? `${age}m ago` : `${Math.floor(age / 60)}h ago`;
         if (r.type === "search" && r.queries) {
           const query = r.queries[0]?.query || "unknown";
-          return `[${r.id.slice(0, 6)}] "${query}" (${r.queries.length} queries) - ${ageStr}`;
+          return `${label} "${query}" (${r.queries.length} queries) - ${ageStr}`;
         }
         if (r.type === "fetch" && (r.urls || r.urlMetadata)) {
-          return `[${r.id.slice(0, 6)}] ${(r.urls ?? r.urlMetadata ?? []).length} URLs fetched - ${ageStr}`;
+          return `${label} ${(r.urls ?? r.urlMetadata ?? []).length} URLs fetched - ${ageStr}`;
         }
-        return `[${r.id.slice(0, 6)}] ${r.type} - ${ageStr}`;
+        return `${label} ${r.type} - ${ageStr}`;
       });
       const choice = await ctx.ui.select("Stored Search Results", options);
-      if (!choice) return;
-      const match = choice.match(/^\[([a-z0-9]+)\]/);
-      if (!match) return;
-      const selected = results.find((r) => r.id.startsWith(match[1]));
+      if (choice === void 0) return;
+      const selected = results[options.indexOf(choice)];
       if (!selected) return;
       const actions = ["View details", "Delete"];
       const action = await ctx.ui.select(`Result ${selected.id.slice(0, 6)}`, actions);
@@ -23378,20 +23555,6 @@ var fetchContentOutputSchema = Type2.Object({
     duration: Type2.Optional(Type2.Number())
   }))
 });
-function renderSearchErrorPlan(plan, expanded, theme) {
-  if (expanded) {
-    return new Text(plan.expanded.map((l, i) => i === 0 ? theme.fg("error", l) : theme.fg("toolOutput", l)).join("\n"), 0, 0);
-  }
-  const box = new Box(0, 0, (t) => theme.bg("toolErrorBg", t));
-  box.addChild(new Text(theme.fg("error", plan.expanded[0]), 0, 0));
-  for (const line of plan.collapsed) {
-    box.addChild(new Text(theme.fg("dim", line), 0, 0));
-  }
-  if (plan.expandHint) {
-    box.addChild(new Text(theme.fg("muted", plan.expandHint), 0, 0));
-  }
-  return box;
-}
 var TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_SHORTCUTS = { curate: "ctrl+shift+s", activity: "ctrl+shift+w" };
 var FETCH_MODE_DESCRIPTIONS = {
@@ -23408,28 +23571,29 @@ function searchProviderSchema(description, allowedProviders) {
 function isCommandEnabled(config, name) {
   return config.commands?.[name]?.enabled !== false;
 }
-function resolveToolNames(config) {
+function resolveToolNames(config, enabledTools) {
+  const path = webPreferencesPath();
   if (config.toolNames !== void 0 && (!config.toolNames || typeof config.toolNames !== "object" || Array.isArray(config.toolNames))) {
-    throw new Error(`toolNames in ${WEB_SEARCH_CONFIG_PATH4} must be an object`);
+    throw new Error(`toolNames in ${path} must be an object`);
   }
   const names = { ...DEFAULT_TOOL_NAMES };
   for (const key of Object.keys(DEFAULT_TOOL_NAMES)) {
     const value = config.toolNames?.[key];
     if (value === void 0) continue;
-    if (typeof value !== "string") throw new Error(`toolNames.${key} in ${WEB_SEARCH_CONFIG_PATH4} must be a string`);
+    if (typeof value !== "string") throw new Error(`toolNames.${key} in ${path} must be a string`);
     const trimmed = value.trim();
     if (!TOOL_NAME_PATTERN.test(trimmed)) {
-      throw new Error(`toolNames.${key} in ${WEB_SEARCH_CONFIG_PATH4} must start with a letter and contain only letters, numbers, underscores, or hyphens`);
+      throw new Error(`toolNames.${key} in ${path} must start with a letter and contain only letters, numbers, underscores, or hyphens`);
     }
     names[key] = trimmed;
   }
-  const registeredKeys = Object.keys(DEFAULT_TOOL_NAMES).filter((key) => isToolEnabled(config, key));
+  const registeredKeys = Object.keys(DEFAULT_TOOL_NAMES).filter((key) => enabledTools[key]);
   const seen = /* @__PURE__ */ new Map();
   for (const key of registeredKeys) {
     const name = names[key];
-    if (name === "web_enable") throw new Error(`toolNames.${key} in ${WEB_SEARCH_CONFIG_PATH4} uses reserved loader name web_enable`);
+    if (name === "web_enable") throw new Error(`toolNames.${key} in ${path} uses reserved loader name web_enable`);
     const previous = seen.get(name);
-    if (previous) throw new Error(`toolNames.${key} duplicates toolNames.${previous} in ${WEB_SEARCH_CONFIG_PATH4}`);
+    if (previous) throw new Error(`toolNames.${key} duplicates toolNames.${previous} in ${path}`);
     seen.set(name, key);
   }
   return names;
@@ -23552,18 +23716,21 @@ function index_default(pi, options = {}) {
   const fetchModeConfig = resolveFetchModeConfig(initConfig);
   const toolActivation = options.registerTool ? "eager" : initConfig.toolActivation ?? "auto";
   if (toolActivation !== "auto" && toolActivation !== "dynamic" && toolActivation !== "eager") {
-    throw new Error(`toolActivation in ${WEB_SEARCH_CONFIG_PATH4} must be "auto", "dynamic", or "eager"`);
+    throw new Error(`toolActivation in ${webPreferencesPath()} must be "auto", "dynamic", or "eager"`);
   }
   const allowedSearchProviders = initConfig.webSearch?.allowedProviders === void 0 ? RESOLVED_SEARCH_PROVIDERS : getAllowedSearchProviders();
   const allEligibleProviders = allowedSearchProviders.filter((provider) => ALL_SEARCH_PROVIDERS.includes(provider));
   const allExcludedProviders = allowedSearchProviders.filter((provider) => !ALL_SEARCH_PROVIDERS.includes(provider));
   const allPolicyDescription = allEligibleProviders.length === 0 ? `all has no eligible allowed providers; explicit-only allowed providers (${allExcludedProviders.map(providerLabel).join(", ")}) remain excluded` : allExcludedProviders.length > 0 ? `all searches eligible allowed providers (${allEligibleProviders.map(providerLabel).join(", ")}); explicit-only allowed providers (${allExcludedProviders.map(providerLabel).join(", ")}) remain excluded` : `all searches every eligible allowed provider (${allEligibleProviders.map(providerLabel).join(", ")})`;
   const curatorRunState = registerCuratorRunLifecycle(pi);
-  const toolNames = resolveToolNames(initConfig);
-  const webSearchEnabled = isToolEnabled(initConfig, "webSearch");
-  const sourceCheckEnabled = isToolEnabled(initConfig, "sourceCheck");
-  const fetchContentEnabled = isToolEnabled(initConfig, "fetchContent");
-  const getSearchContentEnabled = isToolEnabled(initConfig, "getSearchContent");
+  const enabledTools = resolveEnabledTools(initConfig);
+  const toolNames = resolveToolNames(initConfig, enabledTools);
+  const {
+    webSearch: webSearchEnabled,
+    sourceCheck: sourceCheckEnabled,
+    fetchContent: fetchContentEnabled,
+    getSearchContent: getSearchContentEnabled
+  } = enabledTools;
   const coreSettings = {
     toolNames: options.toolName ? {
       webSearch: `${options.toolName} action=search`,
@@ -23571,12 +23738,7 @@ function index_default(pi, options = {}) {
       fetchContent: `${options.toolName} action=fetch`,
       getSearchContent: `${options.toolName} action=content`
     } : toolNames,
-    enabledTools: {
-      webSearch: webSearchEnabled,
-      sourceCheck: sourceCheckEnabled,
-      fetchContent: fetchContentEnabled,
-      getSearchContent: getSearchContentEnabled
-    },
+    enabledTools,
     maxInlineContentChars: getMaxInlineContentChars(initConfig),
     fetchModes: fetchModeConfig
   };
@@ -24236,12 +24398,12 @@ Open manually: ${handle.url}` }],
       const rawQueryList = Array.isArray(input.queries) ? input.queries : input.query !== void 0 ? expandQueryString(input.query) : [];
       const queryList = normalizeQueryList(rawQueryList);
       const title = theme.fg("toolTitle", theme.bold("search "));
-      if (queryList.length === 0) return toolCall(title, [theme.fg("error", "(no query)")], theme, context);
+      if (queryList.length === 0) return toolCall2(title, [theme.fg("error", "(no query)")], theme, context);
       const count = `${queryList.length} ${queryList.length === 1 ? "query" : "queries"}`;
       const color = queryList.length === 1 ? "accent" : "muted";
       const lines = queryList.slice(0, 5).map((q) => theme.fg(color, `"${q}"`));
       if (queryList.length > 5) lines.push(theme.fg("muted", `... and ${queryList.length - 5} more`));
-      return toolCall(title + theme.fg("accent", count), lines, theme, context);
+      return toolCall2(title + theme.fg("accent", count), lines, theme, context);
     },
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details;
@@ -24253,7 +24415,7 @@ Open manually: ${handle.url}` }],
           const timeout = typeof details?.timeoutSeconds === "number" ? details.timeoutSeconds : void 0;
           const shortcut = typeof details?.shortcut === "string" ? details.shortcut : curateKey;
           lines2.push(theme.fg("dim", timeout ? `auto-submits after ${timeout}s idle; ${shortcut} reopens` : `${shortcut} reopens`));
-          return new Text(lines2.join("\n"), 0, 0);
+          return new Text2(lines2.join("\n"), 0, 0);
         }
         if (details?.phase === "curating" || details?.phase === "waiting-for-approval" || details?.phase === "generating-summary") {
           const phaseText = details?.phase === "generating-summary" ? "generating summary draft..." : details?.phase === "waiting-for-approval" ? "summary draft ready; approve in browser..." : "waiting for summary approval in browser...";
@@ -24268,23 +24430,23 @@ Open manually: ${handle.url}` }],
           } else {
             lines2.push(theme.fg("dim", `${shortcut} reopens`));
           }
-          return new Text(lines2.join("\n"), 0, 0);
+          return new Text2(lines2.join("\n"), 0, 0);
         }
         if (details?.phase === "searching") {
           const progress2 = details?.progress ?? 0;
           const bar2 = "\u2588".repeat(Math.floor(progress2 * 10)) + "\u2591".repeat(10 - Math.floor(progress2 * 10));
           const query = details?.currentQuery || "";
           const display = query.length > 40 ? query.slice(0, 37) + "..." : query;
-          return new Text(theme.fg("accent", `[${bar2}] ${display}`), 0, 0);
+          return new Text2(theme.fg("accent", `[${bar2}] ${display}`), 0, 0);
         }
         const progress = details?.progress ?? 0;
         const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
-        return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "searching"}`), 0, 0);
+        return new Text2(theme.fg("accent", `[${bar}] ${details?.phase || "searching"}`), 0, 0);
       }
       if (details?.error) {
         const plan = buildSearchErrorPlan(details);
         if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-        return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+        return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
       }
       let statusLine;
       const queryInfo = details?.queryCount === 1 ? "" : `${details?.successfulQueries}/${details?.queryCount} queries, `;
@@ -24371,24 +24533,24 @@ Open manually: ${handle.url}` }],
       }
       const totalLines = lines.length;
       if (!expanded) {
-        const box = new Box(0, 0);
-        box.addChild(new Text(statusLine, 0, 0));
+        const box = new Box2(0, 0);
+        box.addChild(new Text2(statusLine, 0, 0));
         let collapsedLines = 1;
         const summaryPreview = details?.summary?.text?.trim() || "";
         if (summaryPreview) {
           const preview = summaryPreview.length > 120 ? summaryPreview.slice(0, 117) + "..." : summaryPreview;
-          box.addChild(new Text(theme.fg("dim", preview), 0, 0));
+          box.addChild(new Text2(theme.fg("dim", preview), 0, 0));
           collapsedLines++;
         } else if (details?.curatedQueries?.length) {
           for (const cq of details.curatedQueries.slice(0, 3)) {
             const dq = cq.query.length > 55 ? cq.query.slice(0, 52) + "..." : cq.query;
             const srcCount = cq.sources?.length ?? 0;
             const suffix = cq.error ? theme.fg("error", " (error)") : theme.fg("dim", ` \xB7 ${srcCount} sources`);
-            box.addChild(new Text(theme.fg("accent", `"${dq}"`) + suffix, 0, 0));
+            box.addChild(new Text2(theme.fg("accent", `"${dq}"`) + suffix, 0, 0));
             collapsedLines++;
           }
           if (details.curatedQueries.length > 3) {
-            box.addChild(new Text(theme.fg("dim", `... and ${details.curatedQueries.length - 3} more`), 0, 0));
+            box.addChild(new Text2(theme.fg("dim", `... and ${details.curatedQueries.length - 3} more`), 0, 0));
             collapsedLines++;
           }
         } else {
@@ -24400,18 +24562,18 @@ Open manually: ${handle.url}` }],
           const fallbackLine = (firstContentLine?.trim() || "").replace(/\*\*/g, "");
           if (fallbackLine) {
             const preview = fallbackLine.length > 120 ? fallbackLine.slice(0, 117) + "..." : fallbackLine;
-            box.addChild(new Text(theme.fg("dim", preview), 0, 0));
+            box.addChild(new Text2(theme.fg("dim", preview), 0, 0));
             collapsedLines++;
           }
         }
         const moreLines = Math.max(0, totalLines - collapsedLines);
         if (moreLines > 0) {
-          box.addChild(new Text(theme.fg("muted", `
+          box.addChild(new Text2(theme.fg("muted", `
 ... (${moreLines} more lines, ${totalLines} total, ctrl+o to expand)`), 0, 0));
         }
         return box;
       }
-      return new Text(lines.join("\n"), 0, 0);
+      return new Text2(lines.join("\n"), 0, 0);
     }
   });
   if (sourceCheckEnabled) registerTool("source_check", {
@@ -24436,11 +24598,11 @@ Open manually: ${handle.url}` }],
     },
     renderCall(args, theme, context) {
       const claim = typeof args.claim === "string" ? safeText(args.claim) : "";
-      return toolCall(theme.fg("toolTitle", theme.bold("source_check")), claim ? [theme.fg("accent", claim)] : [], theme, context);
+      return toolCall2(theme.fg("toolTitle", theme.bold("source_check")), claim ? [theme.fg("accent", claim)] : [], theme, context);
     },
     renderResult(result, _options, theme, context) {
       const text = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
-      return new Text(theme.fg(context?.isError ? "error" : "toolOutput", safeText(text)), 0, 0);
+      return new Text2(theme.fg(context?.isError ? "error" : "toolOutput", safeText(text)), 0, 0);
     }
   });
   if (fetchContentEnabled) registerTool("fetch", {
@@ -24487,107 +24649,8 @@ Open manually: ${handle.url}` }],
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       return markToolError(await core.fetchContent(params, signal, { extensionContext: ctx, onUpdate }));
     },
-    renderCall(args, theme, context) {
-      let normalized;
-      try {
-        normalized = normalizeFetchContentParams(args);
-      } catch {
-        return toolCall(theme.fg("toolTitle", theme.bold("fetch")), [theme.fg("error", "(invalid parameters)")], theme, context);
-      }
-      const { urlList, options: options2 } = normalized;
-      const { prompt, timestamp, frames, model, mode, answerModel, auth } = options2;
-      const title = theme.fg("toolTitle", theme.bold("fetch "));
-      if (urlList.length === 0) return toolCall(title, [theme.fg("error", "(no URL)")], theme, context);
-      const count = `${urlList.length} ${urlList.length === 1 ? "URL" : "URLs"}`;
-      const color = urlList.length === 1 ? "accent" : "muted";
-      const lines = urlList.slice(0, 5).map((url) => theme.fg(color, url));
-      if (urlList.length > 5) lines.push(theme.fg("muted", `... and ${urlList.length - 5} more`));
-      if (mode && mode !== "readable") {
-        lines.push(theme.fg("dim", "mode: ") + theme.fg("warning", mode));
-      }
-      if (timestamp) {
-        lines.push(theme.fg("dim", "timestamp: ") + theme.fg("warning", timestamp));
-      }
-      if (typeof frames === "number") {
-        lines.push(theme.fg("dim", "frames: ") + theme.fg("warning", String(frames)));
-      }
-      if (prompt) {
-        const display = prompt.length > 250 ? prompt.slice(0, 247) + "..." : prompt;
-        lines.push(theme.fg("dim", "prompt: ") + theme.fg("muted", `"${display}"`));
-      }
-      if (model) {
-        lines.push(theme.fg("dim", "model: ") + theme.fg("warning", model));
-      }
-      if (answerModel) {
-        lines.push(theme.fg("dim", "answer model: ") + theme.fg("warning", answerModel));
-      }
-      if (auth !== void 0) {
-        lines.push(theme.fg("dim", "auth: ") + theme.fg("warning", auth === true ? "true" : auth));
-      }
-      return toolCall(title + theme.fg("accent", count), lines, theme, context);
-    },
-    renderResult(result, { expanded, isPartial }, theme) {
-      const details = result.details;
-      if (isPartial) {
-        const progress = details?.progress ?? 0;
-        const bar = "\u2588".repeat(Math.floor(progress * 10)) + "\u2591".repeat(10 - Math.floor(progress * 10));
-        return new Text(theme.fg("accent", `[${bar}] ${details?.phase || "fetching"}`), 0, 0);
-      }
-      if (details?.error) {
-        const fd = details;
-        const extras = [];
-        if (typeof fd.urlCount === "number" || typeof fd.successful === "number") {
-          extras.push(`urls: ${fd.successful ?? 0}/${fd.urlCount ?? 0} succeeded`);
-        }
-        if (fd.responseId) extras.push(`response id: ${fd.responseId}`);
-        if (fd.urls && fd.urls.length > 0) {
-          for (const u of fd.urls.slice(0, 8)) extras.push(`  \u25B8 ${u}`);
-          if (fd.urls.length > 8) extras.push(`  ... and ${fd.urls.length - 8} more`);
-        }
-        const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
-        if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-        return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-      }
-      if (details?.urlCount === 1) {
-        const title = details?.title || "Untitled";
-        const imgCount = details?.imageCount ?? (details?.hasImage ? 1 : 0);
-        const imageBadge = imgCount > 1 ? theme.fg("accent", ` [${imgCount} images]`) : imgCount === 1 ? theme.fg("accent", " [image]") : "";
-        let statusLine2 = theme.fg("success", title) + theme.fg("muted", ` (${details?.totalChars ?? 0} chars)`) + imageBadge;
-        if (details?.truncated) {
-          statusLine2 += theme.fg("warning", " [truncated]");
-        }
-        if (typeof details?.duration === "number") {
-          statusLine2 += theme.fg("muted", ` | ${formatSeconds(Math.floor(details.duration))} total`);
-        }
-        const textContent2 = result.content.find((c) => c.type === "text")?.text || "";
-        if (!expanded) {
-          const brief = textContent2.length > 200 ? textContent2.slice(0, 200) + "..." : textContent2;
-          return new Text(statusLine2 + "\n" + theme.fg("dim", brief), 0, 0);
-        }
-        const lines = [statusLine2];
-        if (details?.prompt) {
-          const display = details.prompt.length > 250 ? details.prompt.slice(0, 247) + "..." : details.prompt;
-          lines.push(theme.fg("dim", `prompt: "${display}"`));
-        }
-        if (details?.timestamp) {
-          lines.push(theme.fg("dim", `timestamp: ${details.timestamp}`));
-        }
-        if (typeof details?.frames === "number") {
-          lines.push(theme.fg("dim", `frames: ${details.frames}`));
-        }
-        const preview2 = textContent2.length > 500 ? textContent2.slice(0, 500) + "..." : textContent2;
-        lines.push(theme.fg("dim", preview2));
-        return new Text(lines.join("\n"), 0, 0);
-      }
-      const countColor = (details?.successful ?? 0) > 0 ? "success" : "error";
-      const statusLine = theme.fg(countColor, `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", getSearchContentEnabled ? " (content stored)" : " (content fetched)");
-      if (!expanded) {
-        return new Text(statusLine, 0, 0);
-      }
-      const textContent = result.content.find((c) => c.type === "text")?.text || "";
-      const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-      return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
-    }
+    renderCall: renderFetchCall,
+    renderResult: (result, options2, theme) => renderFetchResult(result, options2, theme, getSearchContentEnabled)
   });
   if (getSearchContentEnabled) {
     const maxInlineContentChars = getMaxInlineContentChars(initConfig);
@@ -24626,7 +24689,7 @@ Open manually: ${handle.url}` }],
           target += `${target ? " \xB7 " : ""}find ${queries.length}`;
         }
         const label = target || (typeof responseId === "string" ? responseId.slice(0, 8) : "(waiting for responseId)");
-        return toolCall(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)], theme, context);
+        return toolCall2(theme.fg("toolTitle", theme.bold("get_content")), [theme.fg("accent", label)], theme, context);
       },
       renderResult(result, { expanded }, theme) {
         const details = result.details;
@@ -24637,7 +24700,7 @@ Open manually: ${handle.url}` }],
           else if (details.title) extras.push(`resource: ${details.title}`);
           const plan = buildSearchErrorPlan({ error: details.error, extraLines: extras });
           if (plan) return renderSearchErrorPlan(plan, expanded, theme);
-          return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+          return new Text2(theme.fg("error", `Error: ${details.error}`), 0, 0);
         }
         let statusLine;
         if (typeof details?.matchCount === "number") {
@@ -24652,11 +24715,11 @@ Open manually: ${handle.url}` }],
           statusLine = theme.fg("success", details?.title || "Content") + theme.fg("muted", ` (${details?.contentLength ?? 0} chars${slice})`);
         }
         if (!expanded) {
-          return new Text(statusLine, 0, 0);
+          return new Text2(statusLine, 0, 0);
         }
         const textContent = result.content.find((c) => c.type === "text")?.text || "";
         const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
-        return new Text(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
+        return new Text2(statusLine + "\n" + theme.fg("dim", preview), 0, 0);
       }
     });
   }
@@ -24668,7 +24731,9 @@ Open manually: ${handle.url}` }],
   ], toolActivation);
   const closeCommandCurators = isCommandEnabled(initConfig, "websearch") ? registerWebSearchCommand(pi, buildSearchReturn) : () => {
   };
-  if (isCommandEnabled(initConfig, "curator")) registerCuratorCommand(pi, toolNames.webSearch);
+  if (isCommandEnabled(initConfig, "curator")) {
+    registerCuratorCommand(pi, webSearchEnabled ? coreSettings.toolNames.webSearch : void 0);
+  }
   if (isCommandEnabled(initConfig, "google-account")) registerGoogleAccountCommand(pi);
   if (isCommandEnabled(initConfig, "search")) registerStoredSearchCommand(pi, ownedResults);
 }

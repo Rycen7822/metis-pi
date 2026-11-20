@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { platform } from "node:os";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import { resolveCuratorNetworkConfig } from "./curator-network.ts";
 
 export function shouldAutoOpenCuratorBrowser(config = loadWebAccessConfig()): boolean {

@@ -7,10 +7,10 @@ import { matchesDomainFilter, normalizeDomain, normalizeDomainFilters } from "./
 import { resolveParallelApiKey } from "./parallel.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { SearchHttpError } from "./search-types.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
+import { webCredentialsPath } from "./config.ts";
 
 const PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const REQUEST_TIMEOUT_MS = 60_000;
 
 interface ParallelMcpResult {

@@ -1,12 +1,12 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { isLoopbackHostname } from "./hostname.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { fetchRemoteUrl, loadSsrfConfig, validateRemoteUrl, type Lookup, type SsrfConfig } from "./ssrf-protection.ts";
 
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const EXTRACT_TIMEOUT_MS = 60_000;
 const MARKDOWN_FILTER = "fit";
 
@@ -37,13 +37,13 @@ function normalizeBaseUrl(value: unknown): string | null {
 	try {
 		parsed = new URL(trimmed);
 	} catch {
-		throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+		throw new Error(`Invalid Crawl4AI base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
 	}
 	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-		throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
+		throw new Error(`Invalid Crawl4AI base URL in ${webPreferencesPath()}: expected an HTTP or HTTPS URL`);
 	}
 	if (parsed.username || parsed.password) {
-		throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
+		throw new Error(`Invalid Crawl4AI base URL in ${webPreferencesPath()}: URL credentials are not allowed`);
 	}
 	parsed.pathname = parsed.pathname.replace(/\/+$/, "");
 	parsed.search = "";
@@ -60,7 +60,7 @@ function requireBaseUrl(): string {
 	if (!baseUrl) {
 		throw new Error(
 			"Crawl4AI base URL not configured. Either:\n" +
-			`  1. Set crawl4aiBaseUrl in ${getWebAccessConfigPath()}\n` +
+			`  1. Set crawl4aiBaseUrl in ${webPreferencesPath()}\n` +
 			"  2. Set CRAWL4AI_BASE_URL environment variable",
 		);
 	}

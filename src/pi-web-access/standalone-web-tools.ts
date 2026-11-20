@@ -1,14 +1,22 @@
 // Standalone MCP host policy and bounded result ownership. The execution core
 // stays shared with Pi; this adapter decides which host-only features to reject.
-import { getWebSearchConfigPath } from "./utils.ts";
+import { webCredentialsPath, webPreferencesPath } from "./config.ts";
 import { isOpenAISearchAvailable } from "./openai-search.ts";
 import { deleteResult, storeResult } from "./storage.ts";
 import type { SearchProviderSelection } from "./search-providers.ts";
 import type { FetchContentCallParams, WebToolCore, WebToolResult } from "./web-tool-contract.ts";
-import { createWebToolCore, DEFAULT_TOOL_NAMES, getMaxInlineContentChars, isToolEnabled, loadConfig, markToolError, resolveFetchModeConfig, resolveRequestedProvider, WEB_SEARCH_CONFIG_PATH, type FetchModeConfig, type ToolNames, type WebToolCoreSettings } from "./web-tool-core.ts";
+import {
+	createWebToolCore, DEFAULT_TOOL_NAMES, getMaxInlineContentChars, loadConfig, markToolError,
+	resolveEnabledTools, resolveFetchModeConfig, resolveRequestedProvider,
+	type FetchModeConfig, type ToolNames, type WebToolCoreSettings,
+} from "./web-tool-core.ts";
 
 const MAX_STORED_RESULTS = 50;
-const STANDALONE_DIRECT_IMAGE_ERROR = "Direct image fetch is not supported over MCP; fetch_content returns text there. Fetch images from the Pi extension instead.";
+const TEXT_ONLY = {
+	localFile: "Local files are not supported over MCP; pass an HTTP or HTTPS URL.",
+	video: "Video or YouTube analysis is not supported over MCP. Use the Pi extension instead.",
+	image: "Direct image fetch is not supported over MCP; use the Pi extension instead.",
+};
 
 export interface StandaloneWebToolCore extends WebToolCore {
 	/** Default names of the tools webAccess enables; hosts list only these. */
@@ -41,7 +49,7 @@ async function standaloneProviderRejection(requested: unknown): Promise<string |
 			return undefined; // The core reports the same configuration error.
 		}
 		if (!available) {
-			return `OpenAI search over MCP needs an API key: set openaiApiKey in ${getWebSearchConfigPath()} or OPENAI_API_KEY. ` +
+			return `OpenAI search over MCP needs an API key: set openaiApiKey in ${webCredentialsPath()} or OPENAI_API_KEY. ` +
 				"ChatGPT/Codex sign-in, openaiUseProviderBaseUrl, and Pi model credentials work only inside Pi.";
 		}
 	}
@@ -53,7 +61,7 @@ function standaloneFetchRejection(params: FetchContentCallParams, fetchModes: Fe
 		return "fetch_content mode \"answer\" is not supported over MCP: page answers use Pi's models. Use mode \"readable\" or \"raw\".";
 	}
 	if (params.mode === undefined && fetchModes.defaultMode === "answer") {
-		return `fetch.defaultMode in ${WEB_SEARCH_CONFIG_PATH} is "answer", which is not supported over MCP. Pass mode "readable" or "raw".`;
+		return `fetch.defaultMode in ${webPreferencesPath()} is "answer", which is not supported over MCP. Pass mode "readable" or "raw".`;
 	}
 	return undefined;
 }
@@ -64,12 +72,7 @@ export function createStandaloneWebToolCore(fetch?: typeof globalThis.fetch): St
 	const config = loadConfig();
 	const settings: WebToolCoreSettings = {
 		toolNames: { ...DEFAULT_TOOL_NAMES },
-		enabledTools: {
-			webSearch: isToolEnabled(config, "webSearch"),
-			sourceCheck: isToolEnabled(config, "sourceCheck"),
-			fetchContent: isToolEnabled(config, "fetchContent"),
-			getSearchContent: isToolEnabled(config, "getSearchContent"),
-		},
+		enabledTools: resolveEnabledTools(config),
 		maxInlineContentChars: getMaxInlineContentChars(config),
 		fetchModes: resolveFetchModeConfig(config),
 	};
@@ -87,7 +90,7 @@ export function createStandaloneWebToolCore(fetch?: typeof globalThis.fetch): St
 		publishResult(data) {
 			remember(data.id);
 		},
-		extractOptions: { fetch, rejectDirectImages: STANDALONE_DIRECT_IMAGE_ERROR },
+		extractOptions: { fetch, textOnly: TEXT_ONLY },
 	});
 
 	return {

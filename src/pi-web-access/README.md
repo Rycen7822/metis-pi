@@ -177,8 +177,8 @@ This is not the upstream `npx -y pi-web-access` artifact. The maintained bundle 
 
 MCP restrictions:
 
-- No curator or summary workflows (`workflow` is ignored), Pi ChatGPT/current-model login, or Kimi Code Plan auth. Automatic routing uses standalone-capable providers; explicit unsupported selections return errors instead of substituting another provider.
-- No answer mode, video/YouTube understanding, frames, or image results. Unsupported fetch modes/sources fail explicitly; readable/raw web pages, GitHub, and PDF text remain available.
+- No curator or summary workflows (the `workflow` argument is rejected), Pi ChatGPT/current-model login, or Kimi Code Plan auth. Automatic routing uses standalone-capable providers; explicit unsupported selections return errors instead of substituting another provider.
+- No answer mode, video/YouTube understanding, frames, or image results. Local files and unsupported fetch modes/sources fail explicitly; readable/raw web pages, GitHub, and PDF text remain available.
 - `includeContent` waits for fetches. The 50 most recent results are held in memory for retrieval and disappear when the server exits.
 
 ## Capabilities

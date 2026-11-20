@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
@@ -11,7 +11,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 
 const QUERIT_SEARCH_URL = "https://api.querit.ai/v1/search";
 const QUERIT_CONTENTS_URL = "https://api.querit.ai/v1/contents";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 const CONTENTS_TIMEOUT_MS = 60_000;
 const MAX_CONTENT_URLS = 10;

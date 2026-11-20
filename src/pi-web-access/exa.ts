@@ -1,4 +1,5 @@
-import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath, resolveApiBaseUrl } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects, resolveApiBaseUrl } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./content.ts";
@@ -7,7 +8,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 
 const EXA_API_BASE_URL = "https://api.exa.ai";
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const EXA_MCP_ADVANCED_TOOL = "web_search_advanced_exa";
 const EXA_MCP_BASIC_TOOL = "web_search_exa";
 

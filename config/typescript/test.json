@@ -5,9 +5,9 @@
     "allowJs": true,
     "checkJs": false,
     "paths": {
-      "@juicesharp/rpiv-test-utils": ["../../test/helpers/ask-user-question/index.ts"]
+      "@juicesharp/rpiv-test-utils": ["../../test/ask-user-question/support/index.ts"]
     }
   },
-  "include": ["../../test/**/*.mts", "../../src/ask-user-question/**/*.test.ts", "../../src/ask-user-question/test-fixtures.ts"],
+  "include": ["../../test/**/*.mts", "../../test/ask-user-question/**/*.ts"],
   "exclude": []
 }

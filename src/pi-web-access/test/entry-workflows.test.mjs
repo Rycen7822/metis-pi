@@ -11,7 +11,7 @@ const indexUrl = new URL("../index.ts", import.meta.url).href;
 const metisEntryUrl = new URL("../../../extensions/web-access.ts", import.meta.url).href;
 const coreUrl = new URL("../web-tool-core.ts", import.meta.url).href;
 const storageUrl = new URL("../storage.ts", import.meta.url).href;
-const configUrl = new URL("../utils.ts", import.meta.url).href;
+const configUrl = new URL("../config.ts", import.meta.url).href;
 
 function run(script, config = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-entry-workflow-"));

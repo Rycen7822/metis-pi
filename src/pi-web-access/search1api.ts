@@ -2,7 +2,7 @@ import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
@@ -12,7 +12,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 
 const SEARCH1API_SEARCH_URL = "https://api.search1api.com/search";
 const SEARCH1API_CRAWL_URL = "https://api.search1api.com/crawl";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 const CRAWL_TIMEOUT_MS = 60_000;
 

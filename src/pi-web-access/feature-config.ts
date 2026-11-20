@@ -1,4 +1,4 @@
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 
 type FeatureConfig = { image?: { enabled?: unknown } };
 

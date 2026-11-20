@@ -1,4 +1,4 @@
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import {
 	chmodSync, closeSync, constants as fsConstants, existsSync, lstatSync,
 	mkdirSync, mkdtempSync, openSync, readFileSync, readSync,

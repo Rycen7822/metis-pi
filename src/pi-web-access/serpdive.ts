@@ -3,7 +3,7 @@ import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
@@ -11,7 +11,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
 
 const SERPDIVE_API_URL = "https://api.serpdive.com/v1/search";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 // Retrieval depth. The default is deliberately the free tier: this provider

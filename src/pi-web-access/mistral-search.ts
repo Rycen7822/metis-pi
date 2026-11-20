@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
@@ -9,7 +9,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 const MISTRAL_CONVERSATIONS_URL = "https://api.mistral.ai/v1/conversations";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 const DEFAULT_SEARCH_MODEL = "mistral-small-latest";
 const DEFAULT_SEARCH_TOOL = "web_search";
@@ -31,7 +31,7 @@ function loadConfig(): WebSearchConfig {
 function resolveSearchModel(value: unknown): string {
 	if (value === undefined) return DEFAULT_SEARCH_MODEL;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`mistralSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
+		throw new Error(`mistralSearchModel in ${webPreferencesPath()} must be a non-empty string`);
 	}
 	return value.trim();
 }
@@ -39,7 +39,7 @@ function resolveSearchModel(value: unknown): string {
 function resolveSearchTool(value: unknown): MistralSearchTool {
 	if (value === undefined) return DEFAULT_SEARCH_TOOL;
 	if (value !== "web_search" && value !== "web_search_premium") {
-		throw new Error(`mistralSearchTool in ${getWebAccessConfigPath()} must be either web_search or web_search_premium`);
+		throw new Error(`mistralSearchTool in ${webPreferencesPath()} must be either web_search or web_search_premium`);
 	}
 	return value;
 }

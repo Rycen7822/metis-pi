@@ -1,4 +1,4 @@
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 /**
  * PDF Content Extractor
  *

@@ -1,4 +1,4 @@
-import { loadWebAccessConfig } from "./utils.ts";
+import { loadWebAccessConfig } from "./config.ts";
 import { readExecError, trimErrorText, mapFfmpegError } from "./media-errors.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

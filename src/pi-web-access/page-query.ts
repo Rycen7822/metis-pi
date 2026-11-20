@@ -1,4 +1,4 @@
-import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webPreferencesPath } from "./config.ts";
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { findModelWithProviderRouting, isModelInScope } from "./summary-model-scope.ts";
@@ -23,7 +23,7 @@ interface AnswerModelSelector {
 }
 
 function loadConfiguredAnswerModel(): AnswerModelSelector | undefined {
-	const configPath = getWebAccessConfigPath();
+	const configPath = webPreferencesPath();
 	const fetchConfig = loadWebAccessConfig().fetch;
 	if (!fetchConfig || typeof fetchConfig !== "object" || Array.isArray(fetchConfig)) return undefined;
 	const values = fetchConfig as Record<string, unknown>;
@@ -61,7 +61,7 @@ function resolveModel(ctx: ExtensionContext, override?: string, configured?: Ans
 		if (configured) {
 			throw new Error(
 				`Answer model not found: ${configured.provider}/${configured.id} ` +
-				`(from fetch.answerProvider/fetch.answerModel in ${getWebAccessConfigPath()})`,
+				`(from fetch.answerProvider/fetch.answerModel in ${webPreferencesPath()})`,
 			);
 		}
 		throw new Error("No current model available for page answering");

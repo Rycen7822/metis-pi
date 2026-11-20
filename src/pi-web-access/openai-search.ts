@@ -1,5 +1,6 @@
 import { extractAnswer, extractSnippetAround } from "./search-answer-formatting.ts";
-import { getWebAccessConfigPath, loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
+import { webPreferencesPath, loadWebAccessConfig, webCredentialsPath } from "./config.ts";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
@@ -11,7 +12,7 @@ import { forEachCitationAnnotation, forEachSearchCallSource } from "./responses-
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 // The selected model runs the server-side web_search call and writes the cited summary.
@@ -177,19 +178,19 @@ function extractAccountId(token: string): string | undefined {
 function resolveConfiguredResponsesUrl(value: unknown): string {
 	if (value === undefined) return OPENAI_RESPONSES_URL;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
+		throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must be an absolute http(s) URL`);
 	}
 	let url: URL;
 	try {
 		url = new URL(value.trim());
 	} catch {
-		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
+		throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must be an absolute http(s) URL`);
 	}
 	if (url.protocol !== "https:" && url.protocol !== "http:") {
-		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use http or https`);
+		throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must use http or https`);
 	}
 	if (url.hostname === "opencode.ai" && url.protocol !== "https:") {
-		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use HTTPS for opencode.ai`);
+		throw new Error(`openaiResponsesUrl in ${webPreferencesPath()} must use HTTPS for opencode.ai`);
 	}
 	return url.toString();
 }
@@ -199,7 +200,7 @@ function resolveUseProviderBaseUrl(config: WebSearchConfig): boolean {
 	const value = config.openaiUseProviderBaseUrl;
 	if (value === undefined) return false;
 	if (typeof value !== "boolean") {
-		throw new Error(`openaiUseProviderBaseUrl in ${getWebAccessConfigPath()} must be a boolean`);
+		throw new Error(`openaiUseProviderBaseUrl in ${webPreferencesPath()} must be a boolean`);
 	}
 	return value;
 }
@@ -230,7 +231,7 @@ function resolveProviderResponsesUrl(baseUrl: unknown, useCodexEndpoint: boolean
 function resolveConfiguredSearchProviders(value: unknown): readonly string[] {
 	if (value === undefined) return DEFAULT_SEARCH_PROVIDERS;
 	if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.trim().length === 0)) {
-		throw new Error(`openaiSearchProviders in ${getWebAccessConfigPath()} must be an array of non-empty Pi provider ids`);
+		throw new Error(`openaiSearchProviders in ${webPreferencesPath()} must be an array of non-empty Pi provider ids`);
 	}
 	return value.map((entry) => entry.trim());
 }
@@ -238,7 +239,7 @@ function resolveConfiguredSearchProviders(value: unknown): readonly string[] {
 function resolveConfiguredSearchModel(value: unknown): string | undefined {
 	if (value == null) return undefined;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`openaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
+		throw new Error(`openaiSearchModel in ${webPreferencesPath()} must be a non-empty string`);
 	}
 	return value.trim();
 }
@@ -288,7 +289,7 @@ async function resolvePiAuth(ctx: ExtensionContext, responsesUrl: string, provid
 		if (!hasExplicitResponsesUrl && !useProviderBaseUrl && !useCodexEndpoint && baseUrl !== undefined && !isOfficialBaseUrl) {
 			throw new CustomOpenAIBaseUrlError(
 				"OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. " +
-				`Set openaiResponsesUrl in ${getWebAccessConfigPath()} to the full Responses endpoint for this credential.`,
+				`Set openaiResponsesUrl in ${webPreferencesPath()} to the full Responses endpoint for this credential.`,
 			);
 		}
 		let providerResponsesUrl = responsesUrl;
@@ -568,7 +569,7 @@ function isAlphaSearchEnabled(): boolean {
 	const value = loadConfig().openaiUseAlphaSearch;
 	if (value === undefined) return false;
 	if (typeof value !== "boolean") {
-		throw new Error(`openaiUseAlphaSearch in ${getWebAccessConfigPath()} must be a boolean`);
+		throw new Error(`openaiUseAlphaSearch in ${webPreferencesPath()} must be a boolean`);
 	}
 	return value;
 }

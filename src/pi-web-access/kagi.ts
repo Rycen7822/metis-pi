@@ -1,7 +1,7 @@
 import { errorMessage } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
@@ -13,7 +13,7 @@ import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateR
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
 const KAGI_EXTRACT_URL = "https://kagi.com/api/v1/extract";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 interface WebSearchConfig {

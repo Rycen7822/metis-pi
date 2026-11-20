@@ -12,7 +12,7 @@ const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const activityModuleUrl = new URL("../activity.ts", import.meta.url).href;
 
 // Every child starts from a config-less HOME. Deleting PI_CODING_AGENT_DIR and
-// XDG_CONFIG_HOME is not enough: getWebSearchConfigDir() then falls through to
+// XDG_CONFIG_HOME is not enough: webAccessAgentDir() then falls through to
 // join(homedir(), ".pi", "agent"), the Pi agent config directory. Without an
 // isolated HOME, a maintainer with brightdataApiKey configured sees unrelated
 // failures, and if that key is a `!command` source (`!op read …`, `!pass show …`)

@@ -1,5 +1,5 @@
 import { errorMessage } from "./search-error-redaction.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, webCredentialsPath } from "./config.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential, requireProviderCredential } from "./credential-source.ts";
@@ -10,7 +10,7 @@ import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 const JINA_SEARCH_BASE_URL = "https://s.jina.ai/";
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = webCredentialsPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 
 interface WebSearchConfig {
