@@ -1,4 +1,6 @@
-use crate::Result;
+//! Local Bekko128 encoding and scoring; independent of corpus and storage.
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 use half::f16;
 use memmap2::Mmap;
 use serde::Deserialize;
@@ -16,7 +18,7 @@ type Tokenizer = tokenizers::TokenizerImpl<
 // Bekko-128 produces one fixed-width vector per text document or query.
 pub const EMBEDDING_DIMENSION: usize = 128;
 const ROWS: usize = 200_000;
-const REVISION: &str = "c18167b8f244c1bc6de21ce9b710bac8a29c4615";
+pub const REVISION: &str = "c18167b8f244c1bc6de21ce9b710bac8a29c4615";
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -247,6 +249,31 @@ impl Document {
     }
 }
 
+pub const DOCUMENT_BYTES: usize = EMBEDDING_DIMENSION * 2 + 4;
+
+impl Document {
+    pub fn to_bytes(&self) -> [u8; DOCUMENT_BYTES] {
+        let mut bytes = [0; DOCUMENT_BYTES];
+        for (slot, value) in bytes.chunks_exact_mut(2).zip(self.values) {
+            slot.copy_from_slice(&value.to_bits().to_le_bytes());
+        }
+        bytes[DOCUMENT_BYTES - 4..].copy_from_slice(&self.inverse_norm.to_le_bytes());
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8; DOCUMENT_BYTES]) -> Option<Self> {
+        let mut values = [f16::ZERO; EMBEDDING_DIMENSION];
+        for (value, pair) in values.iter_mut().zip(bytes.chunks_exact(2)) {
+            *value = f16::from_bits(u16::from_le_bytes([pair[0], pair[1]]));
+            if !value.is_finite() {
+                return None;
+            }
+        }
+        let inverse_norm = f32::from_le_bytes(bytes[DOCUMENT_BYTES - 4..].try_into().ok()?);
+        (inverse_norm.is_finite() && inverse_norm >= 0.0).then_some(Self { values, inverse_norm })
+    }
+}
+
 const SCAN_ROWS: usize = 1024;
 
 /// Query-scoped scratch only, not a second persistent representation. The 1024
@@ -254,7 +281,7 @@ const SCAN_ROWS: usize = 1024;
 /// than striding 1024 rows across conflicting cache sets. SIMD lanes remain
 /// independent documents; each dot keeps scalar dimension order and signed zero.
 /// Full blocks flush automatically; finish consumes every tail row.
-pub(super) struct TextScan {
+pub struct TextScan {
     values: Vec<f16>,
     inverse_norms: Vec<f32>,
     query: [f32; EMBEDDING_DIMENSION],

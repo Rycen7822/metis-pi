@@ -1,6 +1,6 @@
 //! Request-level model selection and full-scope scoring, never a reranker.
 // Both miss and hit consume the same FP16 representation, window by window.
-mod bekko;
+use metis_bekko as bekko;
 mod lateon;
 mod native;
 mod text_pool;

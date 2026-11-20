@@ -7,7 +7,9 @@ license = "MIT"
 publish = false
 
 [dependencies]
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 memchr = "2"
+metis-bekko = { path = "../../local-embedding/bekko" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }

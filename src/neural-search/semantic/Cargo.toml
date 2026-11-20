@@ -8,6 +8,7 @@ description = "Search code and text with ripgrep and local static embeddings."
 repository = "https://github.com/mrmps/sgrep"
 
 [dependencies]
+metis-bekko = { path = "../../local-embedding/bekko" }
 memmap2 = "0.9"
 crc32fast = "1"
 sha2 = "0.11"

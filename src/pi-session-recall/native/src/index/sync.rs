@@ -5,6 +5,8 @@ use crate::{
         Entry, Event, FileId, FragmentAnchor, Prefix, Record, RecordAnchor, Role, SessionReader,
     },
 };
+use jiff::Timestamp;
+use metis_bekko::{DOCUMENT_BYTES, Document, Encoder};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
 use std::{
@@ -148,7 +150,7 @@ impl Index {
                 match scan.reader.next_record(&mut *check)? {
                     Some(Event::Record(record)) => {
                         bytes = bytes.saturating_add(record.anchor.line.len);
-                        records.push(Prepared::new(record, check)?);
+                        records.push(Prepared::new(record, self.encoder.as_deref(), check)?);
                     }
                     Some(Event::Gap { line, .. }) => {
                         if line.terminated {
@@ -272,9 +274,10 @@ impl Scan<'_> {
             )?;
             tx.last_insert_rowid()
         };
+        let indexed_at = Timestamp::now().as_second();
         for record in records {
             check()?;
-            record.insert(&tx, source, check)?;
+            record.insert(&tx, source, indexed_at, check)?;
         }
         tx.execute(
             "UPDATE sources SET cursor=?,prefix_digest=?,gaps=?,tail_gap=?,observed=?,finished=? WHERE id=?",
@@ -292,15 +295,37 @@ impl Scan<'_> {
 struct Prepared {
     entry: Entry,
     anchor: RecordAnchor,
-    chunks: Vec<(Role, FragmentAnchor, String)>,
+    chunks: Vec<PreparedChunk>,
+}
+
+struct PreparedChunk {
+    role: Role,
+    anchor: FragmentAnchor,
+    terms: String,
+    vector: Option<[u8; DOCUMENT_BYTES]>,
 }
 
 impl Prepared {
-    fn new(record: Record, check: &mut impl FnMut() -> Result<()>) -> Result<Self> {
+    fn new(
+        record: Record,
+        encoder: Option<&Encoder>,
+        check: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let mut chunks = Vec::new();
         record.visit_fragments(|role, anchor, text| {
             check()?;
-            chunks.push((role, anchor, terms::index(text)));
+            let vector = match encoder {
+                Some(encoder) => {
+                    Some(Document::from_normalized(&encoder.encode(text)?.0).to_bytes())
+                }
+                None => None,
+            };
+            chunks.push(PreparedChunk {
+                role,
+                anchor,
+                terms: terms::index(text),
+                vector,
+            });
             Ok(())
         })?;
         Ok(Self {
@@ -314,8 +339,17 @@ impl Prepared {
         self,
         tx: &Connection,
         source: i64,
+        indexed_at: i64,
         check: &mut impl FnMut() -> Result<()>,
     ) -> Result<()> {
+        let day = self
+            .entry
+            .timestamp
+            .as_deref()
+            .and_then(|text| text.parse::<Timestamp>().ok())
+            .map(|timestamp| timestamp.as_second())
+            .filter(|at| *at <= indexed_at)
+            .map(|at| at.div_euclid(86_400));
         let line = self.anchor.line;
         tx.prepare_cached("INSERT INTO entries VALUES(?,?,?,?,?,?,?,?)")?
             .execute(params![
@@ -333,7 +367,15 @@ impl Prepared {
         )?;
         let mut insert_terms =
             tx.prepare_cached("INSERT INTO chunks_fts(rowid,terms) VALUES(?,?)")?;
-        for (role, anchor, terms) in self.chunks {
+        let mut insert_vector =
+            tx.prepare_cached("INSERT INTO vectors(chunk,payload,indexed_at,day) VALUES(?,?,?,?)")?;
+        for PreparedChunk {
+            role,
+            anchor,
+            terms,
+            vector,
+        } in self.chunks
+        {
             check()?;
             let role = match role {
                 Role::User => "user",
@@ -347,7 +389,11 @@ impl Prepared {
                 anchor.text_bytes.start,
                 anchor.text_bytes.end,
             ])?;
-            insert_terms.execute(params![tx.last_insert_rowid(), terms])?;
+            let id = tx.last_insert_rowid();
+            insert_terms.execute(params![id, terms])?;
+            if let Some(vector) = vector {
+                insert_vector.execute(params![id, vector.as_slice(), indexed_at, day])?;
+            }
         }
         Ok(())
     }

@@ -1082,6 +1082,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "metis-bekko"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "tokenizers",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1579,6 +1590,7 @@ dependencies = [
  "libloading",
  "memchr",
  "memmap2",
+ "metis-bekko",
  "rayon",
  "regex",
  "safetensors",

@@ -2,7 +2,8 @@ CREATE TABLE cache_root (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     path BLOB NOT NULL,
     device INTEGER NOT NULL,
-    inode INTEGER NOT NULL
+    inode INTEGER NOT NULL,
+    model TEXT
 ) STRICT;
 
 CREATE TABLE sources (
@@ -48,6 +49,15 @@ CREATE TABLE chunks (
 ) STRICT;
 
 CREATE INDEX chunk_entry ON chunks(source, entry);
+
+CREATE TABLE vectors (
+    chunk INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+    payload BLOB NOT NULL CHECK (length(payload)=260),
+    indexed_at INTEGER NOT NULL,
+    day INTEGER
+) STRICT;
+
+CREATE INDEX vector_day ON vectors(day, chunk);
 
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     terms, content='', contentless_delete=1, tokenize='unicode61 tokenchars _'

@@ -17,7 +17,8 @@ pub enum Scope<'a> {
     Branch { path: &'a Path, leaf: &'a str },
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LexicalHit {
     pub chunk_id: i64,
     pub path: PathBuf,
@@ -76,17 +77,7 @@ impl Index {
         for candidate in candidates {
             check()?;
             let mut hit = candidate?;
-            let text = (|| -> Result<String> {
-                let file = self.root.file(&hit.hit.path)?;
-                if ancestors.is_some() && stamp(&file.metadata()?) != hit.stamp {
-                    return Err("Recall branch changed since indexing".into());
-                }
-                let reader = SessionReader::open(file, || Ok(()))?;
-                if reader.header.id != hit.hit.session_id || reader.header.cwd != hit.cwd {
-                    return Err("Recall source header changed".into());
-                }
-                reader.read_fragment(&hit.anchor)
-            })();
+            let text = self.read_candidate(&hit, ancestors.is_some());
             match text {
                 Ok(text) => {
                     hit.hit.text = text;
@@ -98,11 +89,23 @@ impl Index {
         check()?;
         Ok(result)
     }
+
+    pub(super) fn read_candidate(&self, hit: &Candidate, branch: bool) -> Result<String> {
+        let file = self.root.file(&hit.hit.path)?;
+        if branch && stamp(&file.metadata()?) != hit.stamp {
+            return Err("Recall branch changed since indexing".into());
+        }
+        let reader = SessionReader::open(file, || Ok(()))?;
+        if reader.header.id != hit.hit.session_id || reader.header.cwd != hit.cwd {
+            return Err("Recall source header changed".into());
+        }
+        reader.read_fragment(&hit.anchor)
+    }
 }
 
-type Filter<'a> = (Option<&'a str>, Option<i64>, Option<String>);
+pub(super) type Filter<'a> = (Option<&'a str>, Option<i64>, Option<String>);
 
-fn resolve_scope<'a>(
+pub(super) fn resolve_scope<'a>(
     db: &Connection,
     scope: Scope<'a>,
     check: &mut impl FnMut() -> Result<()>,
@@ -136,15 +139,15 @@ fn resolve_scope<'a>(
     }
 }
 
-struct Candidate {
-    hit: LexicalHit,
+pub(super) struct Candidate {
+    pub hit: LexicalHit,
     cwd: String,
     anchor: FragmentAnchor,
     stamp: [u8; 56],
 }
 
 impl Candidate {
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         let role: String = row.get(6)?;
         Ok(Self {
             hit: LexicalHit {

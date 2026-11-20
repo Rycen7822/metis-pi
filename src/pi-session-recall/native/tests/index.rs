@@ -304,6 +304,65 @@ fn source_mutation_during_a_write_is_retried_from_the_unadvanced_cursor() {
 }
 
 #[test]
+#[ignore = "requires verified local Bekko128 assets; set RECALL_TEST_BEKKO_DIR"]
+fn real_bekko_finds_a_paraphrase_without_lexical_overlap_and_limits_repetition() {
+    use std::sync::Arc;
+
+    let f = Fixture::new();
+    let model =
+        PathBuf::from(std::env::var_os("RECALL_TEST_BEKKO_DIR").expect("local model assets"));
+    let encoder = Arc::new(metis_bekko::Encoder::open(&model).unwrap());
+    let relevant = "Preserve the originals before building an index.";
+    let repetitions: Vec<_> = (0..220)
+        .map(|i| msg(&i.to_string(), None, relevant))
+        .collect();
+    f.write("a-long.jsonl", "/project", &repetitions);
+    f.write(
+        "b-target.jsonl",
+        "/project",
+        &[msg("target", None, relevant)],
+    );
+    f.write(
+        "c-noise.jsonl",
+        "/project",
+        &[msg("noise", None, "A whale swims under the coral reef.")],
+    );
+    let mut index = Index::open_hybrid(&f.root, &f.cache, encoder.clone()).unwrap();
+    let db = Connection::open(f.cache.join("index.sqlite3")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER fail_vector BEFORE INSERT ON vectors
+         BEGIN SELECT RAISE(ABORT, 'test vector write failure'); END;",
+    )
+    .unwrap();
+    assert!(
+        index
+            .refresh(|| Ok(()))
+            .unwrap_err()
+            .to_string()
+            .contains("test vector write failure")
+    );
+    assert!(hits(&index, "originals", Scope::All).is_empty());
+    drop(index);
+    db.execute_batch("DROP TRIGGER fail_vector").unwrap();
+
+    let mut index = Index::open_hybrid(&f.root, &f.cache, encoder).unwrap();
+    assert!(index.refresh(|| Ok(())).unwrap().gaps.is_empty());
+    let query = "retain source history";
+    assert!(hits(&index, query, Scope::All).is_empty());
+    let response = index.hybrid(query, Scope::All, || Ok(())).unwrap();
+    let top = &response.sessions[..2];
+    assert!(
+        top.iter()
+            .any(|session| session.session_path.ends_with("b-target.jsonl"))
+    );
+    assert!(
+        top.iter()
+            .all(|session| session.hits[0].evidence.text == relevant)
+    );
+    assert_eq!(response.stale_candidates, 0);
+}
+
+#[test]
 fn root_isolation_excludes_archives_and_rejects_rebinding_or_out_of_scope_paths() {
     let f = Fixture::new();
     let outside = f.temp.path().join("another-root");

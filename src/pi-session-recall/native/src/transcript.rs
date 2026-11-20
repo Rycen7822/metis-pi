@@ -29,7 +29,8 @@ pub struct Entry {
     pub timestamp: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
     Assistant,
