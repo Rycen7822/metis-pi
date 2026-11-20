@@ -13,6 +13,8 @@ export interface Goal {
   tokenBudget?: number;
   tokensUsed: number;
   timeUsedSeconds: number;
+  openAISafetyRecoveries?: number;
+  openAISafetyRecoveryRequests?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -107,6 +109,8 @@ function normalizeGoal(value: unknown): Goal | null {
     tokenBudget,
     tokensUsed: normalizeNonNegativeInteger(raw.tokensUsed),
     timeUsedSeconds: normalizeNonNegativeInteger(raw.timeUsedSeconds),
+    openAISafetyRecoveries: normalizeNonNegativeInteger(raw.openAISafetyRecoveries),
+    openAISafetyRecoveryRequests: normalizeNonNegativeInteger(raw.openAISafetyRecoveryRequests),
     createdAt: normalizeNonNegativeInteger(raw.createdAt, ts),
     updatedAt: normalizeNonNegativeInteger(raw.updatedAt, ts),
   };
@@ -211,6 +215,39 @@ export class GoalState {
       }
     }
     if (this.#goal?.status === "active") this.#activeSinceMs = Date.now();
+  }
+
+  beginOpenAISafetyRecovery(): number {
+    if (!this.#goal) throw new Error("cannot recover safety refusal because no goal exists");
+    const recoveries = (this.#goal.openAISafetyRecoveries ?? 0) + 1;
+    this.#goal.openAISafetyRecoveries = recoveries;
+    this.#goal.openAISafetyRecoveryRequests = 0;
+    this.#goal.updatedAt = nowSeconds();
+    return recoveries;
+  }
+
+  advanceOpenAISafetyRecoveryRequest(maxRequests: number): boolean {
+    if (!this.#goal?.openAISafetyRecoveries) return false;
+    if ((this.#goal.openAISafetyRecoveryRequests ?? 0) >= maxRequests) {
+      this.clearOpenAISafetyRecovery();
+      return true;
+    }
+    this.#goal.openAISafetyRecoveryRequests = (this.#goal.openAISafetyRecoveryRequests ?? 0) + 1;
+    this.#goal.updatedAt = nowSeconds();
+    return true;
+  }
+
+  finishOpenAISafetyRecoveryWindow(maxRequests: number): boolean {
+    if (!this.#goal?.openAISafetyRecoveries || (this.#goal.openAISafetyRecoveryRequests ?? 0) < maxRequests) return false;
+    return this.clearOpenAISafetyRecovery();
+  }
+
+  clearOpenAISafetyRecovery(): boolean {
+    if (!this.#goal?.openAISafetyRecoveries) return false;
+    delete this.#goal.openAISafetyRecoveries;
+    delete this.#goal.openAISafetyRecoveryRequests;
+    this.#goal.updatedAt = nowSeconds();
+    return true;
   }
 
   startTurn(): void {

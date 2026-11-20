@@ -21,15 +21,20 @@ import { GoalState, validateObjective, formatElapsedSeconds, type Goal, type Goa
 import type { GoalPopup } from "./view.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hasMetisHostSDK } from "../pi-sdk/host.ts";
+import { isOpenAICybersecurityRefusal, type OpenAISafetyMessage } from "../openai-safety.ts";
+import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const STATE_TYPE = "goal";
 const UI_MESSAGE_TYPE = "goal-ui";
 const CONTINUATION_MESSAGE_TYPE = "goal-continuation";
+const SAFETY_RECOVERY_MESSAGE_TYPE = "goal-openai-safety-recovery";
 const CONTINUATIONS_PER_AUDIT = 5;
+const MAX_OPENAI_SAFETY_RECOVERIES = 3;
+const OPENAI_SAFETY_REQUEST_WINDOW = 5;
 const EDIT_AUTHORIZATION_MESSAGE_TYPE = "goal-agent-edit";
 interface PersistedGoalState {
   version: 2;
@@ -306,7 +311,7 @@ ${
 }`;
 }
 
-function lastAssistantMessage(messages: Array<{ role?: string; stopReason?: string; errorMessage?: string }>) {
+function lastAssistantMessage(messages: Array<{ role?: string } & OpenAISafetyMessage>) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message?.role === "assistant") return message;
@@ -314,21 +319,29 @@ function lastAssistantMessage(messages: Array<{ role?: string; stopReason?: stri
   return undefined;
 }
 
-function goalStopStatusForAssistantError(message: { errorMessage?: string } | undefined): GoalStatus {
+function goalStopStatusForAssistantError(message: { errorMessage?: string } | undefined): "blocked" | "usageLimited" {
   const errorMessage = message?.errorMessage ?? "";
   return /\b(usage|rate|quota|limit)\b/i.test(errorMessage) ? "usageLimited" : "blocked";
 }
 
 export default function goalExtension(pi: ExtensionAPI) {
   if (!hasMetisHostSDK()) return;
+  const goalConfig = readMetisConfig(getAgentDir()).config["goal"];
+  if (!isMetisConfigTable(goalConfig)) throw new Error("goal must be a TOML table");
+  const autoCompactOnOpenAISafetyRefusal = goalConfig["autoCompactOnOpenAISafetyRefusal"];
+  if (typeof autoCompactOnOpenAISafetyRefusal !== "boolean") {
+    throw new Error("goal.autoCompactOnOpenAISafetyRefusal must be a boolean");
+  }
   pi.registerMessageRenderer(CONTINUATION_MESSAGE_TYPE, (_message, { outputPad }, theme) =>
     new Text(theme.fg("muted", "Goal continue"), outputPad, 0));
   pi.registerMessageRenderer(EDIT_AUTHORIZATION_MESSAGE_TYPE, (_message, { outputPad }, theme) =>
     new Text(theme.fg("muted", "Goal agent edit authorized (once)"), outputPad, 0));
+  pi.registerMessageRenderer(SAFETY_RECOVERY_MESSAGE_TYPE, (_message, { outputPad }, theme) =>
+    new Text(theme.fg("warning", "Goal OpenAI safety recovery"), outputPad, 0));
   const state = new GoalState();
   let revision = 0;
   let inputGeneration = 0;
-  let pendingError: { errorMessage?: string } | undefined;
+  let pendingError: OpenAISafetyMessage | undefined;
   let inAgentTurn = false;
   let continuationsUntilAudit = 0;
   let completionReportGoalId: string | undefined;
@@ -460,6 +473,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     if (action === "set" || action === "edit" || action === "clear") continuationsUntilAudit = 0;
     if (action !== "account" || state.current?.status !== "active") editGrant = undefined;
     if (action !== "account") {
+      state.clearOpenAISafetyRecovery();
       revision++;
       clearOwed();
       pendingError = undefined;
@@ -596,6 +610,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     pendingError = undefined;
     inAgentTurn = true;
     requestInvalidated = false;
+    if (state.advanceOpenAISafetyRecoveryRequest(OPENAI_SAFETY_REQUEST_WINDOW)) persist("account");
     state.startTurn();
   });
 
@@ -629,7 +644,12 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
       return;
     }
 
-    if (lastAssistant?.stopReason === "aborted" && await pauseAfterAbort(ctx)) return;
+    if (lastAssistant?.stopReason === "aborted") {
+      if (state.clearOpenAISafetyRecovery()) persist("account");
+      if (await pauseAfterAbort(ctx)) return;
+    } else if (state.finishOpenAISafetyRecoveryWindow(OPENAI_SAFETY_REQUEST_WINDOW)) {
+      persist("account");
+    }
 
     const maintenance: OccStatusRequest = { deferGoal: false };
     pi.events.emit(METIS_EVENTS.occStatus, maintenance);
@@ -657,6 +677,66 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     return true;
   }
 
+  function stopGoalAfterError(ctx: ExtensionContext, status: "blocked" | "usageLimited", reason: string): void {
+    state.transition(status);
+    persist("status");
+    showGoalMessage(`Goal ${statusLabel(status)}\n\n${reason}\n\n${goalSummary(state.current!)}`);
+    updateStatus(ctx);
+  }
+
+  function recoverFromOpenAISafety(ctx: ExtensionContext): void {
+    const goal = state.current;
+    if (!goal || goal.status !== "active") return;
+    const recovery = state.beginOpenAISafetyRecovery();
+    if (recovery > MAX_OPENAI_SAFETY_RECOVERIES) {
+      stopGoalAfterError(ctx, "blocked",
+        `OpenAI cybersecurity refusals followed all ${MAX_OPENAI_SAFETY_RECOVERIES} ` +
+        `automatic context compactions within ${OPENAI_SAFETY_REQUEST_WINDOW} requests of each recovery. ` +
+        "Automatic continuation was stopped.");
+      return;
+    }
+
+    persist("account");
+    clearOwed();
+    const goalId = goal.id, expectedRevision = revision, expectedInput = inputGeneration;
+    const isCurrent = () => state.current?.id === goalId && state.current.status === "active"
+      && revision === expectedRevision && inputGeneration === expectedInput;
+    const fail = (error: unknown) => {
+      if (!isCurrent()) return;
+      const message = error instanceof Error ? error.message : String(error);
+      stopGoalAfterError(ctx, "blocked",
+        `OpenAI safety recovery failed: ${message}. Automatic continuation was stopped.`);
+    };
+    try {
+      ctx.compact({
+        customInstructions:
+          "Preserve the active Goal, verified progress and evidence needed for the next safe step. " +
+          "The previous response was flagged for possible cybersecurity risk. Do not instruct the agent " +
+          "to repeat or evade the flagged action; retain only context needed to continue the legitimate task safely.",
+        onComplete: () => {
+          if (!isCurrent()) return;
+          try {
+            pi.sendMessage({
+              customType: SAFETY_RECOVERY_MESSAGE_TYPE,
+              content:
+                "你刚刚的操作被 OpenAI 的安全策略标记为疑似网络安全风险，上下文已压缩。" +
+                "请尝试使用更安全、合规的方式继续当前任务，不要重复刚才被拦截的操作。" +
+                `继续推进当前 Goal。这是第 ${recovery}/${MAX_OPENAI_SAFETY_RECOVERIES} 次安全恢复；` +
+                `若恢复后 ${OPENAI_SAFETY_REQUEST_WINDOW} 个请求内仍被拦截，将计入连续恢复失败。`,
+              display: true,
+              details: { goalId, recovery, requestWindow: OPENAI_SAFETY_REQUEST_WINDOW },
+            }, { triggerTurn: true });
+          } catch (error) {
+            fail(error);
+          }
+        },
+        onError: error => fail(error),
+      });
+    } catch (error) {
+      fail(error);
+    }
+  }
+
   pi.on("agent_settled", async (event, ctx) => {
     const error = pendingError;
     pendingError = undefined;
@@ -664,18 +744,16 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     // Pi can represent startup cancellation as an error before the provider
     // runs. Settlement's abort flag distinguishes it from exhausted recovery.
     if (event.aborted) {
+      if (state.clearOpenAISafetyRecovery()) persist("account");
       if (!await pauseAfterAbort(ctx)) queueContinuation(ctx);
       return;
     }
-    const status = goalStopStatusForAssistantError(error);
-    state.transition(status);
-    persist("status");
-    showGoalMessage(
-      `Goal ${statusLabel(status)}` +
-        "\n\nPi finished error recovery without a successful response, so automatic " +
-        `continuation was stopped.\n\n${goalSummary(state.current)}`,
-    );
-    updateStatus(ctx);
+    if (autoCompactOnOpenAISafetyRefusal && isOpenAICybersecurityRefusal(error)) {
+      recoverFromOpenAISafety(ctx);
+      return;
+    }
+    stopGoalAfterError(ctx, goalStopStatusForAssistantError(error),
+      "Pi finished error recovery without a successful response, so automatic continuation was stopped.");
   });
 
   const projectMessages = <T>(messages: T[]): T[] => {

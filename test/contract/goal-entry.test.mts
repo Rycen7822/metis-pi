@@ -7,12 +7,15 @@ import { sgr } from "../helpers/terminal.mjs";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import goalExtension from "../../extensions/goal.ts";
+import { temporaryDirectory } from "../helpers/temp-dir.mjs";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 test.beforeEach((t) => {
   (t as TestContext).mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_700_000_000_000 });
 });
 
-function makeHost(t: TestContext) {
+function makeHost(t: TestContext, options: { autoCompactOnOpenAISafetyRefusal?: boolean } = {}) {
   const statusCalls: { key: string; text: string | undefined }[] = [];
   const entries: { type: string; data: any }[] = [];
   const handlers = new Map<string, (...args: any[]) => any>();
@@ -22,6 +25,7 @@ function makeHost(t: TestContext) {
   const sentOptions: unknown[] = [];
   const userMessages: unknown[] = [];
   const notifications: string[] = [];
+  const compactions: any[] = [];
 
   const pi = {
     events: createEventBus(),
@@ -44,6 +48,7 @@ function makeHost(t: TestContext) {
     },
     hasPendingMessages: () => false,
     isIdle: () => true,
+    compact: (options: any) => { compactions.push(options); options.onComplete({}); },
     ui: {
       theme: { fg: (_key: string, text: string) => text },
       setStatus: (key: string, text: string | undefined) => statusCalls.push({ key, text }),
@@ -54,7 +59,18 @@ function makeHost(t: TestContext) {
     },
   };
 
-  goalExtension(pi as never);
+  const agentDir = temporaryDirectory(t, "metis-goal-config-");
+  if (options.autoCompactOnOpenAISafetyRefusal !== undefined) {
+    writeFileSync(join(agentDir, "metis-pi.toml"),
+      `[goal]\nautoCompactOnOpenAISafetyRefusal = ${options.autoCompactOnOpenAISafetyRefusal}\n`);
+  }
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try { goalExtension(pi as never); }
+  finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
   t.after(() => handlers.get("session_shutdown")!({}, ctx));
 
   return {
@@ -66,6 +82,7 @@ function makeHost(t: TestContext) {
     sentOptions,
     userMessages,
     notifications,
+    compactions,
     command: async (args: string) => await commands.get("goal")!.handler(args, ctx),
     tools,
     tool: async (action: string, params: Record<string, unknown> = {}) =>
@@ -116,6 +133,21 @@ function popupHost(h: ReturnType<typeof makeHost>) {
 /** Mock timers tick in whole steps, so each second is one scheduler advance. */
 function tick(t: TestContext, seconds: number): void {
   for (let i = 0; i < seconds; i += 1) t.mock.timers.tick(1000);
+}
+
+const cybersecurityFlag = "This content was flagged for possible cybersecurity risk.";
+const safetyFailure = { role: "assistant", provider: "openai", stopReason: "error", errorMessage: cybersecurityFlag };
+
+async function safetyRefusal(h: ReturnType<typeof makeHost>): Promise<void> {
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [safetyFailure] }, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
+}
+
+async function successfulRequest(h: ReturnType<typeof makeHost>): Promise<void> {
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
 }
 
 test("goal popup controls use live state, persist pause and resume, and only clear paused or completed goals", async t => {
@@ -704,6 +736,111 @@ test("a successful retry clears the failed attempt and resumes goal continuation
   await h.fire("agent_settled", { aborted: false }, h.ctx);
   assert.equal((await h.tool("get")).details.goal.status, "active");
   assert.equal(h.entries.filter(entry => entry.data.action === "status").length, 0);
+});
+
+test("OpenAI cybersecurity refusal compacts once and injects a safe continuation by default", async t => {
+  const h = makeHost(t);
+  await h.command("continue the defensive task after a false positive");
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [safetyFailure] }, h.ctx);
+  assert.equal(h.compactions.length, 0, "native retry still owns the unsettled failure");
+  assert.equal((await h.tool("get")).details.goal.status, "active");
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
+  assert.equal(h.compactions.length, 1);
+  assert.match(h.compactions[0].customInstructions, /active Goal, verified progress/);
+  assert.equal((await h.tool("get")).details.goal.status, "active");
+  const prompt = h.sent.at(-1) as any;
+  assert.equal(prompt.customType, "goal-openai-safety-recovery");
+  assert.match(prompt.content, /更安全、合规的方式继续当前任务/);
+  assert.match(prompt.content, /不要重复刚才被拦截的操作/);
+  assert.deepEqual(prompt.details, { goalId: prompt.details.goalId, recovery: 1, requestWindow: 5 });
+  assert.deepEqual(h.sentOptions.at(-1), { triggerTurn: true });
+  assert.deepEqual((await h.fire("context", { messages: [prompt] })).messages, [prompt],
+    "the safety instruction survives context projection");
+});
+
+test("a safety error recovered by native retry never compacts or consumes a recovery window", async t => {
+  const h = makeHost(t);
+  await h.command("allow native retry to recover first");
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [safetyFailure] }, h.ctx);
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [{ role: "assistant", provider: "openai", stopReason: "stop" }] }, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
+  assert.equal(h.compactions.length, 0);
+  assert.equal((await h.tool("get")).details.goal.status, "active");
+  assert.equal(h.sent.some((message: any) => message.customType === "goal-openai-safety-recovery"), false);
+});
+
+test("three safety compactions stop the goal only when each is followed by another refusal", async t => {
+  const h = makeHost(t);
+  await h.command("bound repeated safety recovery");
+  for (let recovery = 1; recovery <= 3; recovery++) {
+    await safetyRefusal(h);
+    assert.equal(h.compactions.length, recovery);
+    assert.equal((await h.tool("get")).details.goal.status, "active");
+    assert.equal((h.sent.at(-1) as any).details.recovery, recovery);
+  }
+  await safetyRefusal(h);
+  assert.equal(h.compactions.length, 3, "the fourth in-window refusal does not start another compaction");
+  assert.equal((await h.tool("get")).details.goal.status, "blocked");
+  assert.match((h.sent.at(-1) as any).content, /all 3 automatic context compactions within 5 requests/);
+  const sent = h.sent.length;
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
+  assert.equal(h.sent.length, sent, "repeated settlement cannot queue more work");
+});
+
+test("the safety recovery window includes its fifth request and expires before the sixth", async t => {
+  const h = makeHost(t);
+  await h.command("measure five requests after each safety hint");
+  await safetyRefusal(h);
+  for (let request = 1; request <= 4; request++) await successfulRequest(h);
+  await safetyRefusal(h);
+  assert.equal((h.sent.at(-1) as any).details.recovery, 2, "a refusal in request five continues the same sequence");
+  assert.equal(h.compactions.length, 2);
+  for (let request = 1; request <= 5; request++) await successfulRequest(h);
+  await safetyRefusal(h);
+  assert.equal((h.sent.at(-1) as any).details.recovery, 1, "a later refusal starts a fresh sequence");
+  assert.equal(h.compactions.length, 3);
+  assert.equal((await h.tool("get")).details.goal.status, "active");
+});
+
+test("a stale compaction callback cannot resume a paused safety recovery", async t => {
+  const h = makeHost(t);
+  let complete: (() => void) | undefined;
+  h.ctx.compact = (options: any) => { h.compactions.push(options); complete = options.onComplete; };
+  await h.command("let the user pause during compaction");
+  await safetyRefusal(h);
+  assert.equal(h.compactions.length, 1);
+  await h.command("pause");
+  complete!();
+  assert.equal((await h.tool("get")).details.goal.status, "paused");
+  assert.equal(h.sent.some((message: any) => message.customType === "goal-openai-safety-recovery"), false);
+});
+
+test("safety recovery persists its count and honors the opt-out and compaction failure", async t => {
+  const restored = makeHost(t);
+  await restored.command("restore the safety sequence");
+  await safetyRefusal(restored);
+  const saved = structuredClone(restored.entries.at(-1)!.data);
+  restored.ctx.sessionManager.getBranchMetadata = () => [{ type: "custom", customType: "goal", data: saved }];
+  await restored.fire("session_tree", {}, restored.ctx);
+  await safetyRefusal(restored);
+  assert.equal((restored.sent.at(-1) as any).details.recovery, 2);
+
+  const disabled = makeHost(t, { autoCompactOnOpenAISafetyRefusal: false });
+  await disabled.command("retain the original error policy");
+  await safetyRefusal(disabled);
+  assert.equal(disabled.compactions.length, 0);
+  assert.equal((await disabled.tool("get")).details.goal.status, "blocked");
+
+  const failed = makeHost(t);
+  failed.ctx.compact = (options: any) => { failed.compactions.push(options); options.onError(new Error("synthetic compaction failure")); };
+  await failed.command("do not fake a successful compaction");
+  await safetyRefusal(failed);
+  assert.equal((await failed.tool("get")).details.goal.status, "blocked");
+  assert.match((failed.sent.at(-1) as any).content, /synthetic compaction failure/);
+  assert.equal(failed.sent.some((message: any) => message.customType === "goal-openai-safety-recovery"), false);
 });
 
 for (const action of ["pause", "replace", "restore", "abort"] as const) {

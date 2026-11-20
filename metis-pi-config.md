@@ -11,6 +11,14 @@ Metis 偏好只存全局 `<agentDir>/metis-pi.toml`（默认 `~/.pi/agent`，跟
 - 显示/快捷键/入口变更重载或重启；执行在 run 边界、LSP 每次调用、MCP `/mcp reload`、动态指令下一正式 run 生效，后端设置须安全重启 daemon。`/execution`、`/pruner settings`、`/websearch`、`/curator` 保存同一个全局文件。
 - TOML 没有 null；autoBudgetThreshold/budgetTurnDelta/frontierGapThresholdTokens 用布尔 false 表示关闭，maxImagesPerRequest=false 表示采用 API 默认。其他类型错误由各模块回退或报错，配置文件保持原样。
 
+## `[goal]`
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `autoCompactOnOpenAISafetyRefusal` | `true` | Goal 活跃且 OpenAI 最终返回明确网络安全风险错误时，自动压缩上下文并提示 Agent 用更安全的方式续跑。连续三次恢复都在随后五个请求内再次被拦截后，下一次命中将 Goal 标记为 `blocked`。 |
+
+只识别 `openai` / `openai-codex` 的明确错误，不把网络错误或超时当作安全拦截。原生重试尚未结束或用户中止时不触发；暂停、替换、清除目标会重置恢复计数。修改后 `/reload` 生效，失败处理见 [Goal 文档](docs/features/goal.md#openai-安全拦截恢复)。
+
 ## `[appearance]` 及其子表
 
 | 字段（相对 appearance） | 默认值 | 含义 / 合法值 |

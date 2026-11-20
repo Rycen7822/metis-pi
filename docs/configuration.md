@@ -11,6 +11,7 @@ Metis 读取全局的 `<agentDir>/metis-pi.toml`。`agentDir` 默认为 `~/.pi/a
 | 自动压缩上限 | `[compactionPolicy]` | `/reload`；首次加载补丁版 SDK 需要重启。 |
 | 历史整理与 OCC | `[contextPrune]` | `/pruner` 保存时生效；手动编辑后执行 `/reload`。 |
 | 动态指令 | `[dynamicAgents]` | 下一次正式运行。 |
+| 长任务目标 | `[goal]` | `/reload` 或重启。 |
 | 子代理 | `[subagents]`、`[subagents.profiles]` | 后端启动时。更新前先检查[活动任务](subagents/lifecycle.md)。 |
 | 本地搜索 | `[neuralSearch]` | `/reload`；语义缓存预算和空闲超时在下一次语义请求读取。 |
 | 提问 | `[askUserQuestion]` | 工具说明在注册时读取；折叠键在每次调用时读取。 |

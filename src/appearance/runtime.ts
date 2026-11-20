@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./tool-host-adapter.ts";
 import { makeCodemodeRenderers } from "./transcript/codemode-view.ts";
@@ -27,6 +26,7 @@ import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "../selection-copy/index.ts";
 import { createFullscreenLayout, type FullscreenLayoutHost } from "./chrome/fullscreen-layout.ts";
 import { METIS_EVENTS } from "../collaboration.ts";
+import { openAISafetyNotice } from "../openai-safety.ts";
 
 export type AppearanceAPI = Pick<ExtensionAPI, "on" | "getAllTools">;
 // Decoration factories have one contract, owned by the adapter that consumes them.
@@ -408,7 +408,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("agent_end", (event) => {
     hostData.bump();
     if (!chromeEnabled) return;
-    pendingSafetyNotice = openaiSafetyNotice(event.messages.findLast(message => message.role === "assistant"));
+    pendingSafetyNotice = openAISafetyNotice(event.messages.findLast(message => message.role === "assistant"));
     metrics.agentEnd();
   });
   pi.on("agent_settled", (event, ctx) => {
@@ -609,15 +609,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     await gitStopped;
   });
   return { whenReady: () => installation };
-}
-
-function openaiSafetyNotice(message: AssistantMessage | undefined): string | undefined {
-  if (message?.stopReason !== "error" || (message.provider !== "openai" && message.provider !== "openai-codex")) return;
-  // Older provider errors only expose the message, sometimes prefixed by Pi with the stream error code.
-  const detail = message.errorMessage?.replace(/^(?:Error Code [\w-]+|Codex error|[\w-]+):\s*/, "");
-  const cyberFlag = "This content was flagged for possible cybersecurity risk.";
-  if (detail?.startsWith(cyberFlag)) return `OpenAI safety policy blocked the response: ${cyberFlag}`;
-  if (message.rawStopReason === "incomplete.content_filter") return "OpenAI content filter stopped the response.";
 }
 
 function isUserMessage(message: unknown): boolean {
