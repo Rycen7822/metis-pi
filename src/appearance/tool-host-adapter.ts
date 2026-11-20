@@ -256,7 +256,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         const data = asRecord(value);
         const inputs = [initial, asRecord(theme).colors ?? theme, theme.fg, theme.bold, args, data.content, data.details,
           ctx.state, ctx.toolCallId, opts.expanded, opts.isPartial, ctx.expanded, ctx.isPartial, ctx.isError, ctx.durationMs, ctx.cwd, ctx.showImages,
-          ctx.executionStarted, ctx.argsComplete, ctx.hasResult, ctx.writeChanges, ctx.colorLevel?.kind, ctx.explorationPlan];
+          ctx.executionStarted, ctx.argsComplete, ctx.argsReceived, ctx.hasResult, ctx.writeChanges, ctx.colorLevel?.kind, ctx.explorationPlan];
         const previous = lastComponent && typeof lastComponent === "object" ? nestedBodies.get(lastComponent) : undefined;
         // Never share an unrendered default-shell body with the active self-shell:
         // the host still owns and invalidates its original fallback child tree.

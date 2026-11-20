@@ -43,8 +43,10 @@ export interface ViewContext {
   readonly cwd?: string;
   readonly state?: unknown;
   readonly isPartial?: boolean;
-  /** Host lifecycle: args streaming finished (toolCall args complete). */
+  /** Host lifecycle: the final model response made the tool call ready. */
   readonly argsComplete?: boolean;
+  /** Host lifecycle: the provider finished sending arguments before the final response. */
+  readonly argsReceived?: boolean;
   /** Host lifecycle: tool execution started (markExecutionStarted). */
   readonly executionStarted?: boolean;
   /** Host callback that rebuilds and redraws this tool row. */

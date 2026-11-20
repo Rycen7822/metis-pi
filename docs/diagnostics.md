@@ -20,7 +20,15 @@
 
 Metis 接管的 `openai` 提供商使用 HTTP Responses API。某个工具调用开始收到参数后，若连续 120 秒没有该调用的新参数、也未收到完成事件，Metis 会取消该响应并报告 `OpenAI Responses stream stalled`。连接心跳、正文、思考和其他调用不会替它续期。
 
-参数收齐后停止计时，不必等整个响应完成。没有未收齐参数时，正文和隐藏推理仍沿用 Pi 的 HTTP 超时；`openai-codex` 的传输策略不变。Codemode 卡片显示 `Receiving script from model` 时还未执行脚本；中断或超时不会运行半截脚本。
+参数收齐后停止计时，不必等整个响应完成。Codemode 会从 `Receiving script from model` 切换到
+`Script received; waiting for model response to finish`。这两个阶段都没有执行脚本，中断也不会运行半截脚本。
+没有未收齐参数时，正文、隐藏推理和等待响应结束仍沿用 Pi 的 HTTP 超时；`openai-codex` 的传输策略不变。
+
+需要定位停在哪一步时，在复现前执行 `/responses-stream on`。中断或请求结束后执行 `/responses-stream` 查看最近四条
+OpenAI HTTP Responses 请求的解析事件数、参数增量字节数、最后进展和结束事件；例如有 `args.done` 但没有 `completed`，
+说明参数结束后没有收到正常响应终止。字节数不是网络流量，HTTP 心跳注释不算解析事件。
+默认关闭，只在内存保留事件类别、索引、计数和相对时间，不采集脚本、正文、思维链、请求 ID 或凭据；
+`/responses-stream off` 清空并停止。切分支清空；切会话或重载后重新开启。
 
 ## 请求前缀诊断
 

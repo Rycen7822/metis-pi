@@ -326,24 +326,26 @@ export function makeCodemodeRenderers(input: {
       if (timer && context.executionStarted && timer.startedAt === undefined) timer.startedAt = Date.now();
       const title = label(theme.bold("codemode")), view = expansion(context);
       const pending = !context.hasResult && !context.isError;
-      const receiving = pending && context.argsComplete === false && !context.executionStarted && context.isPartial !== false;
+      const generating = pending && context.argsComplete === false && !context.executionStarted && context.isPartial !== false;
+      const receiving = generating && !context.argsReceived;
       const code = asRecord(args).code;
       const expanded = view.script ?? view.expanded;
       // Automatic streaming visibility ends with generation, without resetting explicit expansion choices.
-      const script = typeof code === "string" && (receiving || expanded) && code ? safeText(code) : "";
-      const invalid = typeof code !== "string" && !receiving && !context.isError;
+      const script = typeof code === "string" && (generating || expanded) && code ? safeText(code) : "";
+      const invalid = typeof code !== "string" && !generating && !context.isError;
       let component: Component = input.makeText(invalid ? `${title} ${theme.fg("error", "[invalid arg]")}` : title);
       if (script) {
         let styled = script;
-        if (receiving) {
+        if (generating) {
           if (colorLevel.kind !== "none") styled = theme.fg("muted", script);
         } else styled = input.highlight?.(script, "javascript") ?? script;
         component = stackComponents([
-          component, scriptBody(input.makeText(styled), scriptGlyph, receiving && !expanded),
+          component, scriptBody(input.makeText(styled), scriptGlyph, generating && !expanded),
         ]);
       }
       let phase: string | undefined;
       if (receiving) phase = "Receiving script from model (not running)";
+      else if (generating) phase = "Script received; waiting for model response to finish (not running)";
       else if (pending && context.isPartial) {
         if (context.executionStarted) phase = "Running script";
         else if (context.argsComplete) phase = "Waiting to run script";

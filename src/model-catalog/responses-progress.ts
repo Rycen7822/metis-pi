@@ -1,5 +1,6 @@
 import { createAssistantMessageEventStream, type Api, type AssistantMessage,
   type AssistantMessageEventStream, type Model, type Provider } from "@earendil-works/pi-ai";
+import type { BeginResponsesTrace } from "./responses-trace.ts";
 
 const TOOL_ARGUMENT_IDLE_MS = 120_000;
 
@@ -57,6 +58,7 @@ function watchProgress(
   signal: AbortSignal | undefined,
   start: (signal: AbortSignal, observe: (event: unknown) => void) => AssistantMessageEventStream,
   idleMs: number,
+  trace: ReturnType<BeginResponsesTrace>,
 ): AssistantMessageEventStream {
   const deadline = new AbortController();
   const requestSignal = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
@@ -66,7 +68,11 @@ function watchProgress(
     let partial: AssistantMessage | undefined;
     let result: AssistantMessage | undefined;
     try {
-      const source = start(requestSignal, event => { if (!requestSignal.aborted) progress.observe(event); });
+      const source = start(requestSignal, event => {
+        if (requestSignal.aborted) return;
+        trace?.observe(event);
+        progress.observe(event);
+      });
       for await (const event of source) {
         if ((event.type === "error" || event.type === "done") && deadline.signal.aborted && !signal?.aborted) {
           // Native Responses returns "aborted" for our local abort, but a
@@ -75,17 +81,22 @@ function watchProgress(
             ...(event.type === "error" ? event.error : event.message), stopReason: "error",
             errorMessage: `OpenAI Responses stream stalled: unfinished tool arguments made no progress for ${idleMs / 1000}s.`,
           };
+          trace?.finish("argument timeout");
           output.push({ type: "error", reason: "error", error });
           return;
         }
         if ("partial" in event) partial = event.partial;
-        if (event.type === "done" || event.type === "error") progress.clear();
+        if (event.type === "done" || event.type === "error") {
+          progress.clear();
+          trace?.finish(event.type === "done" ? "done" : event.reason === "aborted" ? "cancelled" : "error");
+        }
         output.push(event);
       }
       result = await source.result();
     } catch (cause) {
       deadline.abort();
       const reason = signal?.aborted ? "aborted" : "error";
+      trace?.finish(reason === "aborted" ? "cancelled" : "error");
       const error: AssistantMessage = {
         ...(partial ?? { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), content: [],
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -102,7 +113,7 @@ function watchProgress(
   return output;
 }
 
-export function withResponsesProgress(base: Provider, idleMs = TOOL_ARGUMENT_IDLE_MS): Provider {
+export function withResponsesProgress(base: Provider, idleMs = TOOL_ARGUMENT_IDLE_MS, beginTrace?: BeginResponsesTrace): Provider {
   return {
     ...base,
     streamSimple(model, context, options) {
@@ -113,7 +124,7 @@ export function withResponsesProgress(base: Provider, idleMs = TOOL_ARGUMENT_IDL
           observe(event);
           return options?.onProviderStreamEvent?.(event, requestModel);
         },
-      }), idleMs);
+      }), idleMs, beginTrace?.());
     },
   };
 }

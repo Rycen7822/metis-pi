@@ -233,6 +233,10 @@ test("encrypted reasoning and finished arguments do not impose a deadline on the
   const argsDone = f.nextRaw("response.function_call_arguments.done");
   f.send({ type: "response.function_call_arguments.done", output_index: 2, arguments: item.arguments });
   await argsDone;
+  const milestone = (await f.output.next()).value;
+  assert.equal(milestone?.type, "toolcall_delta");
+  assert.equal(milestone?.argsReceived, true, "unchanged final JSON still reports that parameters were received");
+  assert.equal(milestone?.delta, "");
   t.mock.timers.tick(121_000);
   f.send({ type: "response.output_item.done", output_index: 2, item });
   f.send({ type: "response.completed", response: { status: "completed", output: [message, reasoning, item] } });

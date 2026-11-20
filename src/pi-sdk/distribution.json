@@ -114,13 +114,17 @@
     {
       "file": "0028-reuse-stable-streaming-markdown.patch",
       "sha256": "224e34af3d3c4c0a863a8bd593e200e4ba5ed7106081fe48d4c2a34ac87a0192"
+    },
+    {
+      "file": "0029-report-received-tool-arguments.patch",
+      "sha256": "6f61708204f9d28a488f3d2412e2be74b4fb54fc2aeb59a08d79e539c132c81d"
     }
   ],
-  "patchSet": "26e031694416e5ba9bb1f23dc94bdc346b584cdb8d4eeed23f3aa96880b8d43b",
+  "patchSet": "eafcab050ed4da36683a3d8133841950c1ad7051aab1772f7327b217212a9e05",
   "archive": {
     "file": "pi-1.6.0.tgz",
-    "sha256": "dfd261c2643150ae1f22e51a19484466ed6aef48320b119622ef49497b5bfb1f",
-    "bytes": 6062321,
-    "unpackedBytes": 27073709
+    "sha256": "fee73246c1dbdb851fe8da1686330ef3ae920508928d686a68e6754cb7cb262c",
+    "bytes": 6062778,
+    "unpackedBytes": 27076148
   }
 }

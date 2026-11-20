@@ -171,7 +171,7 @@ test("native codemode restores the active branch store without reading unrelated
   assert.deepEqual(await run(), [1, true]);
 });
 
-test("generation streams a bounded source preview, then folds it without overwriting explicit expansion", (t) => {
+test("generation streams a bounded source preview, then folds it without overwriting explicit expansion", async (t) => {
   installCopyPrototypes(t);
   class StreamingHost extends ToolExecutionComponent {
     constructor(name, definition, args) {
@@ -225,6 +225,19 @@ test("generation streams a bounded source preview, then folds it without overwri
   assert.doesNotMatch(frame(), /tools\.read/);
   folded.updateArgs({ code });
   assert.match(frame(), /tools\.read/, "each arriving source update is visible before completion");
+  const mode = {
+    isInitialized: true, footer: { invalidate() {} }, programStatus: { handleEvent() {} }, ui: { requestRender() {} },
+    streamingComponent: { updateContent() {} }, pendingTools: new Map([[parent, folded]]),
+  };
+  const message = { role: "assistant", content: [{ type: "toolCall", id: parent, name: "codemode", arguments: { code } }] };
+  await InteractiveMode.prototype.handleEvent.call(mode, {
+    type: "message_update", message,
+    assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message, argsReceived: true },
+  });
+  const waiting = frame();
+  assert.match(waiting, /Script received; waiting for model response to finish \(not running\)/);
+  assert.match(waiting, /tools\.read/, "the bounded preview remains while the model response is pending");
+  assert.doesNotMatch(waiting, /Receiving script from model|Waiting to run script|Running script/);
   folded.setArgsComplete();
   assert.doesNotMatch(frame(), /JS_ONLY_MARKER/, "source folds as soon as generation ends, before execution starts");
   assert.match(frame(), /Waiting to run script/);
