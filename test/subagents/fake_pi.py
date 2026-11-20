@@ -189,8 +189,12 @@ async def run(raw_task, rid):
     if task == "CRASH":
         os._exit(9)
     if task in {"SPAWN_CHILD", "SPAWN_DETACHED_CHILD"}:
-        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
-                                start_new_session=sys.platform != 'win32')
+        options = {}
+        if task == "SPAWN_DETACHED_CHILD":
+            options = {"creationflags": subprocess.DETACHED_PROCESS} if sys.platform == "win32" else {"start_new_session": True}
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"], stdout=sys.stdout, stderr=sys.stderr, **options,
+        )
         emit(
             {
                 "type": "tool_execution_start",

@@ -17,18 +17,8 @@ import weakref
 from unittest import mock as m
 
 from paths import TEST_ROOT
+from metis_subagent import views, worker
 from metis_subagent.common import AgentError, dumps, group_members, process_identity, python_executable
-
-
-def force_kill(pid):
-    """Kill exactly one process we own; SIGKILL on POSIX, TerminateProcess here."""
-    if sys.platform == 'win32':
-        subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
-    else:
-        os.kill(pid, signal.SIGKILL)
-from metis_subagent import worker
-from metis_subagent import views
 from metis_subagent.pi_parent import PiNotifications, bind
 from metis_subagent.runtime import Runtime
 from metis_subagent.schema import TOOLS, validate_op
@@ -1541,16 +1531,16 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 events = await self.until(lambda: self.events(aid, "tool_execution_start"))
                 child = json.loads(events[0]["payload"])["args"]["pid"]
                 owner = json.loads((self.home / "agents" / aid / "owner.json").read_text())
-                force_kill(owner["pi_pid"])
-                await self.until(lambda: self.rt.store.run(self.scope, s["run_id"])["state"] == "crashed", timeout=3)
+                # On Windows os.kill with SIGTERM uses TerminateProcess, which reports errors directly.
+                os.kill(owner["pi_pid"], signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
+                # Guard exit and the daemon's final pipe drain are separate phases.
+                await self.until(lambda: w.proc.returncode is not None)
+                await self.until(lambda: aid not in self.rt.workers)
+                self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "crashed")
                 self.assertEqual(self.rt.store.run(self.scope, queued["run_id"])["state"], "cancelled")
                 self.assertEqual(self.rt.store.agent(self.scope, aid)["cleanup"], "verified")
                 self.assertIsNone(process_identity(child))
                 self.assertEqual(group_members(pgid), [])
-                # Task.done() precedes its scheduled done callbacks; wait for
-                # retirement itself, not just the tasks that trigger it.
-                await self.until(lambda: aid not in self.rt.workers, timeout=3)
-                self.assertNotIn(aid, self.rt.workers)
                 self.assertTrue(w.closed)
                 self.assertTrue(all(t.done() for t in w.tasks))
 
