@@ -83,6 +83,7 @@ function activateHarness(t, bindingsExtra = {}) {
   const pi = new Proxy({
     on: (event, handler) => handlers.set(event, (payload = {}, ctx) => {
       if (event === "session_start") currentCtx = ctx;
+      if (event === "agent_end") payload = { messages: [], ...payload };
       return handler({ type: event, ...payload }, ctx ?? currentCtx);
     }),
     getAllTools: () => [toolInfo("read")],
@@ -279,6 +280,53 @@ for (const enabled of [false, true]) {
     assert.match(diagnostic(), /outcome: pending \(attempts=0, toolErrors=0\)/, "a new interaction clears the prior verdict");
   });
 }
+
+const cybersecurityFlag = "This content was flagged for possible cybersecurity risk.";
+const openaiFailure = { role: "assistant", provider: "openai", stopReason: "error", content: [] };
+
+test("OpenAI safety errors produce one terminal error notice, even with a partial tool call", async t => {
+  const { handlers, slots } = await session(t);
+  const policyNotice = `OpenAI safety policy blocked the response: ${cybersecurityFlag}`;
+  const cases = [
+    [{ errorMessage: `${cybersecurityFlag} Additional provider text.` }, policyNotice],
+    [{ errorMessage: `Error Code fixture: ${cybersecurityFlag}` }, policyNotice],
+    [{ rawStopReason: "incomplete.content_filter" }, "OpenAI content filter stopped the response."],
+  ];
+  for (const [failure, text] of cases) {
+    handlers.get("agent_start")();
+    const message = { ...openaiFailure, ...failure, content: [{ type: "toolCall", name: "codemode", arguments: {} }] };
+    handlers.get("agent_end")({ messages: [message] });
+    assert.deepEqual(slots.notifications, [], "no notice while Pi can still recover");
+    handlers.get("agent_settled")({ aborted: false });
+    handlers.get("agent_settled")({ aborted: false });
+    assert.deepEqual(slots.notifications.splice(0), [{ level: "error", text }], "exactly one notice without raw provider text");
+  }
+});
+
+test("OpenAI safety notices do not label transport errors, other providers, or recovered attempts", async t => {
+  const { handlers, slots } = await session(t);
+  const flagged = { ...openaiFailure, errorMessage: cybersecurityFlag };
+  const end = message => handlers.get("agent_end")({ messages: [message] });
+  for (const message of [
+    { ...openaiFailure, errorMessage: "Connection error.: other side closed (UND_ERR_SOCKET)" },
+    { ...openaiFailure, errorMessage: "OpenAI Responses stream stalled: unfinished tool arguments made no progress for 120s." },
+    { ...flagged, provider: "custom" },
+    { ...flagged, stopReason: "stop", content: [{ type: "text", text: cybersecurityFlag }] },
+  ]) {
+    handlers.get("agent_start")();
+    end(message);
+    handlers.get("agent_settled")({ aborted: false });
+  }
+  handlers.get("agent_start")();
+  end(flagged);
+  handlers.get("agent_settled")({ aborted: true });
+  handlers.get("agent_start")();
+  end(flagged);
+  handlers.get("agent_start")();
+  end({ role: "assistant", provider: "openai", stopReason: "stop" });
+  handlers.get("agent_settled")({ aborted: false });
+  assert.deepEqual(slots.notifications, []);
+});
 
 for (const acceptance of ["before", "after", "unavailable"]) {
   test(`summary append ${acceptance} acceptance falls back without another append`, async t => {

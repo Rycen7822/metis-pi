@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./tool-host-adapter.ts";
 import { makeCodemodeRenderers } from "./transcript/codemode-view.ts";
@@ -76,6 +77,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   let userTimestamps: ReturnType<typeof installUserTimestamps>;
   let stopEmbeddedTranscripts: (() => void) | undefined;
   let replyEndedAt: number | undefined;
+  let pendingSafetyNotice: string | undefined;
   const replyTimes = new WeakMap<object, number>();
   const surface = createTranscriptSurface(bindings.colorLevel ?? detectColorLevel(), sourceInfoFor);
   const { transcript, codemodeViews, session } = surface;
@@ -233,6 +235,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     outputSpeed.reset();
     outcome.reset();
     replyEndedAt = undefined;
+    pendingSafetyNotice = undefined;
     // One capability snapshot per session, from the same live ctx.ui that
     // chrome.install captures below.
     const available = hostData.available;
@@ -379,6 +382,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   // Write tracking observes lifecycle events only (never tool_call/tool_result
   // content); all state is ephemeral presentation data dropped at shutdown.
   pi.on("agent_start", () => {
+    pendingSafetyNotice = undefined;
     hostData.bump();
     if (!chromeEnabled) return;
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
@@ -401,15 +405,20 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     outputSpeed.requestStart();
     requestRender();
   });
-  pi.on("agent_end", () => {
+  pi.on("agent_end", (event) => {
     hostData.bump();
     if (!chromeEnabled) return;
+    pendingSafetyNotice = openaiSafetyNotice(event.messages.findLast(message => message.role === "assistant"));
     metrics.agentEnd();
   });
-  pi.on("agent_settled", () => {
+  pi.on("agent_settled", (event, ctx) => {
+    const notice = pendingSafetyNotice;
+    pendingSafetyNotice = undefined;
     hostData.bump();
     if (!chromeEnabled) return;
     metrics.agentSettled();
+    // Only the final unsuccessful attempt gets a notice; native retry and transcript are unchanged.
+    if (notice && !event.aborted && ctx.hasUI) ctx.ui.notify(notice, "error");
   });
 
   // Model/effort switches and session-structure events refresh the snapshot
@@ -595,10 +604,20 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     ledger.reset();
     turnSummary.forgetSession();
     replyEndedAt = undefined;
+    pendingSafetyNotice = undefined;
     hostData.bind(undefined);
     await gitStopped;
   });
   return { whenReady: () => installation };
+}
+
+function openaiSafetyNotice(message: AssistantMessage | undefined): string | undefined {
+  if (message?.stopReason !== "error" || (message.provider !== "openai" && message.provider !== "openai-codex")) return;
+  // Older provider errors only expose the message, sometimes prefixed by Pi with the stream error code.
+  const detail = message.errorMessage?.replace(/^(?:Error Code [\w-]+|Codex error|[\w-]+):\s*/, "");
+  const cyberFlag = "This content was flagged for possible cybersecurity risk.";
+  if (detail?.startsWith(cyberFlag)) return `OpenAI safety policy blocked the response: ${cyberFlag}`;
+  if (message.rawStopReason === "incomplete.content_filter") return "OpenAI content filter stopped the response.";
 }
 
 function isUserMessage(message: unknown): boolean {

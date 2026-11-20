@@ -12,6 +12,7 @@
 | 缓存命中突然下降 | 用 [请求前缀诊断](#请求前缀诊断) 对照复现前后的请求。 |
 | 模型、指令或整理状态有误 | 用 `/model` 核对当前模型；用 `/dynamic-agents` 或 `/pruner status` 查看策略。 |
 | Codemode 停在 `Receiving script from model` | 脚本仍是模型输出，尚未执行；可用 Esc 中断。[OpenAI 流停滞](#openai-流停滞)说明何时会自动报错。 |
+| `OpenAI safety policy blocked the response` | OpenAI 明确报告了安全拦截，不是网络断开。见 [OpenAI 安全拦截](#openai-安全拦截)。 |
 | 工具未注册或不可用 | 用 [tool_search](features/tool-discovery.md) 核对目录；再检查 `/mcp`、`/lsp`、`/neural-search health` 或 `/metis-subagents`。 |
 
 报告问题时附上 Pi 与 Metis 版本、终端模式、复现步骤和相关诊断字段。发送前移除密钥、私人路径和会话正文。
@@ -29,6 +30,11 @@ OpenAI HTTP Responses 请求的解析事件数、参数增量字节数、最后�
 说明参数结束后没有收到正常响应终止。字节数不是网络流量，HTTP 心跳注释不算解析事件。
 默认关闭，只在内存保留事件类别、索引、计数和相对时间，不采集脚本、正文、思维链、请求 ID 或凭据；
 `/responses-stream off` 清空并停止。切分支清空；切会话或重载后重新开启。
+
+## OpenAI 安全拦截
+
+当请求最终失败，且 OpenAI 明确返回 `This content was flagged for possible cybersecurity risk.` 或 `incomplete.content_filter` 时，
+TUI 会显示单独的错误通知，无需开启 `/responses-stream`。普通拒答、网络断开、参数超时或缺失结束事件不会触发该通知。
 
 ## 请求前缀诊断
 
