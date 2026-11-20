@@ -1,8 +1,9 @@
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 299890261..8e5ce5eb8 100644
+index 1be8ab969..4d4da1903 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -521,7 +521,5 @@ export class InteractiveMode {
+@@ -571,9 +571,7 @@ export class InteractiveMode {
+ 	private anthropicSubscriptionWarningShown = false;
  
  	// Status line tracking (for mutating immediately-sequential status updates)
 -	private lastStatusSpacer: Spacer | undefined = undefined;
@@ -11,7 +12,9 @@ index 299890261..8e5ce5eb8 100644
 +	private lastStatus: { spacer: Spacer; text: ThemedText; update: (message: string) => void } | undefined;
  	private managedToolStatusStarted = false;
  
-@@ -3954,6 +3952,5 @@ export class InteractiveMode {
+ 	// Streaming message tracking
+@@ -4013,8 +4011,7 @@ export class InteractiveMode {
+ 		const message = status.type === "warning" ? `Warning: ${status.message}` : status.message;
  		const color = status.type === "warning" ? "warning" : "dim";
  		this.chatContainer.addChild(new ThemedText(() => theme.fg(color, message), 1, 0));
 -		this.lastStatusSpacer = undefined;
@@ -19,7 +22,9 @@ index 299890261..8e5ce5eb8 100644
 +		this.lastStatus = undefined;
  		this.ui.requestRender();
  	}
-@@ -3970,7 +3967,7 @@ export class InteractiveMode {
+ 
+@@ -4029,20 +4026,26 @@ export class InteractiveMode {
+ 		const last = children.length > 0 ? children[children.length - 1] : undefined;
  		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
  
 -		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
@@ -30,7 +35,7 @@ index 299890261..8e5ce5eb8 100644
 +			status.update(message);
  			this.ui.requestRender();
  			return;
-@@ -3978,10 +3975,16 @@ export class InteractiveMode {
+ 		}
  
  		const spacer = new Spacer(1);
 -		this.lastStatusMessage = message;
@@ -51,3 +56,4 @@ index 299890261..8e5ce5eb8 100644
 +		};
  		this.ui.requestRender();
  	}
+ 

@@ -83,7 +83,7 @@ async function runScenario(t, scenario = {}) {
 					const tools = [], handlers = new Map();
 					const { default: initialize } = await import(${JSON.stringify(indexUrl)});
 					initialize({ registerTool(tool) { tools.push(tool); }, registerCommand() {}, registerShortcut() {}, on(event, handler) { handlers.set(event, handler); }, appendEntry() {}, sendMessage() {} });
-					await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+					await handlers.get("session_start")({}, { sessionManager: { getBranchMetadata: () => [] } });
 					const search = tools.find(tool => tool.name === "web_search");
 					const searched = await search.execute("alpha-tool", { queries: ["test query", "second query"], provider: "openai", workflow: "none", ...scenario.options }, undefined, undefined, ctx);
 					const retrieve = tools.find(tool => tool.name === "get_search_content");

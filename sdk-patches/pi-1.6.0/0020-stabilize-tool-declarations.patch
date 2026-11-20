@@ -1,5 +1,5 @@
 diff --git a/packages/ai/src/utils/transcript.ts b/packages/ai/src/utils/transcript.ts
-index e9bec79..e43cbb5 100644
+index e9bec79f8..e43cbb54a 100644
 --- a/packages/ai/src/utils/transcript.ts
 +++ b/packages/ai/src/utils/transcript.ts
 @@ -150,18 +150,26 @@ export interface ToolStateChanges {
@@ -40,7 +40,7 @@ index e9bec79..e43cbb5 100644
  	};
  }
 diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
-index aec781d..ae8f771 100644
+index aec781d6a..ae8f771ed 100644
 --- a/packages/coding-agent/src/extensions/codemode/tool.ts
 +++ b/packages/coding-agent/src/extensions/codemode/tool.ts
 @@ -164,7 +164,9 @@ function describeGlobals(models: boolean, discovery: CodemodeDiscovery): string
@@ -55,7 +55,7 @@ index aec781d..ae8f771 100644
  	return lines.join("\n");
  }
 diff --git a/packages/coding-agent/test/tool-search.test.ts b/packages/coding-agent/test/tool-search.test.ts
-index 0af75c6..88c1df8 100644
+index 0af75c630..88c1df8da 100644
 --- a/packages/coding-agent/test/tool-search.test.ts
 +++ b/packages/coding-agent/test/tool-search.test.ts
 @@ -251,6 +251,10 @@ describe("schema references in the search text", () => {
@@ -69,3 +69,17 @@ index 0af75c6..88c1df8 100644
  	const plain = tool("read_notes", "Read notes.");
  	const github = ["a", "b", "c"].map((suffix) => tool(`mcp__github__${suffix}`, `GitHub ${suffix}.`));
  	const docs = [tool("mcp__docs__search", "Search docs."), tool("mcp__docs__long", "Long ".repeat(200))];
+diff --git a/packages/coding-agent/test/suite/agent-session-codemode.test.ts b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+index 252e2c357..6adeb7f6f 100644
+--- a/packages/coding-agent/test/suite/agent-session-codemode.test.ts
++++ b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
+@@ -999,7 +999,8 @@ describe("codemode models", () => {
+ 		const codemode = harness.session.agent.state.tools.find((tool) => tool.name === "codemode");
+ 		// The description names the models globals and points to the docs for the API.
+ 		expect(codemode?.description).toContain("`models`: classifiers and image generation");
+-		expect(codemode?.description).toContain(CODEMODE_DOCS_PATH);
++		expect(codemode?.description).toContain("docs/codemode.md");
++		expect(codemode?.description).not.toContain(CODEMODE_DOCS_PATH);
+ 
+ 		const overridden = await createHarness({ tools: [createCodemodeTool() as AgentTool] });
+ 		harnesses.push(overridden);

@@ -1396,26 +1396,18 @@ for (const exhaustWait of [false, true])
       }),
     );
     const settingsManager = SettingsManager.create(dir, dir);
-    const branch = [
-      { type: "message", id: "request", message: { role: "user" } },
-      {
-        type: "custom",
-        customType: "metis-occ-state",
-        data: { phase: "normal", work: 4, atWork: 0, atChars: 0, recentGrowth: [100, 100, 100, 100] },
-      },
-    ];
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "request", timestamp: 1 });
+    sessionManager.appendCustomEntry("metis-occ-state", {
+      phase: "normal", work: 4, atWork: 0, atChars: 0, recentGrowth: [100, 100, 100, 100],
+    });
     const hooks = new Map();
     let tokens = 239999,
       compactions = 0;
     const ctx = {
       cwd: dir,
       model: { provider: "local", id: "large-window", contextWindow: 1000000 },
-      sessionManager: {
-        getSessionId: () => "limit-test",
-        getBranch: () => branch,
-        getEntries: () => branch,
-        buildSessionProjection: () => ({ messages: [], entries: [] }),
-      },
+      sessionManager,
       getContextUsage: () => ({ tokens, contextWindow: 1000000 }),
       isIdle: () => true,
       hasPendingMessages: () => false,
@@ -1427,7 +1419,7 @@ for (const exhaustWait of [false, true])
     };
     const occ = registerOcc(
       {
-        getSettings: () => settingsManager.getSettings(),
+        getCompactionSettings: () => settingsManager.getCompactionSettings(ctx.model),
         on(name, fn) {
           hooks.set(name, fn);
         },
@@ -1438,7 +1430,7 @@ for (const exhaustWait of [false, true])
           },
         },
         appendEntry(customType, data) {
-          branch.push({ type: "custom", customType, data });
+          sessionManager.appendCustomEntry(customType, data);
         },
       },
       {},

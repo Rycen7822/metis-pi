@@ -1,149 +1,99 @@
-// Layout-level provenance: Box and Container are layout LEAVES in pi-tui
-// (only ScrollView/Stack register layout nodes), so their render output IS
-// the composited row array. Their products are alignment tables: per row, a
-// placement chain into the child product that owns the row's cells. Fidelity
-// is structural (child heights must match the host's own mouseLayout), and
-// any mismatch simply leaves rows unmapped → native extraction.
+import {
+  copySourceFor, publishRows, publishedRowsOf, registerCacheReleaser, registerProduct, type ChildPlacement, type CopySource,
+} from "./model.ts";
 
-import { copySourceFor, publishRows, publishedRowsOf, registerProduct } from "./model.ts";
-import type { ChildPlacement, CopySource } from "./model.ts";
-
-interface MouseChild {
-  component: unknown;
-  height: number;
-}
-
-interface MouseLayout {
+type Rows = readonly string[];
+interface ChildLayout {
   width: number;
-  children: MouseChild[];
+  children: readonly object[];
+  parts: readonly Rows[];
 }
+interface ContainerLike { childLines?: ChildLayout }
+interface BoxLike extends ContainerLike { paddingX: number; paddingY: number }
+type Render<Self> = (this: Self, width: number) => Rows;
 
-interface BoxLike {
-  paddingX: number;
-  paddingY: number;
-  mouseLayout?: MouseLayout;
-}
-
-interface ContainerLike {
-  mouseLayout?: MouseLayout;
-}
-
-type RenderFn<W, R> = (this: W, width: number) => R;
-
+export const ASSISTANT_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-assistant");
 export const MOUSE_REGION_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-mouse-region");
 export const BOX_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-box");
 export const CONTAINER_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-container");
 
-/** MouseRegion forwards its child's exact row array but does not inherit a
- * wrapped render method. Publish that array without adding another render or
- * changing the child's product identity. */
-export function wrapMouseRegionPrototype(prototype: object): boolean {
-  if (Object.prototype.hasOwnProperty.call(prototype, MOUSE_REGION_COPY_OWNER) || !Object.isExtensible(prototype)) return false;
+function wrapRender<Self extends object>(prototype: object, key: symbol, withCopy?: (self: Self, rows: Rows, width: number) => Rows) {
+  if (Object.hasOwn(prototype, key) || !Object.isExtensible(prototype)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
-  if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) return false;
-  const original = descriptor.value as RenderFn<object, string[]>;
-  const wrapper = function (this: object, width: number): string[] {
-    const rows = original.call(this, width);
-    try { publishRows(this, rows); } catch { /* Copy metadata must not break rendering. */ }
-    return rows;
-  };
-  Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
-  Object.defineProperty(prototype, MOUSE_REGION_COPY_OWNER, { value: true, configurable: true });
-  return true;
-}
-
-function childRowsOf(component: unknown, width: number): readonly string[] | undefined {
-  const rows = (component as { render?: (w: number) => string[] }).render?.(width);
-  return Array.isArray(rows) ? rows : undefined;
-}
-
-/** Shared alignment wrapper for Box/Container.render: children render at the
- * content width and stack vertically between padY bg rows, each prefixed by
- * colShift cells. The product is a per-row placement chain into child
- * products; any structural mismatch (child heights vs the host's own
- * mouseLayout, re-render width drift) leaves rows unmapped → native.
- *
- * Child rows come from the LAST_ROWS slot each wrapped prototype publishes —
- * the parent render pass just produced those exact arrays, so re-rendering
- * children here would be pure waste (and compounds across nested containers:
- * 2^depth leaf renders per frame). Only children of UNWRAPPED component types
- * (no slot) are re-rendered, purely to verify their height. */
-function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
-  prototype: object,
-  key: symbol,
-  /** Box: contentWidth = width − 2·paddingX, padY = paddingY, colShift = paddingX.
-   * Container: contentWidth = width, padY = 0, colShift = 0. */
-  metrics: (self: SELF, width: number) => { contentWidth: number; padY: number; colShift: number },
-): boolean {
-  if (Object.prototype.hasOwnProperty.call(prototype, key) || !Object.isExtensible(prototype)) return false;
-  const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
-  if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
-    return false;
-  }
-  const original = descriptor.value as RenderFn<SELF, string[]>;
-  const wrapper = function (this: SELF, width: number): string[] {
-    const rows = original.call(this, width);
+  if (!descriptor?.configurable || !descriptor.writable || typeof descriptor.value !== "function") return false;
+  const render: Render<Self> = descriptor.value;
+  const value: Render<Self> = function (width) {
+    let rows = render.call(this, width);
     try {
+      if (withCopy) rows = withCopy(this, rows, width);
       publishRows(this, rows);
-      if (rows.length === 0) return rows;
-      const { contentWidth, padY, colShift } = metrics(this, width);
-      const mouse = this.mouseLayout;
-      if (!mouse || mouse.width !== contentWidth) return rows;
-      let total = padY * 2;
-      for (const child of mouse.children) total += child.height;
-      if (total !== rows.length) return rows;
-      // Resolve child products first; allocate the placements table only when
-      // at least one child actually has a product (otherwise the whole array
-      // would be undefined — the same native outcome with no allocation).
-      const childProducts: (CopySource | undefined)[] = new Array(mouse.children.length);
-      let anyProduct = false;
-      for (let c = 0; c < mouse.children.length; c++) {
-        const child = mouse.children[c]!;
-        let childRows = publishedRowsOf(child.component);
-        if (!childRows) childRows = childRowsOf(child.component, contentWidth);
-        if (!childRows || childRows.length !== child.height) return rows;
-        const product = copySourceFor(childRows);
-        // A shared component may have published another occurrence at a different width.
-        if (product?.width === contentWidth) {
-          childProducts[c] = product;
-          anyProduct = true;
-        }
-      }
-      if (!anyProduct) return rows;
-      const placements: (ChildPlacement | undefined)[] = new Array(rows.length).fill(undefined);
-      let row = padY;
-      for (let c = 0; c < mouse.children.length; c++) {
-        const product = childProducts[c];
-        if (product) {
-          for (let i = 0; i < mouse.children[c]!.height; i++) {
-            placements[row + i] = { product, rowIndex: i, colShift };
-          }
-        }
-        row += mouse.children[c]!.height;
-      }
-      registerProduct(rows, { width, rows: [], children: placements });
-    } catch {
-      // Provenance must never break rendering.
-    }
+    } catch { /* Copy metadata must not break rendering. */ }
     return rows;
   };
-  Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
+  Object.defineProperty(prototype, "render", { ...descriptor, value });
   Object.defineProperty(prototype, key, { value: true, configurable: true });
   return true;
 }
 
-/** Wrap Box.prototype.render: children render at width - 2*paddingX and are
- * stacked vertically between paddingY bg rows; each child line is prefixed
- * with paddingX cells. */
-export function wrapBoxPrototype(prototype: object): boolean {
-  return wrapAlignmentPrototype<BoxLike>(prototype, BOX_COPY_OWNER,
-    (self, width) => ({ contentWidth: Math.max(1, width - self.paddingX * 2), padY: self.paddingY, colShift: self.paddingX }));
+/** A MouseRegion forwards the child's exact painted rows and their existing product. */
+export function wrapMouseRegionPrototype(prototype: object): boolean {
+  return wrapRender(prototype, MOUSE_REGION_COPY_OWNER);
 }
 
-/** Wrap Container.prototype.render: children stacked at the same width, no
- * gaps. Each fresh array gets a product using the rows its children just
- * published; unknown component types retain the conservative fallback. */
+/** Pi copies an assistant's rows to add zero-width OSC shell integration markers. */
+export function wrapAssistantPrototype(prototype: object): boolean {
+  type Assistant = { zoneLines?: { source: Rows; lines: Rows } };
+  return wrapRender<Assistant>(prototype, ASSISTANT_COPY_OWNER, ({ zoneLines }, rows) => {
+    if (zoneLines?.lines === rows) {
+      const product = copySourceFor(zoneLines.source);
+      if (product) registerProduct(rows, product);
+    }
+    return rows;
+  });
+}
+
+/** The native child layout already measured each part; never render children again to align copy. */
+function wrapAlignmentPrototype<Self extends ContainerLike>(prototype: object, key: symbol, padding: (self: Self) => [number, number]) {
+  const cache = new WeakMap<Self, { native: Rows; published: Rows; sources: readonly (CopySource | undefined)[] }>();
+  return wrapRender<Self>(prototype, key, (self, native, width) => {
+    const [padX, padY] = padding(self), layout = self.childLines;
+    const contentWidth = Math.max(1, width - padX * 2);
+    if (layout?.width !== contentWidth || layout.parts.reduce((n, part) => n + part.length, padY * 2) !== native.length) return native;
+    const { parts } = layout;
+    const sources = parts.map((part, i) => {
+      // Prefer fresh provenance only when its visible rows match the native cached part.
+      const fresh = publishedRowsOf(layout.children[i]);
+      const matches = fresh && (part === fresh || (part.length === fresh.length && part.every((line, j) => line === fresh[j])));
+      const source = copySourceFor(matches ? fresh : part);
+      return source?.width === contentWidth ? source : undefined;
+    });
+    const previous = cache.get(self);
+    if (previous?.native === native && sources.every((source, i) => source === previous.sources[i])) return previous.published;
+
+    // A visual cache hit may have a new logical source. Never overwrite an already committed frame's provenance.
+    const rows = copySourceFor(native) ? native.slice() : native;
+    if (sources.some(Boolean)) {
+      const children: (ChildPlacement | undefined)[] = new Array(rows.length).fill(undefined);
+      let offset = padY;
+      for (const [i, part] of parts.entries()) {
+        const product = sources[i];
+        if (product) for (let rowIndex = 0; rowIndex < part.length; rowIndex++) {
+          children[offset + rowIndex] = { product, rowIndex, colShift: padX };
+        }
+        offset += part.length;
+      }
+      registerProduct(rows, { width, rows: [], children });
+    }
+    if (!previous) registerCacheReleaser(self, () => { cache.delete(self); });
+    cache.set(self, { native, published: rows, sources });
+    return rows;
+  });
+}
+
+export function wrapBoxPrototype(prototype: object): boolean {
+  return wrapAlignmentPrototype<BoxLike>(prototype, BOX_COPY_OWNER, self => [self.paddingX, self.paddingY]);
+}
+
 export function wrapContainerPrototype(prototype: object): boolean {
-  return wrapAlignmentPrototype<ContainerLike>(prototype, CONTAINER_COPY_OWNER,
-    (_self, width) => ({ contentWidth: width, padY: 0, colShift: 0 }));
+  return wrapAlignmentPrototype(prototype, CONTAINER_COPY_OWNER, () => [0, 0]);
 }

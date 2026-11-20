@@ -339,7 +339,7 @@ describe("Dialog overflow — notes open on a multi-select tab (NFR-2)", () => {
 		expect(openLines.length - closedLines.length).toBe(3);
 		// NFR-2: growing midRows never desyncs the spacerRows residual math — the trailing
 		// residual-spacer tail is identical with notes closed vs open.
-		const trailingBlanks = (lines: string[]) => {
+		const trailingBlanks = (lines: readonly string[]) => {
 			let n = 0;
 			for (let i = lines.length - 1; i >= 0 && lines[i].trim() === ""; i--) n++;
 			return n;
@@ -411,7 +411,7 @@ describe("Dialog overflow — notes open on the Submit tab (NFR-2)", () => {
 		expect(openLines.join("\n")).toContain(HINT_PART_NEW_LINE);
 		// NFR-2: growing midRows never desyncs the residual-spacer math — the trailing
 		// blank tail is identical with the editor closed vs open (footer stays 5 rows).
-		const trailingBlanks = (lines: string[]) => {
+		const trailingBlanks = (lines: readonly string[]) => {
 			let n = 0;
 			for (let i = lines.length - 1; i >= 0 && lines[i].trim() === ""; i--) n++;
 			return n;

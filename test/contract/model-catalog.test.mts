@@ -12,7 +12,7 @@ import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 
 const openai = "https://api.openai.com/v1/models";
 const legacy = "https://chatgpt.com/backend-api/codex/models?client_version=0.150.0";
-const visibleSol = { slug: "gpt-6.2-sol", display_name: "Sol", visibility: "list", context_window: 500_000,
+const visibleSol = { slug: "gpt-6.2-sol", display_name: "Account catalog Sol", visibility: "list", context_window: 500_000,
   max_context_window: 872_000, input_modalities: ["text", "image", "audio"],
   supported_reasoning_levels: ["low", "high", "max", "ultra"].map(effort => ({ effort })) };
 const oauth = (access: string) => ({ type: "oauth" as const, access, refresh: "synthetic-refresh",
@@ -122,7 +122,7 @@ test("the shipped entry refreshes the two OAuth lists and restores the same acco
 
   await credentials.modify("openai", async () => oauth("other-user"));
   await restarted.refresh({ providers: ["openai"], allowNetwork: false });
-  assert.ok(!(await restarted.getAvailable("openai")).some(model => model.id === "gpt-6.2-sol"));
+  assert.notEqual(restarted.getModel("openai", visibleSol.slug)?.name, visibleSol.display_name);
   await credentials.modify("openai", async () => ({ type: "api_key", key: "synthetic-key" }));
   assert.deepEqual((await restarted.refresh({ providers: ["openai"] })).errors, new Map());
   assert.match(calls.at(-1) ?? "", /^https:\/\/pi\.dev\//);
@@ -264,7 +264,8 @@ test("offline startup can restore the saved model after Pi rotates the OAuth tok
   const scope = createHash("sha256").update(JSON.stringify([initial.access, initial.accountId])).digest("hex");
   const oldEntry = { models: [], metisAccountCatalog: { scope, models: [model], checkedAt: Date.now() } };
   await oldStore.write(provider, oldEntry);
-  assert.equal((await loadExtension(dir, credentials, oldStore)).getModel(provider, id)?.id, id, "a matching older catalog still opens offline");
+  const oldCatalog = () => loadExtension(dir, credentials, oldStore);
+  assert.equal((await oldCatalog()).getModel(provider, id)?.name, visibleSol.display_name, "matching older catalog opens offline");
 
   const auth = runtime.getProvider(provider)?.auth.oauth;
   assert.ok(auth);
@@ -276,27 +277,28 @@ test("offline startup can restore the saved model after Pi rotates the OAuth tok
   assert.match(failed.errors.get(provider)?.message ?? "", /HTTP 503/);
   assert.equal(rotate.mock.callCount(), 1, "refresh runs through Pi's actual credential broker");
   const cold = await loadExtension(dir, credentials, store);
-  assert.equal(cold.getModel(provider, id)?.id, id, "the resumed session can find its saved model");
-  assert.ok((await cold.getAvailable(provider)).some(model => model.id === id));
-  assert.equal((await loadExtension(dir, credentials, oldStore)).getModel(provider, id), undefined, "unproven legacy cache stays isolated");
+  assert.equal(cold.getModel(provider, id)?.name, visibleSol.display_name, "the resumed session can find its saved model");
+  assert.ok((await cold.getAvailable(provider)).some(model => model.id === id && model.name === visibleSol.display_name));
+  assert.notEqual((await oldCatalog()).getModel(provider, id)?.name, visibleSol.display_name, "unproven legacy cache stays isolated");
 
   const config = join(dir, "custom-models.json");
   writeFileSync(config, JSON.stringify({ providers: { openai: { baseUrl: "https://custom.invalid/v1" } } }));
-  assert.equal((await loadExtension(dir, credentials, store, config)).getModel(provider, id), undefined);
+  assert.notEqual((await loadExtension(dir, credentials, store, config)).getModel(provider, id)?.name, visibleSol.display_name);
   assert.deepEqual(tokens, ["Bearer initial-token", "Bearer rotated-token"], "offline startup never requests either catalog");
   const rotated = await credentials.read(provider);
   assert.ok(rotated?.type === "oauth");
   for (const unrelated of [{ ...rotated, accountId: "other-account" }, { ...rotated, access: "external-token" }]) {
     await credentials.modify(provider, async () => unrelated);
-    assert.ok(!(await cold.getAvailable(provider)).some(model => model.id === id));
+    assert.ok(!(await cold.getAvailable(provider)).some(model => model.name === visibleSol.display_name));
   }
   const login = cold.getProvider(provider)?.auth.oauth;
   assert.ok(login?.login);
   t.mock.method(login, "login", async () => rotated);
   await cold.login(provider, "oauth", { async prompt() { throw new Error("unexpected prompt"); }, notify() {} });
-  assert.ok(!(await cold.getAvailable(provider)).some(model => model.id === id), "a fresh login with identical tokens is still distinct");
+  assert.ok(!(await cold.getAvailable(provider)).some(model => model.name === visibleSol.display_name),
+    "a fresh login with identical tokens is still distinct");
   await cold.refresh({ providers: [provider], allowNetwork: false });
-  assert.equal(cold.getModel(provider, id), undefined);
+  assert.notEqual(cold.getModel(provider, id)?.name, visibleSol.display_name);
 });
 
 test("local Codex fills exact-slug fields without extending the account inventory", async t => {
@@ -378,7 +380,8 @@ test("pi update --models forces an enabled Metis catalog refresh through the pac
   const update = () => run(process.execPath, ["--import", pathToFileURL(hook).href, cli, "update", "--models"], {
     cwd: dir, timeout: 20_000, windowsHide: true,
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PATHEXT: process.env.PATHEXT,
-      HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PI_CODING_AGENT_DIR: agentDir },
+      // Identify this isolated process after Pi overwrites argv, so concurrent SDK retention tests can exclude it.
+      HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir, PI_CODING_AGENT_DIR: agentDir, PI_MANAGED_INSTALL_ROOT: dir },
   });
   for (let refresh = 0; refresh < 2; refresh++) {
     const { stdout } = await update();

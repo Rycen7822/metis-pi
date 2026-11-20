@@ -26,7 +26,7 @@ test("auto scrollbar keeps colored history inside both gutters on wheel input an
       // Literal reset boundaries prove that even the blank gutter cells are unpainted.
       const ansi = line.replaceAll("\x1b]8;;\x07", "");
       assert.equal(Tui.visibleWidth(line), terminal.columns);
-      assert.match(ansi, /^\x1b\[0m  \x1b\[0m\x1b\[48;2;(?:32;55;40|70;30;28)mdiff /);
+      assert.match(ansi, /^(?:\x1b\[0m)?  \x1b\[0m\x1b\[48;2;(?:32;55;40|70;30;28)mdiff /);
       assert.match(ansi, /\x1b\[0m  (?:\x1b\[0m)+$/, "right gutter starts after a reset");
     }
   };

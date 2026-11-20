@@ -30,10 +30,10 @@ index a57ca5de7..bc59f9ce4 100644
  ## Explicit text pages
  
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index b75ec76bf..956d07f24 100644
+index eb2f70a51..8d7c0cb28 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
-@@ -1597,6 +1597,7 @@ export class AgentSession {
+@@ -1601,6 +1601,7 @@ export class AgentSession {
  			name: definition.name,
  			description: definition.description,
  			parameters: definition.parameters,
@@ -42,7 +42,7 @@ index b75ec76bf..956d07f24 100644
  			exposure: this._getToolExposure(definition.name),
  			...(definition.namespace ? { namespace: definition.namespace } : {}),
 diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
-index ab74403a5..62296d5dd 100644
+index 9bb5ac5ef..80056e14a 100644
 --- a/packages/coding-agent/src/core/extensions/types.ts
 +++ b/packages/coding-agent/src/core/extensions/types.ts
 @@ -2173,10 +2173,10 @@ export type GetSessionNameHandler = () => string | undefined;

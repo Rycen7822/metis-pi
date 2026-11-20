@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/modes/interactive/components/assistant-message.ts b/packages/coding-agent/src/modes/interactive/components/assistant-message.ts
-index 7cb2960..8023c29 100644
+index 5e3f660f3..c10e550d4 100644
 --- a/packages/coding-agent/src/modes/interactive/components/assistant-message.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/assistant-message.ts
 @@ -10,7 +10,7 @@ import {
@@ -20,8 +20,8 @@ index 7cb2960..8023c29 100644
  }
  
  /**
-@@ -114,20 +116,63 @@ export class AssistantMessageComponent extends Container {
- 		return lines;
+@@ -120,20 +122,63 @@ export class AssistantMessageComponent extends Container {
+ 		return this.zoneLines.lines;
  	}
  
 +	private markdownCacheKey(): string | undefined {
@@ -91,7 +91,7 @@ index 7cb2960..8023c29 100644
  		};
  
  		// Spacers are added lazily, right before the next visible content block. This puts a blank
-@@ -147,25 +192,7 @@ export class AssistantMessageComponent extends Container {
+@@ -153,25 +198,7 @@ export class AssistantMessageComponent extends Container {
  		for (let i = 0; i < message.content.length; i++) {
  			const content = message.content[i];
  			if (content.type === "text" && content.text.trim()) {
@@ -118,7 +118,7 @@ index 7cb2960..8023c29 100644
  			} else if (content.type === "thinking") {
  				const thinkingBlocks: string[] = [];
  				for (; i < message.content.length; i++) {
-@@ -193,30 +220,7 @@ export class AssistantMessageComponent extends Container {
+@@ -199,30 +226,7 @@ export class AssistantMessageComponent extends Container {
  				const thinking = thinkingBlocks.join("\n\n");
  				const thinkingComponent = hidden
  					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
@@ -151,7 +151,7 @@ index 7cb2960..8023c29 100644
  					new MouseRegion(thinkingComponent, (event) => {
  						if (event.type !== "click" || event.button !== "left") return undefined;
 diff --git a/packages/coding-agent/src/modes/interactive/components/markdown-transform.ts b/packages/coding-agent/src/modes/interactive/components/markdown-transform.ts
-index 58bae90..7a4d0d6 100644
+index 58bae9094..7a4d0d605 100644
 --- a/packages/coding-agent/src/modes/interactive/components/markdown-transform.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/markdown-transform.ts
 @@ -1,5 +1,8 @@
@@ -164,7 +164,7 @@ index 58bae90..7a4d0d6 100644
  export function createMarkdownTransform(
  	messageType: MarkdownTransformContext["messageType"],
 diff --git a/packages/coding-agent/src/modes/interactive/components/mermaid.ts b/packages/coding-agent/src/modes/interactive/components/mermaid.ts
-index e59c2e7..0232f84 100644
+index e59c2e796..0232f84d9 100644
 --- a/packages/coding-agent/src/modes/interactive/components/mermaid.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/mermaid.ts
 @@ -3,6 +3,7 @@ import { type AnsiTheme, type MermaidArt, render, toAnsi } from "lovely-mermaid"
@@ -192,16 +192,19 @@ index e59c2e7..0232f84 100644
 +	return transform;
  }
 diff --git a/packages/coding-agent/test/assistant-message.test.ts b/packages/coding-agent/test/assistant-message.test.ts
-index 2cf3689..bc01af5 100644
+index 93146d04b..0523ca2de 100644
 --- a/packages/coding-agent/test/assistant-message.test.ts
 +++ b/packages/coding-agent/test/assistant-message.test.ts
-@@ -3,4 +3,5 @@ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
+ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
  import { afterEach, describe, expect, test, vi } from "vitest";
  import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 +import { createMermaidMarkdownTransformer } from "../src/modes/interactive/components/mermaid.ts";
  import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
  import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-@@ -67,4 +68,55 @@ describe("AssistantMessageComponent", () => {
+ import { stripAnsi } from "../src/utils/ansi.ts";
+@@ -66,6 +67,57 @@ describe("AssistantMessageComponent", () => {
+ 		initTheme("dark");
  	});
  
 +	test("reuses an unchanged streaming Mermaid diagram but respects a mode change rendered during resize", () => {
@@ -257,3 +260,4 @@ index 2cf3689..bc01af5 100644
 +
  	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
  		initTheme("dark");
+ 

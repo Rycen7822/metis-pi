@@ -38,7 +38,7 @@ function runWebSearchThenRetrieve(config) {
 			};
 			const initializeExtension = (await import(${JSON.stringify(indexUrl)})).default;
 			initializeExtension(pi);
-			await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+			await handlers.get("session_start")({}, { sessionManager: { getBranchMetadata: () => [] } });
 			const search = tools.find((t) => t.name === "web_search");
 			const result = await search.execute("t", { query: "response id", provider: "openai", workflow: "none" });
 			const text = result.content[0].text;

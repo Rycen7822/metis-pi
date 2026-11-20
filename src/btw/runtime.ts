@@ -8,13 +8,14 @@ import {
 import { type AssistantMessage, type ThinkingLevel as AiThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
-import { branchEntryReferences, readHistoryEntries } from "../session-history.ts";
+import { readHistoryEntries } from "../session-history.ts";
 import { detectColorLevel } from "../presentation/palette.ts";
 import { createTranscriptSurface } from "../appearance/transcript/surface.ts";
 import { requestEmbeddedTranscript } from "../appearance/transcript/embedded.ts";
 import { btwTools, loadBtwAccessGuard, type BtwAccess } from "./access.ts";
 import { BtwOverlay, type BtwSessionView } from "./view.ts";
 import { embeddedHost } from "../appearance/transcript/embedded-host.ts";
+import { hasMetisHostSDK } from "../pi-sdk/host.ts";
 
 const BTW_ENTRY_TYPE = "btw-thread-entry";
 const BTW_RESET_TYPE = "btw-thread-reset";
@@ -163,6 +164,7 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 
 
 export default function (pi: ExtensionAPI) {
+	if (!hasMetisHostSDK()) return;
 	let thread: BtwDetails[] = [];
 	let pending: PendingReply | null = null;
 	let overlayStatus = "Ready";
@@ -273,7 +275,7 @@ export default function (pi: ExtensionAPI) {
 		pending = null;
 		overlayStatus = "Ready";
 		overlayDraft = "";
-		const branch = branchEntryReferences(ctx.sessionManager);
+		const branch = ctx.sessionManager.getBranchMetadata();
 		const lastResetIndex = branch.findLastIndex((entry) => entry.type === "custom" && entry.customType === BTW_RESET_TYPE);
 		const active = new Set(branch.slice(lastResetIndex + 1)
 			.filter(entry => entry.type === "custom" && entry.customType === BTW_ENTRY_TYPE).map(entry => entry.id));

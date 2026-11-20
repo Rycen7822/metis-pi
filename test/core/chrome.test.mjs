@@ -122,6 +122,7 @@ test("footer disclosures are independent native mouse targets and preserve focus
   assert.doesNotMatch(frame(), /project\/harness|output-speed-accounting|turns queued/);
   Object.assign(snapshot.speed, { estimatedTokens: 3090, durationMs: 30000, sampleCount: 3 });
   snapshot.revision++;
+  tui.requestRender();
   assert.match(frame(), /gen≈\(avg3\) 103 tok\/s/, "a pooled rate is never mislabeled as the latest raw response");
   const initialViewport = scroll.viewportHeight;
   assert.ok(initialViewport > 0, "exercise the native flexible transcript viewport");
@@ -154,11 +155,13 @@ test("footer disclosures are independent native mouse targets and preserve focus
   assert.equal(goalOpens, 1, "native footer clicks open the goal without changing composer focus");
   assert.equal(editor.focused, true);
   statuses.set("goal", "Goal complete");
+  tui.requestRender();
   frame();
   const oldGoal = goalPoint();
   click(oldGoal);
   assert.equal(goalOpens, 2, "inactive goal statuses remain clickable");
   statuses.delete("goal");
+  tui.requestRender();
   frame();
   click(oldGoal);
   assert.equal(goalOpens, 2, "removed status geometry cannot open a stale goal");
@@ -167,8 +170,10 @@ test("footer disclosures are independent native mouse targets and preserve focus
 
   branch = "topic-分支";
   callbacks.forEach(cb => cb());
+  tui.requestRender();
   assert.match(frame(), /topic-分支/);
   statuses.set("context-prune", `${summary}\n8 turns queued — updated detail`);
+  tui.requestRender();
   assert.match(frame(), /8 turns queued/, "an expanded detail follows the latest status without collapsing");
   const point = arrows()[0];
   tui.handleTerminalInput(sgr(0, point.x, point.y));

@@ -1,8 +1,13 @@
-import { getPackageDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getPackageDir, VERSION, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { sdkVersion } from "../src/pi-sdk/artifact.mjs";
 import { ensureSDK } from "../src/pi-sdk/install.mjs";
 
 export default function installPiSDK(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
+    if (VERSION !== sdkVersion) {
+      ctx.ui.notify(`Metis 需要 Pi ${sdkVersion}；当前运行 ${VERSION}。请先更新并重启 Pi。`, "warning");
+      return;
+    }
     try {
       const result = await ensureSDK({ runningPackageDir: getPackageDir() });
       if (result.status === "unmanaged") {

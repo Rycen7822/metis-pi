@@ -166,7 +166,7 @@ export class ConversationDocument {
 
   private updateAssistant(row: Core.AssistantMessageComponent, message: TranscriptMessage, streaming: boolean,
     cwd = this.options.cwd): void {
-    // Pi1.5.2's row consumes content/error state, not api/model/usage. Keep the archive projection at this UI boundary;
+    // Pi's assistant row consumes content/error state, not api/model/usage. Keep the archive projection at this UI boundary;
     // do not manufacture transport facts just to satisfy the SDK's broader AssistantMessage annotation.
     const native = typeof message.content === "string"
       ? { ...message, content: [{ type: "text", text: message.content }] } : message;

@@ -34,7 +34,7 @@ export interface QuestionnaireSessionConfig {
 }
 
 export interface QuestionnaireSessionComponent {
-	render(width: number): string[];
+	render(width: number): readonly string[];
 	invalidate(): void;
 	handleInput(data: string): void;
 }

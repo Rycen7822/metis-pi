@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index ad510e794..2ec5044d1 100644
+index b283d59a5..db95d4833 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
 @@ -76,7 +76,7 @@ import {
@@ -19,7 +19,7 @@ index ad510e794..2ec5044d1 100644
  	type SessionBeforeCompactResult,
  	type SessionBeforeTreeResult,
  	type SessionBoundaryDraft,
-@@ -2923,19 +2924,50 @@ export class AgentSession {
+@@ -2938,19 +2939,50 @@ export class AgentSession {
  		this._resolveIdleWaitIfIdle();
  	}
  
@@ -82,7 +82,7 @@ index ad510e794..2ec5044d1 100644
  	 * @param customInstructions Optional instructions for the compaction summary
  	 */
  	async compact(customInstructions?: string): Promise<CompactionResult> {
-@@ -2952,12 +2984,12 @@ export class AgentSession {
+@@ -2967,12 +2999,12 @@ export class AgentSession {
  			}
  
  			const settings = this.settingsManager.getCompactionSettings(model);
@@ -99,7 +99,7 @@ index ad510e794..2ec5044d1 100644
  				if (lastEntry?.type === "compaction") {
  					throw new Error("Already compacted");
  				}
-@@ -2967,15 +2999,14 @@ export class AgentSession {
+@@ -2982,15 +3014,14 @@ export class AgentSession {
  			let extensionCompaction: CompactionResult | undefined;
  
  			if (this._extensionRunner.hasHandlers("session_before_compact")) {
@@ -117,7 +117,7 @@ index ad510e794..2ec5044d1 100644
  
  				if (result?.cancel) {
  					cancelledByExtension = true;
-@@ -3278,14 +3309,12 @@ export class AgentSession {
+@@ -3293,14 +3324,12 @@ export class AgentSession {
  				return false;
  			}
  
@@ -135,7 +135,7 @@ index ad510e794..2ec5044d1 100644
  			started = true;
  			this._emit({ type: "compaction_start", reason });
  			abortController.signal.throwIfAborted();
-@@ -3293,15 +3322,14 @@ export class AgentSession {
+@@ -3308,15 +3337,14 @@ export class AgentSession {
  			let extensionCompaction: CompactionResult | undefined;
  
  			if (this._extensionRunner.hasHandlers("session_before_compact")) {
@@ -185,7 +185,7 @@ index 8d453918f..b03590c72 100644
  
  	const firstKeptEntry = projectedEntries[cutPoint.firstKeptEntryIndex]?.sourceEntry;
 diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
-index 7fcc870a9..5f049d91d 100644
+index 9bcf4d25e..f93aac904 100644
 --- a/packages/coding-agent/src/core/extensions/types.ts
 +++ b/packages/coding-agent/src/core/extensions/types.ts
 @@ -806,6 +806,7 @@ export interface SessionBeforeForkEvent {
@@ -415,7 +415,7 @@ index 2ebe080bb..420611218 100644
  			record.kind === "header"
  				? { kind: "header" as const, entry: record.header }
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index af1f28e14..680ad5b41 100644
+index b2d06f716..46d95b56a 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -34,7 +34,7 @@ import {
@@ -438,7 +438,7 @@ index af1f28e14..680ad5b41 100644
  	| "getHeader"
  	| "getEntries"
  	| "getTree"
-@@ -1224,7 +1226,14 @@ export class SessionManager {
+@@ -1231,7 +1233,14 @@ export class SessionManager {
  	 */
  	createBranchPreview(cwd: string = this.cwd): SessionManager {
  		const preview = SessionManager.inMemory(cwd);
@@ -454,7 +454,7 @@ index af1f28e14..680ad5b41 100644
  		return preview;
  	}
  
-@@ -1283,7 +1292,19 @@ export class SessionManager {
+@@ -1290,7 +1299,19 @@ export class SessionManager {
  	 * Use buildSessionContext() to get the resolved messages for the LLM.
  	 */
  	getBranch(fromId?: string): SessionEntry[] {
@@ -475,7 +475,7 @@ index af1f28e14..680ad5b41 100644
  	}
  
  	/**
-@@ -1291,7 +1312,8 @@ export class SessionManager {
+@@ -1298,7 +1319,8 @@ export class SessionManager {
  	 * Uses tree traversal from current leaf.
  	 */
  	buildContextEntries(): SessionEntry[] {
@@ -485,7 +485,7 @@ index af1f28e14..680ad5b41 100644
  	}
  
  	/**
-@@ -1300,7 +1322,32 @@ export class SessionManager {
+@@ -1307,7 +1329,32 @@ export class SessionManager {
  	 */
  	buildSessionProjection(): SessionProjection {
  		const path = this.getBranchMetadata();

@@ -1,3 +1,4 @@
+import { hasMetisHostSDK } from "../src/pi-sdk/host.ts";
 import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
@@ -36,6 +37,7 @@ function appearanceVersion(): string {
 }
 
 export default function codexAppearance(pi: AppearanceAPI): void {
+  if (!hasMetisHostSDK()) return;
   const prototype = Pi.ToolExecutionComponent.prototype;
   const colorLevel = colorLevelOnce();
   // Resolve host Tui capabilities here; the surface painters use one color context.
@@ -110,6 +112,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
         Markdown: Tui.Markdown.prototype,
         Box: Tui.Box.prototype,
         Container: Tui.Container.prototype,
+        Assistant: Pi.AssistantMessageComponent.prototype,
         MouseRegion: Tui.MouseRegion.prototype,
       },
       fns: {

@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index 022061b..f6b915f 100644
+index c3fb5c59d..7233283ae 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
-@@ -1027,7 +1027,7 @@ export class AgentSession {
+@@ -1031,7 +1031,7 @@ export class AgentSession {
  	// =========================================================================
  
  	private _refreshFinalizedContext(): void {
@@ -11,7 +11,7 @@ index 022061b..f6b915f 100644
  		for (const entry of projection.entries) {
  			for (const message of entry.messages) this._entryIdsByMessage.set(message, entry.sourceEntry.id);
  		}
-@@ -1319,7 +1319,7 @@ export class AgentSession {
+@@ -1323,7 +1323,7 @@ export class AgentSession {
  
  		const messageIndex = this.agent.state.messages.indexOf(message);
  		if (messageIndex < 0) return undefined;
@@ -20,7 +20,7 @@ index 022061b..f6b915f 100644
  		let projectedIndex = 0;
  		for (const entry of projection.entries) {
  			for (let i = 0; i < entry.messages.length; i++) {
-@@ -4482,7 +4482,7 @@ export class AgentSession {
+@@ -4494,7 +4494,7 @@ export class AgentSession {
  		// After compaction, the last assistant usage reflects pre-compaction context size.
  		// We can only trust usage from an assistant that responded after the latest compaction.
  		// If no such assistant exists, context token count is unknown until the next LLM response.
@@ -30,7 +30,7 @@ index 022061b..f6b915f 100644
  		const latestCompaction = getLatestCompactionEntry(branch);
  
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 6720a4d..58859b6 100644
+index 73c135889..810839393 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -93,6 +93,11 @@ export type ReadonlySessionManager = Pick<
@@ -62,7 +62,7 @@ index 6720a4d..58859b6 100644
  function projectContextEntries(
  	contextEntries: SessionEntry[],
  	settings: Pick<SessionContext, "thinkingLevel" | "model">,
-@@ -1338,32 +1353,38 @@ export class SessionManager {
+@@ -1345,32 +1360,38 @@ export class SessionManager {
  	 * Build the session context (what gets sent to the LLM).
  	 * Uses tree traversal from current leaf.
  	 */
@@ -108,7 +108,7 @@ index 6720a4d..58859b6 100644
  		}
  	}
 diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
-index 4630352..e2f57de 100644
+index 463035215..e2f57de24 100644
 --- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
 +++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
 @@ -32,18 +32,33 @@ describe("persisted session body cache", () => {

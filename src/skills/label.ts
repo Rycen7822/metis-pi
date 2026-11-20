@@ -18,7 +18,7 @@ export function skillNames(block: SkillBlock | undefined): string[] {
   return names;
 }
 
-/** Missing native presentation capability leaves stock Pi 1.5.2 unchanged. */
+/** Decorate the SDK’s native skill component without replacing its renderer. */
 export function installSkillLabelNames(component: unknown): HostPatch {
   return patchHostPrototype(component, "getDisplayName", original => {
     if (typeof original !== "function") return undefined;

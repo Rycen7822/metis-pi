@@ -71,7 +71,8 @@ function restored(manager) {
 function click(component, button = "left") {
   const region = component.children[0];
   assert.ok(region instanceof Tui.MouseRegion);
-  return region.handleMouse({ type: "click", button, x: 1, y: 0, screenX: 1, screenY: 0 });
+  const width = 80;
+  return region.handleMouse({ type: "click", button, x: 1, y: 0, screenX: 1, screenY: 0, width, height: region.render(width).length });
 }
 
 // Real native handleEvent/addMessageToChat, with incidental interactive collaborators only.

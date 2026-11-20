@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index 956d07f..d470e8c 100644
+index 8d7c0cb28..1a8688400 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
 @@ -73,6 +73,7 @@ import {
@@ -10,7 +10,7 @@ index 956d07f..d470e8c 100644
  	estimateProjectedContextTokens,
  	estimateTokens,
  	generateBranchSummary,
-@@ -828,7 +829,10 @@ export class AgentSession {
+@@ -832,7 +833,10 @@ export class AgentSession {
  	private _getCompactionSettings(model = this.model) {
  		const settings = this.settingsManager.getCompactionSettings(this.model);
  		if (model && model.contextWindow > 0 && settings.enabled) {
@@ -22,7 +22,7 @@ index 956d07f..d470e8c 100644
  		}
  		return settings;
  	}
-@@ -844,14 +848,22 @@ export class AgentSession {
+@@ -848,14 +852,22 @@ export class AgentSession {
  	}
  
  	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
@@ -50,7 +50,7 @@ index 956d07f..d470e8c 100644
  	}
  
  	private _installAgentRequestProjection(): void {
-@@ -860,10 +872,15 @@ export class AgentSession {
+@@ -864,10 +876,15 @@ export class AgentSession {
  			const failed = this._failedResponse;
  			this._failedResponse = undefined;
  			const prepare = async () => {
@@ -68,7 +68,7 @@ index 956d07f..d470e8c 100644
  					// Messages declare the provider-visible loadout; context.tools keeps executable implementations.
  					tools: this.agent.state.tools.slice(),
  				};
-@@ -907,7 +924,9 @@ export class AgentSession {
+@@ -911,7 +928,9 @@ export class AgentSession {
  			}
  			// The route stands: the router already decided this request. The state entry does not change
  			// the projection.
@@ -79,7 +79,7 @@ index 956d07f..d470e8c 100644
  				await this._runAutoCompaction("threshold", false);
  				({ previous, context } = await prepare());
  			}
-@@ -4456,6 +4475,9 @@ export class AgentSession {
+@@ -4468,6 +4487,9 @@ export class AgentSession {
  		const contextWindow = model.contextWindow ?? 0;
  		if (contextWindow <= 0) return undefined;
  
@@ -90,7 +90,7 @@ index 956d07f..d470e8c 100644
  		// We can only trust usage from an assistant that responded after the latest compaction.
  		// If no such assistant exists, context token count is unknown until the next LLM response.
 diff --git a/packages/coding-agent/src/core/compaction/compaction.ts b/packages/coding-agent/src/core/compaction/compaction.ts
-index b03590c..1111119 100644
+index b03590c72..1111119ef 100644
 --- a/packages/coding-agent/src/core/compaction/compaction.ts
 +++ b/packages/coding-agent/src/core/compaction/compaction.ts
 @@ -25,11 +25,13 @@ import type {
@@ -170,7 +170,7 @@ index b03590c..1111119 100644
  	return undefined;
  }
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 680ad5b..9ca1301 100644
+index 46d95b56a..e5fb6ed55 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -388,25 +388,36 @@ export function buildSessionProjection(
@@ -221,7 +221,7 @@ index 680ad5b..9ca1301 100644
  		}),
  	);
  	return {
-@@ -1052,7 +1063,7 @@ export class SessionManager {
+@@ -1059,7 +1070,7 @@ export class SessionManager {
  		usage?: Usage,
  	): string {
  		const timestamp = new Date().toISOString();
@@ -230,7 +230,7 @@ index 680ad5b..9ca1301 100644
  		const id = generateId(this.store);
  		const entry: CompactionEntry<T> = {
  			type: "compaction",
-@@ -1350,9 +1361,30 @@ export class SessionManager {
+@@ -1357,9 +1368,30 @@ export class SessionManager {
  		}
  	}
  
@@ -264,7 +264,7 @@ index 680ad5b..9ca1301 100644
  
  	/**
 diff --git a/packages/coding-agent/test/agent-session-stats.test.ts b/packages/coding-agent/test/agent-session-stats.test.ts
-index a26346f..7d9eeeb 100644
+index a26346fc0..7d9eeeb3b 100644
 --- a/packages/coding-agent/test/agent-session-stats.test.ts
 +++ b/packages/coding-agent/test/agent-session-stats.test.ts
 @@ -98,6 +98,29 @@ function syncAgentMessages(session: AgentSession, sessionManager: SessionManager
@@ -298,7 +298,7 @@ index a26346f..7d9eeeb 100644
  		const { session, sessionManager } = await createSession();
  
 diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
-index 57977b0..ce8a51c 100644
+index 57977b072..ce8a51cf0 100644
 --- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
 +++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
 @@ -32,6 +32,36 @@ describe("persisted session body cache", () => {
@@ -339,7 +339,7 @@ index 57977b0..ce8a51c 100644
  		const seed = SessionManager.create(directory, directory);
  		seed.appendMessage(userMsg("start persistence"));
 diff --git a/packages/coding-agent/test/suite/virtual-models.test.ts b/packages/coding-agent/test/suite/virtual-models.test.ts
-index f70a513..756308f 100644
+index f70a51305..756308f8f 100644
 --- a/packages/coding-agent/test/suite/virtual-models.test.ts
 +++ b/packages/coding-agent/test/suite/virtual-models.test.ts
 @@ -298,8 +298,9 @@ describe("AgentSession virtual models", () => {

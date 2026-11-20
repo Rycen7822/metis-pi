@@ -1,3 +1,4 @@
+import { hasMetisHostSDK } from "../src/pi-sdk/host.ts";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ const guidance = "Use the subagent-delegation skill before spawning or assigning
   "Partial script success is not rolled back; do not blindly rerun mutations.";
 
 export default function subagents(pi: ExtensionAPI) {
+  if (!hasMetisHostSDK()) return;
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || (process.platform !== "linux" && process.platform !== "win32")) return;
   const agentDir = getAgentDir();
   let runtime: ReturnType<typeof runtimePackage>;

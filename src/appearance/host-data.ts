@@ -9,7 +9,6 @@
 // boundary — no unknown/as-any escape, invalid pieces degrade to "unknown".
 
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { sessionEntryFacts } from "../session-history.ts";
 
 export interface ModelSnapshot {
   id: string;
@@ -38,7 +37,6 @@ export interface HostContextLike {
   thinkingLevel?: unknown;
   getContextUsage?: () => unknown;
   sessionManager?: {
-    getEntries?: () => unknown[];
     getEntriesMetadata?: () => unknown[];
     getSessionId?: () => string;
     getLeafId?: () => string | null;
@@ -56,7 +54,7 @@ const UI_SURFACE_METHODS = [
 export type UiSurface = Pick<ExtensionUIContext, typeof UI_SURFACE_METHODS[number] | "theme">;
 export type UiAvailable = Partial<Record<typeof UI_SURFACE_METHODS[number], boolean>>;
 
-/** Prove an incremental tail is native storage only; incomplete/old hosts retain the normal refresh path. */
+/** Only verified journal-only changes can reuse the current usage sample. */
 function onlyJournalAppends(manager: HostContextLike["sessionManager"], leaf: string | null | undefined,
   previous: string | null | undefined): boolean {
   if (!manager?.getEntryMetadata || previous === undefined) return false;
@@ -227,10 +225,10 @@ export class HostData {
     return typeof this.#ctx?.cwd === "string" ? this.#ctx.cwd : "";
   }
 
-  /** Whether the live context exposes sessionManager.getEntries (footer
+  /** Whether the live context exposes session metadata (footer
    * shows Σ only when the source truly exists — no fabricated zeros). */
   get hasSessionManager(): boolean {
-    return typeof this.#ctx?.sessionManager?.getEntries === "function";
+    return typeof this.#ctx?.sessionManager?.getEntriesMetadata === "function";
   }
 
   get ui(): Record<string, unknown> {
@@ -241,9 +239,9 @@ export class HostData {
    * on init/restore/verified structure changes — never per tick/render). */
   getSessionEntries(): unknown[] {
     const manager = this.#ctx?.sessionManager;
-    if (!manager || typeof manager.getEntries !== "function") return [];
+    if (!manager || typeof manager.getEntriesMetadata !== "function") return [];
     try {
-      const entries = sessionEntryFacts(manager);
+      const entries = manager.getEntriesMetadata();
       return Array.isArray(entries) ? entries : [];
     } catch {
       return [];

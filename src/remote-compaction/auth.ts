@@ -6,10 +6,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { record, type BindingScope, type CheckpointScope, type Checkpoint } from "./checkpoint.ts";
 
-// These fields are additive in the explicit Pi OAuth-continuity patch.
-// Stock 1.5 retains the conservative token/account check.
-type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>
-  & { source?: string; oauthSessionId?: string };
+type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const safeError = (value: unknown, secrets: string[] = []): string => {
   let text = typeof value === "string" ? value : value instanceof Error ? value.message : "provider request failed";
@@ -40,17 +37,11 @@ export async function resolveRequest(ctx: ExtensionContext, model: Model<Api>, r
   const provider = ctx.modelRegistry.getProvider(model.provider);
   const auth: RequestAuth = resolvedAuth ?? await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? "Codex authentication unavailable" : safeError(auth.error));
-  // Patched Pi resolves source and ownership atomically with model headers.
-  // Stock Pi needs a second read; reject a race instead of mixing credentials.
-  const needsSource = resolvedAuth === undefined && !("source" in auth);
-  const legacy = needsSource ? await ctx.modelRegistry.getProviderAuth(model.provider) : undefined;
   if (!provider) throw new Error("Unsupported Codex API");
-  if (needsSource && legacy?.auth.apiKey !== auth.apiKey)
-    throw new Error("Codex authentication changed during resolution; retry with the current authentication");
   const account = tokenAccount(auth.apiKey), header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
   const baseScope = bindingScope(model, url, account, header);
   // The only explicit auth override is the read-only legacy Codex CLI login.
-  const scope: CheckpointScope = resolvedAuth !== undefined || (auth.source ?? legacy?.source) === "OAuth"
+  const scope: CheckpointScope = resolvedAuth !== undefined || auth.source === "OAuth"
     ? { ...baseScope, credential: "oauth" }
     : { ...baseScope, credential: "api_key", apiKeyDigest: hash(auth.apiKey) };
   const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };

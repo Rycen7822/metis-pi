@@ -1,6 +1,7 @@
 import { isMetisConfigTable, metisConfigPath, readMetisConfig } from "../configuration/store.ts";
 import { readHistoryEntries } from "../session-history.ts";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { hasMetisHostSDK } from "../pi-sdk/host.ts";
 import { DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "./policy.ts";
 
@@ -9,6 +10,7 @@ type Snapshot = { model: string; policy: Policy; replacement?: AgentFile };
 const identity = (model?: ModelIdentity) => model ? JSON.stringify([model.provider, model.id]) : "";
 
 export default function dynamicAgents(pi: ExtensionAPI): void {
+  if (!hasMetisHostSDK()) return;
   const configPath = metisConfigPath(getAgentDir());
   const configured = () => {
     try {

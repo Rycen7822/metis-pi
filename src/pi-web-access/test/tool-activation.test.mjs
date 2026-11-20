@@ -44,7 +44,8 @@ function run(config = {}, options = {}) {
 				timestamp: new Date(index).toISOString(), message,
 			}));
 			const ctx = { model, sessionManager: {
-				getBranch: () => entries, buildSessionProjection: () => buildSessionProjection(entries),
+				getBranchMetadata: () => entries, getEntry: id => entries.find(entry => entry.id === id),
+				buildSessionProjection: () => buildSessionProjection(entries),
 			} };
 			for (const event of [].concat(options.event ?? "session_start")) {
 				for (const handler of handlers.get(event) ?? []) await handler(options.eventPayload ?? {}, ctx);

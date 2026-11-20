@@ -19,8 +19,8 @@
 //   separated by hard boundaries.
 
 import {
-  BOX_COPY_OWNER, CONTAINER_COPY_OWNER, MOUSE_REGION_COPY_OWNER,
-  wrapBoxPrototype, wrapContainerPrototype, wrapMouseRegionPrototype,
+  ASSISTANT_COPY_OWNER, BOX_COPY_OWNER, CONTAINER_COPY_OWNER, MOUSE_REGION_COPY_OWNER,
+  wrapAssistantPrototype, wrapBoxPrototype, wrapContainerPrototype, wrapMouseRegionPrototype,
 } from "./structure.ts";
 import {
   MARKDOWN_COPY_OWNER, TEXT_COPY_OWNER,
@@ -38,6 +38,7 @@ export interface SelectionCopyHost {
     Markdown: object;
     Box: object;
     Container: object;
+    Assistant?: object;
     MouseRegion?: object;
   };
   fns?: {
@@ -123,6 +124,10 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
         ["box", host.prototypes.Box, BOX_COPY_OWNER, wrapBoxPrototype(host.prototypes.Box)],
         ["container", host.prototypes.Container, CONTAINER_COPY_OWNER, wrapContainerPrototype(host.prototypes.Container)],
       ];
+      if (host.prototypes.Assistant) {
+        const assistant = host.prototypes.Assistant;
+        entries.push(["assistant", assistant, ASSISTANT_COPY_OWNER, wrapAssistantPrototype(assistant)]);
+      }
       if (host.prototypes.MouseRegion) {
         entries.push(["mouse-region", host.prototypes.MouseRegion, MOUSE_REGION_COPY_OWNER, wrapMouseRegionPrototype(host.prototypes.MouseRegion)]);
       }

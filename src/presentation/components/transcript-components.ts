@@ -175,7 +175,7 @@ export class ThinkingRailComponent implements Component {
   readonly #child: TranscriptChild;
   readonly #level: ColorLevel;
   #lastWidth = -1;
-  #lastChildLines: string[] | undefined;
+  #lastChildLines: readonly string[] | undefined;
   #cache: string[] | undefined;
 
   constructor(child: TranscriptChild, level: ColorLevel) {
@@ -260,7 +260,7 @@ export class ThinkingPeekComponent implements Component {
   readonly #paintHint: (text: string) => string;
   readonly #onScroll: () => void;
   #lastWidth = -1;
-  #childLines: string[] | undefined;
+  #childLines: readonly string[] | undefined;
   #window: PeekWindow | undefined;
   #rows: string[] | undefined;
 
@@ -358,7 +358,7 @@ export class ThinkingClickableComponent implements Component {
     this.#apply = apply;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     const rows = this.#child.render(width);
     publishRows(this, rows);
     return rows;

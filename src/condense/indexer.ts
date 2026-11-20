@@ -58,7 +58,7 @@ type StoredRecord = DirectoryMetadata & ProjectionEvidence & {
   activated?: boolean;
 };
 type IndexedRecord = { record: ToolCallRecord } | StoredRecord;
-type RecordReader = ExtensionContext["sessionManager"] & { getEntryForScan?(id: string): SessionEntry | undefined };
+type RecordReader = ExtensionContext["sessionManager"];
 
 export class ToolCallIndexer {
   /** Persisted payloads stay in the session store; only legacy aliases without index entries need full fallback records. */
@@ -309,8 +309,7 @@ export class ToolCallIndexer {
     const item = this.index.get(resolved);
     if (!item) return undefined;
     if ("record" in item) return item.record;
-    const reader = this.sourceReader;
-    const entry = reader && (reader.getEntryForScan ?? reader.getEntry).call(reader, item.entryId);
+    const entry = this.sourceReader?.getEntryForScan(item.entryId);
     const record = entry?.type === "custom" && entry.customType === CUSTOM_TYPE_INDEX
       ? (entry.data as IndexEntryData)?.toolCalls?.[item.position] : undefined;
     if (!record || occKey(record.toolCallId, record.resultTimestamp) !== resolved) {

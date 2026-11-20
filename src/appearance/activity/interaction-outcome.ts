@@ -2,7 +2,7 @@
 // every business step succeed". Replaces the old sticky lastRunFailed flag,
 // where any single tool error permanently branded the whole interaction.
 //
-// Evidence model (host events only, Pi v0.85.1 semantics):
+// Evidence model (host events only):
 //   - each assistant message is one provider attempt; message_start opens it
 //     (re-announcements of an unfinished attempt do NOT open a new one);
 //   - message_end stopReason is terminal evidence: stop=completed,

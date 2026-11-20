@@ -67,7 +67,8 @@ function run({ messages = [], hook = "" } = {}) {
 				timestamp: new Date(index).toISOString(), message,
 			}));
 			const ctx = { sessionManager: {
-				getBranch: () => entries, buildSessionProjection: () => buildSessionProjection(entries),
+				getBranchMetadata: () => entries, getEntry: id => entries.find(entry => entry.id === id),
+				buildSessionProjection: () => buildSessionProjection(entries),
 			} };
 			for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start", reason: "startup" }, ctx);
 			await new Promise(resolve => setTimeout(resolve, 0));

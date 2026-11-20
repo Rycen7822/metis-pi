@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { combineSummaryMessages, retainSummaryGroup, summaryGroupMembers } from "../../src/condense/summary-refs.ts";
 import { ToolCallIndexer } from "../../src/condense/indexer.ts";
 import { occKey } from "../../src/condense/occurrence-key.ts";
@@ -63,9 +64,9 @@ test("index replay recovers individual group bodies but refuses to split legacy 
     const details = structuredClone(message.details);
     if (legacy) delete details.members;
     const indexer = new ToolCallIndexer();
-    indexer.syncSummaryEntries({ sessionManager: { getBranch: () => [
-      { id: "summary", type: "custom_message", customType: "context-prune-summary", content: message.content, details },
-    ] } });
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendCustomMessageEntry("context-prune-summary", message.content, false, details);
+    indexer.syncSummaryEntries({ sessionManager });
     assert.equal(indexer.getOwnedSummaryText([occKey("same", 20)]), legacy ? null : "Beta evidence");
     assert.equal(indexer.getOwnedSummaryText([occKey("same", 10)]), null, "one semantic member remains indivisible");
     assert.equal(indexer.getOwnedSummaryText([occKey("same", 10), occKey("other", 11)]),

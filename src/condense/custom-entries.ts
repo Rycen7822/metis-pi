@@ -2,7 +2,7 @@ import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-a
 import { readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 
 export function* customEntries(source: Iterable<SessionEntry> | ExtensionContext["sessionManager"], customType?: string) {
-  const entries = "getBranch" in source
+  const entries = "getBranchMetadata" in source
     ? readHistoryEntries(source, "branch", entry => entry.type === "custom"
       && (customType === undefined || entry.customType === customType))
     : source;

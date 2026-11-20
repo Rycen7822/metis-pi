@@ -1,4 +1,4 @@
-// Provenance-tracking replica of Pi 1.5.0's wrapTextWithAnsi. Produces the same visual rows plus, per row, the visible-text
+// Provenance-tracking replica of Pi’s wrapTextWithAnsi. Produces the same visual rows plus, per row, the visible-text
 // spans and kinds needed to reconstruct logical text on copy.
 //
 // Fidelity contract: callers diff our styled rows against the host's own

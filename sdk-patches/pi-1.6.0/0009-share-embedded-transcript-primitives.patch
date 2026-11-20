@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 2765ed7..14d5bb7 100644
+index 2765ed799..14d5bb700 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
 @@ -399,6 +399,7 @@ export {
@@ -38,8 +38,28 @@ index 2765ed7..14d5bb7 100644
  // Clipboard utilities
  export { copyToClipboard } from "./utils/clipboard.ts";
  export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
+diff --git a/packages/coding-agent/src/modes/interactive/tui-renderer.ts b/packages/coding-agent/src/modes/interactive/tui-renderer.ts
+index 6487c1c6f..64cf5de22 100644
+--- a/packages/coding-agent/src/modes/interactive/tui-renderer.ts
++++ b/packages/coding-agent/src/modes/interactive/tui-renderer.ts
+@@ -10,6 +10,7 @@ export interface InteractiveTuiOptions {
+ 	readonly showHardwareCursor: boolean;
+ 	readonly logDirectory: string;
+ 	readonly terminal?: Terminal;
++	readonly embedded?: boolean;
+ 	readonly onRightClickPaste?: () => void;
+ 	readonly fullscreenCopyOnSelect?: boolean;
+ 	readonly fullscreenWheelScrollLines?: WheelScrollLines;
+@@ -24,6 +25,7 @@ export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScr
+ 	if (options.tuiMode === "fullscreen") {
+ 		const styleSearchMatch = (text: string) => theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
+ 		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, {
++			embedded: options.embedded,
+ 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
+ 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
+ 			searchNavigationButtonStyle: (text, hovered) => (hovered ? theme.underline(text) : text),
 diff --git a/packages/tui/src/tui-alt-screen.ts b/packages/tui/src/tui-alt-screen.ts
-index 85f69ac..6ce20fb 100644
+index 885874f91..7cd6f59ae 100644
 --- a/packages/tui/src/tui-alt-screen.ts
 +++ b/packages/tui/src/tui-alt-screen.ts
 @@ -167,6 +167,8 @@ interface SearchHighlightRange {
@@ -153,7 +173,7 @@ index 85f69ac..6ce20fb 100644
  		let remaining = delta;
  		const seen = new Set<ScrollView>();
  		for (const scrollView of this.currentLayout ? getScrollViewsAt(this.currentLayout, event.x, event.y) : []) {
-@@ -1691,6 +1730,20 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+@@ -1694,6 +1733,20 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
  	}
  
  	protected override doRender(): void {
@@ -174,7 +194,7 @@ index 85f69ac..6ce20fb 100644
  		if (this.stopped || !this.altScreenActive) return;
  		const width = Math.max(1, this.terminal.columns);
  		const height = Math.max(1, this.terminal.rows);
-@@ -1708,6 +1761,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+@@ -1714,6 +1767,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
  		screen = this.applySelection(screen, nextLayout);
  		screen = this.compositeFlashes(screen, width, height);
  
@@ -182,23 +202,31 @@ index 85f69ac..6ce20fb 100644
  		const cursorPos = this.extractCursorPosition(screen, height);
  		screen = this.applyLineResets(screen).map((line) => {
  			if (isImageLine(line) || visibleWidth(line) <= width) return line;
-diff --git a/packages/coding-agent/src/modes/interactive/tui-renderer.ts b/packages/coding-agent/src/modes/interactive/tui-renderer.ts
-index 6487c1c..64cf5de 100644
---- a/packages/coding-agent/src/modes/interactive/tui-renderer.ts
-+++ b/packages/coding-agent/src/modes/interactive/tui-renderer.ts
-@@ -10,6 +10,7 @@ export interface InteractiveTuiOptions {
- 	readonly showHardwareCursor: boolean;
- 	readonly logDirectory: string;
- 	readonly terminal?: Terminal;
-+	readonly embedded?: boolean;
- 	readonly onRightClickPaste?: () => void;
- 	readonly fullscreenCopyOnSelect?: boolean;
- 	readonly fullscreenWheelScrollLines?: WheelScrollLines;
-@@ -24,6 +25,7 @@ export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScr
- 	if (options.tuiMode === "fullscreen") {
- 		const styleSearchMatch = (text: string) => theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
- 		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, {
-+			embedded: options.embedded,
- 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
- 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
- 			searchNavigationButtonStyle: (text, hovered) => (hovered ? theme.underline(text) : text),
+diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
+index f3b84d4ae..c90b56bbc 100644
+--- a/packages/tui/src/layout.ts
++++ b/packages/tui/src/layout.ts
+@@ -95,7 +95,8 @@ function renderCached(context: LayoutContext, component: Component, width: numbe
+ 	}
+ 	let lines = widths.get(safeWidth);
+ 	if (!lines) {
+-		lines = context.reusableOutput?.get(component)?.get(safeWidth) ?? component.render(safeWidth);
++		const reusable = component.viewportDependent ? undefined : context.reusableOutput?.get(component)?.get(safeWidth);
++		lines = reusable ?? component.render(safeWidth);
+ 		widths.set(safeWidth, lines);
+ 	}
+ 	return lines;
+diff --git a/packages/tui/src/tui.ts b/packages/tui/src/tui.ts
+index 66725297e..444fad075 100644
+--- a/packages/tui/src/tui.ts
++++ b/packages/tui/src/tui.ts
+@@ -129,6 +129,9 @@ export interface Component {
+ 	 */
+ 	render(width: number): readonly string[];
+ 
++	/** Re-evaluate this layout leaf on viewport-only frames, even when its width is unchanged. */
++	readonly viewportDependent?: boolean;
++
+ 	/** Optional handler for keyboard input when component has focus. */
+ 	handleInput?(data: string): void;
+ 

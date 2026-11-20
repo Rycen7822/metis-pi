@@ -2,6 +2,7 @@
 // copy-on-select: tests must explicitly supply a fake clipboard backend.
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
+import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
 import { copySourceFor } from "../../src/selection-copy/model.ts";
 import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
@@ -24,7 +25,7 @@ export function altScreen(width = 80, rows = 24, options) {
   const terminal = fakeTerminal(width, rows);
   const tui = new Tui.TuiAltScreen(terminal, undefined, undefined, options);
   assert.equal(tui.copySelection, undefined, "no system clipboard backend, even under local WSL");
-  tui.requestRender = () => {};
+  tui.requestViewRender = () => {}; // Disable timers without suppressing content invalidation.
   tui.beforeTerminalStart();
   tui.setCopyOnSelect(false);
   return { tui, terminal };
@@ -43,7 +44,7 @@ export function drag(tui, startX, startY, endX, endY) {
 /** Each test owns session resources; render wrappers remain installed for the process. */
 export function installCopyPrototypes(t, names = ["Text", "Markdown", "Box", "Container"], fns = {}) {
   const system = createSelectionCopySystem({
-    prototypes: Object.fromEntries(names.map((name) => [name, Tui[name].prototype])),
+    prototypes: { ...Object.fromEntries(names.map(name => [name, Tui[name].prototype])), Assistant: AssistantMessageComponent.prototype },
     fns: { ...Tui, renderLatex: (text, options) => Tui.renderLatex(text, options) ?? null, ...fns },
   });
   t.after(() => system.dispose());

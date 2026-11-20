@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index 2ec5044d1..b75ec76bf 100644
+index db95d4833..eb2f70a51 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
-@@ -825,13 +825,21 @@ export class AgentSession {
+@@ -829,13 +829,21 @@ export class AgentSession {
  		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
  	}
  
@@ -25,7 +25,7 @@ index 2ec5044d1..b75ec76bf 100644
  		);
  	}
  
-@@ -3150,8 +3158,7 @@ export class AgentSession {
+@@ -3165,8 +3173,7 @@ export class AgentSession {
  	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
  	 */
  	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
@@ -35,7 +35,7 @@ index 2ec5044d1..b75ec76bf 100644
  
  		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
  		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
-@@ -3164,6 +3171,7 @@ export class AgentSession {
+@@ -3179,6 +3186,7 @@ export class AgentSession {
  		const messageModel = this._modelForMessage(assistantMessage);
  		const sameModel = messageModel !== undefined;
  		const contextWindow = (messageModel ?? this.model)?.contextWindow ?? 0;
@@ -43,7 +43,7 @@ index 2ec5044d1..b75ec76bf 100644
  
  		// Skip compaction checks if this assistant message is older than the latest
  		// compaction boundary. This prevents a stale pre-compaction usage/error
-@@ -3298,7 +3306,7 @@ export class AgentSession {
+@@ -3313,7 +3321,7 @@ export class AgentSession {
  	 */
  	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
  		const model = this.model;
@@ -52,7 +52,7 @@ index 2ec5044d1..b75ec76bf 100644
  		let abortController: AbortController | undefined;
  		let started = false;
  		let fromExtension = false;
-@@ -3618,6 +3626,7 @@ export class AgentSession {
+@@ -3634,6 +3642,7 @@ export class AgentSession {
  				getActiveTools: () => this.getActiveToolNames(),
  				getAllTools: () => this.getAllTools(),
  				getSettings: () => this.settingsManager.getSettings(),
@@ -61,17 +61,18 @@ index 2ec5044d1..b75ec76bf 100644
  				refreshTools: () => this._refreshToolRegistry(),
  				getCommands,
 diff --git a/packages/coding-agent/src/core/extensions/loader.ts b/packages/coding-agent/src/core/extensions/loader.ts
-index e26aebabf..f8c16b99e 100644
+index 5e0aee1de..39f79fb9a 100644
 --- a/packages/coding-agent/src/core/extensions/loader.ts
 +++ b/packages/coding-agent/src/core/extensions/loader.ts
-@@ -382,6 +382,14 @@ function createExtensionAPI(
+@@ -384,6 +384,15 @@ function createExtensionAPI(
  			extension.toolRenderers.push(resolver);
  		},
  
 +		registerCompactionLimit({ contextWindowAbove, autoCompactTokenLimit }) {
 +			assertActive();
 +			for (const tokens of [contextWindowAbove, autoCompactTokenLimit]) {
-+				if (!Number.isSafeInteger(tokens) || tokens <= 0) throw new Error("Compaction limits must be positive integers");
++				if (!Number.isSafeInteger(tokens) || tokens <= 0)
++					throw new Error("Compaction limits must be positive integers");
 +			}
 +			extension.compactionLimit = { contextWindowAbove, autoCompactTokenLimit };
 +		},
@@ -79,13 +80,14 @@ index e26aebabf..f8c16b99e 100644
  		// Flag access - checks extension registered it, reads from runtime
  		getFlag(name: string): boolean | string | undefined {
  			assertActive();
-@@ -440,6 +448,12 @@ function createExtensionAPI(
+@@ -442,6 +451,13 @@ function createExtensionAPI(
  			return runtime.getSettings();
  		},
  
 +		getCompactionSettings() {
 +			assertActive();
-+			if (!runtime.getCompactionSettings) throw new Error("Compaction settings are not available before session binding");
++			if (!runtime.getCompactionSettings)
++				throw new Error("Compaction settings are not available before session binding");
 +			return runtime.getCompactionSettings();
 +		},
 +
@@ -93,10 +95,10 @@ index e26aebabf..f8c16b99e 100644
  			assertActive();
  			runtime.setActiveTools(toolNames);
 diff --git a/packages/coding-agent/src/core/extensions/runner.ts b/packages/coding-agent/src/core/extensions/runner.ts
-index bf2c63808..2786ab27a 100644
+index 937c93313..def2ff774 100644
 --- a/packages/coding-agent/src/core/extensions/runner.ts
 +++ b/packages/coding-agent/src/core/extensions/runner.ts
-@@ -435,6 +435,7 @@ export class ExtensionRunner {
+@@ -439,6 +439,7 @@ export class ExtensionRunner {
  		this.runtime.getActiveTools = actions.getActiveTools;
  		this.runtime.getAllTools = actions.getAllTools;
  		this.runtime.getSettings = actions.getSettings;
@@ -104,7 +106,7 @@ index bf2c63808..2786ab27a 100644
  		this.runtime.setActiveTools = actions.setActiveTools;
  		this.runtime.refreshTools = actions.refreshTools;
  		this.runtime.getCommands = actions.getCommands;
-@@ -808,6 +809,16 @@ export class ExtensionRunner {
+@@ -812,6 +813,16 @@ export class ExtensionRunner {
  		return resolve(0);
  	}
  
@@ -122,7 +124,7 @@ index bf2c63808..2786ab27a 100644
  		for (const ext of this.extensions) {
  			const renderer = ext.entryRenderers?.get(customType);
 diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
-index 5f049d91d..ab74403a5 100644
+index f93aac904..9bb5ac5ef 100644
 --- a/packages/coding-agent/src/core/extensions/types.ts
 +++ b/packages/coding-agent/src/core/extensions/types.ts
 @@ -1773,6 +1773,9 @@ export interface ExtensionAPI {
@@ -144,7 +146,7 @@ index 5f049d91d..ab74403a5 100644
  
  	/**
  	 * Set the active tools by name. Unknown and `hidden` tools are ignored. Tools with `codemode` or
-@@ -2246,6 +2251,7 @@ export interface ExtensionActions {
+@@ -2251,6 +2256,7 @@ export interface ExtensionActions {
  	getActiveTools: GetActiveToolsHandler;
  	getAllTools: GetAllToolsHandler;
  	getSettings: GetSettingsHandler;
@@ -152,7 +154,7 @@ index 5f049d91d..ab74403a5 100644
  	setActiveTools: SetActiveToolsHandler;
  	refreshTools: RefreshToolsHandler;
  	getCommands: GetCommandsHandler;
-@@ -2314,6 +2320,11 @@ export interface ExtensionCommandContextActions {
+@@ -2319,6 +2325,11 @@ export interface ExtensionCommandContextActions {
   */
  export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionActions {}
  
@@ -164,7 +166,7 @@ index 5f049d91d..ab74403a5 100644
  /** Loaded extension with all registered items. */
  export interface Extension {
  	path: string;
-@@ -2326,6 +2337,7 @@ export interface Extension {
+@@ -2331,6 +2342,7 @@ export interface Extension {
  	tools: Map<string, RegisteredTool>;
  	messageRenderers: Map<string, MessageRenderer>;
  	toolRenderers?: ToolRendererResolver[];

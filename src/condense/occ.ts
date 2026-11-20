@@ -3,14 +3,13 @@ import {
   calculateContextTokens,
   compact,
   estimateTokens,
-  SettingsManager,
   type ExtensionAPI,
   type ExtensionContext,
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
 import { shouldDeferToNative } from "./budget.ts";
-import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
+import { readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 import { customEntries } from "./custom-entries.ts";
 import { createCompactionOutputLimiter } from "./output-limit.ts";
 import { hasUnavailableNestedEvidence, isProtected } from "./protected.ts";
@@ -106,7 +105,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (!settings) {
         // Resolve Pi's live effective settings with its own defaults/model overrides,
         // without reopening global/project files or discarding in-memory overrides.
-        settings = pi.getCompactionSettings?.() ?? SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(ctx.model);
+        settings = pi.getCompactionSettings?.();
+        if (!settings) return undefined;
       }
       const limit = window - settings.reserveTokens;
       return settings.enabled && limit > 0 ? { limit, buffer: Math.max(1024, limit * 0.05) } : undefined;
@@ -127,7 +127,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   };
   // Identity is not authority: retain the latest accepted user entry ID even
   // after a split-turn compaction or context edit hides its visible contribution.
-  const externalRequest = (ctx: ExtensionContext) => branchEntryReferences(ctx.sessionManager)
+  const externalRequest = (ctx: ExtensionContext) => ctx.sessionManager.getBranchMetadata()
     .filter(e => e.type === "message" && e.message.role === "user").at(-1)?.id;
 
   function decide(ctx: ExtensionContext): boolean {
@@ -491,11 +491,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     const model = ctx.model;
     const remote: CodexCompactionOwnerRequest = {
       model: model && { api: model.api, provider: model.provider },
-      sessionManager: {
-        buildSessionProjection: () => ctx.sessionManager.buildSessionProjection(),
-        getBranch: () => ctx.sessionManager.getBranch(),
-        getBranchMetadata: () => branchEntryReferences(ctx.sessionManager),
-      },
+      sessionManager: ctx.sessionManager,
       owns: false,
     };
     pi.events.emit(METIS_EVENTS.codexCompactionOwner, remote);

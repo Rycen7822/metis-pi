@@ -35,7 +35,7 @@ index fcac8a035..a57ca5de7 100644
  
  Use one script until the next step needs model judgment or user approval. Keep deterministic pagination,
 diff --git a/packages/coding-agent/src/core/tools/read.ts b/packages/coding-agent/src/core/tools/read.ts
-index dd123cb4e..8b3753148 100644
+index f3fb60494..01135bb89 100644
 --- a/packages/coding-agent/src/core/tools/read.ts
 +++ b/packages/coding-agent/src/core/tools/read.ts
 @@ -14,7 +14,15 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
@@ -87,7 +87,7 @@ index dd123cb4e..8b3753148 100644
  	Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String(), note: Type.String() }),
  ]);
  
-@@ -243,11 +265,22 @@ export function createReadToolDefinition(
+@@ -244,11 +266,22 @@ export function createReadToolDefinition(
  		constrainedSampling: { type: "json_schema", strict: "prefer" },
  		async execute(
  			_toolCallId,
@@ -112,15 +112,15 @@ index dd123cb4e..8b3753148 100644
  				(resolve, reject) => {
  					if (signal?.aborted) {
 @@ -273,6 +306,8 @@ export function createReadToolDefinition(
+ 							let content: (TextContent | ImageContent)[];
  							let details: ReadToolDetails | undefined;
- 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
  							if (mimeType) {
 +								if (format === "page")
 +									throw new Error("Page reads support text files only; use the default format for images.");
  								// Read image as binary.
  								const buffer = await ops.readFile(absolutePath);
  								const processed = await processImage(buffer, mimeType, {
-@@ -313,11 +348,35 @@ export function createReadToolDefinition(
+@@ -314,11 +349,35 @@ export function createReadToolDefinition(
  								// A user-specified limit is honored before truncation.
  								const userLimitedLines =
  									limit === undefined ? undefined : Math.min(startLine + limit, totalFileLines) - startLine;
@@ -157,7 +157,7 @@ index dd123cb4e..8b3753148 100644
  									details = { truncation };
  								} else if (truncation.truncated) {
  									// Truncation occurred. Build an actionable continuation notice.
-@@ -327,7 +386,9 @@ export function createReadToolDefinition(
+@@ -328,7 +387,9 @@ export function createReadToolDefinition(
  									if (truncation.truncatedBy === "lines") {
  										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
  									} else {
@@ -168,7 +168,7 @@ index dd123cb4e..8b3753148 100644
  									}
  									details = { truncation };
  								} else if (userLimitedLines !== undefined && startLine + userLimitedLines < totalFileLines) {
-@@ -351,7 +412,7 @@ export function createReadToolDefinition(
+@@ -352,7 +413,7 @@ export function createReadToolDefinition(
  						}
  					})();
  				},
@@ -178,10 +178,10 @@ index dd123cb4e..8b3753148 100644
  		...readRenderers,
  	};
 diff --git a/packages/coding-agent/test/read-streaming.test.ts b/packages/coding-agent/test/read-streaming.test.ts
-index 0a8883e4f..210d39ec4 100644
+index 8cea01c24..a3911a89a 100644
 --- a/packages/coding-agent/test/read-streaming.test.ts
 +++ b/packages/coding-agent/test/read-streaming.test.ts
-@@ -146,6 +146,97 @@ describe("read tool streaming", () => {
+@@ -158,6 +158,97 @@ describe("read tool streaming", () => {
  	const tempDir = mkdtempSync(join(tmpdir(), "pi-read-streaming-"));
  	afterAll(() => rmSync(tempDir, { recursive: true, force: true }));
  

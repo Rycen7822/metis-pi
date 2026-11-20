@@ -38,7 +38,7 @@ async function fixture(t, { coder = true, coderPath = "builtin:codemode", coderA
   };
   const ctx = {
     cwd: dir, mode: "rpc", isIdle: () => false, hasPendingMessages: () => false,
-    sessionManager: { getSessionId: () => dir, getBranch: () => [] },
+    sessionManager: { getSessionId: () => dir, getBranchMetadata: () => [] },
     ui: { notify: (text, level) => warnings.push({ text, level }), setStatus() {}, setWidget() {} },
   };
   async function emit(name, event = {}) {

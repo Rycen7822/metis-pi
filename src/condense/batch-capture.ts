@@ -1,6 +1,6 @@
 import { captureFusionResult } from "./fusion.ts";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences, type SessionEntryReference } from "../session-history.ts";
+import { readHistoryEntries, reverseBranchEntryReferences, type SessionEntryReference } from "../session-history.ts";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { isConversationBoundary } from "./chain-detector.ts";
@@ -32,9 +32,6 @@ export function projectBranchMessages(branch: any[]): any[] {
 export function createLiveTurnCounter() {
   let head: SessionEntryReference | undefined, count = 0;
   return (manager: ExtensionContext["sessionManager"]): number => {
-    if (!manager.getEntryMetadata) {
-      return manager.getBranch().filter(entry => entry.type === "message" && entry.message.role === "assistant").length - 1;
-    }
     let next: SessionEntryReference | undefined, added = 0;
     for (const entry of reverseBranchEntryReferences(manager)) {
       next ??= entry;
@@ -59,7 +56,7 @@ export function activeCaptureSource(manager: ExtensionContext["sessionManager"],
   const selected = new Map(entries.filter(entry => entry.messages.length && isProjectableEntry(entry.sourceEntry))
     .map(entry => [entry.sourceEntry.id, entry.sourceEntry]));
   const wanted = new Set(selected.keys());
-  const references = branchEntryReferences(manager);
+  const references = manager.getBranchMetadata();
   const turnIndices = new Map<string, number>(), chainGroups = new Map<string, string>();
   let assistant: string | undefined, turn = 0;
   for (const entry of references) {
@@ -80,11 +77,10 @@ export function activeCaptureSource(manager: ExtensionContext["sessionManager"],
     if (message.role === "assistant") chainGroups.set(entry.sourceEntry.id, group);
   }
   return { turnIndices, chainGroups, readBranch: () => {
-    const read = manager.getEntryForScan ?? manager.getEntry;
     const branch: SessionEntry[] = [];
     for (const entry of references) {
       if (!wanted.has(entry.id)) continue;
-      const body = selected.get(entry.id) ?? read.call(manager, entry.id);
+      const body = selected.get(entry.id) ?? manager.getEntryForScan(entry.id);
       if (!body) throw new Error(`Capture source unavailable: ${entry.id}`);
       branch.push(body);
     }

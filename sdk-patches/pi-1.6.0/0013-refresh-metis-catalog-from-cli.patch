@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
-index ff5f42b..8f2ee5b 100644
+index ff5f42b39..8f2ee5bd1 100644
 --- a/packages/coding-agent/src/core/model-runtime.ts
 +++ b/packages/coding-agent/src/core/model-runtime.ts
 @@ -925,7 +925,8 @@ export class ModelRuntime implements Models {
@@ -22,7 +22,7 @@ index ff5f42b..8f2ee5b 100644
  
  	/**
 diff --git a/packages/coding-agent/src/package-manager-cli.ts b/packages/coding-agent/src/package-manager-cli.ts
-index a49230a..be32719 100644
+index 3b1095912..9b07858a8 100644
 --- a/packages/coding-agent/src/package-manager-cli.ts
 +++ b/packages/coding-agent/src/package-manager-cli.ts
 @@ -31,6 +31,7 @@ import {
@@ -33,7 +33,7 @@ index a49230a..be32719 100644
  import type { InlineExtension } from "./core/extensions/types.ts";
  import { ModelRuntime } from "./core/model-runtime.ts";
  import { DefaultPackageManager, isOfflineModeEnabled } from "./core/package-manager.ts";
-@@ -608,7 +609,47 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
+@@ -622,7 +623,47 @@ function updateTargetIncludesExtensions(target: UpdateTarget): boolean {
  	return target.type === "all" || target.type === "extensions";
  }
  
@@ -82,7 +82,7 @@ index a49230a..be32719 100644
  	const controller = new AbortController();
  	const timeout = setTimeout(() => controller.abort(), 15_000);
  	try {
-@@ -618,6 +659,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
+@@ -632,6 +673,7 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
  			allowModelNetwork: false,
  			signal: controller.signal,
  		});
@@ -90,7 +90,7 @@ index a49230a..be32719 100644
  		const result = await modelRuntime.refresh({
  			allowNetwork: true,
  			force: true,
-@@ -1010,7 +1052,7 @@ export async function handlePackageCommand(
+@@ -1024,7 +1066,7 @@ export async function handlePackageCommand(
  
  	if (options.command === "update" && options.updateTarget?.type === "models") {
  		try {

@@ -1,13 +1,13 @@
+import { hasMetisHostSDK } from "../src/pi-sdk/host.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createCondenseRuntime } from "../src/condense/runtime.ts";
 
 /** Defer registration until Pi can identify an already installed recovery tool. */
 export default function condense(pi: ExtensionAPI): void {
+  if (!hasMetisHostSDK()) return;
   let runtime: ReturnType<typeof createCondenseRuntime> | undefined;
 
   pi.on("session_start", async (_event, ctx) => {
-    // Clear the legacy standalone usage line when reloading older code.
-    ctx.ui.setStatus("metis-condense-cost", undefined);
     if (!runtime) {
       if (pi.getAllTools().some((tool) => tool.name === "context_tree_query")) {
         ctx.ui.notify(

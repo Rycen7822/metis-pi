@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/core/extensions/loader.ts b/packages/coding-agent/src/core/extensions/loader.ts
-index f8c16b99e..17092fd7e 100644
+index 39f79fb9a..c8f8a3cd2 100644
 --- a/packages/coding-agent/src/core/extensions/loader.ts
 +++ b/packages/coding-agent/src/core/extensions/loader.ts
-@@ -276,23 +276,28 @@ function createExtensionAPI(
+@@ -278,23 +278,28 @@ function createExtensionAPI(
  		loadingUnsubscribers.length = 0;
  	};
  
@@ -47,7 +47,7 @@ index f8c16b99e..17092fd7e 100644
  
  		registerTool(tool: ToolDefinition): void {
 diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
-index 62296d5dd..80e613d78 100644
+index 80056e14a..52e3b33aa 100644
 --- a/packages/coding-agent/src/core/extensions/types.ts
 +++ b/packages/coding-agent/src/core/extensions/types.ts
 @@ -925,6 +925,14 @@ export interface BeforeProviderRequestEvent {

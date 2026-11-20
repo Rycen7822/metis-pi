@@ -1,7 +1,7 @@
 // The ONLY persistence exception granted to this extension: a UI-metrics
 // CustomEntry appended via the public pi.appendEntry() and rendered by
 // pi.registerEntryRenderer(). Custom entries never enter LLM context
-// (verified v0.85.1); session JSONL is never edited directly, existing entries
+// Session JSONL is never edited directly, and existing entries
 // are never rewritten, message bodies are never stored.
 //
 // schemaVersion 2 records the RUNTIME verdict: outcome + terminal evidence +

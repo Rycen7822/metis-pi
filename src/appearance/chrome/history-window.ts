@@ -7,7 +7,8 @@ export const HISTORY_ROW_BUDGET = 5000;
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
 
 interface Component {
-  render(width: number): string[];
+  render(width: number): readonly string[];
+  readonly viewportDependent?: boolean;
   invalidate?(): void;
   handleMouse?(event: Record<string, any>): unknown;
   children?: Component[];
@@ -47,8 +48,8 @@ type Edge = "start" | "end";
 type Cursor = { component: Component; row: number };
 type PageBoundary = Cursor & { direction: "backward" | "forward" };
 type RowOrigin = Cursor & { height: number; index: number };
-type CachedBlock = { rows?: string[]; offset: number; height: number; unwatch: () => void };
-type WindowPiece = { component: Component; rows: string[]; index: number; offset: number; height: number; start: number; end: number };
+type CachedBlock = { rows?: readonly string[]; offset: number; height: number; unwatch: () => void };
+type WindowPiece = { component: Component; rows: readonly string[]; index: number; offset: number; height: number; start: number; end: number };
 
 function descendants(root: Component): Component[] {
   const result: Component[] = [];
@@ -101,6 +102,7 @@ function observe(component: object, methods: readonly string[], changed: () => v
 /** A bounded display window, not a second session store. Source components
  * remain owned by Pi; only derived rows and mirrors are evicted. */
 export class HistoryWindow {
+  readonly viewportDependent = true;
   #blocks = new Map<Component, CachedBlock>();
   #structureRestores: (() => void)[] = [];
   #structureChecks: (() => boolean)[] = [];
@@ -128,6 +130,7 @@ export class HistoryWindow {
   readonly holdSelection: () => boolean;
   readonly promptHost: HistoryWindowHost | undefined;
   readonly promptHeader: Component = {
+    viewportDependent: true,
     render: width => {
       this.#promptWidth = width;
       this.#promptRows = [this.#pinned && this.#promptPreview ? this.#paintPrompt(this.#promptPreview.summary) : ""];
@@ -209,7 +212,7 @@ export class HistoryWindow {
     this.#evictedBlocks++;
   }
 
-  #retainFragment(component: Component, rows: string[], offset: number, height: number): void {
+  #retainFragment(component: Component, rows: readonly string[], offset: number, height: number): void {
     this.#evict(component);
     Object.assign(this.#watch(component), { rows, offset, height });
   }
@@ -605,7 +608,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     };
     const restoreStart = observe(scroll, ["scrollToStart"], () => jump("start"));
     const restoreEnd = observe(scroll, ["scrollToEnd"], () => jump("end"));
-    // Pi 1.5's private pointer helper supplies actual scrollbar provenance.
+    // Pi's private pointer helper supplies actual scrollbar provenance.
     // Generic scrollTo also serves prompt/search navigation and stays native.
     // An absent/locked helper disables only this optional enhancement.
     const pointerName = "scrollScrollbarToPointer";

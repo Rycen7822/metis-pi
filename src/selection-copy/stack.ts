@@ -4,7 +4,7 @@ import { copySourceFor, publishRows, registerProduct, releaseCopyCache, type Chi
 
 /** Preserve native mouse geometry and resolve copy from the displayed child rows. */
 export function stackComponents(components: Component[]): Component {
-  const container = new Container(), snapshots: string[][] = [];
+  const container = new Container(), snapshots: (readonly string[])[] = [];
   for (const [index, component] of components.entries()) {
     const region = new MouseRegion(component, () => undefined);
     region.render = width => {

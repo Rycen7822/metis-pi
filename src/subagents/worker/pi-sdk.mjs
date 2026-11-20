@@ -65,8 +65,7 @@ for (const key of Object.keys(args)) {
 if (args.messages.length || args.fileArgs.length || args.diagnostics.some((d) => d.type === "error")) {
   throw new Error("Managed child accepts tasks only through its protocol; invalid Pi command arguments");
 }
-// An explicit managed allowlist bounds MCP registration too, even on SDKs
-// that otherwise retain unnamed MCP tools for codemode/tool_search. Defaults
+// An explicit managed allowlist also bounds MCP tools Pi retains for codemode/tool_search. Defaults
 // and modifier-only selections are not allowlists; leave those to the host.
 if (args.tools?.length && !args.tools.every((name) => /^[+-]/.test(name))) {
   const ambiguous = args.tools.find((name) => name.includes("*") && !name.startsWith("mcp__"));

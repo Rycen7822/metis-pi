@@ -1,5 +1,5 @@
 diff --git a/packages/ai/src/api/lazy.ts b/packages/ai/src/api/lazy.ts
-index fad2116..f4ba635 100644
+index fad21164e..f4ba635c6 100644
 --- a/packages/ai/src/api/lazy.ts
 +++ b/packages/ai/src/api/lazy.ts
 @@ -67,9 +67,10 @@ export function lazyStream(
@@ -15,7 +15,7 @@ index fad2116..f4ba635 100644
  	const observeResult = (result: AssistantMessage | undefined): void => {
  		if (observedResult) return;
 diff --git a/packages/ai/src/models.ts b/packages/ai/src/models.ts
-index 99189b0..e5f73b6 100644
+index 99189b05e..e5f73b68c 100644
 --- a/packages/ai/src/models.ts
 +++ b/packages/ai/src/models.ts
 @@ -933,20 +933,7 @@ class ModelsImpl implements MutableModels {
@@ -92,7 +92,7 @@ index 99189b0..e5f73b6 100644
  
  	streamDeferred(
 diff --git a/packages/ai/src/utils/event-stream.ts b/packages/ai/src/utils/event-stream.ts
-index eb968c0..480c4c1 100644
+index eb968c016..480c4c100 100644
 --- a/packages/ai/src/utils/event-stream.ts
 +++ b/packages/ai/src/utils/event-stream.ts
 @@ -31,10 +31,16 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
@@ -147,7 +147,7 @@ index eb968c0..480c4c1 100644
  	}
  
 diff --git a/packages/ai/test/event-stream.test.ts b/packages/ai/test/event-stream.test.ts
-index 39d3248..b57ae9c 100644
+index 39d324873..b57ae9cc9 100644
 --- a/packages/ai/test/event-stream.test.ts
 +++ b/packages/ai/test/event-stream.test.ts
 @@ -4,6 +4,19 @@ import { AssistantMessageEventStream, EventStream } from "../src/utils/event-str

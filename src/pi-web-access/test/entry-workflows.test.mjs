@@ -65,7 +65,8 @@ function instance(branch = []) {
 	};
 	const ctx = {
 		hasUI: true, modelRegistry: { getAvailable() { return []; }, find() {} },
-		scopedModels: [], sessionManager: { getBranch() { return branch; } },
+		scopedModels: [],
+		sessionManager: { getBranchMetadata: () => branch.map((entry, id) => ({ ...entry, id })), getEntry: id => branch[id] },
 		cwd: process.cwd(), isProjectTrusted() { return true; },
 		ui: { notify: show, setWidget() {}, theme: { fg(_name, text) { return text; } } },
 	};

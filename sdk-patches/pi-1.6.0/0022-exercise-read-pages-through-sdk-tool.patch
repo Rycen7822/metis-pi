@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/test/read-streaming.test.ts b/packages/coding-agent/test/read-streaming.test.ts
-index 210d39e..feb11f9 100644
+index a3911a89a..51f301768 100644
 --- a/packages/coding-agent/test/read-streaming.test.ts
 +++ b/packages/coding-agent/test/read-streaming.test.ts
-@@ -5,7 +5,7 @@ import { join, resolve } from "path";
+@@ -6,7 +6,7 @@ import { join, resolve } from "path";
  import { pathToFileURL } from "url";
  import type * as util from "util";
  import { afterAll, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,7 @@ index 210d39e..feb11f9 100644
  import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "../src/core/tools/truncate.ts";
  
  // Runs when the read tool decodes a chunk: the file is open and partly read, so a test can change it mid-read.
-@@ -152,20 +152,28 @@ describe("read tool streaming", () => {
+@@ -164,20 +164,28 @@ describe("read tool streaming", () => {
  			"a\nb\n",
  			"a\n\nb",
  			"\uFEFFé\n😀\r\n字\n",
@@ -43,7 +43,7 @@ index 210d39e..feb11f9 100644
  					expect(page.totalLines).toBe(text.split("\n").length);
  					expect(page.lines).toBeGreaterThan(0);
  					expect(Buffer.byteLength(page.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-@@ -176,7 +184,7 @@ describe("read tool streaming", () => {
+@@ -188,7 +196,7 @@ describe("read tool streaming", () => {
  						break;
  					}
  					expect(page.nextOffset).toBeGreaterThan(offset);
@@ -52,7 +52,7 @@ index 210d39e..feb11f9 100644
  					offset = page.nextOffset;
  				}
  				expect(count).toBe(text.split("\n").length);
-@@ -186,7 +194,7 @@ describe("read tool streaming", () => {
+@@ -198,7 +206,7 @@ describe("read tool streaming", () => {
  	});
  
  	it("separates requested pagination from safety truncation and never mixes notices into raw text", async () => {
@@ -61,7 +61,7 @@ index 210d39e..feb11f9 100644
  		expect((await tool.execute("page", { path: FILE_PATH, format: "page", limit: 2 })).structuredContent).toEqual({
  			type: "text_page",
  			text: "a\nb",
-@@ -203,7 +211,7 @@ describe("read tool streaming", () => {
+@@ -215,7 +223,7 @@ describe("read tool streaming", () => {
  	});
  
  	it("rejects invalid page ranges, unsupported images and lines that cannot make progress", async () => {
@@ -70,7 +70,7 @@ index 210d39e..feb11f9 100644
  		for (const range of [
  			{},
  			{ limit: 0 },
-@@ -217,13 +225,13 @@ describe("read tool streaming", () => {
+@@ -229,13 +237,13 @@ describe("read tool streaming", () => {
  				/positive integer/,
  			);
  		}

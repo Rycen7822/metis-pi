@@ -234,7 +234,7 @@ const SCRIPT_PREVIEW_ROWS = 12; // Follow the latest generated visual rows witho
 
 /** Frame streaming or explicitly opened source without copying the rail or a hidden preview prefix. */
 function scriptBody(component: Component, glyph: string, preview: boolean): Component {
-  let cache: { width: number; source: string[]; rows: string[] } | undefined;
+  let cache: { width: number; source: readonly string[]; rows: string[] } | undefined;
   return {
     render(width) {
       // Leave room for a wide glyph when the available width is very narrow.

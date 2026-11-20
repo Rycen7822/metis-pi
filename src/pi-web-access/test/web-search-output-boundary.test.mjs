@@ -42,7 +42,7 @@ function runBoundaryScenario(config = {}) {
 			};
 			const initializeExtension = (await import(${JSON.stringify(indexUrl)})).default;
 			initializeExtension(pi);
-			await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+			await handlers.get("session_start")({}, { sessionManager: { getBranchMetadata: () => [] } });
 			const search = tools.find(tool => tool.name === "web_search");
 			const result = await search.execute("call", { queries: ["first", "second"] });
 			const retrieve = tools.find(tool => tool.name === "get_search_content");
@@ -102,7 +102,7 @@ function runIncludeContentScenario(mode) {
 			const pi = { registerTool(tool) { tools.push(tool); }, registerCommand() {}, registerShortcut() {}, on(event, handler) { handlers.set(event, handler); }, appendEntry() {}, sendMessage() {} };
 			const initializeExtension = (await import(${JSON.stringify(indexUrl)})).default;
 			initializeExtension(pi);
-			await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+			await handlers.get("session_start")({}, { sessionManager: { getBranchMetadata: () => [] } });
 			const result = await tools.find(tool => tool.name === "web_search").execute("call", { query: "content guidance", includeContent: true });
 			console.log(JSON.stringify({ text: result.content[0].text, details: result.details }));
 			`,
@@ -244,7 +244,7 @@ test(`background includeContent preserves pages and ${mode} availability`, () =>
 			const extractionFixture = injectExtractFetch(globalThis.fetch);
 			const initializeExtension = (await import(${JSON.stringify(indexUrl)})).default;
 			initializeExtension(pi);
-			await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+			await handlers.get("session_start")({}, { sessionManager: { getBranchMetadata: () => [] } });
 			const result = await tools.find(tool => tool.name === "web_search").execute("call", { query: "partial content", includeContent: true });
 			const message = await notified;
 			const retrieve = tools.find(tool => tool.name === "get_search_content");

@@ -22,6 +22,7 @@ import type { GoalPopup } from "./view.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { hasMetisHostSDK } from "../pi-sdk/host.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
@@ -319,6 +320,7 @@ function goalStopStatusForAssistantError(message: { errorMessage?: string } | un
 }
 
 export default function goalExtension(pi: ExtensionAPI) {
+  if (!hasMetisHostSDK()) return;
   pi.registerMessageRenderer(CONTINUATION_MESSAGE_TYPE, (_message, { outputPad }, theme) =>
     new Text(theme.fg("muted", "Goal continue"), outputPad, 0));
   pi.registerMessageRenderer(EDIT_AUTHORIZATION_MESSAGE_TYPE, (_message, { outputPad }, theme) =>

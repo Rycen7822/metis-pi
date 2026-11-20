@@ -66,7 +66,8 @@ function registerTools() {
 function restoreEntry(data) {
 	restoreFromSession({
 		sessionManager: {
-			getBranch: () => [{ type: "custom", customType: "web-search-results", data }],
+			getBranchMetadata: () => [{ id: "result", type: "custom", customType: "web-search-results" }],
+			getEntry: id => id === "result" ? { type: "custom", customType: "web-search-results", data } : undefined,
 		},
 	});
 }

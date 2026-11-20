@@ -71,7 +71,7 @@ index f8c91d5de..2fad08e78 100644
  		const entries: SessionEntryMetadata[] = [];
  		for (const record of this.records) if (record.kind === "entry") entries.push(record.metadata);
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 5c6aea6f5..4278deaf3 100644
+index 366f1ca1c..7abbda030 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -37,6 +37,7 @@ import {
@@ -100,7 +100,7 @@ index 5c6aea6f5..4278deaf3 100644
  function createSessionId(): string {
  	return uuidv7();
  }
-@@ -1322,9 +1331,23 @@ export class SessionManager {
+@@ -1329,9 +1338,23 @@ export class SessionManager {
  	 * Orphaned entries (broken parent chain) are also returned as roots.
  	 */
  	getTree(): SessionTreeNode[] {
@@ -127,7 +127,7 @@ index 5c6aea6f5..4278deaf3 100644
  
  		// Create nodes with resolved labels
  		for (const entry of entries) {
-@@ -1351,7 +1374,7 @@ export class SessionManager {
+@@ -1358,7 +1381,7 @@ export class SessionManager {
  
  		// Sort children by timestamp (oldest first, newest at bottom)
  		// Use iterative approach to avoid stack overflow on deep trees
@@ -726,10 +726,10 @@ index 1a9d4b1f1..82482b254 100644
  	}
  
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 5b091f408..9b93b7c9c 100644
+index cb06be959..1be8ab969 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -5749,11 +5749,11 @@ export class InteractiveMode {
+@@ -5805,11 +5805,11 @@ export class InteractiveMode {
  	}
  
  	private showTreeSelector(initialSelectedId?: string): void {
@@ -743,7 +743,7 @@ index 5b091f408..9b93b7c9c 100644
  			this.showStatus("No entries in session");
  			return;
  		}
-@@ -5880,6 +5880,7 @@ export class InteractiveMode {
+@@ -5936,6 +5936,7 @@ export class InteractiveMode {
  				},
  				initialSelectedId,
  				initialFilterMode,

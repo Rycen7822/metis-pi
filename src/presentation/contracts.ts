@@ -68,7 +68,7 @@ export interface ViewContext {
 }
 export interface ViewOptions { readonly expanded?: boolean; readonly isPartial?: boolean }
 export interface Component {
-  render(width: number): string[];
+  render(width: number): readonly string[];
   invalidate(): void;
   handleMouse?: import("@earendil-works/pi-tui").Component["handleMouse"];
 }

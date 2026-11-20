@@ -352,7 +352,7 @@ test("one footer keeps ordered host metadata fresh across frames, events and ses
     ...eventBus, emit(name, data) { goalOpens.push(name); eventBus.emit(name, data); },
   } } }, {
     model: { id: "test-model", provider: "openai-codex", contextWindow: 1_000_000 }, thinkingLevel: "high",
-    sessionManager: { getEntries: historyEntries, getSessionId: () => "footer-session", getLeafId: () => leaf },
+    sessionManager: { getEntriesMetadata: historyEntries, getSessionId: () => "footer-session", getLeafId: () => leaf },
     getContextUsage() { reads += 1; return usage; },
   });
   assert.equal(widgetByKey(slots, "metis-pi:composer-meta"), undefined, "metadata belongs below the editor");
@@ -511,7 +511,7 @@ test("one interaction wires usage previews, body generation speed, Working and t
       registerEntryRenderer: (type, renderer) => registered.push({ type, renderer }),
       registerCommand() {},
     },
-  }, { sessionManager: { getEntries: () => [] } });
+  }, { sessionManager: { getEntriesMetadata: () => [] } });
   assert.deepEqual(registered.map(({ type }) => type), ["metis-pi:interaction-summary:v1"]);
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
@@ -685,7 +685,7 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   const entries = [], appended = [];
   const { handlers, footer: makeFooter, ctx } = await session(t, { api: {
     appendEntry: (type, data) => appended.push({ type, data }), registerEntryRenderer() {}, registerCommand() {},
-  } }, { sessionManager: { getEntries: () => entries } });
+  } }, { sessionManager: { getEntriesMetadata: () => entries } });
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
   const usage = (input, output, cacheRead) => ({ input, output, cacheRead, cacheWrite: 0, reasoning: 0 });

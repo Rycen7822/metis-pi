@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-export const sdkVersion = "1.5.2";
-export const sdkUpstreamCommit = "b4afdddf44e059c67ccf5097e5317d913521b470";
+export const sdkVersion = "1.6.0";
+export const sdkUpstreamCommit = "faac585884ae2c013a6b1400f3e9e77f10b34bac";
 export const sdkPatchCount = 28;
 export const sdkPackages = ["ai", "tui", "codemode", "coding-agent"];
+export const sdkRuntimePackages = [...sdkPackages, "agent-core", "mcp", "schema", "telemetry"];
 export const sdkFiles = ["coding-agent/docs/codemode.md"];
 export const digest = value => createHash("sha256").update(value).digest("hex");
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);

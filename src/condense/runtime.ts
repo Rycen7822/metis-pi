@@ -95,13 +95,11 @@ type PreparedProjection = {
   source?: { capture: ReturnType<typeof createSourceSnapshotter>; snapshot: string | undefined };
 };
 
-/** Load cooperatively where supported; publication guards below remain synchronous and content-based. */
+/** Let the TUI read cooperatively; publication guards remain synchronous and content-based. */
 async function readProjection(ctx: ExtensionContext, signal = ctx.signal): Promise<NativeProjection> {
-  const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
-    buildSessionProjectionAsync?: ExtensionContext["sessionManager"]["buildSessionProjectionAsync"];
-  };
+  const manager = ctx.sessionManager;
   signal?.throwIfAborted();
-  if (ctx.mode !== "tui" || typeof manager.buildSessionProjectionAsync !== "function") return manager.buildSessionProjection(MESSAGE_SOURCES);
+  if (ctx.mode !== "tui") return manager.buildSessionProjection(MESSAGE_SOURCES);
   const leaf = manager.getLeafId();
   const projection = await manager.buildSessionProjectionAsync({ ...MESSAGE_SOURCES, signal });
   signal?.throwIfAborted();

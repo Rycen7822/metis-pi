@@ -238,7 +238,7 @@ index 000000000..15c061586
 +	});
 +});
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index d8a486f13..ad510e794 100644
+index dc4b05a31..b283d59a5 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
 @@ -122,8 +122,8 @@ import type { ModelRuntime } from "./model-runtime.ts";

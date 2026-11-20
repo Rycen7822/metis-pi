@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
 import * as tar from "tar";
-import { readDistribution, sdkPackages, sdkFiles, verifiedArchive } from "./artifact.mjs";
+import { readDistribution, sdkPackages, sdkRuntimePackages, sdkFiles, verifiedArchive } from "./artifact.mjs";
 import { pruneReleases } from "./retention.mjs";
 
 const run = promisify(execFile);
@@ -31,7 +31,7 @@ async function sourceRelease(root, version) {
   if (!validRelease(name)) throw new Error("Invalid managed Pi release name");
   const directory = path.join(root, "releases", name);
   if (await realpath(directory) !== directory) throw new Error("Managed Pi releases must use physical directories");
-  for (const pkg of sdkPackages) {
+  for (const pkg of sdkRuntimePackages) {
     const manifest = await regularJSON(path.join(packageDir(directory, pkg), "package.json"));
     if (manifest.name !== `@earendil-works/pi-${pkg}` || manifest.version !== version)
       throw new Error(`Metis SDK requires Pi ${version}; found ${manifest.name} ${manifest.version}`);

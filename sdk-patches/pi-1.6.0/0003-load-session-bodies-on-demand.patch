@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index f76247d56..d8a486f13 100644
+index 6a89c5b41..dc4b05a31 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
 @@ -123,13 +123,13 @@ import { NestedToolCallRunner } from "./nested-tool-calls.ts";
@@ -18,7 +18,7 @@ index f76247d56..d8a486f13 100644
  	type SessionProjection,
  } from "./session-manager.ts";
  import {
-@@ -656,7 +656,7 @@ export class AgentSession {
+@@ -660,7 +660,7 @@ export class AgentSession {
  
  	/** Record the live model and thinking level on the current branch, so a resume restores them. */
  	private _recordSelection(): void {
@@ -27,7 +27,7 @@ index f76247d56..d8a486f13 100644
  		this._recordModelSelection(branch);
  		this._recordThinkingLevel(branch);
  	}
-@@ -668,7 +668,7 @@ export class AgentSession {
+@@ -672,7 +672,7 @@ export class AgentSession {
  	 * the branch holds a virtual one; checking a physical selection against responses would record
  	 * it on every prompt while `prepareRequest` redirects to another model.
  	 */
@@ -36,7 +36,7 @@ index f76247d56..d8a486f13 100644
  		const model = this.model;
  		if (!model) return;
  		const getModel = (provider: string, modelId: string) => this._modelRuntime.getModel(provider, modelId);
-@@ -685,7 +685,7 @@ export class AgentSession {
+@@ -689,7 +689,7 @@ export class AgentSession {
  	 * level is compared after clamping to the current model, so a level clamped on resume (e.g.
  	 * `xhigh` running as `high`) is not recorded over the requested one.
  	 */
@@ -45,7 +45,7 @@ index f76247d56..d8a486f13 100644
  		const recorded = branch.findLast((entry) => entry.type === "thinking_level_change");
  		if (!recorded) return;
  		const recordedLevel = recorded.thinkingLevel as ThinkingLevel;
-@@ -828,7 +828,7 @@ export class AgentSession {
+@@ -832,7 +832,7 @@ export class AgentSession {
  	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
  		if (model.contextWindow <= 0) return false;
  		return shouldCompact(
@@ -54,7 +54,7 @@ index f76247d56..d8a486f13 100644
  			model.contextWindow,
  			this.settingsManager.getCompactionSettings(this.model),
  		);
-@@ -879,7 +879,9 @@ export class AgentSession {
+@@ -883,7 +883,9 @@ export class AgentSession {
  			// start a turn; extension messages can follow them, e.g. from before_agent_start.
  			const lastResponse = context.messages.findLastIndex((message) => message.role === "assistant");
  			const userTurn = context.messages.slice(lastResponse + 1).some((message) => message.role === "user");
@@ -65,7 +65,7 @@ index f76247d56..d8a486f13 100644
  			const route = await this._modelRuntime.resolveModel(model, convertToLlm(context.messages), {
  				reason: failed ? "retry" : userTurn ? "user" : "continuation",
  				thinkingLevel,
-@@ -1026,7 +1028,7 @@ export class AgentSession {
+@@ -1030,7 +1032,7 @@ export class AgentSession {
  				case "compaction": {
  					const tokensBefore = estimateProjectedContextTokens(
  						manager.buildSessionProjection(),
@@ -74,7 +74,7 @@ index f76247d56..d8a486f13 100644
  					).tokens;
  					entryId = manager.appendCompaction(
  						draft.summary,
-@@ -1046,9 +1048,7 @@ export class AgentSession {
+@@ -1050,9 +1052,7 @@ export class AgentSession {
  	}
  
  	private _createBoundaryPreviewManager(drafts: SessionBoundaryDraft[]): SessionManager {
@@ -85,7 +85,7 @@ index f76247d56..d8a486f13 100644
  		this._applyBoundaryDrafts(manager, drafts);
  		return manager;
  	}
-@@ -1061,7 +1061,9 @@ export class AgentSession {
+@@ -1065,7 +1065,9 @@ export class AgentSession {
  		drafts: SessionBoundaryDraft[],
  		boundary: "turn_end" | "agent_before_settle",
  	): BoundaryContextPreview {
@@ -96,7 +96,7 @@ index f76247d56..d8a486f13 100644
  		const pendingMessages = this._getPendingBoundaryMessages();
  		const llmMessages = convertToLlm(projection.messages);
  		const finalRole = llmMessages[llmMessages.length - 1]?.role;
-@@ -1281,8 +1283,10 @@ export class AgentSession {
+@@ -1285,8 +1287,10 @@ export class AgentSession {
  	private _findPersistedMessageEntryId(message: AgentMessage): string | undefined {
  		const mapped = this._entryIdsByMessage.get(message);
  		if (mapped) return mapped;
@@ -109,7 +109,7 @@ index f76247d56..d8a486f13 100644
  		}
  
  		const messageIndex = this.agent.state.messages.indexOf(message);
-@@ -1486,7 +1490,10 @@ export class AgentSession {
+@@ -1490,7 +1494,10 @@ export class AgentSession {
  		}
  
  		this._extensionRunner.invalidate(
@@ -121,8 +121,8 @@ index f76247d56..d8a486f13 100644
  		);
  		this._disconnectFromAgent();
  		this._eventListeners = [];
-@@ -1901,9 +1908,11 @@ export class AgentSession {
- 		this._pendingToolNames.clear();
+@@ -1910,9 +1917,11 @@ export class AgentSession {
+ 		this._restoredToolNames.clear();
  		// All system messages on the branch, including those before a compaction. Compaction snapshots
  		// are derived from these, so replaying them gives the current loadout.
 -		const systemMessages = this.sessionManager
@@ -136,7 +136,7 @@ index f76247d56..d8a486f13 100644
  		// No recorded loadout: keep the current tools.
  		if (systemMessages.length === 0) return;
  		// Tools the branch ever added or removed. Removed tools stay inactive.
-@@ -2874,6 +2883,15 @@ export class AgentSession {
+@@ -2889,6 +2898,15 @@ export class AgentSession {
  	// Compaction
  	// =========================================================================
  
@@ -152,7 +152,7 @@ index f76247d56..d8a486f13 100644
  	/** Generate Pi's built-in compaction summary for manual and automatic compaction. */
  	private async _runDefaultCompaction(
  		preparation: CompactionPreparation,
-@@ -3004,14 +3022,11 @@ export class AgentSession {
+@@ -3019,14 +3037,11 @@ export class AgentSession {
  			}
  
  			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
@@ -168,7 +168,7 @@ index f76247d56..d8a486f13 100644
  
  			if (this._extensionRunner && savedCompactionEntry) {
  				await this._extensionRunner.emit({
-@@ -3122,7 +3137,7 @@ export class AgentSession {
+@@ -3137,7 +3152,7 @@ export class AgentSession {
  		// Skip compaction checks if this assistant message is older than the latest
  		// compaction boundary. This prevents a stale pre-compaction usage/error
  		// from retriggering compaction on the first prompt after compaction.
@@ -177,7 +177,7 @@ index f76247d56..d8a486f13 100644
  		const assistantIsFromBeforeCompaction =
  			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
  		if (assistantIsFromBeforeCompaction) {
-@@ -3141,19 +3156,20 @@ export class AgentSession {
+@@ -3156,19 +3171,20 @@ export class AgentSession {
  					entry.sourceEntry.id === assistantEntryId &&
  					entry.messages.some((message) => message.role === "assistant"),
  			);
@@ -205,7 +205,7 @@ index f76247d56..d8a486f13 100644
  		const assistantUsageMatchesProjection = assistantIsProjected && !hasPostAssistantContextEdit;
  		const explicitOverflow = assistantMessage.stopReason === "error" && isContextOverflow(assistantMessage);
  		const contextOverflow =
-@@ -3330,14 +3346,11 @@ export class AgentSession {
+@@ -3345,14 +3361,11 @@ export class AgentSession {
  			abortController.signal.throwIfAborted();
  
  			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
@@ -221,7 +221,7 @@ index f76247d56..d8a486f13 100644
  
  			if (this._extensionRunner && savedCompactionEntry) {
  				await this._extensionRunner.emit({
-@@ -4326,12 +4339,12 @@ export class AgentSession {
+@@ -4338,12 +4351,12 @@ export class AgentSession {
  	 * Get all user messages from session for fork selector.
  	 */
  	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
@@ -238,7 +238,7 @@ index f76247d56..d8a486f13 100644
  
  			const text = contentText(entry.message.content, "");
  			if (text) {
-@@ -4355,7 +4368,7 @@ export class AgentSession {
+@@ -4367,7 +4380,7 @@ export class AgentSession {
  		let toolCalls = 0;
  		const usageTotals = createUsageTotals();
  
@@ -247,7 +247,7 @@ index f76247d56..d8a486f13 100644
  			if (entry.type === "usage") {
  				addUsageToTotals(usageTotals, entry.usage);
  			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-@@ -4373,11 +4386,8 @@ export class AgentSession {
+@@ -4385,11 +4398,8 @@ export class AgentSession {
  				}
  			} else if (message.role === "assistant") {
  				assistantMessages++;
@@ -261,7 +261,7 @@ index f76247d56..d8a486f13 100644
  			}
  		}
  
-@@ -4412,7 +4422,7 @@ export class AgentSession {
+@@ -4424,7 +4434,7 @@ export class AgentSession {
  		// We can only trust usage from an assistant that responded after the latest compaction.
  		// If no such assistant exists, context token count is unknown until the next LLM response.
  		const projection = this.sessionManager.buildSessionProjection();
@@ -986,7 +986,7 @@ index 000000000..660c3cb85
 +	return count;
 +}
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 20b6edaa9..5c6aea6f5 100644
+index 2420f8a72..366f1ca1c 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -1,14 +1,10 @@
@@ -1400,7 +1400,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	return entries;
  }
  
-@@ -992,8 +775,7 @@ export class SessionManager {
+@@ -999,8 +782,7 @@ export class SessionManager {
  	private cwd: string;
  	private persist: boolean;
  	private flushed: boolean = false;
@@ -1410,7 +1410,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	private labelsById: Map<string, string> = new Map();
  	private labelTimestampsById: Map<string, string> = new Map();
  	private leafId: string | null = null;
-@@ -1016,7 +798,7 @@ export class SessionManager {
+@@ -1023,7 +805,7 @@ export class SessionManager {
  		if (sessionFile) {
  			this._setSessionFile(sessionFile, preloadedFileEntries);
  		} else if (preloadedFileEntries?.length) {
@@ -1419,7 +1419,7 @@ index 20b6edaa9..5c6aea6f5 100644
  		} else {
  			this.newSession(newSessionOptions);
  		}
-@@ -1030,11 +812,13 @@ export class SessionManager {
+@@ -1037,11 +819,13 @@ export class SessionManager {
  	private _setSessionFile(sessionFile: string, preloadedFileEntries?: FileEntry[]): void {
  		this.sessionFile = resolvePath(sessionFile);
  		if (existsSync(this.sessionFile)) {
@@ -1435,7 +1435,7 @@ index 20b6edaa9..5c6aea6f5 100644
  				const explicitPath = this.sessionFile;
  				if (statSync(explicitPath).size > 0) {
  					throw new Error(`Session file is not a valid ${APP_NAME} session: ${explicitPath}`);
-@@ -1046,7 +830,7 @@ export class SessionManager {
+@@ -1053,7 +837,7 @@ export class SessionManager {
  				return;
  			}
  
@@ -1444,7 +1444,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			this.flushed = true;
  		} else {
  			const explicitPath = this.sessionFile;
-@@ -1069,8 +853,7 @@ export class SessionManager {
+@@ -1076,8 +860,7 @@ export class SessionManager {
  			cwd: this.cwd,
  			parentSession: options?.parentSession,
  		};
@@ -1454,7 +1454,7 @@ index 20b6edaa9..5c6aea6f5 100644
  		this.labelsById.clear();
  		this.labelTimestampsById.clear();
  		this.leafId = null;
-@@ -1083,32 +866,29 @@ export class SessionManager {
+@@ -1090,32 +873,29 @@ export class SessionManager {
  		return this.sessionFile;
  	}
  
@@ -1496,7 +1496,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			this.leafId = entry.id;
  			if (entry.type === "label") {
  				if (entry.label) {
-@@ -1124,14 +904,7 @@ export class SessionManager {
+@@ -1131,14 +911,7 @@ export class SessionManager {
  
  	private _rewriteFile(): void {
  		if (!this.persist || !this.sessionFile) return;
@@ -1512,7 +1512,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	isPersisted(): boolean {
-@@ -1165,42 +938,32 @@ export class SessionManager {
+@@ -1172,42 +945,32 @@ export class SessionManager {
  	 * first assistant reply) keeps the prompt on disk if the first turn never completes (#10000).
  	 */
  	private _hasConversation(): boolean {
@@ -1562,7 +1562,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			this.leafId = previousLeafId;
  			throw error;
  		}
-@@ -1215,7 +978,7 @@ export class SessionManager {
+@@ -1222,7 +985,7 @@ export class SessionManager {
  	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
  		const entry: SessionMessageEntry = {
  			type: "message",
@@ -1571,7 +1571,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			message,
-@@ -1228,7 +991,7 @@ export class SessionManager {
+@@ -1235,7 +998,7 @@ export class SessionManager {
  	appendThinkingLevelChange(thinkingLevel: string): string {
  		const entry: ThinkingLevelChangeEntry = {
  			type: "thinking_level_change",
@@ -1580,7 +1580,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			thinkingLevel,
-@@ -1241,7 +1004,7 @@ export class SessionManager {
+@@ -1248,7 +1011,7 @@ export class SessionManager {
  	appendModelChange(provider: string, modelId: string): string {
  		const entry: ModelChangeEntry = {
  			type: "model_change",
@@ -1589,7 +1589,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			provider,
-@@ -1255,7 +1018,7 @@ export class SessionManager {
+@@ -1262,7 +1025,7 @@ export class SessionManager {
  	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
  		const entry: UsageEntry = {
  			type: "usage",
@@ -1598,7 +1598,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			kind,
-@@ -1279,7 +1042,7 @@ export class SessionManager {
+@@ -1286,7 +1049,7 @@ export class SessionManager {
  	): string {
  		const timestamp = new Date().toISOString();
  		const systemMessage = getCurrentSystemMessage(this.buildSessionProjection().messages);
@@ -1607,7 +1607,7 @@ index 20b6edaa9..5c6aea6f5 100644
  		const entry: CompactionEntry<T> = {
  			type: "compaction",
  			id,
-@@ -1303,7 +1066,7 @@ export class SessionManager {
+@@ -1310,7 +1073,7 @@ export class SessionManager {
  			type: "custom",
  			customType,
  			data,
@@ -1616,7 +1616,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  		};
-@@ -1316,7 +1079,7 @@ export class SessionManager {
+@@ -1323,7 +1086,7 @@ export class SessionManager {
  		const sanitizedName = name.replace(/[\r\n]+/g, " ").trim();
  		const entry: SessionInfoEntry = {
  			type: "session_info",
@@ -1625,7 +1625,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			name: sanitizedName,
-@@ -1327,16 +1090,9 @@ export class SessionManager {
+@@ -1334,16 +1097,9 @@ export class SessionManager {
  
  	/** Get the current session name from the latest session_info entry, if any. */
  	getSessionName(): string | undefined {
@@ -1645,7 +1645,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	/**
-@@ -1359,7 +1115,7 @@ export class SessionManager {
+@@ -1366,7 +1122,7 @@ export class SessionManager {
  			content,
  			display,
  			details,
@@ -1654,7 +1654,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  		};
-@@ -1377,9 +1133,9 @@ export class SessionManager {
+@@ -1384,9 +1140,9 @@ export class SessionManager {
  		) {
  			throw new Error("Context edit replacement must be null or contain string/array content");
  		}
@@ -1666,7 +1666,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			throw new Error(`Entry ${targetId} is not on the active branch`);
  		}
  		const editable =
-@@ -1398,7 +1154,7 @@ export class SessionManager {
+@@ -1405,7 +1161,7 @@ export class SessionManager {
  				: replacement;
  		const entry: ContextEditEntry = {
  			type: "context_edit",
@@ -1675,7 +1675,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			targetId,
-@@ -1417,24 +1173,59 @@ export class SessionManager {
+@@ -1424,24 +1180,59 @@ export class SessionManager {
  	}
  
  	getLeafEntry(): SessionEntry | undefined {
@@ -1744,7 +1744,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	/**
-@@ -1450,12 +1241,12 @@ export class SessionManager {
+@@ -1457,12 +1248,12 @@ export class SessionManager {
  	 * Pass undefined or empty string to clear the label.
  	 */
  	appendLabelChange(targetId: string, label: string | undefined): string {
@@ -1759,7 +1759,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: this.leafId,
  			timestamp: new Date().toISOString(),
  			targetId,
-@@ -1478,15 +1269,7 @@ export class SessionManager {
+@@ -1485,15 +1276,7 @@ export class SessionManager {
  	 * Use buildSessionContext() to get the resolved messages for the LLM.
  	 */
  	getBranch(fromId?: string): SessionEntry[] {
@@ -1776,7 +1776,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	/**
-@@ -1494,7 +1277,7 @@ export class SessionManager {
+@@ -1501,7 +1284,7 @@ export class SessionManager {
  	 * Uses tree traversal from current leaf.
  	 */
  	buildContextEntries(): SessionEntry[] {
@@ -1785,7 +1785,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	/**
-@@ -1502,7 +1285,8 @@ export class SessionManager {
+@@ -1509,7 +1292,8 @@ export class SessionManager {
  	 * Uses tree traversal from current leaf.
  	 */
  	buildSessionProjection(): SessionProjection {
@@ -1795,7 +1795,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	buildSessionContext(): SessionContext {
-@@ -1514,22 +1298,22 @@ export class SessionManager {
+@@ -1521,22 +1305,22 @@ export class SessionManager {
  	 * Get session header.
  	 */
  	getHeader(): SessionHeader | null {
@@ -1823,7 +1823,7 @@ index 20b6edaa9..5c6aea6f5 100644
  	}
  
  	/**
-@@ -1588,7 +1372,7 @@ export class SessionManager {
+@@ -1595,7 +1379,7 @@ export class SessionManager {
  	 * are not modified or deleted.
  	 */
  	branch(branchFromId: string): void {
@@ -1832,7 +1832,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			throw new Error(`Entry ${branchFromId} not found`);
  		}
  		this.leafId = branchFromId;
-@@ -1615,14 +1399,14 @@ export class SessionManager {
+@@ -1622,14 +1406,14 @@ export class SessionManager {
  		fromHook?: boolean,
  		usage?: Usage,
  	): string {
@@ -1849,7 +1849,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			parentId: branchFromId,
  			timestamp: new Date().toISOString(),
  			fromId,
-@@ -1720,7 +1504,7 @@ export class SessionManager {
+@@ -1727,7 +1511,7 @@ export class SessionManager {
  				parentId = labelEntry.id;
  			}
  
@@ -1858,7 +1858,7 @@ index 20b6edaa9..5c6aea6f5 100644
  			this.sessionId = newSessionId;
  			this.sessionFile = newSessionFile;
  			this._buildIndex();
-@@ -1752,7 +1536,7 @@ export class SessionManager {
+@@ -1759,7 +1543,7 @@ export class SessionManager {
  			labelEntries.push(labelEntry);
  			parentId = labelEntry.id;
  		}
@@ -2197,7 +2197,7 @@ index 8bb7b353e..361662450 100644
  				addUsageToTotals(usageTotals, entry.usage);
  			} else if (entry.type === "message" && entry.message.role === "assistant") {
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 2459c10df..5b091f408 100644
+index e8b8552b1..cb06be959 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 @@ -72,7 +72,7 @@ import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-ser
@@ -2209,7 +2209,7 @@ index 2459c10df..5b091f408 100644
  	computeCacheWaste,
  	detectCacheMiss,
  } from "../../core/cache-stats.ts";
-@@ -322,11 +322,15 @@ export function formatCrashExtensionHint(extensionMatches: readonly string[] | u
+@@ -328,11 +328,15 @@ export function formatCrashExtensionHint(extensionMatches: readonly string[] | u
  				: `${quoted.slice(0, -1).join(", ")}, and ${quoted[quoted.length - 1]}`;
  	const noun = matches.length === 1 ? "extension" : "extensions";
  	const pronoun = matches.length === 1 ? "it" : "them";
@@ -2227,7 +2227,7 @@ index 2459c10df..5b091f408 100644
  
  function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
  	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
-@@ -1868,12 +1872,11 @@ export class InteractiveMode {
+@@ -1920,12 +1924,11 @@ export class InteractiveMode {
  			);
  			for (const d of collisionList) {
  				if (d.collision) {
@@ -2244,7 +2244,7 @@ index 2459c10df..5b091f408 100644
  				}
  			}
  		}
-@@ -3581,7 +3584,7 @@ export class InteractiveMode {
+@@ -3649,7 +3652,7 @@ export class InteractiveMode {
  					const entries = this.sessionManager.buildContextEntries();
  					if (entries[0]?.id !== event.entry.id) break;
  					this.chatContainer.clear();
@@ -2253,7 +2253,7 @@ index 2459c10df..5b091f408 100644
  					const compactionIndex = branch.findIndex((entry) => entry.id === event.entry.id);
  					const entriesAfterCompaction = new Set(branch.slice(compactionIndex + 1).map((entry) => entry.id));
  					const retainedEntries = entries.slice(1);
-@@ -4151,8 +4154,8 @@ export class InteractiveMode {
+@@ -4219,8 +4222,8 @@ export class InteractiveMode {
  		// Cache misses are not persisted, unlike successful cache-warming usage.
  		// Re-derive them and inject them after the assistant messages that paid for them.
  		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
@@ -2264,7 +2264,7 @@ index 2459c10df..5b091f408 100644
  
  		if (options.updateFooter) {
  			this.footer.invalidate();
-@@ -4218,7 +4221,8 @@ export class InteractiveMode {
+@@ -4286,7 +4289,8 @@ export class InteractiveMode {
  					}
  				}
  				if (message.stopReason !== "aborted" && message.stopReason !== "error") {
@@ -2274,24 +2274,31 @@ index 2459c10df..5b091f408 100644
  					if (miss) this.addCacheMissNotice(miss);
  				}
  			} else if (message.role === "toolResult") {
-@@ -4332,11 +4336,14 @@ export class InteractiveMode {
- 		let previousDroppedCount = 0;
- 		// message_end reaches the UI before the current message is persisted,
- 		// so the branch's last assistant message is the previous response.
+@@ -4381,15 +4385,17 @@ export class InteractiveMode {
+ 		const dropped = getDroppedReasoning(message);
+ 		if (!dropped) return;
+ 
+-		// Providers report a withheld block again on every later request that replays it, so only
+-		// a count above the previous response's means new losses. message_end reaches the UI before
+-		// the current message is persisted, so the branch's last assistant message is the previous response.
 -		const branch = this.sessionManager.getBranch();
++		// message_end reaches the UI before persistence; only decode the previous response.
 +		const branch = this.sessionManager.getBranchMetadata();
  		for (let i = branch.length - 1; i >= 0; i--) {
  			const entry = branch[i];
  			if (entry.type === "message" && entry.message.role === "assistant") {
--				previousDroppedCount = InteractiveMode.countDroppedThinkingBlocks(entry.message);
+-				const previous = getDroppedReasoning(entry.message);
+-				if (previous?.diagnostic === dropped.diagnostic && dropped.count <= previous.count) return;
 +				const previous = this.sessionManager.getEntry(entry.id);
-+				if (previous?.type === "message" && previous.message.role === "assistant") {
-+					previousDroppedCount = InteractiveMode.countDroppedThinkingBlocks(previous.message);
-+				}
++				const earlier =
++					previous?.type === "message" && previous.message.role === "assistant"
++						? getDroppedReasoning(previous.message)
++						: undefined;
++				if (earlier?.diagnostic === dropped.diagnostic && dropped.count <= earlier.count) return;
  				break;
  			}
  		}
-@@ -4362,7 +4369,7 @@ export class InteractiveMode {
+@@ -4416,7 +4422,7 @@ export class InteractiveMode {
  		if (!this.settingsManager.getShowCacheMissNotices()) return;
  
  		// Entries don't contain `message` yet: message_end fires before persistence.
@@ -2300,7 +2307,7 @@ index 2459c10df..5b091f408 100644
  		if (miss) this.addCacheMissNotice(miss);
  	}
  
-@@ -4390,7 +4397,7 @@ export class InteractiveMode {
+@@ -4444,7 +4450,7 @@ export class InteractiveMode {
  		this.renderProjectTrustWarningIfNeeded();
  
  		// Show compaction info if session was compacted
@@ -2309,7 +2316,7 @@ index 2459c10df..5b091f408 100644
  		const compactionCount = allEntries.filter((e) => e.type === "compaction").length;
  		if (compactionCount > 0) {
  			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
-@@ -4411,7 +4418,8 @@ export class InteractiveMode {
+@@ -4465,7 +4471,8 @@ export class InteractiveMode {
  				() =>
  					theme.fg(
  						"warning",
@@ -2319,7 +2326,7 @@ index 2459c10df..5b091f408 100644
  					),
  				1,
  				0,
-@@ -6851,7 +6859,7 @@ export class InteractiveMode {
+@@ -6933,7 +6940,7 @@ export class InteractiveMode {
  	private handleSessionCommand(): void {
  		const stats = this.session.getSessionStats();
  		const sessionName = this.sessionManager.getSessionName();
@@ -2328,7 +2335,7 @@ index 2459c10df..5b091f408 100644
  		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
  
  		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
-@@ -6896,7 +6904,10 @@ export class InteractiveMode {
+@@ -6978,7 +6985,10 @@ export class InteractiveMode {
  
  			info += `\n${theme.bold("Cache Warming")}\n`;
  			info += `${theme.fg("dim", "Mode:")} ${cacheWarmingMode}\n`;
@@ -2451,7 +2458,7 @@ index 492347099..1e07f0255 100644
  		async (event) => {
  			events.push(event);
 diff --git a/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts b/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts
-index 48732b52d..88555df2f 100644
+index adbc2a905..372de7521 100644
 --- a/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts
 +++ b/packages/coding-agent/test/interactive-mode-assistant-diagnostics.test.ts
 @@ -1,6 +1,7 @@
@@ -2503,6 +2510,35 @@ index 48732b52d..88555df2f 100644
  		};
  
  		maybeShowThinkingDropNotice.call(context, { ...message, timestamp: 2 });
+@@ -95,10 +98,12 @@ describe("InteractiveMode assistant diagnostics", () => {
+ 
+ 	test("shows OpenAI reasoning removals with their reasons", () => {
+ 		initTheme("dark");
++		const sessionManager = SessionManager.inMemory();
++		sessionManager.appendMessage(message);
+ 		const context = {
+ 			chatContainer: new Container(),
+ 			settingsManager: { getShowCacheMissNotices: () => true },
+-			sessionManager: { getBranch: () => [{ type: "message" as const, message }] },
++			sessionManager,
+ 		};
+ 
+ 		// The previous Anthropic response dropped more blocks; that must not hide the OpenAI removals.
+@@ -116,11 +121,12 @@ describe("InteractiveMode assistant diagnostics", () => {
+ 	test("shows OpenAI reasoning removals only when new items are removed", () => {
+ 		initTheme("dark");
+ 		// OpenAI reports a removed item again on every later request that replays it.
+-		const previous = openAIMessage(["rs_1", "rs_2"], ["prefix_mismatch"]);
++		const sessionManager = SessionManager.inMemory();
++		sessionManager.appendMessage(openAIMessage(["rs_1", "rs_2"], ["prefix_mismatch"]));
+ 		const context = {
+ 			chatContainer: new Container(),
+ 			settingsManager: { getShowCacheMissNotices: () => true },
+-			sessionManager: { getBranch: () => [{ type: "message" as const, message: previous }] },
++			sessionManager,
+ 		};
+ 
+ 		maybeShowThinkingDropNotice.call(context, openAIMessage(["rs_1", "rs_2"], ["prefix_mismatch"]));
 diff --git a/packages/coding-agent/test/session-manager/build-context.test.ts b/packages/coding-agent/test/session-manager/build-context.test.ts
 index e81eb5dc1..1e3507c99 100644
 --- a/packages/coding-agent/test/session-manager/build-context.test.ts
@@ -2592,7 +2628,7 @@ index e81eb5dc1..1e3507c99 100644
  	describe("trivial cases", () => {
  		it("empty entries returns empty context", () => {
 diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
-index ac6441490..7925c2af9 100644
+index d0206ba1f..fe7f58793 100644
 --- a/packages/coding-agent/test/session-manager/file-operations.test.ts
 +++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
 @@ -45,6 +45,35 @@ describe("loadEntriesFromFile", () => {
@@ -2646,77 +2682,6 @@ index ac6441490..7925c2af9 100644
  			}
  		}
  	});
-diff --git a/packages/coding-agent/test/virtual-models.test.ts b/packages/coding-agent/test/virtual-models.test.ts
-index 3650c2ccd..4389d4126 100644
---- a/packages/coding-agent/test/virtual-models.test.ts
-+++ b/packages/coding-agent/test/virtual-models.test.ts
-@@ -14,7 +14,13 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
- import { ModelRuntime } from "../src/core/model-runtime.ts";
- import { createAgentSession } from "../src/core/sdk.ts";
- import { SessionManager } from "../src/core/session-manager.ts";
--import { getBranchSelection, type ModelRouteRequest, type VirtualModelDefinition } from "../src/core/virtual-models.ts";
-+import {
-+	getBranchSelection,
-+	getVirtualModelState,
-+	type ModelRouteRequest,
-+	VIRTUAL_MODEL_STATE_ENTRY,
-+	type VirtualModelDefinition,
-+} from "../src/core/virtual-models.ts";
- import { createTestResourceLoader } from "./utilities.ts";
- 
- async function createRuntime(requests: ModelRouteRequest[] = []) {
-@@ -55,12 +61,19 @@ describe("getBranchSelection", () => {
- 	function select(build: (sessionManager: SessionManager) => void, runtime: ModelRuntime) {
- 		const sessionManager = SessionManager.inMemory();
- 		build(sessionManager);
--		const lookups: string[] = [];
--		const selection = getBranchSelection(sessionManager.getBranch(), (provider, modelId) => {
--			lookups.push(`${provider}/${modelId}`);
--			return runtime.getModel(provider, modelId);
--		});
--		return { selection, lookups };
-+		const selectFrom = (
-+			branch: ReturnType<SessionManager["getBranch"]> | ReturnType<SessionManager["getBranchMetadata"]>,
-+		) => {
-+			const lookups: string[] = [];
-+			const selection = getBranchSelection(branch, (provider, modelId) => {
-+				lookups.push(`${provider}/${modelId}`);
-+				return runtime.getModel(provider, modelId);
-+			});
-+			return { selection, lookups };
-+		};
-+		const full = selectFrom(sessionManager.getBranch());
-+		expect(selectFrom(sessionManager.getBranchMetadata())).toEqual(full);
-+		return full;
- 	}
- 
- 	// #10198: the selection must not cost one catalog lookup per assistant message.
-@@ -113,6 +126,25 @@ describe("getBranchSelection", () => {
- 	});
- });
- 
-+describe("metadata router-state recovery", () => {
-+	it.each([undefined, null, { next: "exact state" }])("preserves the latest matching state %j", (state) => {
-+		const manager = SessionManager.inMemory();
-+		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "router", modelId: "auto", state: "older" });
-+		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "router", modelId: "auto", state });
-+		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "other", modelId: "auto", state: "other" });
-+		const unrelated = manager.appendCustomEntry("unrelated-large-state", { untouched: true });
-+		const reads: string[] = [];
-+		expect(getVirtualModelState(manager.getBranch(), "router", "auto")).toEqual(state);
-+		expect(
-+			getVirtualModelState(manager.getBranchMetadata(), "router", "auto", (id) => {
-+				reads.push(id);
-+				return manager.getEntry(id);
-+			}),
-+		).toEqual(state);
-+		expect(reads).not.toContain(unrelated);
-+	});
-+});
-+
- describe("ModelRuntime virtual models", () => {
- 	it("lists a virtual model and routes it to a physical model with a clamped thinking level", async () => {
- 		const requests: ModelRouteRequest[] = [];
 diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
 new file mode 100644
 index 000000000..537b716bf
@@ -2847,3 +2812,74 @@ index 07978840d..489bb9f73 100644
  
  		expect(session.thinkingLevel).toBe("low");
  		// Resume restores the thinking level from this context.
+diff --git a/packages/coding-agent/test/virtual-models.test.ts b/packages/coding-agent/test/virtual-models.test.ts
+index 3650c2ccd..4389d4126 100644
+--- a/packages/coding-agent/test/virtual-models.test.ts
++++ b/packages/coding-agent/test/virtual-models.test.ts
+@@ -14,7 +14,13 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
+ import { ModelRuntime } from "../src/core/model-runtime.ts";
+ import { createAgentSession } from "../src/core/sdk.ts";
+ import { SessionManager } from "../src/core/session-manager.ts";
+-import { getBranchSelection, type ModelRouteRequest, type VirtualModelDefinition } from "../src/core/virtual-models.ts";
++import {
++	getBranchSelection,
++	getVirtualModelState,
++	type ModelRouteRequest,
++	VIRTUAL_MODEL_STATE_ENTRY,
++	type VirtualModelDefinition,
++} from "../src/core/virtual-models.ts";
+ import { createTestResourceLoader } from "./utilities.ts";
+ 
+ async function createRuntime(requests: ModelRouteRequest[] = []) {
+@@ -55,12 +61,19 @@ describe("getBranchSelection", () => {
+ 	function select(build: (sessionManager: SessionManager) => void, runtime: ModelRuntime) {
+ 		const sessionManager = SessionManager.inMemory();
+ 		build(sessionManager);
+-		const lookups: string[] = [];
+-		const selection = getBranchSelection(sessionManager.getBranch(), (provider, modelId) => {
+-			lookups.push(`${provider}/${modelId}`);
+-			return runtime.getModel(provider, modelId);
+-		});
+-		return { selection, lookups };
++		const selectFrom = (
++			branch: ReturnType<SessionManager["getBranch"]> | ReturnType<SessionManager["getBranchMetadata"]>,
++		) => {
++			const lookups: string[] = [];
++			const selection = getBranchSelection(branch, (provider, modelId) => {
++				lookups.push(`${provider}/${modelId}`);
++				return runtime.getModel(provider, modelId);
++			});
++			return { selection, lookups };
++		};
++		const full = selectFrom(sessionManager.getBranch());
++		expect(selectFrom(sessionManager.getBranchMetadata())).toEqual(full);
++		return full;
+ 	}
+ 
+ 	// #10198: the selection must not cost one catalog lookup per assistant message.
+@@ -113,6 +126,25 @@ describe("getBranchSelection", () => {
+ 	});
+ });
+ 
++describe("metadata router-state recovery", () => {
++	it.each([undefined, null, { next: "exact state" }])("preserves the latest matching state %j", (state) => {
++		const manager = SessionManager.inMemory();
++		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "router", modelId: "auto", state: "older" });
++		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "router", modelId: "auto", state });
++		manager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, { provider: "other", modelId: "auto", state: "other" });
++		const unrelated = manager.appendCustomEntry("unrelated-large-state", { untouched: true });
++		const reads: string[] = [];
++		expect(getVirtualModelState(manager.getBranch(), "router", "auto")).toEqual(state);
++		expect(
++			getVirtualModelState(manager.getBranchMetadata(), "router", "auto", (id) => {
++				reads.push(id);
++				return manager.getEntry(id);
++			}),
++		).toEqual(state);
++		expect(reads).not.toContain(unrelated);
++	});
++});
++
+ describe("ModelRuntime virtual models", () => {
+ 	it("lists a virtual model and routes it to a physical model with a clamped thinking level", async () => {
+ 		const requests: ModelRouteRequest[] = [];

@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Codex-style transcripts and workflow extensions for Pi. **Metis 0.23.0 targets Pi 1.5.2 only**; Node.js **22.19.0+** is required.
+Codex-style transcripts and workflow extensions for Pi. **This Metis checkout targets Pi 1.6.0 only**; Node.js **22.19.0+** is required.
 
 ## Installation
 
@@ -11,7 +11,7 @@ pi install git:git@github.com:Rycen7822/metis-pi.git
 # Local development: npm install, then pi install .
 ```
 
-Use Pi 1.5.2 before installing or updating Metis; older SDKs are not supported. On a managed Pi 1.5.2 installation, normal Git/npm installation and `pi update --extensions` automatically install the [SDK patches](sdk-patches/pi-1.5.2/README.md) from bundled builds. Metis activates a complete new release and keeps the immediately previous release for rollback. Restart Pi to load it—`/reload` cannot replace a running SDK. Other Pi versions or non-managed layouts are not patched.
+Use Pi 1.6.0 before installing or updating Metis; older SDKs are not supported. On a managed Pi 1.6.0 installation, normal Git/npm installation and `pi update --extensions` automatically install the [SDK patches](sdk-patches/pi-1.6.0/README.md) from bundled builds. Metis activates a complete new release and keeps the immediately previous release for rollback. Restart Pi to load it—`/reload` cannot replace a running SDK. Other Pi versions or non-managed layouts are not patched.
 
 Restart Pi and select the `metis-pi` theme. Disable matching standalone providers first: `@howaboua/pi-codex-conversion`, `pi-web-access`, `pi-session-recall`, `@narumitw/pi-lsp`, and agent-stuff's BTW/commit/github/uv resources. Metis retains their original files and sessions; see [managed extensions](docs/features/managed-plugins.md) and [LSP](docs/features/lsp.md).
 

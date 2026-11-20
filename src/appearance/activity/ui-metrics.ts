@@ -1,5 +1,5 @@
 // ONE monotonic interaction clock per user-visible interaction.
-// Pi semantics (verified v0.85.1): `agent_end` fires when ONE underlying run
+// Pi lifecycle: `agent_end` fires when ONE underlying run
 // finishes, but auto-retry / auto-compaction / queued follow-ups may start the
 // next `agent_start` afterwards; only `agent_settled` finalizes. So the clock
 // opens on the FIRST agent_start of a chain and never resets mid-chain. Date

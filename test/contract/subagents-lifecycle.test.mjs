@@ -58,7 +58,11 @@ function fixture(t, call, agentDir = "/unused-test-agent-dir") {
     mode: "rpc",
     isIdle: () => false,
     hasPendingMessages: () => false,
-    sessionManager: { getSessionId: () => "lifecycle-test", getBranch: () => branch },
+    sessionManager: {
+      getSessionId: () => "lifecycle-test",
+      getBranchMetadata: () => branch.map((entry, index) => ({ ...entry, id: String(index) })),
+      getEntry: id => branch[Number(id)],
+    },
     ui: { notify: (text, level) => warnings.push({ text, level }), setWidget() {}, setStatus() {} },
   };
   const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, runtime, ctx, agentDir,

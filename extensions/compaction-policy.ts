@@ -1,3 +1,4 @@
+import { hasMetisHostSDK } from "../src/pi-sdk/host.ts";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isMetisConfigTable, readMetisConfig, type MetisConfig } from "../src/configuration/store.ts";
 
@@ -10,15 +11,11 @@ function positiveTokens(config: MetisConfig, key: string): number {
 }
 
 export default function compactionPolicy(pi: ExtensionAPI): void {
+  if (!hasMetisHostSDK()) return;
   const section = readMetisConfig(getAgentDir()).config.compactionPolicy;
   if (!isMetisConfigTable(section)) throw new Error("compactionPolicy must be a TOML table");
   const contextWindowAbove = positiveTokens(section, "contextWindowAbove");
   const autoCompactTokenLimit = positiveTokens(section, "autoCompactTokenLimit");
-  if (!pi.registerCompactionLimit) {
-    pi.on("session_start", (_event, ctx) => {
-      ctx.ui.notify("Metis compaction policy requires the managed Pi SDK; using Pi settings.", "warning");
-    });
-    return;
-  }
+  if (!pi.registerCompactionLimit) throw new Error("Metis SDK is missing the compaction limit API");
   pi.registerCompactionLimit({ contextWindowAbove, autoCompactTokenLimit });
 }

@@ -21,7 +21,7 @@ Metis 读取全局的 `<agentDir>/metis-pi.toml`。`agentDir` 默认为 `~/.pi/a
 
 模型、认证、主题、包列表、项目信任和 MCP 服务器定义由 Pi 管理。网页工具的凭据放在 `<agentDir>/web-search.json` 或环境变量中。会话正文及其 `<sessionId>-blobs/` 归档与配置分开保存。
 
-## Pi 1.5.2 模型与预热
+## Pi 1.6.0 模型与预热
 
 Metis 按当前 ChatGPT OAuth 登录刷新 `openai` 与 `openai-codex` 的账号目录。API key 和自定义地址沿用 Pi 的目录。`openai` 查询 `/v1/models`，`openai-codex` 使用本机 Codex 的版本号查询 Codex 后端；缺少模型参数时，Metis 会尝试用 `codex debug models` 补齐。缺少必需参数的条目不加入目录。
 

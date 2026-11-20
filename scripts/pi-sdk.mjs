@@ -4,7 +4,7 @@ import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "nod
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as tar from "tar";
-import { digest, readDistribution, sdkPackages, sdkFiles, sdkVersion, sdkUpstreamCommit, sdkPatchCount,
+import { digest, readDistribution, sdkPackages, sdkRuntimePackages, sdkFiles, sdkVersion, sdkUpstreamCommit, sdkPatchCount,
   verifiedArchive } from "../src/pi-sdk/artifact.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -92,13 +92,13 @@ async function packageSDK(sdk) {
 }
 async function prepareSDK(distribution, archive) {
   const targets = new Map();
-  for (const name of sdkPackages) {
+  for (const name of sdkRuntimePackages) {
     const directory = path.join(root, "node_modules/@earendil-works", `pi-${name}`);
     const stat = await lstat(directory), manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
     assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), `SDK dependencies must be physical: ${directory}`);
     assert.equal(manifest.name, `@earendil-works/pi-${name}`);
     assert.equal(manifest.version, distribution.piVersion, `SDK preparation requires Pi ${distribution.piVersion}`);
-    targets.set(name, directory);
+    if (sdkPackages.includes(name)) targets.set(name, directory);
   }
   await mkdir(path.join(root, ".work"), { recursive: true });
   const staging = await mkdtemp(path.join(root, ".work/pi-sdk-prepare-"));

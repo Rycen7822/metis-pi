@@ -1,6 +1,5 @@
 import { setImmediate } from "node:timers/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { branchEntryReferences } from "../session-history.ts";
 import { projectBranchMessages } from "./batch-capture.ts";
 import { isConversationBoundary } from "./chain-detector.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
@@ -74,19 +73,17 @@ export class ContextMetricsReader {
   async read(manager: ExtensionContext["sessionManager"], frontier: PruneFrontier | null,
     isSummarized: (key: string) => boolean, protection: ProtectionConfig, signal?: AbortSignal): Promise<ContextMetricsSnapshot> {
     const cache = this.facts, facts: MetricFact[] = [], leaf = manager.getLeafId();
-    const reader: typeof manager & { getEntryForScan?: typeof manager.getEntry } = manager;
-    const read = reader.getEntryForScan ?? reader.getEntry;
     const assertCurrent = () => {
       signal?.throwIfAborted();
       if (leaf !== manager.getLeafId()) throw new Error("This extension ctx is stale: metrics branch changed");
     };
     assertCurrent();
     let slice = performance.now();
-    for (const source of branchEntryReferences(manager)) {
+    for (const source of manager.getBranchMetadata()) {
       if (source.type === "message" || source.type === "custom_message") {
         let fact = cache.get(source);
         if (!fact) {
-          const entry = read.call(reader, source.id);
+          const entry = manager.getEntryForScan(source.id);
           if (!entry) throw new Error(`Session entry not found: ${source.id}`);
           const [message] = projectBranchMessages([entry]);
           fact = messageFact(message);

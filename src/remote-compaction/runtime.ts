@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { branchEntryReferences, readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
+import { readHistoryEntries, reverseBranchEntryReferences } from "../session-history.ts";
 import {
-  cleanupSessionResources, getCurrentSystemMessage, normalizeContext,
+  cleanupSessionResources, getCurrentSystemMessage, getSystemMessageText, normalizeContext,
   type Model, type Api, type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import {
@@ -51,7 +51,7 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   const data = checkpoint(entry);
   // A context edit of the summary invalidates its opaque history.
   const message = wrapper.messages.find(m => m.role === "compactionSummary");
-  const branch = branchEntryReferences(ctx.sessionManager);
+  const branch = ctx.sessionManager.getBranchMetadata();
   const covered = new Set(branch.slice(0, branch.findIndex(e => e.id === entry.firstKeptEntryId)).map(e => e.id));
   const entryIndex = branch.findIndex(e => e.id === entry.id);
   const edited = branch.slice(entryIndex + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
@@ -484,11 +484,19 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         ? { messages: convertToLlm([system, ...messages]) }
         : { systemPrompt: ctx.getSystemPrompt(), messages: convertToLlm(messages),
           tools: pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name)) });
+      // Direct Codex compaction owns its top-level instructions. Keep the leading tool declarations in the native encoder.
+      const directCodex = !responses && !hybrid;
+      const first = context.messages[0];
+      const initial = first?.role === "system" ? first : undefined;
+      const instructions = directCodex ? (initial && getSystemMessageText(initial)) || "You are a helpful assistant." : undefined;
+      const compactContext = directCodex && initial
+        ? normalizeContext({ messages: [{ ...initial, content: "", sections: undefined }, ...context.messages.slice(1)] })
+        : context;
       const thinking = pi.getThinkingLevel();
       const nativePayload = hybrid ? await capturePayload(request, context, signal, session, thinking === "off" ? undefined : thinking) : undefined;
       // Pin the resolved credential/route snapshot. A second broker resolution
       // could otherwise compact under account B but publish a binding for A.
-      const result = await compactor.provider.streamSimple(compactor.model, context, {
+      const result = await compactor.provider.streamSimple(compactor.model, compactContext, {
         apiKey: compactor.auth.apiKey, env: compactor.auth.env,
         signal, transport: "sse", cacheRetention: hybrid ? "short" : "none", maxRetries: 2,
         sessionId: session,
@@ -502,15 +510,15 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
           items.length = 0;
           delete diagnostic.message; delete diagnostic.code;
           const input = responses ? body.input : [...body.input];
-          let instructions = body.instructions;
+          let prompt = instructions ?? body.instructions;
           if (hybrid) {
-            instructions ??= "";
+            prompt ??= "";
             if (event.customInstructions) input.push({ role: "developer", content: `Compaction focus: ${event.customInstructions}` });
           } else if (event.customInstructions) {
-            instructions = `${instructions ?? ""}\n\nCompaction focus: ${event.customInstructions}`;
+            prompt = `${prompt ?? ""}\n\nCompaction focus: ${event.customInstructions}`;
           }
           if (!responses) input.push({ type: "compaction_trigger" });
-          return { ...body, instructions, input, store: false, stream: true };
+          return { ...body, instructions: prompt, input, store: false, stream: true };
         },
         onProviderStreamEvent(value) {
           const data = record(value);

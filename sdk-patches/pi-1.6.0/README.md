@@ -1,7 +1,7 @@
-# Pi 1.5.2 SDK 补丁
+# Pi 1.6.0 SDK 补丁
 
-唯一基线：[Pi v1.5.2](https://github.com/earendil-works/pi/tree/v1.5.2)，提交
-`b4afdddf44e059c67ccf5097e5317d913521b470`。不支持旧版、预发布版或未来版本。
+唯一基线：[Pi v1.6.0](https://github.com/earendil-works/pi/tree/v1.6.0)，提交
+`faac585884ae2c013a6b1400f3e9e77f10b34bac`。不支持旧版、预发布版或未来版本。
 上游 MIT 许可见 [LICENSE.upstream](LICENSE.upstream)。补丁随 Metis 的完整预编译 SDK 交付。
 
 ## 作用与边界
@@ -16,7 +16,7 @@
 | `0006` | 原生认证层区分登录归属与正常 token 刷新；重新登录、登出及外部凭据替换不继承归属。 |
 | `0007` | 摘要通过 `getDisplayHeader(message)` 返回标题/副行，技能通过 `getDisplayName(skillBlock)` 返回显示名；两状态共用原生渲染，正文和 transformer 不受装饰影响。 |
 | `0008` | 脚本可调用 `tool_search` 时收起 `searchTools()`；模型说明和错误提示同步，无网关时保留原生发现。 |
-| `0009` | 公开主 TUI 的 renderer、编辑器主题、聊天 viewport 及工具 renderer 解析；离屏帧保留光标，BTW 复用完整渲染/滚动/选择链，不接管终端。 |
+| `0009` | 公开聊天及离屏渲染接口；允许视口依赖组件在仅滚动或选区变化时重新求值，其他组件仍复用原生缓存。 |
 | `0010` | 投影/分支按有界热正文窗口读取；原生压缩按有效投影准备，完整事件分支首次访问才加载。协作读取支持取消，预览拒绝混读改写后的来源。 |
 | `0011` | CLI codemode分离在途准入、FIFO执行与结果消费背压；有界预览保留总数/失败/未结算状态，终态不再更新，迟到结果不序列化。 |
 | `0012` | Read显式`format: page`返回原文与行游标/完整性状态；沿用流式读取和原预算，默认string/image与模型正文不变。 |
@@ -38,7 +38,7 @@
 | `0028` | 连续流式更新中，仅当 assistant 正文和内置 Mermaid 转换状态都未变时复用行缓存；不改变第三方转换器。 |
 
 按编号顺序应用；`0002` 已由上游覆盖，编号留空。
-保留 1.5.2 的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
+保留上游的 model/thinking 分离记录、树切换后的 thinking 恢复及 clamp 判断；
 warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 设置、费用格式和连续预热合并展示；
 树选择器保留 SearchLine、IME 光标与 label 输入焦点传播，不恢复旧算法来迁就补丁。
 
@@ -74,17 +74,17 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
 
 ## 隔离重建
 
-Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.5.2 且已使用
+Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.6.0 且已使用
 `--ignore-scripts --bin-links=false` 准备。`SDK` 必须是新的私有目录。
 
 ```bash
 set -eu
 METIS=/absolute/path/to/metis-pi
-SDK=/absolute/path/to/isolated-pi-1.5.2
-PATCHES="$METIS/sdk-patches/pi-1.5.2"
-git clone --no-hardlinks --branch v1.5.2 https://github.com/earendil-works/pi.git "$SDK"
+SDK=/absolute/path/to/isolated-pi-1.6.0
+PATCHES="$METIS/sdk-patches/pi-1.6.0"
+git clone --no-hardlinks --branch v1.6.0 https://github.com/earendil-works/pi.git "$SDK"
 cd "$SDK"
-test "$(git rev-parse HEAD)" = b4afdddf44e059c67ccf5097e5317d913521b470
+test "$(git rev-parse HEAD)" = faac585884ae2c013a6b1400f3e9e77f10b34bac
 npm ci --ignore-scripts --workspaces=false --bin-links=false --no-audit --no-fund
 npm install --no-save --package-lock=false --ignore-scripts --workspaces=false --bin-links=false \
   --no-audit --no-fund vitest@4.1.12 @xterm/headless@5.5.0 chalk@6.0.0 \
@@ -112,14 +112,14 @@ npm --prefix "$METIS" run verify:pi-sdk
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
 `build:pi-sdk` 核对官方 SHA，干净重放全部补丁并逐路径比对源码，再构建四个 SDK 包；
 归档包含 `coding-agent/docs/codemode.md`，使运行时指向的文档同步更新；独立沙箱和 bundled worker 均使用补丁后的规则。
-输出 `assets/pi-sdk/pi-1.5.2.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
+输出 `assets/pi-sdk/pi-1.6.0.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
 若 check 格式化改写源码，先同步补丁，再重新构建；不能沿用旧归档改名充当新版本。
 
 ## 生效与撤回
 
 安装只切换完整发行目录；已运行的进程需重启 Pi，`/reload` 不替换进程内 SDK。
-补丁身份以当前发行目录的 `metis-sdk.json` 为准，`pi --version` 仍为 `1.5.2`。
-原版 1.5.2 缺少展示接口时保持原生标题，不通过正文改写模拟补丁能力。
+补丁身份以当前发行目录的 `metis-sdk.json` 为准，`pi --version` 仍为 `1.6.0`。
+原版 1.6.0 首次启动可准备补丁；依赖补丁接口的功能需重启后才注册，不维护第二套运行逻辑。
 npm 脚本策略拦住 `postinstall` 时，会话入口仍会补装并提示重启；不自动修改 `allowScripts` 授权。
 
 撤回前暂停 Metis 安装/更新并禁用其 SDK 安装入口，避免自动重装；

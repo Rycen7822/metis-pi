@@ -1,8 +1,8 @@
 diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
-index a64c262c1..ffa4a9d89 100644
+index d9cbfe043..f3b84d4ae 100644
 --- a/packages/tui/src/layout.ts
 +++ b/packages/tui/src/layout.ts
-@@ -50,6 +50,20 @@ export interface ScrollbarGeometry {
+@@ -55,6 +55,20 @@ export interface ScrollbarGeometry {
  	maxScrollTop: number;
  }
  
@@ -22,8 +22,8 @@ index a64c262c1..ffa4a9d89 100644
 +
  interface LayoutContext {
  	viewport: { width: number; height: number };
- 	renderCache: Map<Component, Map<number, string[]>>;
-@@ -327,14 +341,37 @@ function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): v
+ 	renderCache: LayoutRenderCache;
+@@ -334,14 +348,37 @@ function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): v
  	}
  }
  
@@ -62,7 +62,7 @@ index a64c262c1..ffa4a9d89 100644
  			let line = sourceLine.replace(OSC133_ZONE_PREFIX, "");
  			const imageMetadata = getKittyImageMetadata(line);
  			if (imageMetadata) {
-@@ -350,11 +387,24 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
+@@ -357,11 +394,24 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
  			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
  				screen[row] = line;
  			} else {
@@ -89,7 +89,7 @@ index a64c262c1..ffa4a9d89 100644
  
  	if (box.scrollView && box.scrollContentLines && box.scrollView.scrollTop > 0 && box.rect.height > 0) {
  		// Find the nearest image line above the viewport. Placeholder rows below an
-@@ -401,7 +451,9 @@ export function renderLayoutFrame(
+@@ -419,7 +469,9 @@ export function renderLayoutFrame(
  		height: safeHeight,
  	});
  	const lines = Array.from({ length: safeHeight }, () => "");
@@ -101,10 +101,10 @@ index a64c262c1..ffa4a9d89 100644
  		root: rootBox,
  		width: safeWidth,
 diff --git a/packages/tui/test/layout.test.ts b/packages/tui/test/layout.test.ts
-index 5aa1cd347..2a152f780 100644
+index 63a9e5776..d5e99b3c4 100644
 --- a/packages/tui/test/layout.test.ts
 +++ b/packages/tui/test/layout.test.ts
-@@ -135,14 +135,12 @@ describe("viewport layout", () => {
+@@ -157,14 +157,12 @@ describe("viewport layout", () => {
  			render: () => ["one", "two", imageLine, "", ""],
  			invalidate: () => {},
  		});
@@ -123,7 +123,7 @@ index 5aa1cd347..2a152f780 100644
  	});
  
  	it("composes horizontal children at allocated widths", () => {
-@@ -354,6 +352,60 @@ describe("viewport layout", () => {
+@@ -376,6 +374,60 @@ describe("viewport layout", () => {
  		assert.strictEqual(outer.scrollTop, 1);
  	});
  

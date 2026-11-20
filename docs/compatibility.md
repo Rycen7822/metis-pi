@@ -2,7 +2,7 @@
 
 | 组件 | 要求 |
 | --- | --- |
-| Pi | 1.5.2。安装、运行与开发应使用同一 SDK 版本。 |
+| Pi | 1.6.0。安装、运行与开发应使用同一 SDK 版本。 |
 | Node.js | 22.19.0 或更新版本。 |
 | 子代理 | Linux、WSL 或 Windows；Python 3.11 或更新版本。Windows 从 PATH 或 `py` 查找 Python。 |
 | PTY | 随包提供 Linux x64 和 Windows x64 helper。Windows ConPTY 要求 Windows 10 1809 或更新版本。 |
@@ -11,7 +11,7 @@
 
 ## 安装与重启
 
-在受管 Pi 1.5.2 上，Metis 的安装钩子会准备补丁版 SDK。钩子未运行时，首次加载扩展也会尝试准备。安装后退出并重新启动 Pi；`/reload` 只能重载扩展。更新 Windows 原生库前，关闭正在使用该库的 Pi 进程。使用随包资产不需要 Rust 或 MSVC。
+在受管 Pi 1.6.0 上，Metis 的安装钩子会准备补丁版 SDK。钩子未运行时，首次加载扩展也会尝试准备；依赖补丁接口的功能在重启前不启用。安装后退出并重新启动 Pi；`/reload` 只能重载扩展。更新 Windows 原生库前，关闭正在使用该库的 Pi 进程。使用随包资产不需要 Rust 或 MSVC。
 
 Windows 上使用 Git for Windows 提供的 Bash。如未安装在默认位置，在 Pi 的 `settings.json` 中设置 `shellPath`，例如 `"D:\\app\\Git\\bin\\bash.exe"`。不要指向用于启动 WSL 的 `bash.exe`。
 

@@ -1,15 +1,18 @@
 diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
-index 51cc652..aeef8cb 100644
+index 51cc652c3..aeef8cb86 100644
 --- a/packages/coding-agent/src/extensions/codemode/execute.ts
 +++ b/packages/coding-agent/src/extensions/codemode/execute.ts
-@@ -27,5 +27,5 @@ import {
+@@ -26,7 +26,7 @@ import {
+ } from "@earendil-works/pi-codemode";
  import { getCodemodeWorkerSpecifier, getQuickJSWasmPath } from "../../config.ts";
  import type { ExtensionToolContext, ToolNamespace } from "../../core/extensions/types.ts";
 -import type { SessionEntry } from "../../core/session-manager.ts";
 +import type { ReadonlySessionManager } from "../../core/session-manager.ts";
  import { formatSize, sliceHead, sliceTail } from "../../core/tools/truncate.ts";
  import { combineUsage } from "../../core/usage-totals.ts";
-@@ -299,11 +299,11 @@ function isStoreEntryData(data: unknown): data is CodemodeStoreEntryData {
+ import { writeOutputFile } from "../../utils/output-files.ts";
+@@ -298,13 +298,13 @@ function isStoreEntryData(data: unknown): data is CodemodeStoreEntryData {
+ 	);
  }
  
 -/** Values of `load()`: the `codemode-store` entries on the branch, applied from the root. */
@@ -27,25 +30,31 @@ index 51cc652..aeef8cb 100644
 +		if (entry?.type !== "custom" || !isStoreEntryData(entry.data)) continue;
  		for (const key of entry.data.delete) store.delete(key);
  		for (const [key, value] of Object.entries(entry.data.set)) store.set(key, value);
-@@ -623,5 +623,5 @@ export async function executeCodemode(
+ 	}
+@@ -622,7 +622,7 @@ export async function executeCodemode(
+ 				return releaseCodemodeWorker;
  			},
  		});
 -		const store = ctx ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
 +		const store = ctx ? readCodemodeStore(ctx.sessionManager) : {};
  		result = await sandbox.execute(code, { signal, store, callLimits: CODEMODE_CALL_LIMITS, maxRecordedCalls: 256 });
  	} finally {
+ 		tracker.close();
 diff --git a/packages/coding-agent/test/suite/agent-session-codemode.test.ts b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
-index 6ddc45d..252e2c3 100644
+index 6ddc45da1..252e2c357 100644
 --- a/packages/coding-agent/test/suite/agent-session-codemode.test.ts
 +++ b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
-@@ -18,5 +18,5 @@ import { Type } from "typebox";
+@@ -17,7 +17,7 @@ import type { ToolResultMessage, Usage } from "@earendil-works/pi-ai/compat";
+ import { Type } from "typebox";
  import { afterEach, describe, expect, it } from "vitest";
  import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
 -import type { CustomEntry } from "../../src/core/session-manager.ts";
 +import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
  import {
  	createToolDefinitionFromAgentTool,
-@@ -860,20 +860,10 @@ describe("codemode options and store", () => {
+ 	type TypeBoxAgentTool,
+@@ -859,22 +859,12 @@ describe("codemode options and store", () => {
+ 	});
  
  	it("folds store entries from the root, ignoring malformed data", () => {
 -		const entry = (data: unknown, customType = CODEMODE_STORE_ENTRY_TYPE): CustomEntry => ({
@@ -72,3 +81,4 @@ index 6ddc45d..252e2c3 100644
 +		expect(readCodemodeStore(session)).toEqual({ a: 3 });
  	});
  });
+ 

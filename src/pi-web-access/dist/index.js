@@ -15982,16 +15982,10 @@ import { join as join6 } from "node:path";
 
 // src/session-history.ts
 function* readHistoryEntries(reader, scope, select, options) {
-  const metadata = scope === "branch" ? reader.getBranchMetadata : reader.getEntriesMetadata;
-  if (!metadata) {
-    const entries = scope === "branch" ? reader.getBranch() : reader.getEntries();
-    for (const entry of entries) if (select(entry)) yield entry;
-    return;
-  }
-  const readEntry = options?.cacheAdmission === "bypass" && reader.getEntryForScan ? reader.getEntryForScan : reader.getEntry;
-  for (const reference of metadata.call(reader)) {
+  const references = scope === "branch" ? reader.getBranchMetadata() : reader.getEntriesMetadata();
+  for (const reference of references) {
     if (!select(reference)) continue;
-    const entry = readEntry.call(reader, reference.id);
+    const entry = options?.cacheAdmission === "bypass" ? reader.getEntryForScan(reference.id) : reader.getEntry(reference.id);
     if (!entry) throw new Error(`Session entry not found: ${reference.id}`);
     yield entry;
   }

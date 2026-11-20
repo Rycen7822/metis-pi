@@ -37,7 +37,11 @@ function makeHost(t: TestContext) {
   const ctx = {
     mode: "rpc" as "rpc" | "tui",
     hasUI: true,
-    sessionManager: { getBranch: (): Array<{ type: string; customType?: string; data?: unknown }> => [], getSessionId: () => "goal-test-session" },
+    sessionManager: {
+      getBranchMetadata: (): Array<{ type: string; customType?: string; data?: unknown }> => [],
+      getEntry() { return this.getBranchMetadata()[0]; },
+      getSessionId: () => "goal-test-session",
+    },
     hasPendingMessages: () => false,
     isIdle: () => true,
     ui: {
@@ -262,7 +266,7 @@ test("goal popup retains invalid and conflicting drafts and closes across branch
   ui.click("[Edit]");
   ui.key("will not save on navigation");
   const branch = structuredClone(h.entries.at(-1)!.data);
-  h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: branch }];
+  h.ctx.sessionManager.getBranchMetadata = () => [{ type: "custom", customType: "goal", data: branch }];
   await h.fire("session_tree", {}, h.ctx);
   await opened;
   assert.equal(ui.tui.hasOverlay(), false);
@@ -346,7 +350,7 @@ test("agent edit grants cannot survive goal changes, restoration or shutdown, an
     const h = makeHost(t);
     await h.tool("create", { objective: "authorized objective", token_budget: 100 });
     const saved = structuredClone(h.entries.at(-1)!.data);
-    h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+    h.ctx.sessionManager.getBranchMetadata = () => [{ type: "custom", customType: "goal", data: saved }];
     h.ctx.isIdle = () => false;
     await h.command("agent-edit");
     assert.deepEqual(h.sentOptions.at(-1), { triggerTurn: true, deliverAs: "steer" });
@@ -473,7 +477,7 @@ test("one goal accounts running time, restores paused edits and completes its fi
   await h.command("pause");
   assert.equal(h.lastStatus(), "Goal paused (/goal resume)");
   const saved = structuredClone(h.entries.at(-1)!.data);
-  h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+  h.ctx.sessionManager.getBranchMetadata = () => [{ type: "custom", customType: "goal", data: saved }];
   await h.fire("session_tree", {}, h.ctx);
   h.ctx.ui.editor = async () => "edited while paused";
   await h.command("edit");
@@ -512,7 +516,7 @@ test("shutdown stops the active refresh and reload only refreshes the new contex
   const stopped = previous.statusCalls.length;
 
   const reloaded = makeHost(t);
-  reloaded.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+  reloaded.ctx.sessionManager.getBranchMetadata = () => [{ type: "custom", customType: "goal", data: saved }];
   await reloaded.fire("session_start", {}, reloaded.ctx);
   const started = reloaded.statusCalls.length;
   tick(t, 3);
@@ -717,7 +721,7 @@ for (const action of ["pause", "replace", "restore", "abort"] as const) {
     }
     if (action === "restore") {
       const saved = structuredClone(h.entries.at(-1)!.data);
-      h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+      h.ctx.sessionManager.getBranchMetadata = () => [{ type: "custom", customType: "goal", data: saved }];
       await h.fire("session_tree", {}, h.ctx);
     }
     await h.fire("agent_settled", { aborted: action === "abort" }, h.ctx);

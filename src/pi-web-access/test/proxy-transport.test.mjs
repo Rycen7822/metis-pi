@@ -349,7 +349,7 @@ test("invalid configured proxy reaches background fetch rejection handling", asy
 			};
 			const initializeExtension = (await import(${JSON.stringify(indexUrl)})).default;
 			initializeExtension(pi);
-			await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
+			await handlers.get("session_start")({}, { sessionManager: { getBranchMetadata: () => [] } });
 			const tool = tools.find((candidate) => candidate.name === "web_search");
 			const result = await tool.execute("background-proxy-test", {
 				query: "proxy cleanup",

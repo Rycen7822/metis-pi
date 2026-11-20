@@ -1,9 +1,11 @@
 // Upstream: https://github.com/nicobailon/pi-web-access (see src/pi-web-access/METIS.md).
+import { hasMetisHostSDK } from "../src/pi-sdk/host.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import initialize from "../src/pi-web-access/dist/index.js";
 import { createDeferredActionTool, type ActionTool } from "../src/deferred-action-tool.ts";
 
 export default function webAccess(pi: ExtensionAPI): void {
+  if (!hasMetisHostSDK()) return;
   const actions = new Map<string, ActionTool>();
   initialize(pi, {
     registerTool: (action: string, tool: ActionTool) => { actions.set(action, tool); },

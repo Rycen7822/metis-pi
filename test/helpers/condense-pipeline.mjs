@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent";
+import { SessionManager, SettingsManager, createEventBus } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { stringify } from "smol-toml";
 import registerCondense from "../../extensions/condense.ts";
@@ -92,7 +92,8 @@ export async function fixture(
   };
   const pi = {
     events,
-    getSettings: () => JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")),
+    getCompactionSettings: () => SettingsManager.inMemory(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")))
+      .getCompactionSettings(model),
     getAllTools: () => [...tools.values()],
     getActiveTools: () => [...tools.keys()],
     on(name, fn) {

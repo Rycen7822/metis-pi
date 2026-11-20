@@ -44,7 +44,8 @@ function startInstance(entries = []) {
 		modelRegistry: {},
 		scopedModels: [],
 		sessionManager: {
-			getBranch: () => entries,
+			getBranchMetadata: () => entries.map((entry, id) => ({ ...entry, id })),
+			getEntry: id => entries[id],
 			// This fixture journals custom state only; it contributes no model messages.
 			buildSessionProjection: () => ({ entries: [], messages: [], model: null, thinkingLevel: "off" }),
 		},
@@ -193,7 +194,8 @@ test("a session forked from history keeps the clones its results point at after 
 					on(event, handler) { handlers.set(event, [...(handlers.get(event) ?? []), handler]); },
 					appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
 				});
-				const ctx = { hasUI: false, model: undefined, modelRegistry: {}, scopedModels: [], sessionManager: { getBranch: () => entries }, ui: { setWidget() {}, notify() {} } };
+				const ctx = { hasUI: false, model: undefined, modelRegistry: {}, scopedModels: [], ui: { setWidget() {}, notify() {} },
+					sessionManager: { getBranchMetadata: () => entries.map((entry, id) => ({ ...entry, id })), getEntry: id => entries[id] } };
 				const emit = async (event) => { for (const handler of handlers.get(event) ?? []) await handler({ type: event }, ctx); };
 				return { emit, entries, call: (name, params) => tools.get(name).execute(name, params, undefined, undefined, ctx) };
 			};

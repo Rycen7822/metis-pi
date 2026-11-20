@@ -43,7 +43,7 @@ index 2fad08e78..2ebe080bb 100644
  	}
  
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 4278deaf3..af1f28e14 100644
+index 7abbda030..b2d06f716 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
 @@ -9,7 +9,6 @@ import {
@@ -62,7 +62,7 @@ index 4278deaf3..af1f28e14 100644
  	| "getEntryMetadata"
  	| "getEntriesMetadata"
  	| "getBranchMetadata"
-@@ -1190,6 +1190,11 @@ export class SessionManager {
+@@ -1197,6 +1197,11 @@ export class SessionManager {
  		return this.store.getEntry(id);
  	}
  
@@ -75,7 +75,7 @@ index 4278deaf3..af1f28e14 100644
  	getEntryMetadata(id: string): SessionEntryMetadata | undefined {
  		return this.store.getMetadata(id);
 diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
-index 7925c2af9..3974e5a55 100644
+index fe7f58793..a37bf71bb 100644
 --- a/packages/coding-agent/test/session-manager/file-operations.test.ts
 +++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
 @@ -74,6 +74,60 @@ describe("loadEntriesFromFile", () => {

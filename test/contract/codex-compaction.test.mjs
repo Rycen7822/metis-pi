@@ -78,7 +78,9 @@ test("manual compaction persists a native checkpoint and resumes with it, not a 
   assert.equal(h.bodies[0].input.at(-1).type, "compaction_trigger");
   assert.equal(h.bodies[0].store, false);
   assert.equal(h.bodies[0].stream, true);
-  assert.match(h.bodies[0].instructions, /Preserve the current goal/);
+  assert.equal(h.bodies[0].instructions.match(/COMPACTION TEST/g)?.length, 1);
+  assert.match(h.bodies[0].instructions, /Compaction focus: Preserve the current goal/);
+  assert.doesNotMatch(JSON.stringify(h.bodies[0].input), /COMPACTION TEST|Preserve the current goal/);
   assert.ok(!JSON.stringify(h.bodies[0].input).includes("KEPT TAIL"), "do not compact and then replay the kept tail twice");
   assert.equal(h.headers[0].get("chatgpt-account-id"), "offline-test");
   assert.equal(h.headers[0].get("x-codex-beta-features"), "remote_compaction_v2");

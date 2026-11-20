@@ -40,25 +40,23 @@ function scrollScreen(children, width = 40, rows = 8) {
   return tui;
 }
 
-test("settled shell scroll frames render each leaf once and reuse its copy product", (t) => {
+test("settled shell scroll frames skip leaf renders and reuse committed copy products", (t) => {
   const shell = shellFixture(t);
   const rows = Array.from({ length: 8 }, (_, i) => shell(`command ${i}\n${"long output words ".repeat(300)}\nlast`));
   const tui = scrollScreen(rows, 80, 12);
   tui.doRender();
   const leaves = rows.flatMap((row) => [row.callRendererComponent, row.resultRendererComponent]);
   const renders = leaves.map((leaf) => t.mock.method(leaf, "render").mock);
+  const before = tui.currentLayout.root.scrollContentLines;
+  assert.ok(productFor(before));
   const beforeScroll = tui.currentLayout.root.scrollView.scrollTop;
   for (let i = 0; i < 3; i++) {
     tui.handleViewportInput("\x1b[<64;10;5M");
     tui.doRender();
   }
   assert.ok(tui.currentLayout.root.scrollView.scrollTop < beforeScroll);
-  for (const render of renders) {
-    assert.equal(render.callCount(), 3, "one render per leaf and wheel frame, including offscreen rows");
-    const first = render.calls[0].result;
-    assert.ok(productFor(first));
-    for (const { result } of render.calls) assert.equal(result, first, "warm frames reuse the cached product array");
-  }
+  for (const render of renders) assert.equal(render.callCount(), 0, "viewport-only frames must not render settled leaves");
+  assert.equal(tui.currentLayout.root.scrollContentLines, before);
   for (const row of rows) assert.ok(publishedRowsOf(row), "self-shell publishes the host's actual rows");
 });
 
@@ -110,6 +108,7 @@ test("native shell updates preserve committed copy, theme colors and image fallb
   }
   row.updateResult(payload("changed after selection"));
   row.imageComponents = [new Tui.Text("NATIVE IMAGE ROW", 0, 0)];
+  tui.requestRender();
   tui.doRender();
   assert.equal(copy(committed, "甲").text, text, "new output cannot rewrite a committed frame's metadata");
   const mixed = copy(tui.currentLayout, "changed");

@@ -1,5 +1,4 @@
-import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
-import type { SessionEntryReference } from "./session-history.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const METIS_EVENTS = {
   embeddedTranscript: "metis-pi:embedded-transcript",
@@ -43,11 +42,7 @@ export interface CondenseMaintenanceRequest { pending?: Promise<void> }
 // Ownership needs model identity and native history reads, not a full SDK ctx.
 export interface CodexCompactionOwnerRequest {
   readonly model?: { readonly api: string; readonly provider: string };
-  readonly sessionManager: {
-    readonly buildSessionProjection: () => SessionProjection;
-    readonly getBranch: () => SessionEntry[];
-    readonly getBranchMetadata?: () => SessionEntryReference[];
-  };
+  readonly sessionManager: Readonly<Pick<ExtensionContext["sessionManager"], "buildSessionProjection" | "getBranchMetadata">>;
   owns: boolean;
 }
 
@@ -87,7 +82,5 @@ export function isCodexCompactionOwnerRequest(value: unknown): value is CodexCom
     && (value["model"] === undefined || (record(value["model"]) && typeof value["model"]["api"] === "string"
       && typeof value["model"]["provider"] === "string"))
     && record(value["sessionManager"]) && typeof value["sessionManager"]["buildSessionProjection"] === "function"
-    && typeof value["sessionManager"]["getBranch"] === "function"
-    && (value["sessionManager"]["getBranchMetadata"] === undefined
-      || typeof value["sessionManager"]["getBranchMetadata"] === "function");
+    && typeof value["sessionManager"]["getBranchMetadata"] === "function";
 }

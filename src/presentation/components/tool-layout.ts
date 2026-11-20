@@ -8,7 +8,7 @@ export function toolGutter(child: Component, theme: Foreground, kind: "args" | "
   const columns = OUTPUT_SUBSEQUENT_PREFIX.length;
   const first = theme.fg("dim", kind === "args" ? COMMAND_CONTINUATION_PREFIX : OUTPUT_INITIAL_PREFIX);
   const rest = kind === "args" ? first : OUTPUT_SUBSEQUENT_PREFIX;
-  let cache: { width: number; source: string[]; rows: string[] } | undefined;
+  let cache: { width: number; source: readonly string[]; rows: string[] } | undefined;
   return {
     render(width) {
       if (width < columns + 2) {

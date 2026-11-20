@@ -1,6 +1,6 @@
 # 架构
 
-Pi 将 Metis 加载为扩展包。Pi 管理模型、认证、会话、工具权限和 Codemode。Metis 提供工具与策略，并通过扩展 API 接入宿主。少数缺少扩展接口的集成由随包的 [Pi SDK 补丁](../sdk-patches/pi-1.5.2/README.md) 提供。
+Pi 将 Metis 加载为扩展包。Pi 管理模型、认证、会话、工具权限和 Codemode。Metis 提供工具与策略，并通过扩展 API 接入宿主。少数缺少扩展接口的集成由随包的 [Pi SDK 补丁](../sdk-patches/pi-1.6.0/README.md) 提供。
 
 ## 模块边界
 

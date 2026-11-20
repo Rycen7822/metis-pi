@@ -2386,8 +2386,7 @@ test("manual capture errors report retained pending work and the unchanged work 
   const f = await fixture(t, { mode: "tui", pruneOn: "on-demand" });
   f.add("semantic source ".repeat(2000), "unknown-command", "scan-pending");
   const getBranch = f.sm.getBranch.bind(f.sm);
-  const readMethod = typeof f.sm.getBranchMetadata === "function" ? "getBranchMetadata" : "getBranch";
-  const mock = t.mock.method(f.sm, readMethod, () => { throw new Error("offline branch read failed"); });
+  const mock = t.mock.method(f.sm, "getBranchMetadata", () => { throw new Error("offline branch read failed"); });
   await f.commands.get("pruner").handler("now", f.ctx);
   assert.ok(f.notices.some(([message]) => /could not inspect pending batches.*raw results retained/.test(message)));
   assert.ok(!f.notices.some(([message]) => /nothing pending/.test(message)));

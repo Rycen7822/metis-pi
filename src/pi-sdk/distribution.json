@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "piVersion": "1.5.2",
-  "upstreamCommit": "b4afdddf44e059c67ccf5097e5317d913521b470",
+  "piVersion": "1.6.0",
+  "upstreamCommit": "faac585884ae2c013a6b1400f3e9e77f10b34bac",
   "patches": [
     {
       "file": "0000-physical-workspace-bundling.patch",
@@ -9,23 +9,23 @@
     },
     {
       "file": "0001-reuse-visible-row-composition.patch",
-      "sha256": "df3750f3f1f74e6ff70cfc8258b08f718c182c73ffd70ef12e2a0c2b3c6ea0a8"
+      "sha256": "f2351afa14d96624e9c27d5996b9817da8b2a30f04db87512c351b3615ab265a"
     },
     {
       "file": "0003-load-session-bodies-on-demand.patch",
-      "sha256": "2b3479c203c913ee0e788d6a4361440f234ca11b4ba1a8e290eebb3174d69bac"
+      "sha256": "92b30f66bab349537cfb781f1fb0dca6283241699a1dd2b18a28fdc562868351"
     },
     {
       "file": "0004-preview-session-trees-without-history-bodies.patch",
-      "sha256": "be12127a9d214fb9b2ea2519cb57475f17c8efa20619d4b111b7298fe004a45e"
+      "sha256": "750dcedd9a8884c6b514e97d44c444f476f035eb1f02e01fadf77d7e1df8dace"
     },
     {
       "file": "0005-preserve-hot-bodies-during-history-scans.patch",
-      "sha256": "d466f631dfc945cdd065a3023a2e69ab00ec79e8df51acce1f6b772b42f36544"
+      "sha256": "47dc84af3ad72957e5928830edea4497bd9c118a26d924ce8cd6fecf914a66c7"
     },
     {
       "file": "0006-preserve-oauth-login-continuity.patch",
-      "sha256": "5fbdd8c5e23f0ed611eca78641605d65c2ab51dfc7a13bb50a8fc0d9f17a1f06"
+      "sha256": "22c14f7e5700f5c2a75b3857e8ac599ebad880eb934cd68d51832f15c7fa0e8e"
     },
     {
       "file": "0007-separate-message-display-headers.patch",
@@ -33,15 +33,15 @@
     },
     {
       "file": "0008-prefer-callable-tool-discovery.patch",
-      "sha256": "0d3c4d42b3b241010555af55c3a8295c37e13e2824b4ff0530e6c776fd994381"
+      "sha256": "d4af563a02fffc3e6fba9e632f8b8e6e311fd23fc4f93b985dcb077075b3aac8"
     },
     {
       "file": "0009-share-embedded-transcript-primitives.patch",
-      "sha256": "40cc9116cc31c1a32a858054ec06a2fe8bb5f848a5ec9c149578497edb0f7406"
+      "sha256": "2a27f348d7012bef3f002ceb85233448460f61a57ba35ae4c74df0caa3f081c5"
     },
     {
       "file": "0010-stream-session-projections.patch",
-      "sha256": "750255ebc8abd2766bcfb6ee737b64f5e3e6aef4db53ddc9933ba1dfe8ef0973"
+      "sha256": "8815e956216939bd754e3bba49dd7b4d82c5de9b7447192655af15f13740456e"
     },
     {
       "file": "0011-bound-codemode-execution.patch",
@@ -49,78 +49,78 @@
     },
     {
       "file": "0012-add-programmatic-read-pages.patch",
-      "sha256": "9d28884a2dde042330aec9698d89f228966deb332cb4688df6189e3da19d7c18"
+      "sha256": "ad4bfab7e2c5b7b5997c9dc29cbe89a6c151a5e9bebafdd9d0e42de30b166df7"
     },
     {
       "file": "0013-refresh-metis-catalog-from-cli.patch",
-      "sha256": "a3d7396bc328be2a621eba9539b4b5e298f425ec9ef7e3d01aba1f7daadacc9e"
+      "sha256": "f02ae6fe91ad75f591b5b5090eabf79e5157972283c46a3f2abf4c888e7b62c4"
     },
     {
       "file": "0014-cap-automatic-compaction.patch",
-      "sha256": "523f44b64ce2c086b2f631757b1bc059c3390fe01cdfd0732aacceccd50bf860"
+      "sha256": "8b4c1472cd7c2ab131828998ac93a2342f0c5283bd07cbfa2f1d0ee86806e6a3"
     },
     {
       "file": "0015-retain-status-row-text.patch",
-      "sha256": "a890dfffe5d5bffbf44f7015e57737c599261f230980a6b68cd77890d44020be"
+      "sha256": "a649b16a1e3c7f3c0df87020a471069b10e4a5edfad3d76aaa4c72deff385eca"
     },
     {
       "file": "0016-load-codemode-store-by-metadata.patch",
-      "sha256": "4fd0ffe5c5cc91048e00ea42e9990a0cfe76fa7080869844f0323f6624c12329"
+      "sha256": "593b156316346008a4a2db729cd076d11fe84dcbcf1ef1caab76357d63643369"
     },
     {
       "file": "0017-unify-codemode-discovery.patch",
-      "sha256": "5d5d332daea7db26308d7e45a7f7ed3e043600cd9776fd423d946f83f81b6d64"
+      "sha256": "ef631d5663fbb78d89b24f16cdfd844acf4f37299b8fd71467de9ed2de622413"
     },
     {
       "file": "0018-observe-prepared-provider-requests.patch",
-      "sha256": "b6f3cca74a687abbb6fc3232253334fcf96fd1d17e8eabe1582f7dcf0ad9ecba"
+      "sha256": "3cf71e9da668bc269a1a4b226b2cb0583574475f6913e5e79ff2264e0288df6e"
     },
     {
       "file": "0019-project-session-messages-on-demand.patch",
-      "sha256": "7fb964984ee173d14d3007c316ddac44fa0af5c864f9c0d77a703f3f41f0144f"
+      "sha256": "c66c98b72d5490b7d8dd5cdbe2578e12954f730b477145c4968e1252f0adbb91"
     },
     {
       "file": "0020-stabilize-tool-declarations.patch",
-      "sha256": "1faf6402b973b22ace21b06d4745e84c5dd9fc86aaf0bbf999fc9a322d4f7bae"
+      "sha256": "11d28a366365bb8cd95a9351d6ffef17dde2ac7f61dbdb7e7d927ebe5d0d4312"
     },
     {
       "file": "0021-avoid-buffering-completion-events.patch",
-      "sha256": "b3b4d9dedbe7f00edc7ca0e86d999bb8f8b48ac7a09bd990b67c357ad6039708"
+      "sha256": "39f5b1ae57faf9e3efd3eb461d114e440205e3c6a2245ee2796292bc83793788"
     },
     {
       "file": "0022-exercise-read-pages-through-sdk-tool.patch",
-      "sha256": "778d163acad5cadf88cf58b8c15dfa2ff8db0fdee261c9c79ae35125c618c366"
+      "sha256": "979be46c00b49b7b2b7443676818f2d76d40891238cf570dbea5964c4090a786"
     },
     {
       "file": "0023-share-restored-history-and-retire-cold-bodies.patch",
-      "sha256": "ffc23d9139233284b45d657b3afd950c206ee378dfa95d17572b8a67c283fbc9"
+      "sha256": "692442732aceef6b4b15363e4e368c69427e005074c8c18f14f0ab12b253fc24"
     },
     {
       "file": "0024-bound-unknown-tool-previews.patch",
-      "sha256": "1fb70a939a3a879f7725b9a8e389f53e307d1eb7649c531c799f071926fdfa17"
+      "sha256": "3c3afc10e8e4be145605398050f829558984d092805a5684df18fdf0ab576747"
     },
     {
       "file": "0025-scope-session-projection.patch",
-      "sha256": "b1bd7179303acab7a6d47f4ade745d866eafcf697328051116c3ce0ca9c0f665"
+      "sha256": "50f8db7d94e5aba0b0c21c59db58a79993ea4046bec37a1e01ebf44f069f7b60"
     },
     {
       "file": "0026-insert-html-payload-last.patch",
-      "sha256": "ee99ce5d30748593d6973aef010405d166cbbdaecce234fc737b072e1b61d48d"
+      "sha256": "44cbefd27532c89c28be0c51ab78d132337373fa5cd8c94693644a03614d5000"
     },
     {
       "file": "0027-load-resume-search-bodies-on-demand.patch",
-      "sha256": "a6a1b527820b2b1fca9bc63acb6159c441ad6b47e74135f0a24e3ec7b1270c64"
+      "sha256": "db22c38c857051234a09bb83e4929340b510d2d4858fda08f153b222206e306f"
     },
     {
       "file": "0028-reuse-stable-streaming-markdown.patch",
-      "sha256": "ed376b9636e13365d914d802b8e02ef0292285616747011f316932e16400752a"
+      "sha256": "224e34af3d3c4c0a863a8bd593e200e4ba5ed7106081fe48d4c2a34ac87a0192"
     }
   ],
-  "patchSet": "49c25ba7b02ad940a99ced40b560ef3cbf4724931776fe52a6c92a147bc819ea",
+  "patchSet": "26e031694416e5ba9bb1f23dc94bdc346b584cdb8d4eeed23f3aa96880b8d43b",
   "archive": {
-    "file": "pi-1.5.2.tgz",
-    "sha256": "6fa34805e0f8259043750ce803f20b223df96e38c4fb8f372de1cd07a5d4e9ef",
-    "bytes": 6059567,
-    "unpackedBytes": 26829003
+    "file": "pi-1.6.0.tgz",
+    "sha256": "dfd261c2643150ae1f22e51a19484466ed6aef48320b119622ef49497b5bfb1f",
+    "bytes": 6062321,
+    "unpackedBytes": 27073709
   }
 }
