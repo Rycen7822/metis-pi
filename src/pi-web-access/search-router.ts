@@ -48,6 +48,7 @@ import { isZaiAvailable, searchWithZai } from "./zai.ts";
 import { isValyuAvailable, searchWithValyu } from "./valyu.ts";
 import { isKeenableAvailable, searchWithKeenable } from "./keenable.ts";
 import { isCeramicAvailable, searchWithCeramic } from "./ceramic.ts";
+import { isDeepSeekAvailable, searchWithDeepSeek } from "./deepseek.ts";
 import { isKimiSearchAvailable, searchWithKimi } from "./kimi-search.ts";
 import { isMistralAvailable, searchWithMistral } from "./mistral-search.ts";
 
@@ -369,6 +370,7 @@ async function searchWithResolvedProvider(
 	if (provider === "valyu") return { ...(await searchWithValyu(query, options)), provider };
 	if (provider === "keenable") return { ...(await searchWithKeenable(query, options)), provider };
 	if (provider === "ceramic") return { ...(await searchWithCeramic(query, options)), provider };
+	if (provider === "deepseek") return { ...(await searchWithDeepSeek(query, options)), provider };
 	if (provider === "xcrawl") return { ...(await searchWithXCrawl(query, options)), provider };
 	if (provider === "perplexity") return { ...(await searchWithPerplexity(query, options)), provider };
 	if (provider === "searxng") return { ...(await searchWithSearXNG(query, options)), provider };
@@ -428,6 +430,7 @@ async function isResolvedProviderAvailable(provider: ResolvedSearchProvider, opt
 	if (provider === "valyu") return isValyuAvailable();
 	if (provider === "keenable") return isKeenableAvailable();
 	if (provider === "ceramic") return isCeramicAvailable();
+	if (provider === "deepseek") return isDeepSeekAvailable();
 	if (provider === "xcrawl") return isXcrawlAvailable();
 	if (provider === "perplexity") return isPerplexityAvailable();
 	if (provider === "searxng") return isSearXNGAvailable();
@@ -481,7 +484,7 @@ async function searchWithProviders(
 			: await isResolvedProviderAvailable(provider, options),
 	})))).filter((entry) => entry.available).map((entry) => entry.provider);
 	if (providers.length === 0) {
-		throw new Error("No configured search provider available for provider \"all\". Parallel MCP, degoog, DuckDuckGo, Kimi, AnySearch, xAI, Mistral, Bright Data, SerpBase, SerpApi, Serper, Serply, You.com, Valyu, Baizhi, Z.ai, XCrawl, Keenable, and Ceramic are excluded.");
+		throw new Error('No configured search provider available for provider "all". Explicit-only providers are excluded.');
 	}
 
 	const settled = await Promise.allSettled(

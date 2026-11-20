@@ -371,6 +371,7 @@ Every key field below accepts a literal, `$NAME` / `${NAME}`, or trusted `!comma
 | `zai` | `zaiApiKey` → `ZAI_API_KEY` | E; GLM Coding Plan quota |
 | `keenable` | Optional `keenableApiKey` → `KEENABLE_API_KEY` | E; keyless rate-limited endpoint |
 | `ceramic` | `ceramicApiKey` → `CERAMIC_API_KEY` | E; paid keyword search |
+| `deepseek` | `deepseekApiKey` → `DEEPSEEK_API_KEY` | E; paid DeepSeek Search API |
 | `searxng` | Optional `searxngHeaders` in JSON | A; configured local endpoint preferred |
 | `degoog` | Optional `degoogApiKey` → `DEGOOG_API_KEY` | E; public or self-hosted endpoint |
 | `duckduckgo` | None | E; HTML search |
@@ -418,6 +419,29 @@ Keyed requests use Exa account limits directly; old `exa-usage.json` is ignored.
 `geminiAuth = "adc"` instead uses Vertex AI (`aiplatform.googleapis.com`) with an OAuth token from `GOOGLE_APPLICATION_CREDENTIALS` or `~/.config/gcloud/application_default_credentials.json` (`gcloud auth application-default login`). `geminiProject` / `geminiLocation` fall back to `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` (or `GCLOUD_PROJECT`); both are required. `authorized_user` refresh-token and `service_account` JWT files work; tokens refresh by expiry and are redacted from errors.
 
 ADC/gateways cover generate-content search, URL context, and PDF/inline data. YouTube/local video Files API paths still need a Gemini API key or fall back to opt-in Gemini Web; a gateway/ADC alone does not make Files API analysis available.
+
+### DeepSeek Search API
+
+Set `deepseekApiKey` in the agent directory’s `web-search.json`, or set `DEEPSEEK_API_KEY`. Then select `provider: "deepseek"` in a call,
+set `provider = "deepseek"` under `[webAccess]`, or add it to an explicit `searchRouting.providers` list. If you use `webSearch.allowedProviders`,
+include `deepseek` there too. Both Pi and the standalone MCP server use these credentials, not Pi model credentials. It is never picked by the
+unconfigured automatic chain or by `all`.
+
+```js
+return await tools.web_access({
+  action: "search",
+  params: { provider: "deepseek", query: "DeepSeek V4 lang:zh", includeContent: true },
+});
+```
+
+The [official Search API](https://api-docs.deepseek.com/zh-cn/guides/search) is called directly, without invoking a model. It supports
+DeepSeek query operators; `domainFilter` adds `site:` / `-site:` clauses and checks returned domains, and `recencyFilter` adds an
+`after:` date in UTC (1, 7, 30 or 365 days back). The final query, including operators, must fit 128 Unicode characters; it is never silently
+truncated. Metis requests 5 results by default, up to 20. `includeContent: true` requests page text in the same search; pages missing from
+the response are fetched normally by Web Access, not by DeepSeek’s separate Fetch API. Image search is not supported.
+
+DeepSeek documents ¥5 per 1,000 successful searches with nonempty results (no charge for no results). Named calls do not retry automatically;
+configure an explicit route to allow fallback on quota, transient or other configured error categories.
 
 ### Provider selection and routing
 

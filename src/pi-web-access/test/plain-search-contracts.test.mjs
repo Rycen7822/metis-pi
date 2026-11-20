@@ -16,6 +16,7 @@ const jsonProviders = [
 	["bocha", "searchWithBocha", "BOCHA_API_KEY", "https://api.bochaai.com/v1/web-search"],
 	["brave", "searchWithBrave", "BRAVE_API_KEY", "https://api.search.brave.com/res/v1/web/search"],
 	["ceramic", "searchWithCeramic", "CERAMIC_API_KEY", "https://api.ceramic.ai/search"],
+	["deepseek", "searchWithDeepSeek", "DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/tools/search"],
 	["keenable", "searchWithKeenable", "KEENABLE_API_KEY", "https://api.keenable.ai/v1/search"],
 	["search1api", "searchWithSearch1API", "SEARCH1API_KEY", "https://api.search1api.com/search"],
 	["searchinfinity", "searchWithSearchinfinity", "SEARCHINFINITY_API_KEY", "https://torchlight.byteintlapi.com/search_api/web_search"],

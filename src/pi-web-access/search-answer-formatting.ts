@@ -31,8 +31,11 @@ export function normalizeSearchText(value: unknown): string {
 	return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
+export function formatSearchResultAsAnswer({ title, url, snippet }: AnswerResult, summary = snippet): string {
+	const source = `Source: ${title} (${url})`;
+	return summary ? `${summary}\n${source}` : source;
+}
+
 export function formatSearchResultsAsAnswer(results: readonly AnswerResult[]): string {
-	return results.map((result) => result.snippet
-		? `${result.snippet}\nSource: ${result.title} (${result.url})`
-		: `Source: ${result.title} (${result.url})`).join("\n\n");
+	return results.map(result => formatSearchResultAsAnswer(result)).join("\n\n");
 }

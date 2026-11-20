@@ -349,6 +349,8 @@ provider 请求按 `max(1024, ceil(2 × R))` 预留文本输出空间；思考�
 
 API key/token 字段、自定义 `searxngHeaders` / `degoogHeaders`（可能含认证信息）
 及带认证的 proxy 保存在 **`<agentDir>/web-search.json`**，与现有 TOML 同目录。
+例如 `deepseekApiKey` / `DEEPSEEK_API_KEY` 用于显式 `deepseek` 搜索；不会自动加入默认 `auto` 或 `all`，
+详见 [DeepSeek Search API](src/pi-web-access/README.md#deepseek-search-api)。
 密钥仍支持原字符串、`$ENV`、`!command` 及 provider 环境变量；Google ADC、
 Pi 登录和浏览器 Cookie 值由原认证系统保存。TOML 中误写密钥字段会报错。
 JSON 仅提供凭据，普通字段始终不参与偏好解析；凭据 JSON 中的认证代理优先于 TOML proxy。

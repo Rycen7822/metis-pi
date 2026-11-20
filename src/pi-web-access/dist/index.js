@@ -3419,9 +3419,13 @@ function extractAnswer(output) {
 function normalizeSearchText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
+function formatSearchResultAsAnswer({ title, url, snippet }, summary = snippet) {
+  const source = `Source: ${title} (${url})`;
+  return summary ? `${summary}
+${source}` : source;
+}
 function formatSearchResultsAsAnswer(results) {
-  return results.map((result) => result.snippet ? `${result.snippet}
-Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.url})`).join("\n\n");
+  return results.map((result) => formatSearchResultAsAnswer(result)).join("\n\n");
 }
 var init_search_answer_formatting = __esm({
   "src/pi-web-access/search-answer-formatting.ts"() {
@@ -10639,7 +10643,46 @@ Query: ${query}` }],
 init_github_extract();
 
 // src/pi-web-access/search-providers.ts
-var RESOLVED_SEARCH_PROVIDERS = ["openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "you", "firecrawl", "jina", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "exa", "serpdive", "kagi", "ollama", "anysearch", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "bocha", "xcrawl", "baizhi", "zai", "keenable", "ceramic"];
+var RESOLVED_SEARCH_PROVIDERS = [
+  "openai",
+  "brave",
+  "parallel",
+  "parallel-mcp",
+  "tinyfish",
+  "search1api",
+  "searchinfinity",
+  "querit",
+  "tavily",
+  "you",
+  "firecrawl",
+  "jina",
+  "searxng",
+  "degoog",
+  "duckduckgo",
+  "perplexity",
+  "gemini",
+  "kimi",
+  "exa",
+  "serpdive",
+  "kagi",
+  "ollama",
+  "anysearch",
+  "xai",
+  "mistral",
+  "brightdata",
+  "serpbase",
+  "serpapi",
+  "serper",
+  "serply",
+  "valyu",
+  "bocha",
+  "xcrawl",
+  "baizhi",
+  "zai",
+  "keenable",
+  "ceramic",
+  "deepseek"
+];
 var SEARCH_PROVIDERS = ["auto", "all", ...RESOLVED_SEARCH_PROVIDERS];
 var ALL_SEARCH_PROVIDERS = ["searxng", "openai", "exa", "brave", "parallel", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "firecrawl", "jina", "serpdive", "kagi", "ollama", "perplexity", "gemini", "bocha"];
 var SEARCH_PROVIDER_LABELS = {
@@ -10681,7 +10724,8 @@ var SEARCH_PROVIDER_LABELS = {
   baizhi: "Baizhi",
   zai: "Z.ai",
   keenable: "Keenable",
-  ceramic: "Ceramic"
+  ceramic: "Ceramic",
+  deepseek: "DeepSeek"
 };
 function providerLabel(provider) {
   return SEARCH_PROVIDER_LABELS[provider];
@@ -15278,6 +15322,111 @@ async function searchWithCeramic(query, options = {}) {
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
+// src/pi-web-access/deepseek.ts
+init_activity();
+init_config();
+init_credential_source();
+init_domain_filter_normalization();
+init_proxy_transport();
+init_search_answer_formatting();
+init_search_error_redaction();
+init_search_result_count_normalization();
+init_search_types();
+var SEARCH_URL2 = "https://api.deepseek.com/v1/tools/search";
+var TIMEOUT_SECONDS = 60;
+var RECENCY_DAYS2 = { day: 1, week: 7, month: 30, year: 365 };
+function credentialOptions3() {
+  const { deepseekApiKey } = loadWebAccessConfig();
+  return { provider: "DeepSeek", configuredValue: deepseekApiKey, environmentValue: process.env.DEEPSEEK_API_KEY };
+}
+function isDeepSeekAvailable() {
+  return hasCredentialSource(credentialOptions3());
+}
+function buildQuery3(query, filters, recency) {
+  const terms = query.trim();
+  if (!terms) throw new Error("DeepSeek invalid request: query must not be blank");
+  const parts = [terms];
+  if (filters.include.length) parts.push(filters.include.map((domain) => `site:${domain}`).join(" OR "));
+  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
+  if (recency) {
+    const cutoff = new Date(Date.now() - RECENCY_DAYS2[recency] * 864e5).toISOString().slice(0, 10);
+    parts.push(`after:${cutoff}`);
+  }
+  const filteredQuery = parts.join(" ");
+  if ([...filteredQuery].length > 128) throw new Error("DeepSeek invalid request: query including filters exceeds 128 Unicode characters");
+  return filteredQuery;
+}
+function mapResponse(data, filters, count, includeContent) {
+  const entries = data?.results;
+  if (!Array.isArray(entries)) throw new Error("DeepSeek returned invalid response: expected results array");
+  const results = [];
+  const answer = [];
+  const inlineContent = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || !("url" in entry) || typeof entry.url !== "string") continue;
+    const row = entry;
+    const url = URL.parse(entry.url);
+    if (!url || url.protocol !== "https:" && url.protocol !== "http:" || url.username || url.password) continue;
+    if (seen.has(url.href) || !matchesDomainFilter(url, filters)) continue;
+    seen.add(url.href);
+    const title = normalizeSearchText(row.title) || url.href;
+    const summary = normalizeSearchText(row.summary);
+    const result = { url: url.href, title, snippet: normalizeSearchText(row.snippet) || summary };
+    results.push(result);
+    answer.push(formatSearchResultAsAnswer(result, summary || result.snippet));
+    if (includeContent && typeof row.content === "string" && row.content.trim()) {
+      inlineContent.push({ url: url.href, title, content: row.content, error: null });
+    }
+    if (results.length === count) break;
+  }
+  return { answer: answer.join("\n\n"), results, ...inlineContent.length ? { inlineContent } : {} };
+}
+async function searchWithDeepSeek(query, options = {}) {
+  if (options.signal?.aborted) throw new Error("Aborted");
+  const filters = normalizeDomainFilters(options.domainFilter);
+  const wireQuery = buildQuery3(query, filters, options.recencyFilter);
+  const count = normalizeSearchResultCount(options.numResults);
+  const includeContent = options.includeContent === true;
+  const apiKey = requireProviderCredential(await resolveCredential({ ...credentialOptions3(), signal: options.signal }), {
+    provider: "DeepSeek",
+    configPath: webCredentialsPath(),
+    configKey: "deepseekApiKey",
+    envVar: "DEEPSEEK_API_KEY",
+    keyInstructions: "Get a key at https://platform.deepseek.com/api_keys"
+  });
+  const timeout = AbortSignal.timeout(TIMEOUT_SECONDS * 1e3);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const activity = activityMonitor.logStart({ type: "api", query });
+  try {
+    const response = await webFetch(SEARCH_URL2, {
+      method: "POST",
+      redirect: "error",
+      signal,
+      headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ query: wireQuery, count, need_content: includeContent })
+    }, options.fetch);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {
+      });
+      throw new SearchHttpError(response.status, `DeepSeek Search API error ${response.status}`);
+    }
+    const result = mapResponse(await response.json(), filters, count, includeContent);
+    signal.throwIfAborted();
+    activityMonitor.logComplete(activity, response.status);
+    return result;
+  } catch (error) {
+    if (options.signal?.aborted) {
+      activityMonitor.logComplete(activity, 0);
+      throw new Error("Aborted");
+    }
+    const cause = timeout.aborted ? new Error(`DeepSeek search timed out after ${TIMEOUT_SECONDS}s`) : error instanceof SyntaxError ? new Error("DeepSeek returned invalid JSON") : error;
+    const failure = redactSearchFailure(cause, apiKey);
+    activityMonitor.logError(activity, failure.message);
+    throw failure.error;
+  }
+}
+
 // src/pi-web-access/kimi-search.ts
 init_utils();
 init_activity();
@@ -15835,6 +15984,7 @@ async function searchWithResolvedProvider(provider, query, options, useCurrentMo
   if (provider === "valyu") return { ...await searchWithValyu(query, options), provider };
   if (provider === "keenable") return { ...await searchWithKeenable(query, options), provider };
   if (provider === "ceramic") return { ...await searchWithCeramic(query, options), provider };
+  if (provider === "deepseek") return { ...await searchWithDeepSeek(query, options), provider };
   if (provider === "xcrawl") return { ...await searchWithXCrawl(query, options), provider };
   if (provider === "perplexity") return { ...await searchWithPerplexity(query, options), provider };
   if (provider === "searxng") return { ...await searchWithSearXNG(query, options), provider };
@@ -15891,6 +16041,7 @@ async function isResolvedProviderAvailable(provider, options, useCurrentModel = 
   if (provider === "valyu") return isValyuAvailable();
   if (provider === "keenable") return isKeenableAvailable();
   if (provider === "ceramic") return isCeramicAvailable();
+  if (provider === "deepseek") return isDeepSeekAvailable();
   if (provider === "xcrawl") return isXcrawlAvailable();
   if (provider === "perplexity") return isPerplexityAvailable();
   if (provider === "searxng") return isSearXNGAvailable();
@@ -15928,7 +16079,7 @@ async function searchWithProviders(query, options, selectedProviders) {
     available: provider === "gemini" ? isGeminiApiAvailable() : await isResolvedProviderAvailable(provider, options)
   })))).filter((entry) => entry.available).map((entry) => entry.provider);
   if (providers.length === 0) {
-    throw new Error('No configured search provider available for provider "all". Parallel MCP, degoog, DuckDuckGo, Kimi, AnySearch, xAI, Mistral, Bright Data, SerpBase, SerpApi, Serper, Serply, You.com, Valyu, Baizhi, Z.ai, XCrawl, Keenable, and Ceramic are excluded.');
+    throw new Error('No configured search provider available for provider "all". Explicit-only providers are excluded.');
   }
   const settled = await Promise.allSettled(
     providers.map((provider) => selectedProviders ? searchWithResolvedProvider(provider, query, options) : searchWithAllProvider(provider, query, options))

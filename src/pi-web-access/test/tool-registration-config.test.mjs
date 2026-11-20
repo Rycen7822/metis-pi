@@ -75,8 +75,9 @@ test("malformed config falls back during extension registration", () => {
 
 test("default public execution tool definitions retain their compatibility hashes", () => {
 	const expected = {
-		web_search: "bbf2a700bb8fb6490d621fb6a4eed9968f9b524b24cd1b9796c2799045c847d9",
-		source_check: "48e69c75320f7a844a83bfe032c98b93ef11115e908831e6349915e708b16889",
+		// Search and source-check enumerate the same providers, including explicit-only DeepSeek.
+		web_search: "b79ae5d7206fe757ac1421e826ee5c5ac183e482c339325a4b5fc3b1a15354af",
+		source_check: "597718ee1af457a65ae2cf804a35de87b774b13edfba834fd9e1efb8305ff172",
 		fetch_content: "0082465bae0f184988fd37fe152cad9c7a236e410747ba6770013895a28978d4",
 		get_search_content: "e1c7597fc085a811c0c6fcde365a96571c275c70b93a48206a38be06a7a45a5f",
 	};
@@ -85,6 +86,16 @@ test("default public execution tool definitions retain their compatibility hashe
 		name,
 		createHash("sha256").update(JSON.stringify({ name, description, parameters })).digest("hex"),
 	])), expected);
+});
+
+test("Pi search tools expose DeepSeek only when the provider allowlist permits it", () => {
+	const defaults = registered({}).tools;
+	const restricted = registered({ webSearch: { allowedProviders: ["brave"] } }).tools;
+	for (const name of ["web_search", "source_check"]) {
+		const providerSchema = tools => tools.find(tool => tool.name === name).parameters.properties.provider;
+		assert.equal(Value.Check(providerSchema(defaults), "deepseek"), true, name);
+		assert.equal(Value.Check(providerSchema(restricted), "deepseek"), false, name);
+	}
 });
 
 test("search tools constrain numResults to integer values from 1 through 20", () => {
