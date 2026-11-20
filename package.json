@@ -50,6 +50,7 @@
     "verify:pi-sdk": "node scripts/pi-sdk.mjs verify",
     "prepare:pi-sdk": "node scripts/pi-sdk.mjs prepare",
     "build:neural-engine": "node scripts/neural-engine.mjs",
+    "build:recall": "node scripts/build-session-recall.mjs",
     "verify:neural-engine": "node scripts/neural-engine.mjs verify",
     "verify:native-assets": "node scripts/verify-native-assets.mjs",
     "prepack": "npm run verify:pi-sdk && npm run verify:native-assets && npm run build:web-access && npm run prepare:subagents",

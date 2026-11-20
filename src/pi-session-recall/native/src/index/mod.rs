@@ -7,7 +7,7 @@ mod tree;
 
 pub use hybrid::{HybridHit, HybridResult, SessionHits};
 pub use search::{LexicalHit, LexicalResult, Scope};
-pub use sync::{CoverageGap, RefreshReport};
+pub use sync::{Coverage, CoverageGap, RefreshReport};
 use tree::Tree;
 
 use crate::Result;
@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-const CACHE_SCHEMA: i64 = 2;
+const CACHE_SCHEMA: i64 = 3;
 
 pub struct Index {
     root: Tree,
@@ -58,40 +58,59 @@ impl Index {
         let mut db = Connection::open_with_flags(cache_dir.join("index.sqlite3"), flags)?;
         db.busy_timeout(Duration::from_millis(100))?;
         db.execute_batch(
-            "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8192;",
         )?;
-        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         let root_path = root.path.as_os_str().as_bytes();
         let device = identity.dev() as i64;
         let inode = identity.ino() as i64;
         match version {
             0 => {
-                tx.execute_batch(include_str!("schema.sql"))?;
-                tx.execute(
-                    "INSERT INTO cache_root VALUES(1,?1,?2,?3,?4)",
-                    params![root_path, device, inode, model],
-                )?;
-                tx.pragma_update(None, "user_version", CACHE_SCHEMA)?;
-            }
-            CACHE_SCHEMA => {
-                let matches: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM cache_root WHERE path=?1 AND device=?2 AND inode=?3 AND model IS ?4)",
-                    params![root_path, device, inode, model],
-                    |row| row.get(0),
-                )?;
-                if !matches {
-                    return Err("Recall index belongs to another session root or model".into());
+                db.pragma_update(None, "journal_mode", "WAL")?;
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                // Recheck after acquiring the writer lock: another process may have opened the new cache.
+                let initialized: i64 =
+                    tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+                if initialized == 0 {
+                    tx.execute_batch(include_str!("schema.sql"))?;
+                    tx.execute(
+                        "INSERT INTO cache_root VALUES(1,?1,?2,?3,?4)",
+                        params![root_path, device, inode, model],
+                    )?;
+                    tx.pragma_update(None, "user_version", CACHE_SCHEMA)?;
                 }
+                tx.commit()?;
             }
+            CACHE_SCHEMA => {}
             _ => return Err("Incompatible Recall cache version; rebuild the index".into()),
         }
-        tx.commit()?;
+        let matches: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cache_root WHERE path=?1 AND device=?2 AND inode=?3 AND model IS ?4)",
+            params![root_path, device, inode, model],
+            |row| row.get(0),
+        )?;
+        if !matches {
+            return Err("Recall index belongs to another session root or model".into());
+        }
         Ok(Self {
             root,
             cache_dir: cache,
             db,
             encoder,
         })
+    }
+
+    /// Bound SQLite's data-page growth. WAL and graph growth are accounted separately
+    /// by the worker that owns the aggregate cache admission lock.
+    pub fn limit_growth(&self, extra_bytes: u64) -> Result<()> {
+        let pages: u64 = self
+            .db
+            .pragma_query_value(None, "page_count", |row| row.get(0))?;
+        let page_size: u64 = self
+            .db
+            .pragma_query_value(None, "page_size", |row| row.get(0))?;
+        self.db
+            .pragma_update(None, "max_page_count", pages + extra_bytes / page_size)?;
+        Ok(())
     }
 }

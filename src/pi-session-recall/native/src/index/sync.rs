@@ -25,6 +25,15 @@ pub struct RefreshReport {
     pub gaps: Vec<(PathBuf, CoverageGap)>,
 }
 
+#[derive(Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Coverage {
+    pub indexed_sources: usize,
+    pub pending_sources: usize,
+    pub incomplete_sources: usize,
+    pub complete: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoverageGap {
     Unavailable,
@@ -43,7 +52,11 @@ impl Index {
             Mode::empty(),
         )?;
         flock(&guard, FlockOperation::NonBlockingLockExclusive)?;
+        // A failed walk must not leave a previous "complete" claim or prune its unseen files.
+        self.db.execute("DELETE FROM refresh_state", [])?;
         let files = self.root.files(&mut check)?;
+        self.db
+            .execute("INSERT INTO refresh_state VALUES(1,?1,0,0)", [files.len()])?;
         self.remove_missing(&files, &mut check)?;
         let mut report = RefreshReport {
             files: files.len(),
@@ -51,11 +64,39 @@ impl Index {
         };
         for path in files {
             check()?;
-            if let Some(gap) = self.refresh_file(&path, &mut check)? {
+            let gap = self.refresh_file(&path, &mut check)?;
+            self.db.execute(
+                "UPDATE refresh_state SET processed=processed+1,incomplete=incomplete+?1",
+                [gap.is_some()],
+            )?;
+            if let Some(gap) = gap {
                 report.gaps.push((path, gap));
             }
         }
         Ok(report)
+    }
+
+    pub fn coverage(&self) -> Result<Coverage> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT total,processed,incomplete FROM refresh_state",
+                [],
+                |row| {
+                    let total: usize = row.get(0)?;
+                    let processed: usize = row.get(1)?;
+                    let incomplete_sources: usize = row.get(2)?;
+                    let pending_sources = total.saturating_sub(processed);
+                    Ok(Coverage {
+                        indexed_sources: processed.saturating_sub(incomplete_sources),
+                        pending_sources,
+                        incomplete_sources,
+                        complete: pending_sources == 0 && incomplete_sources == 0,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default())
     }
 
     fn remove_missing(

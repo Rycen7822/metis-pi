@@ -10,6 +10,7 @@ import {
   ModelRegistry, ModelRuntime, SessionManager, estimateTokens, type ExtensionAPI, type ExtensionToolContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import initialize from "../../extensions/session-recall.ts";
+import { refreshRecall } from "../../src/pi-session-recall/runtime.ts";
 import { searchFiles, searchLines } from "../../src/pi-session-recall/search.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { disableNetwork } from "../helpers/native-provider.mjs";
@@ -109,7 +110,10 @@ async function queryFixture(t: TestContext, contextWindow = 1000) {
   process.env.PI_CODING_AGENT_DIR = dir;
   t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   let tool: ToolDefinition<any, Record<string, unknown>>;
-  initialize({ registerTool: (definition: ToolDefinition<any, Record<string, unknown>>) => { tool = definition; } } as unknown as ExtensionAPI);
+  initialize({
+    on: () => () => {},
+    registerTool: (definition: ToolDefinition<any, Record<string, unknown>>) => { tool = definition; },
+  } as unknown as ExtensionAPI);
   const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null,
     modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model: Model<Api> = { id: "recall", name: "Recall offline", provider: "recall-offline", api: "openai-responses",
@@ -141,6 +145,55 @@ test("the public grouped Recall tool reads native string messages and rejects em
     AbortSignal.abort(), undefined, ctx);
   assert.equal(cancelled.details.cancelled, true);
   assert.equal(captured.length, 0, "a cancelled read cannot dispatch a helper request");
+});
+
+test("hybrid with missing worker is explicit and does not change literal search", async t => {
+  const { dir, sessions, tool, ctx } = await queryFixture(t);
+  const previous = process.env.METIS_RECALL_RUNTIME_DIR;
+  process.env.METIS_RECALL_RUNTIME_DIR = join(dir, "unavailable");
+  t.after(() => {
+    if (previous === undefined) delete process.env.METIS_RECALL_RUNTIME_DIR;
+    else process.env.METIS_RECALL_RUNTIME_DIR = previous;
+  });
+  sessionFile(sessions, "only-literal", ["unique fallback"]);
+  const run = (mode: string) => tool.execute("recall", {
+    action: "search", params: { mode, query: "unique fallback" },
+  }, undefined, undefined, ctx);
+  const unavailable = await run("hybrid");
+  assert.equal(unavailable.details.error, true);
+  assert.match(JSON.stringify(unavailable.content), /literal search/);
+  assert.equal((await run("literal")).details.matchCount, 1);
+});
+
+test("grouped hybrid search uses the staged real worker and respects a custom root", async t => {
+  if (!process.env.METIS_RECALL_RUNTIME_DIR || !process.env.METIS_BEKKO_DIR || process.platform !== "linux") {
+    return t.skip("requires a staged native worker and local Bekko model");
+  }
+  const { dir, sessions, tool, ctx, captured } = await queryFixture(t);
+  const custom = join(dir, "custom");
+  mkdirSync(custom);
+  const session = sessionFile(custom, "evidence", ["Preserve the originals before building an index."]);
+  const outside = sessionFile(sessions, "outside", ["Preserve the originals before building an index."]);
+  ctx.sessionManager = SessionManager.create(dir, custom);
+  writeFileSync(join(dir, "metis-pi.toml"), "[sessionRecall]\nbackgroundIndex = true\n");
+  const run = (scope?: { kind: "session"; sessionPath: string }) => tool.execute("hybrid", {
+    action: "search", params: { mode: "hybrid", query: "retain source history", scope },
+  }, undefined, undefined, ctx);
+  const initial = await run();
+  assert.equal(initial.details.coverage, "partial");
+  assert.equal(initial.details.reason, "index_not_ready");
+  assert.equal(initial.details.matchCount, 0);
+
+  const warmed = await refreshRecall(dir, custom, new AbortController().signal);
+  assert.equal(warmed.coverage.complete, true);
+  const results = await run({ kind: "session", sessionPath: session });
+  assert.equal(results.details.coverage, "complete");
+  assert.equal(results.details.engine, "exact");
+  assert.equal(results.details.matchCount, 1);
+  assert.match(JSON.stringify(results.content), /Preserve the originals/);
+  assert.match(JSON.stringify(results.content), /evidence\.jsonl/);
+  assert.equal((await run({ kind: "session", sessionPath: outside })).details.error, true);
+  assert.equal(captured.length, 0, "hybrid retrieval cannot call the selected provider");
 });
 
 test("Recall cancels an opened query stream before provider dispatch and closes its file", async t => {

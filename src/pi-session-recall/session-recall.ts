@@ -41,6 +41,8 @@ import { toolGutter } from "../presentation/components/tool-layout.ts";
 import { createRecallRequest } from "./context.ts";
 import { searchFiles, searchLines } from "./search.ts";
 import { readSessionLines } from "./session-file.ts";
+import { recallScope, searchRecall } from "./runtime.ts";
+import { safeText } from "../presentation/terminal-text.ts";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -66,7 +68,7 @@ function resolveQueryModel(ctx: ExtensionContext): Model<Api> | undefined {
 const encodeProjectPath = (path: string) => path.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
 
 /** Preserve the native default tree; a custom session store is authoritative. */
-function getSessionsDir(ctx: ExtensionContext): string {
+export function getSessionsDir(ctx: ExtensionContext): string {
 	const root = resolve(getAgentDir(), "sessions"), current = ctx.sessionManager.getSessionDir();
 	const defaultDir = join(root, `--${encodeProjectPath(resolve(ctx.sessionManager.getCwd()))}--`);
 	return current && current !== defaultDir ? current : root;
@@ -162,7 +164,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		name: "session_search",
 		label: "Session Search",
 		description:
-			"Find past sessions by literal text search. This is essentially `rg -i -F` over session JSONL files, not semantic search. " +
+			"Find past sessions. Default literal mode matches exact phrase text in JSONL; mode=hybrid searches indexed history " +
+			"with local BM25 and Bekko128. Scope selection is available only in hybrid mode. " +
 			"Use one exact token or phrase. Spaces are exact spaces in an exact phrase, " +
 			"so only use spaces for wording you expect appeared in the session, such as an error message. " +
 			"Good examples: `libc++abi`, `Cannot find module '@sinclair/typebox'`, `Blender VAT bake`. " +
@@ -173,7 +176,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		renderResult: (result, options, theme) => {
 			const container = new Container();
 			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
-			const details = result.details as { matchCount?: number; totalMatches?: number; query?: string; error?: boolean } | undefined;
+			const details = result.details as { matchCount?: number; totalMatches?: number; query?: string; error?: boolean; mode?: string } | undefined;
 
 			if (details?.error || !details?.matchCount) {
 				container.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
@@ -183,7 +186,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			const total = details.totalMatches ?? details.matchCount;
 			const count = total > details.matchCount ? `Showing ${details.matchCount} of ${total} sessions` :
 				`${details.matchCount} session${details.matchCount > 1 ? "s" : ""}`;
-			const summary = `${count} matching "${details.query}"`;
+			const summary = details?.mode === "hybrid" ? text.split("\n", 1)[0] : `${count} matching "${details.query}"`;
 			container.addChild(new Text(theme.fg("toolOutput", summary), 0, 0));
 
 			if (options.expanded) {
@@ -201,10 +204,10 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		parameters: Type.Object({
 			query: Type.String({
 				minLength: 1,
-				description:
-					"Literal search pattern passed to fixed-string ripgrep-style search. " +
-					"Use one distinctive token or exact phrase, not a bag of unrelated keywords. Spaces mean exact spaces in an exact phrase.",
+				description: "Exact token or phrase in literal mode; keywords or a natural-language description in hybrid mode.",
 			}),
+			mode: Type.Optional(Type.Union([Type.Literal("literal"), Type.Literal("hybrid")])),
+			scope: Type.Optional(recallScope),
 		}),
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -222,6 +225,30 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 
 			try {
 				signal?.throwIfAborted();
+				if (params.mode === "hybrid") {
+					const result = await searchRecall(getAgentDir(), sessionsDir, ctx.sessionManager.getCwd(), query, params.scope, signal);
+					const matches = result.results?.sessions ?? [];
+					const coverage = result.coverage.complete ? "complete" : "partial";
+					const reasons = result.reason ? ` (${safeText(result.reason)})` : "";
+					const counts = `${result.coverage.indexedSources} indexed, ${result.coverage.pendingSources} pending, ` +
+						`${result.coverage.incompleteSources} incomplete`;
+					const summary = `Hybrid Recall: ${matches.length} sessions · ${coverage} coverage${reasons} · ${counts}`;
+					const body = matches.map(session => {
+						const snippets = session.hits.map(hit => `  [${hit.role} · ${safeText(hit.entryId)}] ${safeText(hit.text)}`);
+						return [`Session: ${safeText(session.sessionPath)}`, ...snippets].join("\n");
+					});
+					if (coverage === "partial") body.push("Index coverage is incomplete. Use literal search for unindexed history.");
+					return {
+						content: [{ type: "text" as const, text: [summary, ...body].join("\n\n") }],
+						details: {
+							mode: "hybrid", matchCount: matches.length, coverage, reason: result.reason,
+							indexedSources: result.coverage.indexedSources, pendingSources: result.coverage.pendingSources,
+							incompleteSources: result.coverage.incompleteSources,
+							engine: result.results?.engine, sessions: matches,
+						},
+					};
+				}
+				if (params.scope) return errorResult("Scope selection requires mode=hybrid.");
 				const allMatches = await searchFiles(query, sessionsDir, signal);
 
 				if (allMatches.length === 0) {

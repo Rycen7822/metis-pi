@@ -1,6 +1,7 @@
 // Upstream: https://github.com/ogulcancelik/pi-extensions/tree/main/packages/pi-session-recall.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import initialize from "../src/pi-session-recall/session-recall.ts";
+import initialize, { getSessionsDir } from "../src/pi-session-recall/session-recall.ts";
+import { wireRecallBackground } from "../src/pi-session-recall/background.ts";
 import { createDeferredActionTool, type ActionTool } from "../src/deferred-action-tool.ts";
 
 export default function sessionRecall(pi: ExtensionAPI): void {
@@ -10,6 +11,7 @@ export default function sessionRecall(pi: ExtensionAPI): void {
     toolName: "session_recall",
   });
   pi.registerTool(createDeferredActionTool(
-    "session_recall", "Search past sessions by literal text or query a selected session with an LLM.", actions,
+    "session_recall", "Search past sessions by literal or local hybrid retrieval, or ask an LLM about one session.", actions,
   ));
+  wireRecallBackground(pi, getSessionsDir);
 }

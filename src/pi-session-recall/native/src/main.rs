@@ -1,0 +1,252 @@
+//! Private per-request worker for the Pi Recall extension. No stdout diagnostics.
+use metis_bekko::Encoder;
+use metis_session_recall::index::{Coverage, HybridResult, Index, Scope};
+use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    fs::{self, DirBuilder},
+    io::{self, BufRead, Read},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{DirBuilderExt, MetadataExt},
+    },
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+const PROTOCOL: u32 = 1;
+const CACHE_BUDGET: u64 = 512 * 1024 * 1024;
+const MAX_REQUEST: u64 = 64 * 1024;
+const DB_FILE: &str = "index.sqlite3";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Request {
+    protocol: u32,
+    root: PathBuf,
+    cache_base: PathBuf,
+    model_dir: PathBuf,
+    operation: Operation,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum Operation {
+    Search {
+        query: String,
+        scope: RequestScope,
+        #[serde(rename = "refreshMillis")]
+        refresh_millis: u64,
+    },
+    Refresh,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum RequestScope {
+    All,
+    Project { cwd: String },
+    Session { path: PathBuf },
+    Branch { path: PathBuf, leaf: String },
+}
+
+impl RequestScope {
+    fn resolve(&self) -> Scope<'_> {
+        match self {
+            Self::All => Scope::All,
+            Self::Project { cwd } => Scope::Project(cwd),
+            Self::Session { path } => Scope::Session(path),
+            Self::Branch { path, leaf } => Scope::Branch { path, leaf },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Response {
+    protocol: u32,
+    coverage: Coverage,
+    results: Option<HybridResult>,
+    reason: Option<&'static str>,
+}
+
+#[derive(Debug)]
+struct Deadline;
+impl std::error::Error for Deadline {}
+impl std::fmt::Display for Deadline {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Recall indexing budget expired")
+    }
+}
+
+fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--protocol") {
+        println!("{PROTOCOL}");
+        return;
+    }
+    let result = run().and_then(|value| Ok(serde_json::to_string(&value)?));
+    match result {
+        Ok(wire) => println!("{wire}"),
+        Err(error) => {
+            eprintln!("Recall worker: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run() -> Result<Response> {
+    let mut input = String::new();
+    io::stdin()
+        .lock()
+        .take(MAX_REQUEST + 1)
+        .read_line(&mut input)?;
+    if input.len() as u64 > MAX_REQUEST {
+        return Err("Recall request exceeds wire size limit".into());
+    }
+    let request: Request = serde_json::from_str(&input).map_err(|_| "Malformed Recall request")?;
+    if request.protocol != PROTOCOL {
+        return Err("Unsupported Recall protocol".into());
+    }
+    let root = request.root.canonicalize()?;
+    let stat = fs::metadata(&root)?;
+    if !stat.is_dir() || !request.cache_base.is_absolute() {
+        return Err("Recall requires a session directory and an absolute cache directory".into());
+    }
+    let mut key = Sha256::new();
+    key.update(root.as_os_str().as_bytes());
+    key.update(stat.dev().to_le_bytes());
+    key.update(stat.ino().to_le_bytes());
+    let key: String = key
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let cache = request.cache_base.join(format!("v3-{key}"));
+    let millis = match request.operation {
+        Operation::Search { refresh_millis, .. } => refresh_millis.min(750),
+        Operation::Refresh => 5_000,
+    };
+    let mut reason = None;
+    let admission = if millis == 0 {
+        None
+    } else {
+        private_dir(&request.cache_base)?;
+        let fd = openat(
+            rustix::fs::CWD,
+            &request.cache_base,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?;
+        match flock(&fd, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => {
+                let remaining = CACHE_BUDGET.saturating_sub(disk_bytes(&request.cache_base)?);
+                if remaining < 1024 * 1024 {
+                    reason = Some("disk_budget");
+                    None
+                } else {
+                    private_dir(&cache)?;
+                    Some((fd, remaining))
+                }
+            }
+            Err(rustix::io::Errno::WOULDBLOCK) => {
+                reason = Some("index_busy");
+                None
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    if admission.is_none() && !cache.join(DB_FILE).is_file() {
+        return Ok(Response {
+            protocol: PROTOCOL,
+            coverage: Coverage::default(),
+            results: None,
+            reason: Some(reason.unwrap_or("index_not_ready")),
+        });
+    }
+
+    let encoder = Arc::new(Encoder::open(&request.model_dir)?);
+    let mut index = Index::open_hybrid(&root, &cache, encoder)?;
+    if let Some((_lease, remaining)) = admission {
+        index.limit_growth(remaining / 2)?;
+        let deadline = Instant::now() + Duration::from_millis(millis);
+        if let Err(error) = index.refresh(|| {
+            if Instant::now() >= deadline {
+                return Err(Deadline.into());
+            }
+            Ok(())
+        }) {
+            reason = Some(if error.is::<Deadline>() {
+                "index_pending"
+            } else if error
+                .downcast_ref::<rusqlite::Error>()
+                .is_some_and(|e| e.sqlite_error_code() == Some(rusqlite::ErrorCode::DiskFull))
+            {
+                "disk_budget"
+            } else {
+                return Err(error);
+            });
+        }
+    }
+    let mut coverage = index.coverage()?;
+    coverage.complete &= reason.is_none();
+    if !coverage.complete && reason.is_none() {
+        reason = Some("index_incomplete");
+    }
+    let results = match request.operation {
+        Operation::Search { query, scope, .. } => {
+            match index.hybrid(&query, scope.resolve(), || Ok(())) {
+                Ok(hits) => Some(hits),
+                Err(error)
+                    if !coverage.complete
+                        && error.to_string() == "Session is not in this Recall index" =>
+                {
+                    None
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Operation::Refresh => None,
+    };
+    if results
+        .as_ref()
+        .is_some_and(|result| result.stale_candidates != 0)
+    {
+        coverage.complete = false;
+        reason = Some("source_changed");
+    }
+    Ok(Response {
+        protocol: PROTOCOL,
+        results,
+        coverage,
+        reason,
+    })
+}
+
+fn private_dir(path: &Path) -> Result<()> {
+    DirBuilder::new().recursive(true).mode(0o700).create(path)?;
+    let stat = fs::symlink_metadata(path)?;
+    if !stat.is_dir() || stat.mode() & 0o077 != 0 {
+        return Err("Recall cache directory is not private".into());
+    }
+    Ok(())
+}
+
+fn disk_bytes(dir: &Path) -> Result<u64> {
+    let mut dirs = vec![dir.to_path_buf()];
+    let mut bytes: u64 = 0;
+    while let Some(dir) = dirs.pop() {
+        for item in fs::read_dir(dir)? {
+            let item = item?;
+            let stat = item.path().symlink_metadata()?;
+            if stat.is_dir() {
+                dirs.push(item.path());
+            } else if stat.is_file() {
+                bytes = bytes.saturating_add(stat.blocks().saturating_mul(512));
+            }
+        }
+    }
+    Ok(bytes)
+}

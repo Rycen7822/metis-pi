@@ -15,7 +15,17 @@ text(await tools.web_access({ action: "fetch", params: { urls: ["https://example
 
 ## 会话检索
 
-`session_recall` 的 `search` 在本机查找会话；`query` 使用模型回答会话相关问题。`[sessionRecall].queryModel` 可填已注册的 `provider/model-id`；`"default"` 或不可用的模型使用当前会话模型。使用 `query` 前，确认允许向所选模型发送有关会话内容。
+`session_recall.search` 默认在 JSONL 中查固定字符串。带 Recall worker 的 Linux x64 包可用 `mode: "hybrid"` 做本地 BM25 + Bekko128 检索，例如：
+
+```js
+text(await tools.session_recall({ action: "search", params: {
+  mode: "hybrid", query: "为什么保留会话原文件？", scope: { kind: "project" },
+} }));
+```
+
+省略 `scope` 搜当前允许的所有会话；也可用 `{kind:"session",sessionPath}` 或 `{kind:"branch",sessionPath,leafId}`。混合检索只索引用户和助手可见正文，最后从原文件回读证据。部分覆盖表示还有内容未索引，不等于没有匹配。工具输出或缺失本地模型时仍可用 `literal`。SQLite 是可重建缓存，原 JSONL、恢复和分支行为不变。
+
+`session_recall` 的 `query` 使用模型回答会话相关问题。`[sessionRecall].queryModel` 可填已注册的 `provider/model-id`；`"default"` 或不可用的模型使用当前会话模型。使用 `query` 前，确认允许向所选模型发送有关会话内容。
 
 ## BTW 旁路对话
 

@@ -381,6 +381,8 @@ tools = ["read", "grep", "find", "ls"]
 # session_query 使用的模型；"default" 跟随当前会话，或填写已注册的 "provider/model-id"。
 # 例如 "openai/gpt-6.1-sol"；模型找不到时回退当前会话。每次查询重读，session_search 不调用模型。
 queryModel = "default"
+# 仅在空闲时为本地混合检索预热索引；保持字面搜索和 JSONL 不变。
+backgroundIndex = false
 
 # =============================================================================
 # 8. 网页访问 / Web access

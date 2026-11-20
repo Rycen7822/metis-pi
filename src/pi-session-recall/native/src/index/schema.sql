@@ -6,6 +6,13 @@ CREATE TABLE cache_root (
     model TEXT
 ) STRICT;
 
+CREATE TABLE refresh_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+    total INTEGER NOT NULL,
+    processed INTEGER NOT NULL,
+    incomplete INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path BLOB NOT NULL UNIQUE,
