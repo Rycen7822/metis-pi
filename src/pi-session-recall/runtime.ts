@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
-import { isMetisConfigTable, readMetisConfig } from "../configuration/store.ts";
+import { isMetisConfigTable, metisConfigPath, readMetisConfig, readOptionalConfigFile } from "../configuration/store.ts";
 
 export const recallScope = Type.Union([
   Type.Object({ kind: Type.Literal("all") }, { additionalProperties: false }),
@@ -21,7 +22,10 @@ type NativeScope =
   | { kind: "project"; cwd: string }
   | { kind: "session"; path: string }
   | { kind: "branch"; path: string; leaf: string };
-type Operation = { type: "refresh" } | { type: "search"; scope: NativeScope; query: string; refreshMillis: number };
+type Operation =
+  | { type: "refresh" }
+  | { type: "maintain"; config: { file: string; sha256: string | null } }
+  | { type: "search"; scope: NativeScope; query: string; refreshMillis: number };
 
 const count = Type.Integer({ minimum: 0 });
 const response = Type.Object({
@@ -47,9 +51,25 @@ const response = Type.Object({
 });
 type RecallResponse = Static<typeof response>;
 
+function settings(agentDir: string) {
+  let source: string | undefined;
+  const section = readMetisConfig(agentDir, file => (source = readOptionalConfigFile(file))).config.sessionRecall;
+  const table = isMetisConfigTable(section) ? section : {};
+  const days = table.hnswRetentionDays ?? 15;
+  if (typeof days !== "number" || !Number.isSafeInteger(days) || days <= 0 || days > 0xffff_ffff) {
+    throw new Error("sessionRecall.hnswRetentionDays must be a positive integer.");
+  }
+  const mode = table.hnsw ?? "off";
+  if (mode !== "off" && mode !== "on") throw new Error('sessionRecall.hnsw must be "off" or "on".');
+  return {
+    backgroundIndex: table.backgroundIndex === true,
+    graph: { retentionDays: days, minNodes: mode === "on" ? 2048 : null },
+    proof: { file: metisConfigPath(agentDir), sha256: source === undefined ? null : createHash("sha256").update(source).digest("hex") },
+  };
+}
+
 export function backgroundRecallEnabled(agentDir: string): boolean {
-  const section = readMetisConfig(agentDir).config.sessionRecall;
-  return isMetisConfigTable(section) && section.backgroundIndex === true;
+  return settings(agentDir).backgroundIndex;
 }
 
 function scopedPath(root: string, requested: string): string {
@@ -71,13 +91,22 @@ export async function searchRecall(
     case "session": range = { kind: "session", path: scopedPath(root, scope.sessionPath) }; break;
     case "branch": range = { kind: "branch", path: scopedPath(root, scope.sessionPath), leaf: scope.leafId }; break;
   }
+  const options = settings(agentDir);
   return runNative(agentDir, root, {
-    type: "search", query, scope: range, refreshMillis: backgroundRecallEnabled(agentDir) ? 0 : 200,
-  }, signal);
+    type: "search", query, scope: range, refreshMillis: options.backgroundIndex ? 0 : 200,
+  }, signal, options);
 }
 
 export async function refreshRecall(agentDir: string, sessionDir: string, signal: AbortSignal): Promise<RecallResponse> {
-  return runNative(agentDir, await realpath(sessionDir), { type: "refresh" }, signal);
+  return runNative(agentDir, await realpath(sessionDir), { type: "refresh" }, signal, settings(agentDir));
+}
+
+export async function maintainRecall(agentDir: string, sessionDir: string, signal: AbortSignal): Promise<RecallResponse | undefined> {
+  const dir = join(agentDir, "cache/session-recall");
+  if (!(await lstat(dir).catch(() => undefined))?.isDirectory()) return;
+  const options = settings(agentDir);
+  if (!options.backgroundIndex) options.graph.minNodes = null;
+  return runNative(agentDir, await realpath(sessionDir), { type: "maintain", config: options.proof }, signal, options);
 }
 
 async function readSmall(file: string): Promise<string> {
@@ -105,7 +134,9 @@ async function locateBekko(agentDir: string): Promise<string> {
 
 let active = 0;
 
-async function runNative(agentDir: string, root: string, operation: Operation, signal?: AbortSignal): Promise<RecallResponse> {
+async function runNative(
+  agentDir: string, root: string, operation: Operation, signal: AbortSignal | undefined, options: ReturnType<typeof settings>,
+): Promise<RecallResponse> {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error("Hybrid Recall currently requires Linux x64. Use literal search on this platform.");
   }
@@ -115,8 +146,11 @@ async function runNative(agentDir: string, root: string, operation: Operation, s
   if (!(await lstat(executable).catch(() => undefined))?.isFile()) {
     throw new Error("The native Recall worker is not present. Use literal search or install a package with the Recall runtime.");
   }
-  const modelDir = await locateBekko(agentDir).catch(() => { throw new Error("No local Bekko128 asset. Use literal search."); });
-  const payload = JSON.stringify({ protocol: 1, root, cacheBase: join(agentDir, "cache/session-recall"), modelDir, operation });
+  const modelDir = operation.type === "maintain" ? undefined :
+    await locateBekko(agentDir).catch(() => { throw new Error("No local Bekko128 asset. Use literal search."); });
+  const payload = JSON.stringify({
+    protocol: 1, root, cacheBase: join(agentDir, "cache/session-recall"), modelDir, graph: options.graph, operation,
+  });
   if (Buffer.byteLength(payload) > 64 * 1024) throw new Error("Recall request is too large.");
   const deadline = AbortSignal.timeout(15_000);
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;

@@ -383,6 +383,10 @@ tools = ["read", "grep", "find", "ls"]
 queryModel = "default"
 # 仅在空闲时为本地混合检索预热索引；保持字面搜索和 JSONL 不变。
 backgroundIndex = false
+# HNSW 实验性加速。off 不读图、不构图；on 仍只在开启预热后空闲构图。
+hnsw = "off"
+# 只管图缓存，超过时限的历史仍能从 SQLite 搜到。
+hnswRetentionDays = 15
 
 # =============================================================================
 # 8. 网页访问 / Web access

@@ -1,6 +1,7 @@
 //! Hybrid retrieval. Only candidate IDs and scores are retained during a corpus scan.
 use super::{
     Index,
+    graph::{self, GraphPolicy},
     search::{Candidate, Filter, LexicalHit, Scope, resolve_scope},
     terms,
 };
@@ -28,6 +29,8 @@ pub struct HybridResult {
     pub sessions: Vec<SessionHits>,
     pub stale_candidates: usize,
     pub engine: &'static str,
+    #[serde(skip)]
+    pub semantic_candidates: Vec<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,9 +54,20 @@ impl Index {
         &self,
         query: &str,
         scope: Scope<'_>,
+        check: impl FnMut() -> Result<()>,
+    ) -> Result<HybridResult> {
+        self.hybrid_with_graph(query, scope, None, check)
+    }
+
+    pub fn hybrid_with_graph(
+        &self,
+        query: &str,
+        scope: Scope<'_>,
+        policy: Option<GraphPolicy>,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<HybridResult> {
         check()?;
+        let whole_root = matches!(&scope, Scope::All);
         if query.trim().is_empty() || query.len() > 8192 {
             return Err("Recall hybrid query must be nonblank and at most 8192 bytes".into());
         }
@@ -66,7 +80,24 @@ impl Index {
         let tx = self.db.unchecked_transaction()?;
         let filter = resolve_scope(&tx, scope, &mut check)?;
         let lexical = lexical_lane(&tx, &filter, &expression, &mut check)?;
-        let dense = exact_lane(&tx, &filter, &query_vec, &mut check)?;
+        let graph = if let Some(policy) = policy.filter(|_| whole_root) {
+            graph_lane(&tx, &self.cache_path, policy, &query_vec, &mut check)?
+        } else {
+            None
+        };
+        let (dense, engine) = match graph {
+            Some((mut lane, covered)) => {
+                let delta = exact_lane(&tx, &filter, &query_vec, Some(&covered), &mut check)?;
+                for item in delta.items {
+                    lane.offer(item);
+                }
+                (lane, "hnsw")
+            }
+            None => (
+                exact_lane(&tx, &filter, &query_vec, None, &mut check)?,
+                "exact",
+            ),
+        };
         let ids: BTreeSet<_> = lexical
             .items
             .iter()
@@ -97,7 +128,10 @@ impl Index {
             });
         }
         fuse(&mut scores);
-        self.read_results(&tx, scores, filter.2.is_some(), &mut check)
+        let mut result = self.read_results(&tx, scores, filter.2.is_some(), &mut check)?;
+        result.engine = engine;
+        result.semantic_candidates = dense.items.iter().rev().map(|item| item.id).collect();
+        Ok(result)
     }
 
     fn read_results(
@@ -118,6 +152,7 @@ impl Index {
             sessions: Vec::new(),
             stale_candidates: 0,
             engine: "exact",
+            semantic_candidates: Vec::new(),
         };
         let mut sessions = HashMap::new();
         for score in scores {
@@ -194,13 +229,18 @@ fn exact_lane(
     db: &Connection,
     (project, source, ancestors): &Filter<'_>,
     query: &[f32; EMBEDDING_DIMENSION],
+    covered: Option<&str>,
     check: &mut impl FnMut() -> Result<()>,
 ) -> Result<Lane> {
     let mut select = db.prepare(&format!(
-        "SELECT c.id,c.source,v.payload FROM vectors v
-         JOIN chunks c ON c.id=v.chunk JOIN sources s ON s.id=c.source WHERE {IN_SCOPE}",
+        "WITH coverage(day, through) AS MATERIALIZED (
+            SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM json_each(?4)
+         ) SELECT c.id,c.source,v.payload FROM vectors v
+         JOIN chunks c ON c.id=v.chunk JOIN sources s ON s.id=c.source
+         LEFT JOIN coverage ON coverage.day=v.day
+         WHERE {IN_SCOPE} AND (coverage.through IS NULL OR v.chunk>coverage.through)",
     ))?;
-    let mut rows = select.query(params![project, source, ancestors])?;
+    let mut rows = select.query(params![project, source, ancestors, covered])?;
     let mut lane = Lane::default();
     while let Some(row) = rows.next()? {
         check()?;
@@ -211,6 +251,42 @@ fn exact_lane(
         });
     }
     Ok(lane)
+}
+
+fn graph_lane(
+    db: &Connection,
+    cache: &std::path::Path,
+    policy: GraphPolicy,
+    query: &[f32; EMBEDDING_DIMENSION],
+    check: &mut impl FnMut() -> Result<()>,
+) -> Result<Option<(Lane, String)>> {
+    let Some(graph::GraphCandidates { ids, covered }) =
+        graph::candidates(db, cache, policy, query, check)?
+    else {
+        return Ok(None);
+    };
+    let mut lookup = db.prepare_cached(
+        "SELECT c.source,v.payload FROM vectors v JOIN chunks c ON c.id=v.chunk WHERE v.chunk=?1",
+    )?;
+    let mut lane = Lane::default();
+    for id in ids {
+        check()?;
+        let Some((source, raw)) = lookup
+            .query_row([id], |row| {
+                Ok((row.get(0)?, row.get::<_, [u8; DOCUMENT_BYTES]>(1)?))
+            })
+            .optional()?
+        else {
+            // A deletion may have displaced a live neighbor in the immutable graph.
+            return Ok(None);
+        };
+        lane.offer(LaneItem {
+            id,
+            source,
+            score: similarity(&raw, query)?,
+        });
+    }
+    Ok(Some((lane, serde_json::to_string(&covered)?)))
 }
 
 fn similarity(raw: &[u8; DOCUMENT_BYTES], query: &[f32; EMBEDDING_DIMENSION]) -> Result<f64> {

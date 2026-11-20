@@ -25,6 +25,10 @@ text(await tools.session_recall({ action: "search", params: {
 
 省略 `scope` 搜当前允许的所有会话；也可用 `{kind:"session",sessionPath}` 或 `{kind:"branch",sessionPath,leafId}`。混合检索只索引用户和助手可见正文，最后从原文件回读证据。部分覆盖表示还有内容未索引，不等于没有匹配。工具输出或缺失本地模型时仍可用 `literal`。SQLite 是可重建缓存，原 JSONL、恢复和分支行为不变。
 
+HNSW 默认关闭。显式设置 `backgroundIndex = true` 和 `hnsw = "on"` 后，Pi 空闲时最多每小时为当前会话存储巡检一次图缓存。
+图按 UTC 日期分片；仅加速整库查询，最近入库和过期历史仍精扫。保留期默认 15 天，可用 `hnswRetentionDays` 修改。
+缩短保留期后查询立即绕过到期图，磁盘文件在后台回收；查询不等待建图。
+
 `session_recall` 的 `query` 使用模型回答会话相关问题。`[sessionRecall].queryModel` 可填已注册的 `provider/model-id`；`"default"` 或不可用的模型使用当前会话模型。使用 `query` 前，确认允许向所选模型发送有关会话内容。
 
 ## BTW 旁路对话

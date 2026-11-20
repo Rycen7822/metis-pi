@@ -1,6 +1,8 @@
 //! Private per-request worker for the Pi Recall extension. No stdout diagnostics.
 use metis_bekko::Encoder;
-use metis_session_recall::index::{Coverage, HybridResult, Index, Scope};
+use metis_session_recall::index::{
+    CACHE_SCHEMA, Coverage, GraphPolicy, GraphReport, HybridResult, Index, Scope,
+};
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,7 +30,8 @@ struct Request {
     protocol: u32,
     root: PathBuf,
     cache_base: PathBuf,
-    model_dir: PathBuf,
+    model_dir: Option<PathBuf>,
+    graph: Option<GraphSettings>,
     operation: Operation,
 }
 
@@ -42,6 +45,23 @@ enum Operation {
         refresh_millis: u64,
     },
     Refresh,
+    Maintain {
+        config: Option<ConfigProof>,
+    },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GraphSettings {
+    retention_days: u32,
+    min_nodes: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigProof {
+    file: PathBuf,
+    sha256: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +91,8 @@ struct Response {
     coverage: Coverage,
     results: Option<HybridResult>,
     reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph: Option<GraphReport>,
 }
 
 #[derive(Debug)]
@@ -98,6 +120,11 @@ fn main() {
 }
 
 fn run() -> Result<Response> {
+    let parent = rustix::process::getppid();
+    rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::KILL))?;
+    if rustix::process::getppid() != parent {
+        return Err("Recall parent exited".into());
+    }
     let mut input = String::new();
     io::stdin()
         .lock()
@@ -119,15 +146,32 @@ fn run() -> Result<Response> {
     key.update(root.as_os_str().as_bytes());
     key.update(stat.dev().to_le_bytes());
     key.update(stat.ino().to_le_bytes());
-    let key: String = key
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    let cache = request.cache_base.join(format!("v3-{key}"));
+    let key = hex(&key.finalize());
+    let cache = request.cache_base.join(format!("v{CACHE_SCHEMA}-{key}"));
+    let now = jiff::Timestamp::now().as_second();
+    let graph = request.graph.unwrap_or(GraphSettings {
+        retention_days: 15,
+        min_nodes: None,
+    });
+    if graph.retention_days == 0 || graph.min_nodes == Some(0) {
+        return Err("Invalid Recall graph policy".into());
+    }
+    let policy = GraphPolicy {
+        now,
+        retention_days: graph.retention_days,
+        min_nodes: graph.min_nodes,
+    };
+    if !matches!(request.operation, Operation::Search { .. }) {
+        // A separate, low-priority process leaves foreground queries outside maintenance leases.
+        rustix::process::nice(10)?;
+    }
+    if let Operation::Maintain { config } = &request.operation {
+        return maintain(&request.cache_base, &root, &cache, policy, config.as_ref());
+    }
     let millis = match request.operation {
         Operation::Search { refresh_millis, .. } => refresh_millis.min(750),
         Operation::Refresh => 5_000,
+        Operation::Maintain { .. } => unreachable!("maintenance handled above"),
     };
     let mut reason = None;
     let admission = if millis == 0 {
@@ -164,10 +208,15 @@ fn run() -> Result<Response> {
             coverage: Coverage::default(),
             results: None,
             reason: Some(reason.unwrap_or("index_not_ready")),
+            graph: None,
         });
     }
 
-    let encoder = Arc::new(Encoder::open(&request.model_dir)?);
+    let model = request
+        .model_dir
+        .as_deref()
+        .ok_or("Missing Recall model path")?;
+    let encoder = Arc::new(Encoder::open(model)?);
     let mut index = Index::open_hybrid(&root, &cache, encoder)?;
     if let Some((_lease, remaining)) = admission {
         index.limit_growth(remaining / 2)?;
@@ -197,7 +246,7 @@ fn run() -> Result<Response> {
     }
     let results = match request.operation {
         Operation::Search { query, scope, .. } => {
-            match index.hybrid(&query, scope.resolve(), || Ok(())) {
+            match index.hybrid_with_graph(&query, scope.resolve(), Some(policy), || Ok(())) {
                 Ok(hits) => Some(hits),
                 Err(error)
                     if !coverage.complete
@@ -208,7 +257,7 @@ fn run() -> Result<Response> {
                 Err(error) => return Err(error),
             }
         }
-        Operation::Refresh => None,
+        Operation::Refresh | Operation::Maintain { .. } => None,
     };
     if results
         .as_ref()
@@ -222,7 +271,75 @@ fn run() -> Result<Response> {
         results,
         coverage,
         reason,
+        graph: None,
     })
+}
+
+fn maintain(
+    base: &Path,
+    root: &Path,
+    cache: &Path,
+    policy: GraphPolicy,
+    config: Option<&ConfigProof>,
+) -> Result<Response> {
+    let mut response = Response {
+        protocol: PROTOCOL,
+        coverage: Coverage::default(),
+        results: None,
+        reason: None,
+        graph: None,
+    };
+    if !cache.join(DB_FILE).is_file() {
+        response.reason = Some("index_not_ready");
+        return Ok(response);
+    }
+    let lease = openat(
+        rustix::fs::CWD,
+        base,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )?;
+    if let Err(error) = flock(&lease, FlockOperation::NonBlockingLockExclusive) {
+        if error != rustix::io::Errno::WOULDBLOCK {
+            return Err(error.into());
+        }
+        response.reason = Some("index_busy");
+        return Ok(response);
+    }
+    let mut index = Index::open_graph_cache(root, cache)?;
+    let budget = CACHE_BUDGET.saturating_sub(disk_bytes(base)?);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let check = || {
+        if Instant::now() >= deadline {
+            Err(Deadline.into())
+        } else {
+            Ok(())
+        }
+    };
+    let verify = || {
+        if let Some(proof) = config {
+            let observed = match fs::read(&proof.file) {
+                Ok(bytes) => Some(hex(&Sha256::digest(bytes))),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if observed != proof.sha256 {
+                return Err("Recall graph settings changed during maintenance".into());
+            }
+        }
+        Ok(())
+    };
+    match index.maintain_graphs(policy, budget, check, verify) {
+        Ok(value) => response.graph = Some(value),
+        Err(error) if error.is::<Deadline>() => response.reason = Some("graph_pending"),
+        Err(error) => return Err(error),
+    }
+    response.coverage = index.coverage()?;
+    Ok(response)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn private_dir(path: &Path) -> Result<()> {

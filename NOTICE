@@ -143,6 +143,12 @@ src/neural-search/assets/THIRD_PARTY_NOTICES-win32-x64.txt; standard-library
 notices are in src/neural-search/assets/RUST-STDLIB-NOTICES.html. Provenance, build and maintenance
 boundaries are in src/neural-search/METIS.md and src/neural-search/engine/README.md.
 
+The shared Bekko128 encoder in src/local-embedding/bekko descends from the
+Metis sgrep runtime; copyright (c) 2026 mrmps, MIT License
+(src/neural-search/semantic/LICENSE). Session Recall's native worker uses
+SQLite (public domain) and Unum USearch 2.26.6 (Apache-2.0).
+Bekko128 model assets are separately distributed with the model's notices.
+
 The standalone web MCP bundle also includes typebox 1.3.27 (MIT).
 Its upstream copyright and full license are retained in
 src/pi-web-access/licenses/typebox.LICENSE.

@@ -66,6 +66,22 @@ CREATE TABLE vectors (
 
 CREATE INDEX vector_day ON vectors(day, chunk);
 
+CREATE TABLE graph_parts (
+    day INTEGER PRIMARY KEY,
+    through INTEGER NOT NULL,
+    nodes INTEGER NOT NULL,
+    file TEXT NOT NULL UNIQUE,
+    bytes INTEGER NOT NULL,
+    sha256 BLOB NOT NULL
+) STRICT;
+
+CREATE TABLE graph_poll (
+    singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+    at INTEGER NOT NULL,
+    retention INTEGER NOT NULL,
+    min_nodes INTEGER
+) STRICT;
+
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     terms, content='', contentless_delete=1, tokenize='unicode61 tokenchars _'
 );

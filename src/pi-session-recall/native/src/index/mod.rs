@@ -1,10 +1,12 @@
 //! Rebuildable per-root SQLite index. This layer only opens original JSONL read-only.
+mod graph;
 mod hybrid;
 mod search;
 mod sync;
 mod terms;
 mod tree;
 
+pub use graph::{GraphPolicy, GraphReport};
 pub use hybrid::{HybridHit, HybridResult, SessionHits};
 pub use search::{LexicalHit, LexicalResult, Scope};
 pub use sync::{Coverage, CoverageGap, RefreshReport};
@@ -17,32 +19,42 @@ use rustix::fs::{Mode, OFlags, openat};
 use std::{
     fs::File,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
 
-const CACHE_SCHEMA: i64 = 3;
+pub const CACHE_SCHEMA: i64 = 4;
 
 pub struct Index {
     root: Tree,
     cache_dir: File,
+    cache_path: PathBuf,
     db: Connection,
     encoder: Option<Arc<Encoder>>,
+    graph_only: bool,
 }
 
 impl Index {
     /// Cache storage must be a private, caller-owned directory dedicated to this root.
     pub fn open(root: &Path, cache_dir: &Path) -> Result<Self> {
-        Self::open_inner(root, cache_dir, None)
+        Self::open_inner(root, cache_dir, None, None)
     }
 
     pub fn open_hybrid(root: &Path, cache_dir: &Path, encoder: Arc<Encoder>) -> Result<Self> {
-        Self::open_inner(root, cache_dir, Some(encoder))
+        Self::open_inner(root, cache_dir, Some(metis_bekko::REVISION), Some(encoder))
     }
 
-    fn open_inner(root: &Path, cache_dir: &Path, encoder: Option<Arc<Encoder>>) -> Result<Self> {
-        let model = encoder.as_ref().map(|_| metis_bekko::REVISION);
+    pub fn open_graph_cache(root: &Path, cache_dir: &Path) -> Result<Self> {
+        Self::open_inner(root, cache_dir, Some(metis_bekko::REVISION), None)
+    }
+
+    fn open_inner(
+        root: &Path,
+        cache_dir: &Path,
+        model: Option<&str>,
+        encoder: Option<Arc<Encoder>>,
+    ) -> Result<Self> {
         let root = Tree::open(root)?;
         let identity = root.dir.metadata()?;
         let cache = File::from(openat(
@@ -95,7 +107,9 @@ impl Index {
         Ok(Self {
             root,
             cache_dir: cache,
+            cache_path: cache_dir.to_path_buf(),
             db,
+            graph_only: model.is_some() && encoder.is_none(),
             encoder,
         })
     }

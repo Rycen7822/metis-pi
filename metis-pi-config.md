@@ -306,6 +306,8 @@ provider 请求按 `max(1024, ceil(2 × R))` 预留文本输出空间；思考�
 | --- | --- | --- |
 | `queryModel` | `"default"` | `session_query` 跟随当前会话；可指定已注册的 `provider/model-id`，例如 `openai/gpt-6.1-sol`。 |
 | `backgroundIndex` | `false` | 运行 Pi 时在空闲处预热本地 hybrid 检索索引。开启后，查询只读已完成批次；未完成时会标为部分覆盖。 |
+| `hnsw` | `"off"` | 实验性 `"on"` 允许大范围使用 HNSW；只有开启后台预热才构图。关闭后立即走精确检索。 |
+| `hnswRetentionDays` | `15` | HNSW 图保留期，单位为 24 小时，须为正整数。不会删除 JSONL、FTS 或向量。 |
 
 每次 query 重读，缺省/无效/未注册模型跟随会话，损坏 TOML 报错；search 不调用提供商，模型与认证归 Pi。
 

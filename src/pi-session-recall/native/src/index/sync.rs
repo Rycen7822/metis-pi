@@ -43,6 +43,9 @@ pub enum CoverageGap {
 
 impl Index {
     pub fn refresh(&mut self, mut check: impl FnMut() -> Result<()>) -> Result<RefreshReport> {
+        if self.graph_only {
+            return Err("A graph-maintenance handle cannot index session text".into());
+        }
         check()?;
         // Lock the cache directory on a fresh open-file description. Reads never take this lock.
         let guard = openat(

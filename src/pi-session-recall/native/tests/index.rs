@@ -363,6 +363,138 @@ fn real_bekko_finds_a_paraphrase_without_lexical_overlap_and_limits_repetition()
 }
 
 #[test]
+#[ignore = "requires verified local Bekko128 assets; set RECALL_TEST_BEKKO_DIR"]
+fn immutable_graph_never_blocks_queries_and_preserves_delta_and_expired_hits() {
+    use jiff::Timestamp;
+    use metis_session_recall::index::GraphPolicy;
+    use std::sync::Arc;
+
+    let f = Fixture::new();
+    let model =
+        PathBuf::from(std::env::var_os("RECALL_TEST_BEKKO_DIR").expect("local model assets"));
+    let encoder = Arc::new(metis_bekko::Encoder::open(&model).unwrap());
+    let indexed = Timestamp::now().as_second();
+    let date = Timestamp::from_second(indexed - 2 * 86_400)
+        .unwrap()
+        .to_string();
+    let dated = |id, parent, text| msg(id, parent, text).replace("2026-07-01T00:00:00Z", &date);
+    let path = f.write(
+        "graph.jsonl",
+        "/project",
+        &[
+            dated(
+                "u",
+                None,
+                "Preserve the originals before building an index.",
+            ),
+            dated("v", Some("u"), "An unrelated whale swims across the bay."),
+            "".into(),
+        ],
+    );
+    let mut index = Index::open_hybrid(&f.root, &f.cache, encoder.clone()).unwrap();
+    index.refresh(|| Ok(())).unwrap();
+    let reader = Index::open_hybrid(&f.root, &f.cache, encoder).unwrap();
+    let mut policy = GraphPolicy {
+        now: indexed + 3_602,
+        retention_days: 15,
+        min_nodes: Some(2),
+    };
+    let graph_file = || {
+        fs::read_dir(&f.cache)
+            .unwrap()
+            .flatten()
+            .map(|item| item.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "ann"))
+    };
+    let mut read_during_publication = false;
+    let report = index
+        .maintain_graphs(
+            policy,
+            16 << 20,
+            || Ok(()),
+            || {
+                if graph_file().is_some() {
+                    let result = reader.hybrid_with_graph(
+                        "retain source history",
+                        Scope::All,
+                        Some(policy),
+                        || Ok(()),
+                    )?;
+                    assert_eq!(
+                        result.engine, "exact",
+                        "must not wait for an unpublished graph"
+                    );
+                    assert!(!result.sessions.is_empty());
+                    read_during_publication = true;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(read_during_publication);
+    assert_eq!(report.built, 1);
+    assert_eq!(
+        index
+            .maintain_graphs(policy, 16 << 20, || Ok(()), || Ok(()))
+            .unwrap()
+            .built,
+        0
+    );
+
+    append(
+        &path,
+        &format!("{}\n", dated("fresh", Some("v"), "ziggurat beacon")),
+    );
+    index.refresh(|| Ok(())).unwrap();
+    let search = |policy, scope| {
+        reader
+            .hybrid_with_graph("ziggurat beacon", scope, Some(policy), || Ok(()))
+            .unwrap()
+    };
+    let result = search(policy, Scope::All);
+    assert_eq!(result.engine, "hnsw");
+    assert_eq!(result.sessions[0].hits[0].evidence.entry_id, "fresh");
+    assert_eq!(
+        search(
+            policy,
+            Scope::Branch {
+                path: Path::new("graph.jsonl"),
+                leaf: "fresh"
+            }
+        )
+        .engine,
+        "exact",
+    );
+
+    let file = graph_file().unwrap();
+    let mut corrupt = fs::read(&file).unwrap();
+    corrupt[0] ^= 1;
+    fs::write(&file, corrupt).unwrap();
+    assert_eq!(search(policy, Scope::All).engine, "exact");
+    policy.now += 3_601;
+    assert_eq!(
+        index
+            .maintain_graphs(policy, 16 << 20, || Ok(()), || Ok(()))
+            .unwrap()
+            .built,
+        1
+    );
+    assert_eq!(search(policy, Scope::All).engine, "hnsw");
+
+    policy.retention_days = 1;
+    assert_eq!(search(policy, Scope::All).engine, "exact");
+    let removed = index
+        .maintain_graphs(policy, 16 << 20, || Ok(()), || Ok(()))
+        .unwrap();
+    assert_eq!(removed.removed, 1);
+    assert!(graph_file().is_none());
+    assert_eq!(
+        search(policy, Scope::All).sessions[0].hits[0].evidence.text,
+        "ziggurat beacon"
+    );
+}
+
+#[test]
 fn root_isolation_excludes_archives_and_rejects_rebinding_or_out_of_scope_paths() {
     let f = Fixture::new();
     let outside = f.temp.path().join("another-root");
