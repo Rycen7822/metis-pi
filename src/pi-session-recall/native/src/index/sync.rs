@@ -1,4 +1,4 @@
-use super::{Index, terms, tree::Tree};
+use super::{Index, IndexState, terms, tree::Tree};
 use crate::{
     Result,
     transcript::{
@@ -25,7 +25,7 @@ pub struct RefreshReport {
     pub gaps: Vec<(PathBuf, CoverageGap)>,
 }
 
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Coverage {
     pub indexed_sources: usize,
@@ -80,8 +80,11 @@ impl Index {
     }
 
     pub fn coverage(&self) -> Result<Coverage> {
-        Ok(self
-            .db
+        Self::read_coverage(&self.db)
+    }
+
+    pub(super) fn read_coverage(db: &Connection) -> Result<Coverage> {
+        Ok(db
             .query_row(
                 "SELECT total,processed,incomplete FROM refresh_state",
                 [],
@@ -266,10 +269,11 @@ pub(super) fn stamp(stat: &Metadata) -> [u8; 56] {
 }
 
 fn verify_stamp(root: &Tree, path: &Path, expected: &[u8; 56]) -> Result<()> {
-    if &stamp(&root.file(path)?.metadata()?) != expected {
-        return Err(
-            "Pi session changed during Recall refresh; retry from the committed cursor".into(),
-        );
+    let current = root
+        .file(path)
+        .and_then(|file| Ok(stamp(&file.metadata()?)));
+    if !current.is_ok_and(|value| &value == expected) {
+        return Err(IndexState::SourceChanged.into());
     }
     Ok(())
 }

@@ -152,7 +152,7 @@ async function runNative(
     protocol: 1, root, cacheBase: join(agentDir, "cache/session-recall"), modelDir, graph: options.graph, operation,
   });
   if (Buffer.byteLength(payload) > 64 * 1024) throw new Error("Recall request is too large.");
-  const deadline = AbortSignal.timeout(15_000);
+  const deadline = AbortSignal.timeout(operation.type === "maintain" ? 65_000 : 15_000);
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   requestSignal.throwIfAborted();
   // Allow a query to start while one refresh is active.

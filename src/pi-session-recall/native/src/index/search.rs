@@ -1,4 +1,4 @@
-use super::{Index, sync::stamp, terms};
+use super::{Index, IndexState, sync::stamp, terms};
 use crate::{
     Result,
     transcript::{FileId, FragmentAnchor, Line, RecordAnchor, Role, SessionReader, branch},
@@ -117,7 +117,7 @@ pub(super) fn resolve_scope<'a>(
             |row| row.get(0),
         )
         .optional()?
-        .ok_or_else(|| "Session is not in this Recall index".into())
+        .ok_or_else(|| IndexState::SourceMissing.into())
     };
     match scope {
         Scope::All => Ok((None, None, None)),

@@ -1,6 +1,6 @@
 //! Hybrid retrieval. Only candidate IDs and scores are retained during a corpus scan.
 use super::{
-    Index,
+    Coverage, Index,
     graph::{self, GraphPolicy},
     search::{Candidate, Filter, LexicalHit, Scope, resolve_scope},
     terms,
@@ -31,6 +31,8 @@ pub struct HybridResult {
     pub engine: &'static str,
     #[serde(skip)]
     pub semantic_candidates: Vec<i64>,
+    #[serde(skip)]
+    pub coverage: Coverage,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,6 +155,7 @@ impl Index {
             stale_candidates: 0,
             engine: "exact",
             semantic_candidates: Vec::new(),
+            coverage: Self::read_coverage(db)?,
         };
         let mut sessions = HashMap::new();
         for score in scores {

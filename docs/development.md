@@ -85,4 +85,6 @@ npm run verify:native-assets
 
 Linux 构建需要 Rust musl target、`musl-gcc` 和 `readelf`。Windows 对应的 `native/tools/build-win32-x64.mjs` 需要 MSVC target、VS C++ Build Tools 与 Windows SDK。搜索引擎另见[构建说明](https://github.com/Rycen7822/metis-pi/blob/main/src/neural-search/engine/README.md)。
 
+发布带混合会话检索的 Linux x64 包前，在 glibc 2.39 构建环境运行 `npm run build:recall`。它只暂存 Recall worker，不安装 Pi 或下载模型；Bekko128 继续用单独发布的模型资产。没有该 worker 的包仍支持字面会话检索。
+
 `prepack` 检查 SDK 和原生资产，构建 Web bundle 并生成子代理工具目录。交付文件变更后，用 `npm pack --dry-run --json --ignore-scripts` 核对包清单；需要验证运行时加载时，实际打包并在隔离 profile 中安装。根 `package.json` 管理入口与随包资源。

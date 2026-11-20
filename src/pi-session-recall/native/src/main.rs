@@ -1,7 +1,7 @@
 //! Private per-request worker for the Pi Recall extension. No stdout diagnostics.
 use metis_bekko::Encoder;
 use metis_session_recall::index::{
-    CACHE_SCHEMA, Coverage, GraphPolicy, GraphReport, HybridResult, Index, Scope,
+    CACHE_SCHEMA, Coverage, GraphPolicy, GraphReport, HybridResult, Index, IndexState, Scope,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ use std::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const PROTOCOL: u32 = 1;
 const CACHE_BUDGET: u64 = 512 * 1024 * 1024;
+const EXACT_HEADROOM: u64 = 16 * 1024 * 1024;
 const MAX_REQUEST: u64 = 64 * 1024;
 const DB_FILE: &str = "index.sqlite3";
 
@@ -186,7 +187,11 @@ fn run() -> Result<Response> {
         )?;
         match flock(&fd, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {
-                let remaining = CACHE_BUDGET.saturating_sub(disk_bytes(&request.cache_base)?);
+                let mut remaining = CACHE_BUDGET.saturating_sub(disk_bytes(&request.cache_base)?);
+                if remaining < EXACT_HEADROOM && cache.join(DB_FILE).is_file() {
+                    Index::open_graph_cache(&root, &cache)?.reclaim_graphs()?;
+                    remaining = CACHE_BUDGET.saturating_sub(disk_bytes(&request.cache_base)?);
+                }
                 if remaining < 1024 * 1024 {
                     reason = Some("disk_budget");
                     None
@@ -229,6 +234,8 @@ fn run() -> Result<Response> {
         }) {
             reason = Some(if error.is::<Deadline>() {
                 "index_pending"
+            } else if error.downcast_ref::<IndexState>() == Some(&IndexState::SourceChanged) {
+                "source_changed"
             } else if error
                 .downcast_ref::<rusqlite::Error>()
                 .is_some_and(|e| e.sqlite_error_code() == Some(rusqlite::ErrorCode::DiskFull))
@@ -250,7 +257,8 @@ fn run() -> Result<Response> {
                 Ok(hits) => Some(hits),
                 Err(error)
                     if !coverage.complete
-                        && error.to_string() == "Session is not in this Recall index" =>
+                        && error.downcast_ref::<IndexState>()
+                            == Some(&IndexState::SourceMissing) =>
                 {
                     None
                 }
@@ -259,12 +267,15 @@ fn run() -> Result<Response> {
         }
         Operation::Refresh | Operation::Maintain { .. } => None,
     };
-    if results
-        .as_ref()
-        .is_some_and(|result| result.stale_candidates != 0)
-    {
-        coverage.complete = false;
-        reason = Some("source_changed");
+    if let Some(result) = &results {
+        coverage = result.coverage;
+        if result.stale_candidates != 0 {
+            reason = Some("source_changed");
+        }
+        coverage.complete &= reason.is_none();
+        if !coverage.complete && reason.is_none() {
+            reason = Some("index_incomplete");
+        }
     }
     Ok(Response {
         protocol: PROTOCOL,
@@ -307,8 +318,11 @@ fn maintain(
         return Ok(response);
     }
     let mut index = Index::open_graph_cache(root, cache)?;
-    let budget = CACHE_BUDGET.saturating_sub(disk_bytes(base)?);
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let budget = CACHE_BUDGET
+        .saturating_sub(disk_bytes(base)?)
+        .saturating_sub(EXACT_HEADROOM);
+    // Larger daily partitions may take tens of seconds even at low priority.
+    let deadline = Instant::now() + Duration::from_secs(60);
     let check = || {
         if Instant::now() >= deadline {
             Err(Deadline.into())

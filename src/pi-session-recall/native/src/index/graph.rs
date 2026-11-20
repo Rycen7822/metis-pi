@@ -46,6 +46,19 @@ struct Part {
 }
 
 impl Index {
+    /// Drop only replaceable graph state when more space is needed for the exact index.
+    pub fn reclaim_graphs(&self) -> Result<usize> {
+        let lease = openat(
+            &self.cache_dir,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        flock(&lease, FlockOperation::NonBlockingLockExclusive)?;
+        self.db.execute("DELETE FROM graph_parts", [])?;
+        clean_files(&self.db, &self.cache_path)
+    }
+
     pub fn maintain_graphs(
         &mut self,
         policy: GraphPolicy,

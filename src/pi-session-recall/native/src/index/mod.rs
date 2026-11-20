@@ -26,6 +26,25 @@ use std::{
 
 pub const CACHE_SCHEMA: i64 = 4;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum IndexState {
+    SourceChanged,
+    SourceMissing,
+}
+
+impl std::fmt::Display for IndexState {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(match self {
+            Self::SourceChanged => {
+                "Pi session changed during Recall refresh; retry from the committed cursor"
+            }
+            Self::SourceMissing => "Session is not in this Recall index",
+        })
+    }
+}
+
+impl std::error::Error for IndexState {}
+
 pub struct Index {
     root: Tree,
     cache_dir: File,
