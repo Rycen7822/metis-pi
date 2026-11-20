@@ -115,6 +115,7 @@
     "src",
     "!src/neural-search/engine/**",
     "!src/neural-search/semantic/**",
+    "!src/pi-session-recall/native/**",
     "!src/**/test/**",
     "!src/**/*.test.*",
     "!src/**/scripts/**",
