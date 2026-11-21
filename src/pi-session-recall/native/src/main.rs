@@ -1,7 +1,9 @@
 //! Private per-request worker for the Pi Recall extension. No stdout diagnostics.
+mod rerank;
 use metis_bekko::Encoder;
 use metis_session_recall::index::{
-    CACHE_SCHEMA, Coverage, GraphPolicy, GraphReport, HybridResult, Index, IndexState, Scope,
+    CACHE_SCHEMA, Coverage, EnhancedResult, GraphPolicy, GraphReport, HybridResult, Index,
+    IndexState, Scope,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,7 @@ struct Request {
     cache_base: PathBuf,
     model_dir: Option<PathBuf>,
     graph: Option<GraphSettings>,
+    reranker: Option<rerank::Reranker>,
     operation: Operation,
 }
 
@@ -94,6 +97,10 @@ struct Response {
     reason: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     graph: Option<GraphReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enhanced: Option<EnhancedResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enhanced_reason: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -207,6 +214,7 @@ fn run() -> Result<Response> {
             Err(error) => return Err(error.into()),
         }
     };
+    let attempted = request.reranker.is_some();
     if admission.is_none() && !cache.join(DB_FILE).is_file() {
         return Ok(Response {
             protocol: PROTOCOL,
@@ -214,6 +222,8 @@ fn run() -> Result<Response> {
             results: None,
             reason: Some(reason.unwrap_or("index_not_ready")),
             graph: None,
+            enhanced: None,
+            enhanced_reason: attempted.then_some("index_pending"),
         });
     }
 
@@ -223,6 +233,10 @@ fn run() -> Result<Response> {
         .ok_or("Missing Recall model path")?;
     let encoder = Arc::new(Encoder::open(model)?);
     let mut index = Index::open_hybrid(&root, &cache, encoder)?;
+    let mut enhanced_reason = attempted.then_some("index_pending");
+    let mut potion = None;
+    let can_read_potion =
+        |options: &rerank::Reranker| metis_potion::Encoder::open(&options.potion_dir);
     if let Some((_lease, remaining)) = admission {
         index.limit_growth(remaining / 2)?;
         let deadline = Instant::now() + Duration::from_millis(millis);
@@ -245,6 +259,30 @@ fn run() -> Result<Response> {
                 return Err(error);
             });
         }
+        if let (Some(options), Operation::Search { scope, .. }) =
+            (&request.reranker, &request.operation)
+            && reason.is_none()
+            && index.coverage()?.complete
+        {
+            match can_read_potion(options) {
+                Ok(model) => {
+                    let deadline = Instant::now() + Duration::from_millis(1500);
+                    match index.prepare_potion(scope.resolve(), &model, deadline) {
+                        Ok(true) => potion = Some(model),
+                        Ok(false) => {}
+                        Err(_) => enhanced_reason = Some("potion_index_unavailable"),
+                    }
+                }
+                Err(_) => enhanced_reason = Some("potion_unavailable"),
+            }
+        }
+    } else if reason.is_none()
+        && let Some(options) = &request.reranker
+    {
+        match can_read_potion(options) {
+            Ok(model) => potion = Some(model),
+            Err(_) => enhanced_reason = Some("potion_unavailable"),
+        }
     }
     let mut coverage = index.coverage()?;
     coverage.complete &= reason.is_none();
@@ -253,6 +291,29 @@ fn run() -> Result<Response> {
     }
     let results = match request.operation {
         Operation::Search { query, scope, .. } => {
+            if coverage.complete
+                && let (Some(options), Some(potion)) = (&request.reranker, potion)
+            {
+                match index.enhanced(&query, scope.resolve(), &potion, |old, wide| {
+                    options.rank(&query, old, wide)
+                }) {
+                    Ok(enhanced) => {
+                        return Ok(Response {
+                            protocol: PROTOCOL,
+                            results: None,
+                            coverage,
+                            reason: None,
+                            graph: None,
+                            enhanced: Some(enhanced),
+                            enhanced_reason: None,
+                        });
+                    }
+                    Err(e) if e.is::<rerank::InputLimit>() => {
+                        enhanced_reason = Some("reranker_input_limit")
+                    }
+                    Err(_) => enhanced_reason = Some("enhancement_unavailable"),
+                }
+            }
             match index.hybrid_with_graph(&query, scope.resolve(), Some(policy), || Ok(())) {
                 Ok(hits) => Some(hits),
                 Err(error)
@@ -283,6 +344,8 @@ fn run() -> Result<Response> {
         coverage,
         reason,
         graph: None,
+        enhanced: None,
+        enhanced_reason,
     })
 }
 
@@ -299,6 +362,8 @@ fn maintain(
         results: None,
         reason: None,
         graph: None,
+        enhanced: None,
+        enhanced_reason: None,
     };
     if !cache.join(DB_FILE).is_file() {
         response.reason = Some("index_not_ready");

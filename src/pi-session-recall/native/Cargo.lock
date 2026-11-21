@@ -687,12 +687,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "metis-potion"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokenizers",
+]
+
+[[package]]
 name = "metis-session-recall"
 version = "0.1.0"
 dependencies = [
  "jiff",
  "memchr",
  "metis-bekko",
+ "metis-potion",
  "rusqlite",
  "rustix",
  "serde",

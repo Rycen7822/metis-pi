@@ -7,7 +7,9 @@ mod terms;
 mod tree;
 
 pub use graph::{GraphPolicy, GraphReport};
-pub use hybrid::{HybridHit, HybridResult, SessionHits};
+pub use hybrid::{
+    EnhancedCenter, EnhancedResult, EnhancedSelection, HybridHit, HybridResult, SessionHits,
+};
 pub use search::{LexicalHit, LexicalResult, Scope};
 pub use sync::{Coverage, CoverageGap, RefreshReport};
 use tree::Tree;

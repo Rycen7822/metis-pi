@@ -1,4 +1,6 @@
 //! Hybrid retrieval. Only candidate IDs and scores are retained during a corpus scan.
+#[path = "enhanced.rs"]
+mod enhanced;
 use super::{
     Coverage, Index,
     graph::{self, GraphPolicy},
@@ -6,6 +8,7 @@ use super::{
     terms,
 };
 use crate::Result;
+pub use enhanced::{EnhancedCenter, EnhancedResult, EnhancedSelection};
 use metis_bekko::{DOCUMENT_BYTES, Document, EMBEDDING_DIMENSION};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -19,6 +22,12 @@ pub(super) const LANE_LIMIT: usize = 200;
 const PER_SESSION_LANE: usize = 8;
 const MAX_SESSIONS: usize = 10;
 const PER_SESSION_HITS: usize = 3;
+const CANDIDATE_BY_ID: &str =
+    "SELECT c.id, s.path, s.session_id, s.cwd, e.id, e.parent, c.role, 0.0,
+            s.device, s.inode, e.byte_offset, e.byte_len, e.terminated,
+            e.line_digest, c.block, c.text_start, c.text_end, s.observed
+     FROM chunks c JOIN sources s ON s.id=c.source
+     JOIN entries e ON e.source=c.source AND e.id=c.entry WHERE c.id=?1";
 const IN_SCOPE: &str = "
     (?1 IS NULL OR s.cwd=?1) AND (?2 IS NULL OR c.source=?2)
     AND (?3 IS NULL OR c.entry IN (SELECT value FROM json_each(?3)))";
@@ -143,13 +152,7 @@ impl Index {
         branch: bool,
         check: &mut impl FnMut() -> Result<()>,
     ) -> Result<HybridResult> {
-        let mut lookup = db.prepare_cached(
-            "SELECT c.id, s.path, s.session_id, s.cwd, e.id, e.parent, c.role, 0.0,
-                    s.device, s.inode, e.byte_offset, e.byte_len, e.terminated,
-                    e.line_digest, c.block, c.text_start, c.text_end, s.observed
-             FROM chunks c JOIN sources s ON s.id=c.source
-             JOIN entries e ON e.source=c.source AND e.id=c.entry WHERE c.id=?1",
-        )?;
+        let mut lookup = db.prepare_cached(CANDIDATE_BY_ID)?;
         let mut result = HybridResult {
             sessions: Vec::new(),
             stale_candidates: 0,
@@ -297,10 +300,16 @@ fn similarity(raw: &[u8; DOCUMENT_BYTES], query: &[f32; EMBEDDING_DIMENSION]) ->
     Ok(doc.score(query))
 }
 
-#[derive(Default)]
 struct Lane {
     items: BTreeSet<LaneItem>,
     per_source: HashMap<i64, BTreeSet<LaneItem>>,
+    source_limit: usize,
+}
+
+impl Default for Lane {
+    fn default() -> Self {
+        Self::new(PER_SESSION_LANE)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -333,6 +342,14 @@ impl PartialEq for LaneItem {
 impl Eq for LaneItem {}
 
 impl Lane {
+    fn new(source_limit: usize) -> Self {
+        Self {
+            items: BTreeSet::new(),
+            per_source: HashMap::new(),
+            source_limit,
+        }
+    }
+
     fn offer(&mut self, candidate: LaneItem) {
         if self.items.len() == LANE_LIMIT
             && self.items.first().is_some_and(|item| *item >= candidate)
@@ -340,7 +357,7 @@ impl Lane {
             return;
         }
         let source = self.per_source.entry(candidate.source).or_default();
-        if source.len() == PER_SESSION_LANE {
+        if source.len() == self.source_limit {
             if source.first().is_some_and(|item| *item >= candidate) {
                 return;
             }

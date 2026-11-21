@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy)]
 pub enum Scope<'a> {
     All,
     Project(&'a str),
@@ -142,8 +143,8 @@ pub(super) fn resolve_scope<'a>(
 pub(super) struct Candidate {
     pub hit: LexicalHit,
     cwd: String,
-    anchor: FragmentAnchor,
-    stamp: [u8; 56],
+    pub(super) anchor: FragmentAnchor,
+    pub(super) stamp: [u8; 56],
 }
 
 impl Candidate {

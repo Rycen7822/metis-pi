@@ -311,6 +311,16 @@ provider 请求按 `max(1024, ceil(2 × R))` 预留文本输出空间；思考�
 
 每次 query 重读，缺省/无效/未注册模型跟随会话，损坏 TOML 报错；search 不调用提供商，模型与认证归 Pi。
 
+可选子表 `[sessionRecall.enhanced]` 只用于显式 `search(mode="enhanced")`，不改变任何默认：
+
+| 字段 | 含义（均为绝对路径，无默认） |
+| --- | --- |
+| `potionDir` | Potion-code-16M-v2 固定修订的本地 tokenizer 和 safetensors 目录。 |
+| `modelDir` | Yuanbao-Reranker-0.6B 固定修订的本地模型目录。 |
+| `python` | 可信的 Python ≥ 3.11 解释器；需预装 CUDA PyTorch、Transformers、Accelerate 与 Safetensors。 |
+
+模型修订、启动与回退方式见[增强检索用法](docs/features/managed-plugins.md#增强会话检索)。
+
 ## `[webAccess]`
 
 普通字段沿用 Web Access 的名字和校验规则，统一加上 `webAccess` 表前缀。

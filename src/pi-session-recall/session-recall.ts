@@ -165,7 +165,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		label: "Session Search",
 		description:
 			"Find past sessions. Default literal mode matches exact phrase text in JSONL; mode=hybrid searches indexed history " +
-			"with local BM25 and Bekko128. Scope selection is available only in hybrid mode. " +
+			"with local BM25 and Bekko128. For deeper evidence search use explicit mode=enhanced if local models are configured. " +
+			"Hybrid and enhanced modes support scope selection. In literal mode: " +
 			"Use one exact token or phrase. Spaces are exact spaces in an exact phrase, " +
 			"so only use spaces for wording you expect appeared in the session, such as an error message. " +
 			"Good examples: `libc++abi`, `Cannot find module '@sinclair/typebox'`, `Blender VAT bake`. " +
@@ -186,7 +187,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			const total = details.totalMatches ?? details.matchCount;
 			const count = total > details.matchCount ? `Showing ${details.matchCount} of ${total} sessions` :
 				`${details.matchCount} session${details.matchCount > 1 ? "s" : ""}`;
-			const summary = details?.mode === "hybrid" ? text.split("\n", 1)[0] : `${count} matching "${details.query}"`;
+			const summary = details?.mode === "hybrid" || details?.mode === "enhanced" ? text.split("\n", 1)[0] : `${count} matching "${details.query}"`;
 			container.addChild(new Text(theme.fg("toolOutput", summary), 0, 0));
 
 			if (options.expanded) {
@@ -204,9 +205,9 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		parameters: Type.Object({
 			query: Type.String({
 				minLength: 1,
-				description: "Exact token or phrase in literal mode; keywords or a natural-language description in hybrid mode.",
+				description: "Exact token or phrase in literal mode; keywords or a natural-language description in hybrid or enhanced mode.",
 			}),
-			mode: Type.Optional(Type.Union([Type.Literal("literal"), Type.Literal("hybrid")])),
+			mode: Type.Optional(Type.Union([Type.Literal("literal"), Type.Literal("hybrid"), Type.Literal("enhanced")])),
 			scope: Type.Optional(recallScope),
 		}),
 
@@ -225,14 +226,24 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 
 			try {
 				signal?.throwIfAborted();
-				if (params.mode === "hybrid") {
-					const result = await searchRecall(getAgentDir(), sessionsDir, ctx.sessionManager.getCwd(), query, params.scope, signal);
+				if (params.mode === "hybrid" || params.mode === "enhanced") {
+					const result = await searchRecall(
+						getAgentDir(), sessionsDir, ctx.sessionManager.getCwd(), query, params.scope, signal, params.mode,
+					);
+					if (result.enhanced) {
+						const { evidence, matchCount, outputTokens, outputCap } = result.enhanced;
+						return {
+							content: [{ type: "text" as const, text: `Enhanced Recall: ${matchCount} sessions\n\n${safeText(evidence)}` }],
+							details: { mode: "enhanced", matchCount, outputTokens, outputCap },
+						};
+					}
 					const matches = result.results?.sessions ?? [];
 					const coverage = result.coverage.complete ? "complete" : "partial";
 					const reasons = result.reason ? ` (${safeText(result.reason)})` : "";
 					const counts = `${result.coverage.indexedSources} indexed, ${result.coverage.pendingSources} pending, ` +
 						`${result.coverage.incompleteSources} incomplete`;
-					const summary = `Hybrid Recall: ${matches.length} sessions · ${coverage} coverage${reasons} · ${counts}`;
+					const fallback = result.enhancedReason ? ` (enhanced fallback: ${safeText(result.enhancedReason)})` : "";
+					const summary = `Hybrid Recall: ${matches.length} sessions · ${coverage} coverage${reasons} · ${counts}${fallback}`;
 					const body = matches.map(session => {
 						const snippets = session.hits.map(hit => `  [${hit.role} · ${safeText(hit.entryId)}] ${safeText(hit.text)}`);
 						return [`Session: ${safeText(session.sessionPath)}`, ...snippets].join("\n");
@@ -245,10 +256,11 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 							indexedSources: result.coverage.indexedSources, pendingSources: result.coverage.pendingSources,
 							incompleteSources: result.coverage.incompleteSources,
 							engine: result.results?.engine, sessions: matches,
+							...(result.enhancedReason ? { enhancedReason: result.enhancedReason } : {}),
 						},
 					};
 				}
-				if (params.scope) return errorResult("Scope selection requires mode=hybrid.");
+				if (params.scope) return errorResult("Scope selection requires mode=hybrid or mode=enhanced.");
 				const allMatches = await searchFiles(query, sessionsDir, signal);
 
 				if (allMatches.length === 0) {

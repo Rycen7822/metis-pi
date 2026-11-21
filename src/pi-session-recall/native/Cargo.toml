@@ -10,6 +10,7 @@ publish = false
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 memchr = "2"
 metis-bekko = { path = "../../local-embedding/bekko" }
+metis-potion = { path = "../../local-embedding/potion" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 rustix = { version = "1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }

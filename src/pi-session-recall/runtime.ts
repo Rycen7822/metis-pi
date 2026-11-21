@@ -17,6 +17,7 @@ export const recallScope = Type.Union([
 ]);
 
 type RecallScope = Static<typeof recallScope>;
+interface LocalReranker { potionDir: string; modelDir: string; python: string; script: string }
 type NativeScope =
   | { kind: "all" }
   | { kind: "project"; cwd: string }
@@ -48,6 +49,11 @@ const response = Type.Object({
     }), { maxItems: 10 }),
   })]),
   reason: Type.Union([Type.String(), Type.Null()]),
+  enhanced: Type.Optional(Type.Object({
+    evidence: Type.String(), matchCount: Type.Integer({ minimum: 0, maximum: 10 }),
+    outputTokens: Type.Integer({ minimum: 0, maximum: 2048 }), outputCap: Type.Integer({ minimum: 0, maximum: 2048 }),
+  })),
+  enhancedReason: Type.Optional(Type.String()),
 });
 type RecallResponse = Static<typeof response>;
 
@@ -63,6 +69,7 @@ function settings(agentDir: string) {
   if (mode !== "off" && mode !== "on") throw new Error('sessionRecall.hnsw must be "off" or "on".');
   return {
     backgroundIndex: table.backgroundIndex === true,
+    enhanced: isMetisConfigTable(table.enhanced) ? table.enhanced : undefined,
     graph: { retentionDays: days, minNodes: mode === "on" ? 2048 : null },
     proof: { file: metisConfigPath(agentDir), sha256: source === undefined ? null : createHash("sha256").update(source).digest("hex") },
   };
@@ -80,8 +87,11 @@ function scopedPath(root: string, requested: string): string {
   return file;
 }
 
+let enhancementRunning = false;
+
 export async function searchRecall(
-  agentDir: string, sessionDir: string, cwd: string, query: string, scope: RecallScope = { kind: "all" }, signal?: AbortSignal,
+  agentDir: string, sessionDir: string, cwd: string, query: string, scope: RecallScope = { kind: "all" },
+  signal?: AbortSignal, mode: "hybrid" | "enhanced" = "hybrid",
 ): Promise<RecallResponse> {
   const root = await realpath(sessionDir);
   let range: NativeScope;
@@ -92,9 +102,31 @@ export async function searchRecall(
     case "branch": range = { kind: "branch", path: scopedPath(root, scope.sessionPath), leaf: scope.leafId }; break;
   }
   const options = settings(agentDir);
-  return runNative(agentDir, root, {
-    type: "search", query, scope: range, refreshMillis: options.backgroundIndex ? 0 : 200,
-  }, signal, options);
+  const search: Operation = { type: "search", query, scope: range, refreshMillis: options.backgroundIndex ? 0 : 200 };
+  if (mode === "hybrid") return runNative(agentDir, root, search, signal, options);
+  let enhancedReason = "not_configured";
+  const { potionDir, modelDir, python } = options.enhanced ?? {};
+  if (typeof potionDir === "string" && isAbsolute(potionDir) && typeof modelDir === "string" && isAbsolute(modelDir)
+    && typeof python === "string" && isAbsolute(python)) {
+    if (enhancementRunning) enhancedReason = "reranker_busy";
+    else {
+      enhancementRunning = true;
+      try {
+        const script = fileURLToPath(new URL("./rerank.py", import.meta.url));
+        const result = await runNative(agentDir, root, { ...search, refreshMillis: 200 }, signal, options,
+          { potionDir, modelDir, python, script });
+        if (result.enhanced || result.enhancedReason) return result;
+        enhancedReason = "worker_does_not_support_enhanced";
+      } catch (error) {
+        signal?.throwIfAborted();
+        enhancedReason = error instanceof DOMException && error.name === "TimeoutError"
+          ? "enhancement_timeout" : "enhancement_unavailable";
+      } finally {
+        enhancementRunning = false;
+      }
+    }
+  }
+  return { ...await runNative(agentDir, root, search, signal, options), enhancedReason };
 }
 
 export async function refreshRecall(agentDir: string, sessionDir: string, signal: AbortSignal): Promise<RecallResponse> {
@@ -136,6 +168,7 @@ let active = 0;
 
 async function runNative(
   agentDir: string, root: string, operation: Operation, signal: AbortSignal | undefined, options: ReturnType<typeof settings>,
+  reranker?: LocalReranker,
 ): Promise<RecallResponse> {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error("Hybrid Recall currently requires Linux x64. Use literal search on this platform.");
@@ -149,33 +182,39 @@ async function runNative(
   const modelDir = operation.type === "maintain" ? undefined :
     await locateBekko(agentDir).catch(() => { throw new Error("No local Bekko128 asset. Use literal search."); });
   const payload = JSON.stringify({
-    protocol: 1, root, cacheBase: join(agentDir, "cache/session-recall"), modelDir, graph: options.graph, operation,
+    protocol: 1, root, cacheBase: join(agentDir, "cache/session-recall"), modelDir, graph: options.graph, operation, reranker,
   });
   if (Buffer.byteLength(payload) > 64 * 1024) throw new Error("Recall request is too large.");
-  const deadline = AbortSignal.timeout(operation.type === "maintain" ? 65_000 : 15_000);
+  const deadline = AbortSignal.timeout(operation.type === "maintain" ? 65_000 : reranker ? 30_000 : 15_000);
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   requestSignal.throwIfAborted();
   // Allow a query to start while one refresh is active.
   if (active >= 3) throw new Error("Recall workers are busy; retry the query.");
   active++;
   try {
-    const JSONText = await execute(executable, payload, requestSignal);
+    const JSONText = await execute(executable, payload, requestSignal, reranker !== undefined);
+    requestSignal.throwIfAborted();
     const value: unknown = JSON.parse(JSONText);
-    if (!Check(response, value)) throw new Error("Unexpected Recall worker response or protocol version.");
+    if (!Check(response, value) || (value.enhanced && value.enhanced.outputTokens > value.enhanced.outputCap)) {
+      throw new Error("Unexpected Recall worker response or protocol version.");
+    }
     return value;
   } finally {
     active--;
   }
 }
 
-function execute(executable: string, payload: string, signal: AbortSignal): Promise<string> {
+function execute(executable: string, payload: string, signal: AbortSignal, hasScorer: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, [], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(executable, [], { detached: hasScorer, stdio: ["pipe", "pipe", "pipe"] });
     const text: Buffer[] = [], diagnostic: Buffer[] = [];
     let size = 0, errors = 0, failure: unknown;
     const stop = (reason: unknown) => {
-      failure ??= reason;
-      child.kill("SIGKILL");
+      if (failure) return;
+      failure = reason;
+      if (hasScorer && child.pid !== undefined) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+      } else child.kill("SIGKILL");
     };
     const abort = () => stop(signal.reason);
     signal.addEventListener("abort", abort, { once: true });

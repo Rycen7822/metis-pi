@@ -31,6 +31,32 @@ HNSW 默认关闭。显式设置 `backgroundIndex = true` 和 `hnsw = "on"` 后�
 
 `session_recall` 的 `query` 使用模型回答会话相关问题。`[sessionRecall].queryModel` 可填已注册的 `provider/model-id`；`"default"` 或不可用的模型使用当前会话模型。使用 `query` 前，确认允许向所选模型发送有关会话内容。
 
+### 增强会话检索
+
+需要 Linux x64、随包原生 worker、Bekko128 和本地支持 BF16 的 NVIDIA CUDA 环境。准备好本地 Python 3.11+（验证环境为
+PyTorch 2.11 / Transformers 5.12，另需 Accelerate 和 Safetensors），以及下列固定修订的模型文件；不会自动安装或下载。
+
+- [Potion-code-16M-v2](https://huggingface.co/minishlab/potion-code-16M-v2/tree/e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b)：`model.safetensors`、`tokenizer.json`。
+- [Yuanbao-Reranker-0.6B](https://huggingface.co/Yuanbao-Search/Yuanbao-Reranker-0.6B/tree/0101299a7937a016848d8d55b092f6e31cfa312d)：`model.safetensors`、`config.json`、`tokenizer.json`、`tokenizer_config.json`。
+
+配置可信解释器和本地权重的绝对路径：
+
+```toml
+[sessionRecall.enhanced]
+python = "/opt/recall-env/bin/python"
+potionDir = "/opt/recall-models/potion-code"
+modelDir = "/opt/recall-models/yuanbao"
+```
+
+将上例的 `mode: "hybrid"` 改为 `mode: "enhanced"`。增强路径在同一授权范围精确检索 BM25 / Bekko128 / Potion，
+按 25/60/15 融合、用 Yuanbao 只重排中心；先保留 K16 实际返回的前五会话，再用 K64 补原文。正常增强输出最多 2,048 token
+且不超过该题的 K16 实际原文预算，返回的引文含原记录和字节跨度；不会把对话提交给远端。HNSW 不参与增强评分。
+
+Potion 缓存只在显式增强请求时按批准备，跟普通索引一起受磁盘上限限制；旧索引就地兼容，不迁移 JSONL。
+首次调用、大范围未准备、模型缺失/不兼容、提示对超 1,024 token 或工作进程失败时，可收到注明原因的**同范围普通 hybrid**结果，
+而不是静默扩大增强输入。普通回退使用既有的普通展示额度，不算增强命中。取消不启动回退。
+显式增强会为重排启动本地 Python/CUDA 进程，占用额外时间、RAM 和显存；默认字面搜索和普通 hybrid 不载入这两个附加模型。
+
 ## BTW 旁路对话
 
 `/btw <问题>` 打开旁路对话；无参数时继续已有对话或开始新的对话。Enter 提交，Esc 或 `[X]` 关闭。关闭时可以保留对话，或把摘要送回主会话。

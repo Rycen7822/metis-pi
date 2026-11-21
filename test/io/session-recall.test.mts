@@ -196,6 +196,89 @@ test("grouped hybrid search uses the staged real worker and respects a custom ro
   assert.equal(captured.length, 0, "hybrid retrieval cannot call the selected provider");
 });
 
+test("enhanced Recall is explicit, falls back within scope, and the configured path returns anchored branch evidence", async t => {
+  if (!process.env.METIS_RECALL_RUNTIME_DIR || !process.env.METIS_BEKKO_DIR || process.platform !== "linux") {
+    return t.skip("requires a staged native worker and local Bekko");
+  }
+  const { dir, sessions, tool, ctx, captured } = await queryFixture(t);
+  const manager = SessionManager.inMemory(dir);
+  const shared = manager.appendMessage({ role: "user", content: "\x1b[0mCONTROL_TEXT quartz buffer", timestamp: 0 });
+  manager.appendMessage({ role: "user", content: "EXCLUDED_ID quartz buffer", timestamp: 0 });
+  manager.branch(shared);
+  const leafId = manager.appendMessage({ role: "user", content: "CURRENT_ID quartz buffer", timestamp: 0 });
+  const sessionPath = saveSession(sessions, "anchors", manager);
+  sessionFile(sessions, "decoy", ["OTHER_FILE CURRENT_ID quartz buffer"]);
+  const scope = { kind: "branch", sessionPath, leafId };
+  const call = (mode: string, query = "CURRENT_ID quartz buffer", range = scope, signal?: AbortSignal) => tool.execute("recall", {
+    action: "search", params: { mode, query, scope: range },
+  }, signal, undefined, ctx);
+  const ordinary = await call("enhanced");
+  assert.equal(ordinary.details.mode, "hybrid");
+  assert.equal(ordinary.details.enhancedReason, "not_configured");
+  const text = (result: typeof ordinary) => JSON.stringify(result.content);
+  assert.match(text(ordinary), /CURRENT_ID quartz buffer/);
+  assert.doesNotMatch(text(ordinary), /EXCLUDED_ID|OTHER_FILE/);
+  assert.equal((await call("hybrid")).details.enhancedReason, undefined);
+
+  const { METIS_RECALL_TEST_POTION, METIS_RECALL_TEST_YUANBAO, METIS_RECALL_TEST_PYTHON } = process.env;
+  if (!METIS_RECALL_TEST_POTION || !METIS_RECALL_TEST_YUANBAO || !METIS_RECALL_TEST_PYTHON) {
+    t.diagnostic("CUDA enhanced arm not run without local Potion, Yuanbao, and Python");
+    return;
+  }
+  const config = join(dir, "metis-pi.toml");
+  const configure = (python: string) => writeFileSync(config, "[sessionRecall.enhanced]\n" +
+    `potionDir = ${JSON.stringify(METIS_RECALL_TEST_POTION)}\nmodelDir = ${JSON.stringify(METIS_RECALL_TEST_YUANBAO)}\n` +
+    `python = ${JSON.stringify(python)}\n`);
+  configure(METIS_RECALL_TEST_PYTHON);
+  const original = readFileSync(sessionPath);
+  const enhanced = await call("enhanced");
+  assert.equal(enhanced.details.mode, "enhanced", text(enhanced));
+  assert.equal(enhanced.details.matchCount, 1);
+  assert.match(text(enhanced), /block 0 \| 0:24/);
+  assert.match(text(enhanced), /CURRENT_ID quartz buffer/);
+  assert.doesNotMatch(text(enhanced), /EXCLUDED_ID|OTHER_FILE|CONTROL_TEXT/);
+  assert.ok(Number(enhanced.details.outputTokens) > 0);
+  assert.ok(Number(enhanced.details.outputTokens) <= Number(enhanced.details.outputCap));
+
+  configure(join(dir, "missing-python"));
+  const unavailable = await call("enhanced");
+  assert.equal(unavailable.details.mode, "hybrid");
+  assert.ok(unavailable.details.enhancedReason);
+  assert.match(text(unavailable), /CURRENT_ID quartz buffer/);
+  assert.doesNotMatch(text(unavailable), /EXCLUDED_ID|OTHER_FILE/);
+  const outside = await call("enhanced", "quartz", { ...scope, sessionPath: join(dir, "outside.jsonl") });
+  assert.equal(outside.details.error, true);
+  const waiting = join(dir, "scorer-waiting"), scorer = join(dir, "blocking-scorer");
+  writeFileSync(scorer, `#!/bin/sh\nprintf '%s' "$$" > ${shellQuote(waiting)}\nexec /bin/sleep 20\n`, { mode: 0o755 });
+  configure(scorer);
+  const cancellation = new AbortController();
+  const pending = call("enhanced", undefined, scope, cancellation.signal);
+  let scorerPid: string | undefined;
+  try {
+    for (let i = 0; i < 300 && !scorerPid; i++) {
+      if (existsSync(waiting)) scorerPid = readFileSync(waiting, "utf8");
+      if (!scorerPid) await delay(10);
+    }
+    assert.ok(scorerPid, "a child of the real Recall worker reached the waiting scorer");
+  } finally {
+    cancellation.abort(new Error("stop enhanced Recall"));
+  }
+  assert.equal((await pending).details.cancelled, true);
+  const stopped = () => {
+    try {
+      // Linux can temporarily retain a dead orphan as a zombie; it cannot keep processing data.
+      return readFileSync(`/proc/${scorerPid}/stat`, "utf8").includes(") Z ");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
+  };
+  for (let i = 0; i < 100 && !stopped(); i++) await delay(10);
+  assert.ok(stopped(), "cancellation stopped the local scoring process, not just its caller");
+  assert.deepEqual(readFileSync(sessionPath), original, "indexing and reranking never write the JSONL source");
+  assert.equal(captured.length, 0, "both local search paths must not use the session provider");
+});
+
 test("Recall cancels an opened query stream before provider dispatch and closes its file", async t => {
   const { sessions, tool, ctx, captured } = await queryFixture(t);
   const sessionPath = sessionFile(sessions, "cancel-open-query", ["Evidence that must not reach a provider."]);
