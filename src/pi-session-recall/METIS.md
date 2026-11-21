@@ -14,7 +14,8 @@ Metis loads this `.ts` source through `extensions/session-recall.ts`; references
   After scoring, the worker verifies the original root and every chosen byte span again; success never uses an older source binding.
   Python is a request-owned child, not part of the Pi process; local asset/setup failures are disclosed with ordinary scoped hybrid results.
 - The Linux x64 worker is packaged with the plugin. Build with `npm run build:recall`; release checks verify the source fingerprint and payload.
-  Recall reads the installed Semantic Search asset catalog for Bekko128; no separate model installation or copy. For development,
+  Recall uses the shared read-only [Semantic asset catalog reader](../neural-search/runtime/catalog.mts) to locate Bekko128;
+  Semantic Search owns installation. There is no separate model download or copy. For development,
   `METIS_RECALL_RUNTIME_DIR` can select an independent worker and `METIS_BEKKO_DIR` can select already prepared weights.
 - Literal search counts matching JSONL lines consistently in rg/grep/streaming Node; reject empty strings, retain literal whitespace. Search/reads are async and cancellable.
 - Query keeps the current-leaf branch, including compacted raw messages and native textual summaries, but no remote checkpoint in the helper request. Whole-file search may match an unselected branch excluded from query.

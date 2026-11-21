@@ -75,7 +75,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/neural-search/assets/THIRD_PARTY_NOTICES.txt", "src/neural-search/assets/THIRD_PARTY_NOTICES-win32-x64.txt",
     "src/neural-search/assets/RUST-STDLIB-NOTICES.html",
     "src/neural-search/assets/semantic/linux-x64/bin/sgrep",
-    "src/neural-search/runtime/install.mjs", "src/neural-search/runtime/distribution.json",
+    "src/neural-search/runtime/install.mjs", "src/neural-search/runtime/distribution.json", "src/neural-search/runtime/catalog.mts",
   ]) assert.ok(files.has(path), path);
   assert.deepEqual([...files].filter(path => /^assets\/pi-sdk\/.*\.tgz$/.test(path)), ["assets/pi-sdk/pi-1.6.0.tgz"]);
   assert.ok([...files].filter(path => path.startsWith("sdk-patches/")).every(path => path.startsWith("sdk-patches/pi-1.6.0/")),

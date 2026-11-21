@@ -64,7 +64,7 @@ test("automatic setup reuses models across engine updates and preserves the old 
   fs.mkdirSync(path.join(root, ".work"), { recursive: true });
   const directory = fs.mkdtempSync(path.join(root, ".work/semantic-install-test-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  fs.copyFileSync(installer, path.join(directory, "install.mjs"));
+  fs.cpSync(path.dirname(installer), directory, { recursive: true });
   const agent = path.join(directory, "agent");
   const base = path.join(agent, "metis/neural-search/semantic/linux-x64");
   const counts = {};
@@ -117,7 +117,8 @@ test("automatic setup reuses models across engine updates and preserves the old 
     fs.writeFileSync(path.join(directory, "distribution.json"), JSON.stringify(distribution));
     return run(process.execPath, [path.join(directory, "install.mjs")], { env, timeout: 20_000 });
   };
-  const selected = () => path.join(base, fs.readFileSync(path.join(base, "current"), "utf8").trim());
+  const pointer = path.join(base, "current");
+  const selected = () => path.join(base, fs.readFileSync(pointer, "utf8").trim());
   const modelPaths = () => {
     const catalog = JSON.parse(fs.readFileSync(path.join(selected(), "assets.json"), "utf8"));
     return Object.fromEntries(Object.entries(catalog.models).map(([name, value]) => [name, value.directory]));
@@ -141,6 +142,9 @@ test("automatic setup reuses models across engine updates and preserves the old 
   assert.deepEqual(modelPaths(), paths);
   for (const name of Object.keys(models)) assert.equal(counts[`/model-${name}.tar.gz`], 1);
   const requests = { ...counts };
+  fs.writeFileSync(pointer, path.basename(previous) + "\n".repeat(64 * 1024));
+  await assert.rejects(setup(), /Invalid semantic runtime record:.*current/);
+  fs.writeFileSync(pointer, path.basename(previous) + "\n");
   distribution = { ...distribution, minimum_glibc: "99.0" };
   const unsupported = await setup();
   assert.match(unsupported.stdout, /Other Metis features remain available/);

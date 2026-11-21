@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { readJSON, selectedRuntime, SEMANTIC_RUNTIME_PATH } from "./catalog.mts";
 
 const DOWNLOAD_TIMEOUT_MS = 180_000;
 const INSTALL_WAIT_MS = 600_000;
@@ -29,13 +30,6 @@ function agentDirectory() {
   return path.resolve(directory === "~" ? homedir() : directory.startsWith("~/") ? path.join(homedir(), directory.slice(2)) : directory);
 }
 
-function readJSON(file) {
-  try {
-    if (!fs.lstatSync(file).isFile() || fs.statSync(file).size > 64 * 1024) throw new Error(`Invalid installation record: ${file}`);
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
-}
-
 function filesFor(asset) {
   return asset.catalog ? Object.fromEntries(Object.entries(asset.catalog.files).map(([name, file]) => [name, file.bytes])) : asset.files;
 }
@@ -52,25 +46,13 @@ function physicalFiles(directory, asset) {
   } catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
 
-function currentRuntime(base) {
-  try {
-    const file = path.join(base, "current");
-    if (!fs.lstatSync(file).isFile()) throw new Error("Semantic runtime selection must be a regular file.");
-    const name = fs.readFileSync(file, "utf8").trim();
-    if (!/^runtime-[A-Za-z0-9]+$/.test(name)) throw new Error("Invalid semantic runtime selection.");
-    return path.join(base, name);
-  } catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
-}
-
-function readyRuntime(base) {
-  const directory = currentRuntime(base);
+async function readyRuntime(directory) {
   if (!directory) return;
-  const record = readJSON(path.join(directory, "installation.json"));
+  const record = await readJSON(path.join(directory, "installation.json"));
   if (record?.distribution !== distribution.id || record.engine !== distribution.engine.id) return;
-  const catalog = readJSON(path.join(directory, "assets.json"));
-  if (!physicalFiles(directory, distribution.engine)) return;
-  if (Object.entries(distribution.models).every(([name, asset]) =>
-    record.models?.[name] === asset.id && physicalFiles(catalog?.models?.[name]?.directory, asset))) return directory;
+  const catalog = await readJSON(path.join(directory, "assets.json"));
+  return physicalFiles(directory, distribution.engine) && Object.entries(distribution.models).every(([name, asset]) =>
+    record.models?.[name] === asset.id && physicalFiles(catalog?.models?.[name]?.directory, asset));
 }
 
 function sync(file) {
@@ -191,24 +173,24 @@ function publishObject(objects, asset, directory) {
   sync(objects);
 }
 
-async function obtainObject(objects, asset, context, force = false) {
-  const record = readJSON(objectIndex(objects, asset));
-  if (!force && record?.sha256 === asset.sha256 && /^asset-[A-Za-z0-9]+$/.test(record.directory)) {
-    const directory = path.join(objects, record.directory);
-    if (physicalFiles(directory, asset)) return directory;
-  }
+async function cachedObject(objects, asset) {
+  const record = await readJSON(objectIndex(objects, asset));
+  if (record?.sha256 !== asset.sha256 || !/^asset-[A-Za-z0-9]+$/.test(record.directory)) return;
+  const directory = path.join(objects, record.directory);
+  if (physicalFiles(directory, asset)) return directory;
+}
+
+async function downloadObject(objects, asset, context) {
+  context.signal?.throwIfAborted();
   const directory = fs.mkdtempSync(path.join(objects, "asset-"));
-  let complete = false;
-  try {
-    await download(asset, directory, context);
-    complete = true;
-    publishObject(objects, asset, directory);
-    return directory;
-  } catch (error) {
-    // Once an index may have been renamed, keep its complete payload even if directory sync failed.
-    if (!complete) fs.rmSync(directory, { recursive: true, force: true });
+  try { await download(asset, directory, context); }
+  catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true });
     throw error;
   }
+  // Once an index may have been renamed, keep its complete payload even if directory sync failed.
+  publishObject(objects, asset, directory);
+  return directory;
 }
 
 async function checkRuntime(directory, signal) {
@@ -249,10 +231,9 @@ async function checkRuntime(directory, signal) {
   }
 }
 
-function legacyModel(base, asset, name) {
-  const directory = currentRuntime(base);
+async function legacyModel(directory, asset, name) {
   if (!directory) return;
-  const entry = readJSON(path.join(directory, "assets.json"))?.models?.[name];
+  const entry = (await readJSON(path.join(directory, "assets.json")))?.models?.[name];
   if (entry?.revision !== asset.catalog.revision || Object.keys(entry.files).length !== Object.keys(asset.catalog.files).length) return;
   if (!Object.entries(asset.catalog.files).every(([file, value]) =>
     entry.files[file]?.sha256 === value.sha256 && entry.files[file]?.bytes === value.bytes)) return;
@@ -263,60 +244,57 @@ function legacyModel(base, asset, name) {
 async function install(base, signal) {
   const release = await installationLock(base, signal);
   const context = { signal };
-  const adopted = [];
-  let runtime;
-  let published = false;
+  const adopted = new Set();
+  let stagedRuntime;
   try {
     signal?.throwIfAborted();
-    if (readyRuntime(base)) return;
+    const previous = await selectedRuntime(base);
+    if (await readyRuntime(previous)) return;
+    signal?.throwIfAborted();
     const objects = path.join(base, "objects");
     fs.mkdirSync(objects, { recursive: true, mode: 0o700 });
-    const engine = await obtainObject(objects, distribution.engine, context);
+    const engine = await cachedObject(objects, distribution.engine) ?? await downloadObject(objects, distribution.engine, context);
     const models = [];
     for (const [name, asset] of Object.entries(distribution.models)) {
-      const record = readJSON(objectIndex(objects, asset));
-      const existing = record?.sha256 === asset.sha256 && /^asset-[A-Za-z0-9]+$/.test(record.directory)
-        ? path.join(objects, record.directory) : undefined;
-      const legacy = !physicalFiles(existing, asset) ? legacyModel(base, asset, name) : undefined;
+      let directory = await cachedObject(objects, asset);
+      const legacy = directory ? undefined : await legacyModel(previous, asset, name);
+      signal?.throwIfAborted();
       if (legacy) {
-        const directory = fs.mkdtempSync(path.join(objects, "asset-"));
-        adopted.push(directory);
+        directory = fs.mkdtempSync(path.join(objects, "asset-"));
+        adopted.add(directory);
         copyPayload(legacy, directory, asset);
-        models.push({ name, asset, directory, adopted: true });
-      } else {
-        models.push({ name, asset, directory: await obtainObject(objects, asset, context), adopted: false });
       }
+      directory ??= await downloadObject(objects, asset, context);
+      models.push({ name, asset, directory });
     }
-    runtime = fs.mkdtempSync(path.join(base, "runtime-"));
-    copyPayload(engine, runtime, distribution.engine);
+    stagedRuntime = fs.mkdtempSync(path.join(base, "runtime-"));
+    copyPayload(engine, stagedRuntime, distribution.engine);
     const repaired = new Set();
     for (;;) {
       const catalog = { format_version: 2, models: Object.fromEntries(models.map(model =>
         [model.name, { ...model.asset.catalog, directory: model.directory }])) };
-      publish(path.join(runtime, "assets.json"), JSON.stringify(catalog) + "\n");
-      try { await checkRuntime(runtime, signal); break; }
+      publish(path.join(stagedRuntime, "assets.json"), JSON.stringify(catalog) + "\n");
+      try { await checkRuntime(stagedRuntime, signal); break; }
       catch (error) {
         const damaged = models.find(model => !repaired.has(model.name)
           && error.stderr?.includes("ASSET_MISSING_OR_CORRUPT") && error.stderr.includes(model.name));
         if (!damaged) throw error;
         repaired.add(damaged.name);
-        damaged.directory = await obtainObject(objects, damaged.asset, context, true);
-        damaged.adopted = false;
+        damaged.directory = await downloadObject(objects, damaged.asset, context);
       }
     }
-    for (const model of models) if (model.adopted) {
-      adopted.splice(adopted.indexOf(model.directory), 1); // Ownership transfers before an index can become visible.
-      publishObject(objects, model.asset, model.directory);
+    for (const { asset, directory } of models) {
+      if (adopted.delete(directory)) publishObject(objects, asset, directory);
     }
-    publish(path.join(runtime, "installation.json"), JSON.stringify({ distribution: distribution.id,
+    publish(path.join(stagedRuntime, "installation.json"), JSON.stringify({ distribution: distribution.id,
       engine: distribution.engine.id, models: Object.fromEntries(models.map(model => [model.name, model.asset.id])) }) + "\n");
-    sync(runtime);
+    sync(stagedRuntime);
     signal?.throwIfAborted();
-    publish(path.join(base, "current"), path.basename(runtime) + "\n");
-    published = true;
+    publish(path.join(base, "current"), path.basename(stagedRuntime) + "\n");
+    stagedRuntime = undefined;
     sync(base);
   } finally {
-    if (!published && runtime) fs.rmSync(runtime, { recursive: true, force: true });
+    if (stagedRuntime) fs.rmSync(stagedRuntime, { recursive: true, force: true });
     for (const directory of adopted) fs.rmSync(directory, { recursive: true, force: true });
     try { await context.agent?.close(); } finally { await release(); }
   }
@@ -326,15 +304,17 @@ async function install(base, signal) {
 export async function ensureSemanticRuntime(agentDir = agentDirectory(), signal) {
   signal?.throwIfAborted();
   if (process.env.SGREP_RUNTIME_DIR) return;
-  const base = path.resolve(agentDir, "metis/neural-search/semantic/linux-x64");
+  const base = path.resolve(agentDir, SEMANTIC_RUNTIME_PATH);
   if (checkedAgents.has(base)) return;
   const unsupported = unsupportedPlatform();
   if (unsupported) throw new Error(`Semantic unavailable: ${unsupported}; no alternate backend is selected.`);
   validateDistribution();
-  if (!readyRuntime(base)) {
+  if (!(await readyRuntime(await selectedRuntime(base)))) {
+    signal?.throwIfAborted();
     fs.mkdirSync(base, { recursive: true, mode: 0o700 });
     await install(base, signal);
   }
+  signal?.throwIfAborted();
   checkedAgents.add(base);
 }
 

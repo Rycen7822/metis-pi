@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { isMetisConfigTable, metisConfigPath, readMetisConfig, readOptionalConfigFile } from "../configuration/store.ts";
+import { readJSON, selectedRuntime, SEMANTIC_RUNTIME_PATH } from "../neural-search/runtime/catalog.mts";
 
 export const recallScope = Type.Union([
   Type.Object({ kind: Type.Literal("all") }, { additionalProperties: false }),
@@ -141,27 +142,14 @@ export async function maintainRecall(agentDir: string, sessionDir: string, signa
   return runNative(agentDir, await realpath(sessionDir), { type: "maintain", config: options.proof }, signal, options);
 }
 
-async function readSmall(file: string): Promise<string> {
-  const stat = await lstat(file);
-  if (!stat.isFile() || stat.size > 64 * 1024) throw new Error("Invalid local model asset selection.");
-  return readFile(file, "utf8");
-}
+const bekkoCatalog = Type.Object({ models: Type.Object({ bekko128: Type.Object({ directory: Type.String() }) }) });
 
-/** The installer publishes Bekko as a separate physical model object; no sgrep process is involved. */
 async function locateBekko(agentDir: string): Promise<string> {
   if (process.env.METIS_BEKKO_DIR) return resolve(process.env.METIS_BEKKO_DIR);
-  const base = join(agentDir, "metis/neural-search/semantic/linux-x64");
-  const selected = (await readSmall(join(base, "current"))).trim();
-  if (!/^runtime-[A-Za-z0-9]+$/.test(selected)) throw new Error("Invalid local model asset selection.");
-  const catalog: unknown = JSON.parse(await readSmall(join(base, selected, "assets.json")));
-  if (typeof catalog !== "object" || !catalog || !("models" in catalog)) throw new Error("Missing local Bekko128 asset.");
-  const models = catalog.models;
-  if (typeof models !== "object" || !models || !("bekko128" in models)) throw new Error("Missing local Bekko128 asset.");
-  const model = models.bekko128;
-  if (typeof model !== "object" || !model || !("directory" in model) || typeof model.directory !== "string") {
-    throw new Error("Missing local Bekko128 asset directory.");
-  }
-  return model.directory;
+  const runtime = await selectedRuntime(resolve(agentDir, SEMANTIC_RUNTIME_PATH));
+  const catalog = runtime && await readJSON(join(runtime, "assets.json"));
+  if (!Check(bekkoCatalog, catalog)) throw new Error("Missing local Bekko128 asset directory.");
+  return catalog.models.bekko128.directory;
 }
 
 let active = 0;
