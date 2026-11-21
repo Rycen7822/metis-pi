@@ -62,6 +62,8 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/pi-sdk/distribution.json", "assets/pi-sdk/pi-1.6.0.tgz",
     "src/presentation/host-patch.ts", "src/extension-paths.ts",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
+    "src/pi-session-recall/assets/linux-x64/bin/metis-session-recall",
+    "src/pi-session-recall/assets/linux-x64/manifest.json", "src/pi-session-recall/assets/linux-x64/THIRD_PARTY_NOTICES.txt",
     "src/pi-lsp/config.ts", "src/pi-lsp/pi-lsp.ts", "src/pi-lsp/code-actions.ts", "src/pi-lsp/published-diagnostics.ts",
     "src/pi-lsp/LICENSE", "src/pi-lsp/METIS.md", "docs/features/lsp.md",
     "src/ask-user-question/index.ts", "src/ask-user-question/ask-user-question.ts", "src/ask-user-question/LICENSE", "src/ask-user-question/METIS.md",
@@ -84,6 +86,7 @@ test("package exposes extensions, themes and portable skills with their referenc
   for (const path of files) {
     if (!path.startsWith("src/")) continue;
     assert.ok(!path.startsWith("src/neural-search/engine/"), path);
+    assert.ok(!path.startsWith("src/pi-session-recall/native/"), path);
     assert.ok(!path.split("/").some(part => ["test", "scripts", "evidence"].includes(part)), path);
     assert.doesNotMatch(path, /(?:^|\/)(?:AGENTS\.md|tsconfig[^/]*\.json|test-fixtures\.ts)$|\.test\.[^/]+$/, path);
   }

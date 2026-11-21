@@ -22,8 +22,12 @@ for (const platform of ["linux", "win32"]) {
 // Platform builders additionally own complete input collection and ABI policy.
 if (process.arch !== "x64" || !["linux", "win32"].includes(process.platform))
   throw new Error("Native ABI verification requires Linux x64 or Windows x64.");
-for (const directory of ["native/tools", "src/neural-search/engine"]) {
-  const result = spawnSync(process.execPath, [`${directory}/build-${process.platform}-x64.mjs`, "verify"], {
+const builders = [
+  ...["native/tools", "src/neural-search/engine"].map(directory => `${directory}/build-${process.platform}-x64.mjs`),
+  "scripts/build-session-recall.mjs",
+];
+for (const script of builders) {
+  const result = spawnSync(process.execPath, [script, "verify"], {
     cwd: root, stdio: "inherit",
   });
   if (result.error) throw result.error;

@@ -165,11 +165,20 @@ test("hybrid with missing worker is explicit and does not change literal search"
   assert.equal((await run("literal")).details.matchCount, 1);
 });
 
-test("grouped hybrid search uses the staged real worker and respects a custom root", async t => {
-  if (!process.env.METIS_RECALL_RUNTIME_DIR || !process.env.METIS_BEKKO_DIR || process.platform !== "linux") {
-    return t.skip("requires a staged native worker and local Bekko model");
-  }
+test("packaged hybrid Recall uses Semantic Search's Bekko model and respects a custom root", async t => {
+  const modelDir = process.env.METIS_BEKKO_DIR;
+  if (!modelDir || process.platform !== "linux" || process.arch !== "x64") return t.skip("requires a local Bekko model on Linux x64");
   const { dir, sessions, tool, ctx, captured } = await queryFixture(t);
+  for (const key of ["METIS_RECALL_RUNTIME_DIR", "METIS_BEKKO_DIR"]) {
+    const value = process.env[key];
+    delete process.env[key];
+    t.after(() => { if (value !== undefined) process.env[key] = value; });
+  }
+  const catalog = join(dir, "metis/neural-search/semantic/linux-x64");
+  mkdirSync(join(catalog, "runtime-fixture"), { recursive: true });
+  writeFileSync(join(catalog, "current"), "runtime-fixture\n");
+  writeFileSync(join(catalog, "runtime-fixture/assets.json"), JSON.stringify({ models: { bekko128: { directory: modelDir } } }));
+
   const custom = join(dir, "custom");
   mkdirSync(custom);
   const session = sessionFile(custom, "evidence", ["Preserve the originals before building an index."]);

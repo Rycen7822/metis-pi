@@ -147,7 +147,12 @@ The shared Bekko128 encoder in src/local-embedding/bekko descends from the
 Metis sgrep runtime; copyright (c) 2026 mrmps, MIT License
 (src/pi-session-recall/Bekko-LICENSE). Session Recall's native worker uses
 SQLite (public domain) and Unum USearch 2.26.6 (LICENSE-APACHE-2.0).
-Bekko128 model assets are separately distributed with the model's notices.
+The locked Rust and native dependency notices are in
+src/pi-session-recall/assets/linux-x64/THIRD_PARTY_NOTICES.txt; the Rust standard
+library uses the same notices as Neural Search above. The USearch crate omits
+its license file; the build includes upstream LICENSE from commit
+a985f77553d2d58d5ef1516eafaae81480bb3c30. Bekko128 model assets are separately
+distributed with the model's notices.
 
 The standalone web MCP bundle also includes typebox 1.3.27 (MIT).
 Its upstream copyright and full license are retained in

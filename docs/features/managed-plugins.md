@@ -15,7 +15,9 @@ text(await tools.web_access({ action: "fetch", params: { urls: ["https://example
 
 ## 会话检索
 
-`session_recall.search` 默认在 JSONL 中查固定字符串。带 Recall worker 的 Linux x64 包可用 `mode: "hybrid"` 做本地 BM25 + Bekko128 检索，例如：
+`session_recall.search` 默认在 JSONL 中查固定字符串。Linux x64（glibc ≥ 2.39）安装或更新 Metis 后，可用 `mode: "hybrid"`
+做本地 BM25 + Bekko128 检索。Recall worker 随插件附带；Bekko128 由 Semantic Search 安装流程准备，两者读取同一份模型，
+已有语义搜索模型时无需重新下载或复制。更新后重新加载 Pi。
 
 ```js
 text(await tools.session_recall({ action: "search", params: {

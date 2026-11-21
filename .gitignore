@@ -27,7 +27,6 @@ native/tools/target/
 src/neural-search/engine/target/
 src/neural-search/semantic/target/
 src/pi-session-recall/native/target/
-src/pi-session-recall/assets/linux-x64/
 
 # Condense retains its public entry; runtime sources are TS.
 

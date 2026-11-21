@@ -177,10 +177,12 @@ async function runNative(
   const executable = local ? join(resolve(local), "bin/metis-session-recall") :
     fileURLToPath(new URL("./assets/linux-x64/bin/metis-session-recall", import.meta.url));
   if (!(await lstat(executable).catch(() => undefined))?.isFile()) {
-    throw new Error("The native Recall worker is not present. Use literal search or install a package with the Recall runtime.");
+    throw new Error("The native Recall worker is not present. Update Metis with pi update --extensions, or use literal search.");
   }
   const modelDir = operation.type === "maintain" ? undefined :
-    await locateBekko(agentDir).catch(() => { throw new Error("No local Bekko128 asset. Use literal search."); });
+    await locateBekko(agentDir).catch(() => {
+      throw new Error("No shared Bekko128 asset. Run pi update --extensions to prepare the Semantic runtime, or use literal search.");
+    });
   const payload = JSON.stringify({
     protocol: 1, root, cacheBase: join(agentDir, "cache/session-recall"), modelDir, graph: options.graph, operation, reranker,
   });

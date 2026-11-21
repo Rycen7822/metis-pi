@@ -13,7 +13,9 @@ Metis loads this `.ts` source through `extensions/session-recall.ts`; references
   Frozen exact shortlist views share one SQLite snapshot. Only their bounded center text reaches the bundled offline scorer.
   After scoring, the worker verifies the original root and every chosen byte span again; success never uses an older source binding.
   Python is a request-owned child, not part of the Pi process; local asset/setup failures are disclosed with ordinary scoped hybrid results.
-- Maintainer staging: `npm run build:recall` (Linux x64, glibc ≥ 2.39) stages the worker at the npm package path. An independent stage can be selected with `METIS_RECALL_RUNTIME_DIR`; for tests use an approved model directory as `METIS_BEKKO_DIR`. The worker and model are separate assets.
+- The Linux x64 worker is packaged with the plugin. Build with `npm run build:recall`; release checks verify the source fingerprint and payload.
+  Recall reads the installed Semantic Search asset catalog for Bekko128; no separate model installation or copy. For development,
+  `METIS_RECALL_RUNTIME_DIR` can select an independent worker and `METIS_BEKKO_DIR` can select already prepared weights.
 - Literal search counts matching JSONL lines consistently in rg/grep/streaming Node; reject empty strings, retain literal whitespace. Search/reads are async and cancellable.
 - Query keeps the current-leaf branch, including compacted raw messages and native textual summaries, but no remote checkpoint in the helper request. Whole-file search may match an unselected branch excluded from query.
 - Query windows retain existing word matches and additionally score distinct adjacent Han pairs (isolated Han characters count as single terms).

@@ -1,0 +1,18 @@
+{
+  "target": "x86_64-unknown-linux-gnu",
+  "minimumGlibc": "2.39",
+  "sourceSha256": "4f441fccde63e6473eb876aca162a5df62a661f76b269e367a69421659461377",
+  "rust": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "files": [
+    {
+      "path": "bin/metis-session-recall",
+      "sha256": "d52e1f01618689661f69b3ba852479e0892bd04db50f66555e3bf234095a258c",
+      "bytes": 8280736
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.txt",
+      "sha256": "f6ea7b9654cecb0176e5221a6fc4cadc1cbbed75f351587510526a9abeb86f22",
+      "bytes": 1276765
+    }
+  ]
+}

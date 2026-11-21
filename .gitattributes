@@ -4,6 +4,8 @@
 *.dll binary
 *.so binary
 *.wasm binary
+src/pi-session-recall/assets/linux-x64/bin/metis-session-recall binary
+src/pi-session-recall/assets/*/*NOTICES* -text -whitespace
 # Preserve generated third-party legal text and its manifest-recorded bytes.
 src/neural-search/assets/*NOTICES* -text -whitespace
 # Unified patch blank context lines contain a required single space.
