@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const webRoot = new URL("../src/pi-web-access/", import.meta.url);
-const suite = process.argv[2];
+const [suite, shard, ...extra] = process.argv.slice(2);
 const webAccess = suite === "web-access";
 const root = webAccess ? new URL("test/", webRoot) : new URL("../test/", import.meta.url);
 const files = (dir = root, prefix = "") => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -32,8 +32,9 @@ const suites = {
   ].some((owner) => file.startsWith(`${owner}.test.`)),
 };
 
-if (process.argv.length !== 3 || !Object.hasOwn(suites, suite)) {
-  console.error(`Usage: node scripts/test.mjs <${Object.keys(suites).join("|")}>`);
+const invalidShard = shard !== undefined && (!/^--test-shard=[1-9]\d*\/[1-9]\d*$/.test(shard) || (!webAccess && suite !== "all"));
+if (extra.length || !Object.hasOwn(suites, suite) || invalidShard) {
+  console.error(`Usage: node scripts/test.mjs <${Object.keys(suites).join("|")}> [--test-shard=index/total (all or web-access)]`);
   process.exit(2);
 }
 const selected = files().sort().filter(suites[suite]);
@@ -45,12 +46,13 @@ const child = spawnSync(
   process.execPath,
   ["--experimental-strip-types",
     ...(webAccess ? ["--import", new URL("test/isolate-env.mjs", webRoot).href] : []),
-    "--test", ...selected.map((file) => join(fileURLToPath(root), file))],
+    "--test", ...(shard ? [shard] : []), ...selected.map((file) => join(fileURLToPath(root), file))],
   { stdio: "inherit", ...(webAccess ? { cwd: fileURLToPath(webRoot) } : {}) },
 );
 if (child.error) console.error(child.error);
 process.exitCode = child.status ?? 1;
-if (process.exitCode === 0 && (suite === "ask" || suite === "all")) {
+const runAsk = suite === "ask" || (suite === "all" && (!shard || shard.startsWith("--test-shard=1/")));
+if (process.exitCode === 0 && runAsk) {
   const ask = spawnSync(process.execPath,
     ["node_modules/vitest/vitest.mjs", "run", "--config", "config/vitest/ask.config.ts"],
     { cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "inherit" });

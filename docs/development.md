@@ -29,9 +29,15 @@ npm run prepare:subagents
 
 Web Access 的测试留在 `src/pi-web-access/test/`，由独立命令运行，以保留 Web 工作目录和隔离预加载。修改 Web 源码后先运行 `npm run build:web-access`，再运行 `npm run test:web-access`；测试直接消费两份现有 bundle，Linux CI 核对重建产物与提交一致。
 
-`npm test` 运行根 Node 测试和问卷 Vitest，不运行 Web、pytest、Cargo、TLC 或 PTY。`npm run verify` 加入 Web 与 pytest；CI 另外运行严格 PTY 和 Neural Search engine 的 Rust 库测试。原生工具测试、语义 CLI 测试和形式化验证各有独立入口；基准自检见 [语义搜索基准](../benchmarks/semantic/README.md)，不属于产品套件。
+`npm test` 运行根 Node 测试和问卷 Vitest，不运行 Web、pytest、Cargo、TLC 或 PTY。`npm run verify` 加入 Web 与 pytest。
+CI 的 Ubuntu、Windows 矩阵并行跑类型与 lint、根测试、Web Access 和 pytest；原有的两项平台检查要求整个矩阵通过。
+CI 仍额外运行 Linux 严格 PTY 与 Neural Search engine 的 Rust 库测试。原生工具、语义 CLI 和形式化验证各有独立入口；
+[语义搜索基准](../benchmarks/semantic/README.md)不属于产品套件。
 
-一次性测试、临时复现脚本及结果放 `.work/`，不加入正式套件发现。子代理的 pytest 缓存在 `.work/test-cache/subagents/`。
+CI 用 Node 原生分片分别跑根测试和 Web Access；问卷 Vitest 只在根测试的第一片执行。
+本地可用 `npm test -- --test-shard=1/2` 或 `npm run test:web-access -- --test-shard=2/2` 复跑。
+子代理的 pytest 用 xdist 的四个 worker 和 `worksteal`，缓存在 `.work/test-cache/subagents/`。
+一次性测试和结果放 `.work/`，不加入正式套件发现。
 
 PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 另需 Git。CI 在 Ubuntu 和 Windows 上检查普通构建与测试，在 Linux 上运行严格 PTY 检查。纯文档改动检查事实、链接、示例和包清单即可。
 
@@ -39,7 +45,8 @@ PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 
 
 ### 类型检查与类型感知 lint
 
-按页首步骤安装依赖、运行 `npm run prepare:pi-sdk`，再从仓库根目录运行下列命令。
+按页首步骤安装依赖并运行 `npm run prepare:pi-sdk`。命令行检查使用锁定的 TypeScript 7 原生 `tsc`（`tsc-native`）；
+原有 `typescript` 包保留供需要旧 JS API 的工具使用。CI 的原生编译缓存与旧版分开。
 
 | 什么时候跑 | 命令 | 检查什么 |
 | --- | --- | --- |

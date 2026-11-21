@@ -60,43 +60,57 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `run=${!duplicate}\n`);
           console.log(duplicate ? 'Matching mergeable PR covers this push; skipping duplicate tests.' : 'Full push validation required.');
           NODE
-  test:
-    name: Pi 1.6.0 · ${{ matrix.os }}
+  validation:
+    name: Pi 1.6.0 · ${{ matrix.os }} · ${{ matrix.lane.name }}
     needs: admission
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        lane:
+          - { name: Checks }
+          - { name: Root 1, suite: all, shard: '1/2' }
+          - { name: Root 2, suite: all, shard: '2/2' }
+          - { name: Web 1, suite: web-access, shard: '1/2' }
+          - { name: Web 2, suite: web-access, shard: '2/2' }
+          - { name: Python }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      NODE_COMPILE_CACHE: ${{ github.workspace }}/.work/node-compile-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - uses: astral-sh/setup-uv@v6
+        if: matrix.lane.name == 'Python'
       - run: uv pip install --system --python python -r test/subagents/requirements.txt
+        if: matrix.lane.name == 'Python'
       - run: npm ci --ignore-scripts --bin-links=false --no-audit --no-fund
-      - run: npm run lint:tests
-      - run: npm run lint:comments
       - name: Prepare the shipped SDK without changing a managed Pi installation
         run: npm run prepare:pi-sdk
-      - run: npm run lint:types
+      - run: npm run prepare:subagents
+      - run: npm run build:plugins
+        if: matrix.lane.name != 'Python'
       - name: Cache TypeScript build info
+        if: matrix.lane.name == 'Checks'
         uses: actions/cache@v4
         with:
           path: .work/tsc
           key: >-
-            ${{ runner.os }}-node22-tsc-${{ hashFiles('package-lock.json', 'src/pi-sdk/distribution.json',
+            ${{ runner.os }}-${{ runner.arch }}-tsc7-${{ hashFiles('package-lock.json', 'src/pi-sdk/distribution.json',
             'tsconfig.json', 'config/typescript/*.json', 'src/pi-*/tsconfig.json') }}-${{ github.sha }}
           restore-keys: >-
-            ${{ runner.os }}-node22-tsc-${{ hashFiles('package-lock.json', 'src/pi-sdk/distribution.json',
+            ${{ runner.os }}-${{ runner.arch }}-tsc7-${{ hashFiles('package-lock.json', 'src/pi-sdk/distribution.json',
             'tsconfig.json', 'config/typescript/*.json', 'src/pi-*/tsconfig.json') }}-
       - name: Verify selected host packages
+        if: matrix.lane.name == 'Checks'
         shell: bash
         run: |
           node --input-type=module <<'NODE'
@@ -108,15 +122,21 @@ jobs:
             assert.equal(manifest.version, sdkVersion, name);
           }
           NODE
-      - run: npm run verify:native-assets
-      - run: npm run verify
-        env:
-          NODE_COMPILE_CACHE: ${{ runner.temp }}/metis-pi-node-compile-cache
+      - name: Check types, lint, and native assets
+        if: matrix.lane.name == 'Checks'
+        run: >-
+          npm run lint:tests && npm run lint:comments && npm run lint:types &&
+          npm run verify:native-assets && npm run check && npm run check:test
       - name: Require rebuilt Web Access bundles to match the checkout
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.lane.name == 'Web 1'
         run: git diff --exit-code -- src/pi-web-access/dist
+      - name: Run ${{ matrix.lane.name }} tests
+        if: matrix.lane.shard
+        run: node scripts/test.mjs ${{ matrix.lane.suite }} --test-shard=${{ matrix.lane.shard }}
+      - run: npm run test:subagents
+        if: matrix.lane.name == 'Python'
       - name: Ensure tmux is available
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.lane.name == 'Checks'
         run: |
           if ! command -v tmux >/dev/null 2>&1; then
             sudo apt-get update -qq
@@ -124,9 +144,24 @@ jobs:
           fi
           tmux -V
       - run: npm run test:pty:strict
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.lane.name == 'Checks'
         env:
           PI_BIN: ${{ github.workspace }}/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+  test:
+    name: Pi 1.6.0 · ${{ matrix.os }}
+    needs: [admission, validation]
+    if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require all validation lanes to pass
+        env:
+          VALIDATION: ${{ needs.validation.result }}
+        run: test "$VALIDATION" = success
   neural-engine:
     name: Owned Rust search · Linux x64
     needs: admission
