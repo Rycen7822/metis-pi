@@ -16,6 +16,12 @@ Metis loads this `.ts` source through `extensions/session-recall.ts`; references
 - Maintainer staging: `npm run build:recall` (Linux x64, glibc ≥ 2.39) stages the worker at the npm package path. An independent stage can be selected with `METIS_RECALL_RUNTIME_DIR`; for tests use an approved model directory as `METIS_BEKKO_DIR`. The worker and model are separate assets.
 - Literal search counts matching JSONL lines consistently in rg/grep/streaming Node; reject empty strings, retain literal whitespace. Search/reads are async and cancellable.
 - Query keeps the current-leaf branch, including compacted raw messages and native textual summaries, but no remote checkpoint in the helper request. Whole-file search may match an unselected branch excluded from query.
-- Final normalized input (instructions/question/omission markers included) stays within Pi's estimated 80% context; output is capped by reserved 20% and model limit. This is not a provider-exact token count.
+- Query windows retain existing word matches and additionally score distinct adjacent Han pairs (isolated Han characters count as single terms).
+- Budget the complete system/user prompt against 80% of the selected query model's context. Output is capped by the reserved 20% and model limit.
+  For recognized OpenAI text models use the mapped tiktoken encoding and local chat framing; otherwise use Pi's estimate. Neither is server usage.
+  To avoid quadratic BPE work on the host thread, pieces with a whitespace or non-whitespace run over 8,192 UTF-16 units use a UTF-8 byte upper bound.
+  Window assembly counts only changed excerpts and omission markers at independent tokenizer boundaries.
+  It skips truncation only when the mandatory suffix cannot fit, then rechecks the fully assembled request before dispatch.
+  Successful query details report the encoding name or `pi-estimate` in `inputTokenCounter`.
 
 Compare updates with the pinned source, preserve original sessions/search/query behavior and attribution, and verify registration, model selection and transport.

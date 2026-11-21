@@ -461,7 +461,8 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			}
 
 			try {
-				const { context, maxTokens, wasWindowed } = await createRecallRequest(convertToLlm(messages), question, queryModel, signal);
+				const { context, maxTokens, wasWindowed, inputTokenCounter } =
+					await createRecallRequest(convertToLlm(messages), question, queryModel, signal);
 				signal?.throwIfAborted();
 				const response = await ctx.modelRegistry.streamSimple(queryModel, context, { signal, maxTokens }).result();
 				signal?.throwIfAborted();
@@ -509,6 +510,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 						question,
 						messageCount,
 						wasWindowed,
+						inputTokenCounter,
 					},
 				};
 			} catch (err) {

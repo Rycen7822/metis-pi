@@ -31,6 +31,11 @@ HNSW 默认关闭。显式设置 `backgroundIndex = true` 和 `hnsw = "on"` 后�
 
 `session_recall` 的 `query` 使用模型回答会话相关问题。`[sessionRecall].queryModel` 可填已注册的 `provider/model-id`；`"default"` 或不可用的模型使用当前会话模型。使用 `query` 前，确认允许向所选模型发送有关会话内容。
 
+会话能装进输入预算时完整发送。需要选窗时，除英文关键词外，也按相邻汉字双字寻找相关消息，保留开头、结尾和省略提示。
+输入仍按模型上下文的 80% 控制，包含系统指令、问题和提示标记；输出最多使用余下的 20%，且不超过模型输出上限。
+`details.inputTokenCounter` 标明口径：已知 OpenAI 模型（例如 `gpt-4o`）用对应编码做本地参考计数，其余模型用 `pi-estimate`。两者都不是服务端账单用量。
+遇到极长的连续空白或无空白文本时，本地分词可能很慢，对应片段按 UTF-8 字节数保守计入，可能少装一些原文。
+
 ### 增强会话检索
 
 需要 Linux x64、随包原生 worker、Bekko128 和本地支持 BF16 的 NVIDIA CUDA 环境。准备好本地 Python 3.11+（验证环境为

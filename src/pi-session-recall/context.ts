@@ -1,8 +1,11 @@
-import { normalizeContext, type Context, type Message, type Model, type Api } from "@earendil-works/pi-ai";
-import { estimateTokens, serializeConversation } from "@earendil-works/pi-coding-agent";
+import type { Api, Context, Message, Model } from "@earendil-works/pi-ai";
+import { serializeConversation } from "@earendil-works/pi-coding-agent";
 import { setImmediate } from "node:timers/promises";
+import { queryInputBudget, type QueryInputBudget } from "./input-budget.ts";
+import { createWindow, WINDOW_SEPARATOR as SEP } from "./window.ts";
 
-const SYSTEM_PROMPT = `You are a session context assistant. Given the conversation history from a pi coding session and a question, provide a concise answer based on the session contents.
+const SYSTEM_PROMPT = "You are a session context assistant. " +
+	`Given the conversation history from a pi coding session and a question, provide a concise answer based on the session contents.
 
 Focus on:
 - Specific facts, decisions, and outcomes
@@ -11,9 +14,16 @@ Focus on:
 
 Be concise and direct. If the information isn't in the session, say so.`;
 
-const WINDOW_NOTE = "\n\n**Note:** This is a large session. The conversation has been windowed to focus on sections most relevant to your question. Some messages were omitted or truncated (marked with [...]).";
-const TRUNCATED = "\n[... message truncated ...]";
-const STOP_WORDS = new Set("a an the is was were are be been being have has had do does did will would could should may might can shall to of in for on with at by from as into about like through after over between out against during without before under around among and but or nor not so yet both either neither each every all any few more most other some such no only own same than too very just because if when where how what which who whom this that these those it its they them their we us our you your he him his she her i me my".split(" "));
+const WINDOW_NOTE = "\n\n**Note:** This is a large session. The conversation has been windowed to focus on sections " +
+	"most relevant to your question. Some messages were omitted or truncated (marked with [...]).";
+const HEADER = "## Session Conversation";
+const TRUNCATION_MARKER = "[... message truncated ...]";
+const TRUNCATED = "\n" + TRUNCATION_MARKER;
+const BOOKEND_CHARS = 100;
+const STOP_WORDS = new Set(`a an the is was were are be been being have has had do does did will would could should may might can shall
+	to of in for on with at by from as into about like through after over between out against during without before under around among and but or nor
+	not so yet both either neither each every all any few more most other some such no only own same than too very just because if when where how what
+	which who whom this that these those it its they them their we us our you your he him his she her i me my`.split(/\s+/));
 
 function prepareMessages(messages: Message[]): Message[] {
 	return messages.flatMap<Message>(message => {
@@ -24,30 +34,16 @@ function prepareMessages(messages: Message[]): Message[] {
 	});
 }
 
-function requestContext(conversation: string, question: string, windowed: boolean): Context {
-	return {
-		systemPrompt: SYSTEM_PROMPT,
-		messages: [{ role: "user", timestamp: Date.now(), content: [
-			{ type: "text", text: `## Session Conversation${windowed ? WINDOW_NOTE : ""}\n\n${conversation}\n\n## Question\n\n${question}` },
-		] }],
-	};
-}
-
-/** Use the host's input estimate over the actual normalized request, not a conversation-only estimate. */
-function inputTokens(context: Context): number {
-	return normalizeContext(context).messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-}
-
-function renderWindow(selected: ReadonlyMap<number, string>, total: number): string {
-	const parts: string[] = [];
-	let next = 0;
-	for (const [index, text] of [...selected].sort(([a], [b]) => a - b)) {
-		if (index > next) parts.push(`[... ${index - next} messages omitted ...]`);
-		parts.push(text);
-		next = index + 1;
+function queryTerms(question: string): string[] {
+	const words = question.toLowerCase().replace(/[^\w\s-]/g, " ").split(/\s+/)
+		.filter(word => word.length > 2 && !STOP_WORDS.has(word));
+	const han = new Set<string>();
+	for (const [run] of question.matchAll(/\p{Script=Han}+/gu)) {
+		const chars = [...run];
+		if (chars.length === 1) han.add(run);
+		for (let i = 1; i < chars.length; i++) han.add(chars[i - 1] + chars[i]);
 	}
-	if (next < total) parts.push(`[... ${total - next} messages omitted ...]`);
-	return parts.join("\n\n");
+	return words.concat([...han]);
 }
 
 function safePrefix(text: string, length: number): string {
@@ -55,67 +51,105 @@ function safePrefix(text: string, length: number): string {
 	return text.slice(0, end);
 }
 
-export async function createRecallRequest(messages: Message[], question: string, model: Model<Api>, signal?: AbortSignal): Promise<{
-	context: Context;
-	maxTokens: number;
-	wasWindowed: boolean;
-}> {
+function tailStart(text: string): number {
+	const start = Math.max(0, text.length - BOOKEND_CHARS);
+	return start > 0 && /[\uDC00-\uDFFF]/.test(text[start]!) ? start - 1 : start;
+}
+
+async function selectPrompt(messages: Message[], question: string, counter: QueryInputBudget, signal?: AbortSignal) {
 	signal?.throwIfAborted();
-	const inputBudget = Math.floor(model.contextWindow * 0.8);
-	const maxTokens = Math.min(Math.max(1, Math.floor(model.contextWindow * 0.2)), model.maxTokens || Infinity);
+	const { limit, measure } = counter;
 	const prepared = prepareMessages(messages);
-	const full = requestContext(serializeConversation(prepared), question, false);
-	if (inputTokens(full) <= inputBudget) return { context: full, maxTokens, wasWindowed: false };
-	if (inputTokens(requestContext("", question, true)) >= inputBudget) {
+	const footer = `## Question${SEP}${question}`;
+	const full = HEADER + SEP + serializeConversation(prepared) + SEP + footer;
+	if (measure(full, limit) <= limit) return { text: full, wasWindowed: false };
+	const prefix = HEADER + WINDOW_NOTE + SEP;
+	const instructionsLimit = limit - counter.unitsPerToken;
+	if (measure(prefix + SEP + footer, instructionsLimit) > instructionsLimit) {
 		throw new Error("The recall question and instructions exceed the selected model's input budget.");
 	}
 
 	const texts = prepared.map(message => serializeConversation([message])).filter(Boolean);
-	const keywords = question.toLowerCase().replace(/[^\w\s-]/g, " ").split(/\s+/)
-		.filter(word => word.length > 2 && !STOP_WORDS.has(word));
-	const matches = texts.map((text, index) => ({ index, score: keywords.filter(word => text.toLowerCase().includes(word)).length }))
+	const keywords = queryTerms(question);
+	const matches = texts.map((text, index) => {
+		const lower = text.toLowerCase();
+		return { index, score: keywords.reduce((score, term) => score + Number(lower.includes(term)), 0) };
+	})
 		.filter(match => match.score > 0).sort((a, b) => b.score - a.score || a.index - b.index);
 	const bookends = [...new Set([0, texts.length - 1, 1, texts.length - 2, 2, texts.length - 3])]
 		.filter(index => index >= 0 && index < texts.length);
 	const priority = [...new Set([...matches.map(match => match.index), ...bookends,
 		...matches.flatMap(match => [match.index - 1, match.index + 1]).filter(index => index >= 0 && index < texts.length),
 		...texts.map((_, index) => index)])];
-	const selected = new Map<number, string>();
-	const fits = (index: number, text: string) => inputTokens(requestContext(renderWindow(new Map([...selected, [index, text]]), texts.length), question, true)) <= inputBudget;
-	// Keep the original setup/final-state anchors before spending spare capacity
-	// on matching neighborhoods. Giant bookends get disclosed head/tail excerpts.
+	const window = createWindow(texts.length, limit - measure(prefix) - measure(footer), measure);
+	const excerptCost = (text: string, available: number) => measure(text + SEP, available);
+	// The marker starts after a newline, so its suffix cannot merge with the preceding excerpt.
+	// Its cost is a lower bound even when BPE does not grow monotonically with prefix length.
+	const truncationFloor = excerptCost(TRUNCATION_MARKER, Infinity);
+	// Keep setup and final-state anchors before spending spare capacity on matches.
 	for (const index of bookends) {
 		const text = texts[index]!;
-		let tail = Math.max(0, text.length - 100);
-		if (tail > 0 && /[\uDC00-\uDFFF]/.test(text[tail]!)) tail--;
-		const excerpt = text.length <= 200 ? text : safePrefix(text, 100) + TRUNCATED + "\n" + text.slice(tail);
-		if (fits(index, excerpt)) selected.set(index, excerpt);
+		const excerpt = text.length <= 2 * BOOKEND_CHARS ? text
+			: safePrefix(text, BOOKEND_CHARS) + TRUNCATED + "\n" + text.slice(tailStart(text));
+		const { available, put } = window.at(index);
+		const cost = excerptCost(excerpt, available);
+		if (cost <= available) put({ text: excerpt, cost });
 	}
 	for (let position = 0; position < priority.length; position++) {
 		const index = priority[position]!;
 		if (position % 32 === 0) await setImmediate(undefined, { signal });
 		const text = texts[index]!;
-		if (fits(index, text)) { selected.set(index, text); continue; }
+		const { available, replacing, put } = window.at(index);
+		if (available < 1) continue;
+		const cost = excerptCost(text, available);
+		if (cost <= available) {
+			put({ text, cost });
+			continue;
+		}
+
+		const keepTail = replacing && bookends.includes(index);
+		const end = keepTail ? tailStart(text) : text.length;
+		const tail = keepTail ? "\n" + text.slice(end) : "";
+		if ((keepTail ? excerptCost(TRUNCATION_MARKER + tail, available) : truncationFloor) > available) continue;
+
 		// An oversized relevant record must not bypass the budget or hide truncation.
 		const lower = text.toLowerCase();
 		const hit = keywords.map(word => lower.indexOf(word)).filter(at => at >= 0).sort((a, b) => a - b)[0];
 		let start = hit === undefined ? 0 : Math.max(0, hit - 100);
 		if (start > 0 && /[\uDC00-\uDFFF]/.test(text[start]!)) start--;
-		const head = start > 0 ? safePrefix(text, Math.min(100, start)) + TRUNCATED + "\n" : "";
-		let tailStart = Math.max(0, text.length - 100);
-		if (tailStart > 0 && /[\uDC00-\uDFFF]/.test(text[tailStart]!)) tailStart--;
-		const keepTail = selected.has(index) && bookends.includes(index);
-		const tail = keepTail ? "\n" + text.slice(tailStart) : "";
-		const fragment = (length: number) => head + safePrefix(text.slice(start), length) + TRUNCATED + tail;
-		let low = 0, high = keepTail ? Math.max(0, tailStart - start) : text.length - start;
+		const head = start > 0 ? safePrefix(text, Math.min(BOOKEND_CHARS, start)) + TRUNCATED + "\n" : "";
+		const rest = text.slice(start, end);
+		let best: { text: string; cost: number } | undefined;
+		let low = 0, high = rest.length;
 		while (low < high) {
 			const middle = Math.ceil((low + high) / 2);
-			if (fits(index, fragment(middle))) low = middle;
-			else high = middle - 1;
+			const excerpt = head + safePrefix(rest, middle) + TRUNCATED + tail;
+			const cost = excerptCost(excerpt, available);
+			if (cost <= available) {
+				best = { text: excerpt, cost };
+				low = middle;
+			} else high = middle - 1;
 		}
-		if (low > 0) selected.set(index, fragment(low));
+		if (best) put(best);
 	}
-	const context = requestContext(renderWindow(selected, texts.length), question, true);
-	if (inputTokens(context) > inputBudget) throw new Error("Recall context exceeds the selected model's input budget.");
-	return { context, maxTokens, wasWindowed: true };
+	signal?.throwIfAborted();
+	const text = prefix + window.render() + SEP + footer;
+	if (measure(text, limit) > limit) throw new Error("Recall context exceeds the selected model's input budget.");
+	return { text, wasWindowed: true };
+}
+
+export async function createRecallRequest(messages: Message[], question: string, model: Model<Api>, signal?: AbortSignal) {
+	signal?.throwIfAborted();
+	const counter = await queryInputBudget(model, SYSTEM_PROMPT, Math.floor(model.contextWindow * 0.8));
+	try {
+		const { text, wasWindowed } = await selectPrompt(messages, question, counter, signal);
+		const context: Context = {
+			systemPrompt: SYSTEM_PROMPT,
+			messages: [{ role: "user", timestamp: Date.now(), content: [{ type: "text", text }] }],
+		};
+		const maxTokens = Math.min(Math.max(1, Math.floor(model.contextWindow * 0.2)), model.maxTokens || Infinity);
+		return { context, maxTokens, wasWindowed, inputTokenCounter: counter.name };
+	} finally {
+		counter.close?.();
+	}
 }

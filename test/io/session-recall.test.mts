@@ -103,7 +103,7 @@ function assistant(model: Model<Api>, text: string): AssistantMessage {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 }
 
-async function queryFixture(t: TestContext, contextWindow = 1000) {
+async function queryFixture(t: TestContext, contextWindow = 1000, { provider = "recall-offline", id = "recall" } = {}) {
   const dir = temporaryDirectory(t), sessions = join(dir, "sessions");
   mkdirSync(sessions);
   const previous = process.env.PI_CODING_AGENT_DIR;
@@ -116,7 +116,7 @@ async function queryFixture(t: TestContext, contextWindow = 1000) {
   } as unknown as ExtensionAPI);
   const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null,
     modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
-  const model: Model<Api> = { id: "recall", name: "Recall offline", provider: "recall-offline", api: "openai-responses",
+  const model: Model<Api> = { id, name: "Recall offline", provider, api: "openai-responses",
     baseUrl: "http://127.0.0.1:1/original/v1", contextWindow, maxTokens: 500, reasoning: false, input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const captured: Array<{ model: Model<Api>; context: ReturnType<typeof normalizeContext>;
@@ -317,7 +317,8 @@ test("Recall uses the current native runtime's dynamic auth endpoint, headers an
 });
 
 test("Recall bounds final normalized input for small-count giant messages, many matches and oversized questions", async t => {
-  const { sessions, tool, ctx, captured } = await queryFixture(t);
+  // An OpenAI-looking model ID from another provider must still use the native estimate.
+  const { sessions, tool, ctx, captured } = await queryFixture(t, 1000, { id: "gpt-4o" });
   for (const [name, contents] of [
     ["giant", ["needle 界🙂 ".repeat(8000)]],
     ["many", Array.from({ length: 12 }, (_, i) =>
@@ -327,6 +328,7 @@ test("Recall bounds final normalized input for small-count giant messages, many 
     const sessionPath = sessionFile(sessions, name, [...contents]);
     const result = await tool.execute(name, { action: "query", params: { sessionPath, question: "needle" } }, undefined, undefined, ctx);
     assert.equal(result.details.wasWindowed, true);
+    assert.equal(result.details.inputTokenCounter, "pi-estimate");
     const request = captured.at(-1)!;
     // Independent native input oracle counts the actual provider-facing system,
     // question, framing and every omission/truncation marker together.
@@ -350,6 +352,64 @@ test("Recall bounds final normalized input for small-count giant messages, many 
   const result = await tool.execute("question", { action: "query", params: { sessionPath, question: "q".repeat(8000) } }, undefined, undefined, ctx);
   assert.match(JSON.stringify(result.content), /question and instructions exceed/);
   assert.equal(captured.length, 3, "an impossible input is rejected before provider dispatch");
+});
+
+type QueryTranscript = ReturnType<typeof normalizeContext>["messages"];
+
+function messageText(message: QueryTranscript[number]): string {
+  return typeof message.content === "string" ? message.content : message.content.filter(b => b.type === "text").map(b => b.text).join("");
+}
+
+async function openAIInputTokens(messages: QueryTranscript, id: "gpt-4" | "gpt-4o-2024-08-06"): Promise<number> {
+  const { encoding_for_model } = await import("tiktoken");
+  const encoding = encoding_for_model(id);
+  try {
+    return messages.reduce((tokens, msg) =>
+      tokens + 3 + encoding.encode_ordinary(msg.role).length + encoding.encode_ordinary(messageText(msg)).length, 3);
+  } finally {
+    encoding.free();
+  }
+}
+
+test("Recall keeps a Chinese middle decision inside the selected model's input budget", async t => {
+  const id = "gpt-4o-2024-08-06";
+  const { tool, ctx, sessions, captured } = await queryFixture(t, 1500, { provider: "openai", id });
+  const sessionPath = sessionFile(sessions, "handover", Array.from({ length: 42 }, (_, i) =>
+    i === 26 ? "工具栏：切换前先通知雨燕组。" : "当班记录已收到，后续回访安排正在核对。".repeat(10)));
+  const run = (question: string) => tool.execute("window", { action: "query", params: { sessionPath, question } }, undefined, undefined, ctx);
+  const result = await run("工具栏如何切换？");
+  assert.equal(captured.length, 1);
+  const request = captured[0]!;
+  assert.ok(JSON.stringify(request.context.messages).includes("切换前先通知雨燕组。"));
+  const tokens = await openAIInputTokens(request.context.messages, id);
+  assert.ok(tokens <= 1200, `assembled input: ${tokens}`);
+  assert.equal(request.options.maxTokens, 300);
+  assert.equal(result.details.inputTokenCounter, "o200k_base");
+  assert.match(JSON.stringify((await run("请核对交接记录".repeat(400))).content), /exceed/);
+  assert.equal(captured.length, 1, "over-budget question rejected before dispatch");
+});
+
+test("Recall budgets a clipped match and both gaps in chronological order", async t => {
+  const id = "gpt-4";
+  const { tool, ctx, sessions, captured } = await queryFixture(t, 1300, { provider: "openai", id });
+  const contents = Array.from({ length: 36 }, () => "Routine background without a decision. ".repeat(350));
+  contents[0] = "SETUP_START " + "Inspect the inventory. ".repeat(24);
+  contents[21] = "Unrelated archive text.\n".repeat(400) + "\n\n## needle\n\n[decision] Keep the 𠮷🙂 label.\n" + contents[21];
+  contents[35] += " FINAL_END";
+  const sessionPath = sessionFile(sessions, "gap-budget", contents);
+  const result = await tool.execute("gaps", { action: "query", params: { sessionPath, question: "needle" } }, undefined, undefined, ctx);
+  assert.equal(result.details.wasWindowed, true);
+  assert.equal(result.details.inputTokenCounter, "cl100k_base");
+  assert.equal(captured.length, 1);
+  const { messages } = captured[0]!.context;
+  const text = messageText(messages.find(m => m.role === "user")!);
+  const omitted = [...text.matchAll(/^\[\.\.\. (\d+) messages omitted \.\.\.\]$/gm)];
+  const included = [...text.matchAll(/^\[User\]: /gm)];
+  assert.equal(included.length + omitted.reduce((sum, gap) => sum + Number(gap[1]), 0), contents.length);
+  assert.match(text, /SETUP_START[\s\S]+messages omitted[\s\S]+Keep the 𠮷🙂 label\.[\s\S]+messages omitted[\s\S]+FINAL_END/);
+  assert.match(text, /message truncated/);
+  assert.equal(Buffer.from(text).toString("utf8"), text);
+  assert.ok(await openAIInputTokens(messages, id) <= 1040);
 });
 
 test("Recall preserves original historical messages beside native compaction summaries", async t => {
