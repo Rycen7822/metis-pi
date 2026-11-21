@@ -99,12 +99,17 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
 
 class DaemonReplyIO(unittest.IsolatedAsyncioTestCase):
     async def test_unread_reply_releases_daemon_connection(self):
-        # Run the real IPC handler. Only the reply body is enlarged; close is
-        # observed after it completes, without replacing the production deadline.
+        # Run the real IPC handler with a large reply and the production deadline.
         script="""
 import asyncio,sys
 from pathlib import Path
 from metis_subagent import daemon
+start_listener=daemon.ipc.serve
+async def listen(*args, **kwargs):
+    server=await start_listener(*args, **kwargs)
+    print('READY',flush=True)
+    return server
+daemon.ipc.serve=listen
 original_dispatch=daemon.Runtime.dispatch
 async def dispatch(self,op,p,source=None):
     if op=='doctor': return {'blob':'x'*(1024*1024)}
@@ -123,12 +128,15 @@ asyncio.run(daemon.serve(Path(sys.argv[1])))
                 stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
             writer=None
             try:
-                end=asyncio.get_running_loop().time()+5
-                while writer is None:
-                    try: reader,writer=await ipc.connect(home,limit=1024)
-                    except (FileNotFoundError,ConnectionRefusedError):
-                        if asyncio.get_running_loop().time()>=end: raise
-                        await asyncio.sleep(.01)
+                try:
+                    ready=await asyncio.wait_for(proc.stdout.readline(),30)
+                except TimeoutError:
+                    self.fail('daemon did not start listening within 30 seconds')
+                if not ready:
+                    diagnostic=await asyncio.wait_for(proc.stderr.read(),2)
+                    self.fail(f'daemon exited before listening: {diagnostic.decode(errors="replace")}')
+                self.assertEqual(ready.strip(),b'READY')
+                reader,writer=await ipc.connect(home,limit=1024)
                 writer.transport.pause_reading()
                 from metis_subagent import PROTOCOL_VERSION
                 writer.write((dumps({'v':PROTOCOL_VERSION,'op':'doctor','params':{}})+'\n').encode())
