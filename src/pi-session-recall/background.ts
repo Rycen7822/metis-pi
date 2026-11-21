@@ -24,7 +24,7 @@ export function wireRecallBackground(pi: ExtensionAPI, getRoot: (ctx: ExtensionC
     if (work) { rescan = true; return; }
     if (timer) clearTimeout(timer);
     const current = generation;
-    timer = setTimeout(async () => {
+    const run = async () => {
       timer = undefined;
       if (current !== generation) return;
       if (!ctx.isIdle()) { schedule(ctx, 5_000); return; }
@@ -52,6 +52,9 @@ export function wireRecallBackground(pi: ExtensionAPI, getRoot: (ctx: ExtensionC
           schedule(ctx, delay);
         }
       }
+    };
+    timer = setTimeout(() => {
+      void run().catch(error => console.warn("Recall background scheduling failed:", error));
     }, delay);
     timer.unref();
   };

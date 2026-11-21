@@ -11,10 +11,11 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 import * as tar from "tar";
 import { digest, sdkPackages, sdkRuntimePackages, sdkFiles, sdkPatchCount } from "../../src/pi-sdk/artifact.mjs";
+import { mockWindowsSdkProcessList } from "../helpers/windows-sdk-process-list.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const run = promisify(execFile);
-async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0" } = {}) {
+async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0", windowsProcesses } = {}) {
   const work = path.join(root, ".work");
   await mkdir(work, { recursive: true });
   const dir = await mkdtemp(path.join(work, "sdk-install-"));
@@ -63,7 +64,8 @@ async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0" } = {}) {
     return { archive, manifest };
   }
   await payload();
-  const { ensureSDK } = await import(pathToFileURL(path.join(pkg, "src/pi-sdk/install.mjs")));
+  const restore = process.platform === "win32" && windowsProcesses ? mockWindowsSdkProcessList(windowsProcesses) : undefined;
+  const { ensureSDK } = await import(pathToFileURL(path.join(pkg, "src/pi-sdk/install.mjs"))).finally(() => restore?.());
   const active = async () => (await readFile(path.join(managedRoot, "current-version"), "utf8")).trim();
   const preserved = async () => {
     assert.deepEqual(await Promise.all([readFile(settings), readFile(auth)]), saved);
@@ -144,11 +146,16 @@ test("package postinstall keeps only the immediate Metis rollback and leaves oth
   await cp(path.join(root, "src/condense/refresh-prices.mjs"), path.join(h.pkg, "src/condense/refresh-prices.mjs"));
   await cp(path.join(root, "package.json"), path.join(h.pkg, "package.json"));
   const command = "npm run postinstall --ignore-scripts";
+  const processListPreload = new URL("../helpers/windows-sdk-process-list.mjs", import.meta.url);
+  const windowsEnv = process.platform === "win32" ? {
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${processListPreload.href}`].filter(Boolean).join(" "),
+    METIS_TEST_WINDOWS_SDK_PROCESS_LIST: "empty",
+  } : {};
   await run(process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm",
     process.platform === "win32" ? ["/d", "/s", "/c", command] : ["run", "postinstall", "--ignore-scripts"], {
       cwd: h.pkg, timeout: 30_000, windowsHide: true,
       // Semantic setup is separately tested; its supported external override prevents downloads here.
-      env: { ...process.env, PI_MANAGED_INSTALL_ROOT: h.managedRoot, SGREP_RUNTIME_DIR: h.dir,
+      env: { ...process.env, ...windowsEnv, PI_MANAGED_INSTALL_ROOT: h.managedRoot, SGREP_RUNTIME_DIR: h.dir,
         PI_CODING_AGENT_DIR: path.dirname(h.managedRoot) },
     });
   assert.notEqual(await h.active(), previous);
@@ -260,7 +267,8 @@ test("activation failure removes only its candidate and preserves pre-existing t
 });
 
 test("cleanup failure leaves the verified update active and can be retried", async t => {
-  const h = await fixture(t);
+  let windowsProcesses = [];
+  const h = await fixture(t, { windowsProcesses: () => windowsProcesses });
   await h.ensureSDK({ managedRoot: h.managedRoot });
   const oldest = path.join(path.dirname(h.source), await h.active());
   await h.payload("rollback");
@@ -285,6 +293,14 @@ test("cleanup failure leaves the verified update active and can be retried", asy
     syncBuiltinESMExports();
   }
   assert.ok((await readdir(oldest)).includes("metis-sdk.json"));
+  if (process.platform === "win32") {
+    windowsProcesses = [{ ProcessId: process.pid + 1, CommandLine: null }];
+    const deferred = await h.ensureSDK({ managedRoot: h.managedRoot });
+    assert.equal(deferred.status, "current");
+    assert.equal(deferred.cleanupWarning, undefined);
+    assert.ok((await readdir(oldest)).includes("metis-sdk.json"));
+    windowsProcesses = [];
+  }
   const retry = await h.ensureSDK({ managedRoot: h.managedRoot });
   assert.equal(retry.status, "current");
   assert.equal(retry.cleanupWarning, undefined);
