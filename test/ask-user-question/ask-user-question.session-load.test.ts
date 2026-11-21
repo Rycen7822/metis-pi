@@ -82,7 +82,6 @@ describe("ask_user_question.execute — lazy session-graph load guards (#107)", 
 		const r = await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "stale_module_cache" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("restart Pi") });
-		// Diagnostic includes the resolved namespace shape the issue asked for.
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("resolved namespace keys") });
 		expect(r?.content[0]).toMatchObject({ text: expect.not.stringContaining("declined") });
 	});

@@ -93,7 +93,6 @@ test("Gemini ADC availability requires geminiAuth adc, project, location, and an
 	assert.equal(child.status, 0, child.stderr);
 	assert.deepEqual(JSON.parse(child.stdout.trim()), { adcAvail: false, apiAvail: false });
 
-	// Now write an ADC file; availability should flip on.
 	await writeAdc(root);
 	const child2 = runChild(`
 		const { isGeminiApiAvailable } = await import(${JSON.stringify(geminiApiModuleUrl)});
@@ -256,7 +255,6 @@ test("Gemini ADC classifies only credential rejections as CredentialResolutionEr
 		console.log(JSON.stringify({ threw }));
 	`, env);
 
-	// Credential rejections -> CredentialResolutionError.
 	for (const status of [400, 401, 403]) {
 		const out = classify(status, JSON.stringify({ error: "denied" }));
 		assert.equal(out.status, 0, out.stderr);

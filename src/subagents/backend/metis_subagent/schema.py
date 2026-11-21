@@ -506,7 +506,6 @@ def native_tools():
 NATIVE_TOOLS = native_tools()
 NATIVE_BY_NAME = {t["name"]: t for t in NATIVE_TOOLS}
 
-# Private IPC operations for lifecycle and recovery.
 MANAGEMENT = [
     tool(
         "pi_context",

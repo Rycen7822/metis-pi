@@ -97,7 +97,7 @@ function driveWithListener(
 		) => {
 			return new Promise((resolve) => {
 				const component = factory(overlayTui, identityTheme, keybindings, resolve) as SessionComponent;
-				if (!options?.overlay) return; // The inline factory yielded above the existing overlay.
+				if (!options?.overlay) return;
 				componentRef.current = component;
 				options.onHandle?.(handle);
 				script(resolve);
@@ -185,15 +185,12 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 		const tool = register();
 		const handle = makeHandle();
 		const { ctx, notify, removeListener, listenerRef } = driveWithListener(handle, (done) => {
-			// First press: hide + one-shot notification with the reopen key.
 			expect(listenerRef.current?.(CTRL_RBRACKET)).toEqual({ consume: true });
 			expect(handle.isHidden()).toBe(true);
 			expect(notify).toHaveBeenCalledTimes(1);
 			expect(notify).toHaveBeenCalledWith(expect.stringContaining("press Ctrl+] to reopen"), "info");
-			// Second press: unhide, and the notification stays one-shot.
 			expect(listenerRef.current?.(CTRL_RBRACKET)).toEqual({ consume: true });
 			expect(handle.isHidden()).toBe(false);
-			// Third round-trip re-hides without a second announcement.
 			expect(listenerRef.current?.(CTRL_RBRACKET)).toEqual({ consume: true });
 			expect(handle.isHidden()).toBe(true);
 			expect(notify).toHaveBeenCalledTimes(1);

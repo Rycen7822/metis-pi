@@ -105,7 +105,6 @@ export interface MockCtxOptions {
 	ui?: Partial<ExtensionUIContext>;
 }
 
-/** Context fields used by the questionnaire tests. */
 export function createMockCtx(opts: MockCtxOptions = {}): ExtensionToolContext {
 	return {
 		hasUI: opts.hasUI ?? false,

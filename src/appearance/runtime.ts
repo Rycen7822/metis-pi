@@ -136,7 +136,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     try {
       chrome.state.tui?.requestRender?.();
     } catch {
-      /* render happens on the next host cycle */
     }
   }
 

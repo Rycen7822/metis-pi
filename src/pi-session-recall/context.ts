@@ -86,7 +86,6 @@ async function selectPrompt(messages: Message[], question: string, counter: Quer
 	// The marker starts after a newline, so its suffix cannot merge with the preceding excerpt.
 	// Its cost is a lower bound even when BPE does not grow monotonically with prefix length.
 	const truncationFloor = excerptCost(TRUNCATION_MARKER, Infinity);
-	// Keep setup and final-state anchors before spending spare capacity on matches.
 	for (const index of bookends) {
 		const text = texts[index]!;
 		const excerpt = text.length <= 2 * BOOKEND_CHARS ? text
@@ -112,7 +111,6 @@ async function selectPrompt(messages: Message[], question: string, counter: Quer
 		const tail = keepTail ? "\n" + text.slice(end) : "";
 		if ((keepTail ? excerptCost(TRUNCATION_MARKER + tail, available) : truncationFloor) > available) continue;
 
-		// An oversized relevant record must not bypass the budget or hide truncation.
 		const lower = text.toLowerCase();
 		const hit = keywords.map(word => lower.indexOf(word)).filter(at => at >= 0).sort((a, b) => a - b)[0];
 		let start = hit === undefined ? 0 : Math.max(0, hit - 100);

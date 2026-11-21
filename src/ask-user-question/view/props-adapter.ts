@@ -73,7 +73,6 @@ export function createPropsAdapter(config: PropsAdapterConfig) {
 				hasNote: selectSavedNote(state.notesByTab, state.answers, paneIndex) !== undefined,
 				selectedIndex: state.optionIndex, focused, inputMode: state.inputMode,
 			});
-			// All multi views participate in the cross-tab height measurement.
 			for (let i = 0; i < tabsByIndex.length; i++) {
 				const q = questions[i]!;
 				const isCurrent = i === state.currentTab;

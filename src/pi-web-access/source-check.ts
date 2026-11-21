@@ -1,4 +1,3 @@
-// Structured source evidence and machine-readable research artifacts.
 import { createHash } from "node:crypto";
 import { generateId, getResult, storeResult } from "./storage.ts";
 import type { SearchResult } from "./search-types.ts";

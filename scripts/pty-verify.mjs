@@ -320,7 +320,6 @@ const startJourney = async (name) => {
 let copiedChars = 0;
 try {
   if (selected.has("E1")) {
-    // E1: real idle footer and editor placement.
     const idle = await startJourney("E1");
     // Extension issues also catch missing vendor assets and shortcut collisions.
     assert.ok(!/Could not read the @rycen7822\/metis-pi changelog/.test(idle), "product CHANGELOG.md is present");
@@ -367,7 +366,6 @@ try {
       { text: "PCX_TOOL_ACK" },
       { error: "PCX forced provider failure" },
     );
-    // E2: live Working, completed usage, one real tool, and a provider failure.
     submit("say PCX_OK");
     const working = await waitFor(/• Working \(/, 15_000, "live Working line");
     assert.match(working, /• Working \(\d+s · esc to interrupt\)/, "Codex status rhythm with elapsed");
@@ -384,14 +382,12 @@ try {
     assert.ok(summary.includes("↑") && summary.lastIndexOf("tok/s") > summary.lastIndexOf("↑"),
       "rate follows input/output in the footer");
 
-    // A real bash call still ends Worked.
     submit("please PCX_TOOL now");
     await waitForAfter(/Worked for/, "PCX_TOOL_MARK", 60_000, "post-tool Worked summary");
     const toolResult = lastRequest.messages.find((message) => message.role === "tool" && message.tool_call_id === "call_pcx1");
     assert.equal(lastUserText(), "please PCX_TOOL now");
     assert.equal(messageText(toolResult).trim(), "PCX_TOOL_MARK", "the provider receives stdout from the real bash execution");
 
-    // Provider error must end Failed.
     submit("please PCX_FAIL now");
     await waitForAfter(/Failed after/, "PCX_FAIL", 60_000, "Failed summary");
     assert.equal(lastUserText(), "please PCX_FAIL now");
@@ -403,7 +399,6 @@ try {
       reasoning: `PCX_THINK_HEAD ${"the transcript window keeps the newest rows ".repeat(20)}PCX_THINK_TAIL`,
       text: "PCX_THINK_DONE",
     });
-    // E3: live thinking, peek/full/collapse gestures, and wheel movement.
     submit("please PCX_THINK now");
     await waitFor(/thinking \d+s/, 30_000, "live thinking timer");
     // Screen-only checks keep old scrollback hints from satisfying a live peek.
@@ -463,7 +458,6 @@ try {
       { text: "PCX_DRAFT_ACK" },
       { text: "PCX_AFTER_CLEAR_ACK" },
     );
-    // E4: real SGR drag and Ctrl+C through the isolated clipboard sink.
     submit("please PCX_SELECT now");
     await waitForAfter(/Worked for/, "SELECT_END_MARK", 60_000, "selectable reply is settled");
     assert.equal(lastUserText(), "please PCX_SELECT now");
@@ -530,7 +524,7 @@ try {
     await waitForVisible(/pty probe/, 15_000, "the bare second / pops the menu with a DEAD editor state");
     sendKeys(["Escape"]);
     await waitGone(/pty probe/, 4_000, "second-token menu after Escape");
-    sendKeys(["BSpace"]); // Replace only the bare slash, keeping the first skill.
+    sendKeys(["BSpace"]);
     type("￥");
     await waitForVisible(/pty probe/, 15_000, "bare second ￥ reopens the menu");
     type("pcx-pty-mux-b");
@@ -538,7 +532,7 @@ try {
       const choices = visibleRows(frame).filter((line) => line.includes("pty probe"));
       return choices.length === 1 && choices[0].includes("pcx-pty-mux-b") ? frame : undefined;
     }, 15_000, "the filtered menu contains only the second skill");
-    sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b
+    sendKeys(["Tab"]);
     await delay(300);
     submit("MUX_TAIL_MARKER");
     await waitFor(/MUX_ACK/, 30_000, "provider acknowledges the skill request");

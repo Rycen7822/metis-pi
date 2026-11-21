@@ -58,7 +58,6 @@ export interface CodexEditorHost {
 export interface CodexSurfaceOps {
   /** Paint one physical row with the surface background (pads to width). */
   paintRow: (row: string, width: number) => string;
-  /** Prompt glyph / scroll-indicator painter. */
   paintGlyph: (text: string, tone: "accent" | "dim") => string;
 }
 

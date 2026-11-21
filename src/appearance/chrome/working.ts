@@ -1,19 +1,3 @@
-// The standalone Working line, installed as an above-editor widget through
-// the host's public ctx.ui.setWidget(key, factory, {placement:"aboveEditor"}).
-// 0.8.5: Codex status rhythm (openai/codex status_indicator_widget.rs is the
-// layout/timing reference — no identity or brand copying):
-//   • Working (3m 36s · thinking 24s · esc to interrupt) · read
-// Token/cache stay OUT of the Working line (metadata + footer own
-// them). The native loader row is hidden ONLY after this widget installed
-// successfully; any failure keeps the native row.
-//
-// Animation: a restrained shimmer over the message word + bullet pulse, on
-// its OWN timer (default 64ms, clamped 32..1000) — separate from the 1s
-// elapsed ticker. A frame only bumps a counter and requests a render; it
-// never re-reads session usage or disk. NO_COLOR / ansi16 /
-// animation:false render static. The timer lives only while active; settle
-// and dispose stop it (idle must leave zero timers).
-
 import type { ActivityPhase } from "../activity/ui-metrics.ts";
 import { formatDuration, formatTokensCompact } from "../../presentation/segments.ts";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -27,9 +11,6 @@ export interface WorkingSnapshot {
   tools: { first: string; count: number } | undefined;
 }
 
-/** Config-gated segments. `elapsed:false` removes ONLY the duration — the
- * thought/tool segments keep updating. `tokens` defaults false in 0.8.5
- * (tokens live in the metadata/footer). */
 export interface WorkingShow {
   elapsed: boolean;
   thought: boolean;
@@ -39,7 +20,7 @@ export interface WorkingShow {
 
 export interface WorkingAnimation {
   enabled: boolean;
-  intervalMs: number; // clamped 32..1000
+  intervalMs: number;
 }
 
 export const WORKING_WIDGET_KEY = "metis-pi:working";
@@ -74,14 +55,6 @@ export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
   usage?: { input: number; output: number };
 }
 
-/** Shimmer phase math (pure). Frame counter wraps — no state growth. */
-// Shimmer cycle: ENTER (comet head slides in from the left edge) → SWEEP →
-// EXIT (trail fully off the right edge) → PAUSE (word at rest). One wave
-// always completes before the next begins (0.8.5 bug: %12 inside a %16 loop
-// cut the sweep short).
-// The head moves CONTINUOUSLY (a fraction of a cell per frame): the wave
-// crosses at a leisurely pace while the 32ms frame rate drives smooth
-// sub-cell intensity flow — high frame rate ≠ fast sweep.
 const SHIMMER_TRAIL = 5; // comet trail length in cells behind the head
 const SHIMMER_CELLS_PER_FRAME = 0.25; // sweep speed (4 frames per cell @32ms)
 const SHIMMER_PAUSE_FRAMES = 16;
@@ -214,7 +187,6 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
       return [truncateToWidth(line, Math.floor(width), "…")];
     },
     invalidate(): void {
-      // Stateless per render — the snapshot getter owns freshness.
     },
     stopAnimation(): void {
       syncTimer(false);

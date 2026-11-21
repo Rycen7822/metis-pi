@@ -1,10 +1,18 @@
 {
   "categories": { "correctness": "off" },
   "jsPlugins": [
-    { "name": "landmines-testing", "specifier": "@interfere/landmines/testing" }
+    { "name": "landmines-testing", "specifier": "@interfere/landmines/testing" },
+    { "name": "approved-comments", "specifier": "./config/lint/approved-comments.mjs" }
   ],
   "rules": { "landmines-testing/no-unsignaled-poll": "error" },
   "overrides": [
+    {
+      "files": [
+        "src/pi-session-recall/context.ts", "src/pi-session-recall/input-budget.ts",
+        "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/window.ts"
+      ],
+      "rules": { "approved-comments/ratchet": "error" }
+    },
     {
       "files": ["test/ask-user-question/**/*.test.ts"],
       "rules": { "landmines-testing/no-fixed-sleep": "error" }

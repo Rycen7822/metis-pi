@@ -90,7 +90,6 @@ function measureFrame(build, width, height) {
   tui.beforeTerminalStart();
   const root = build();
   tui.setLayoutRoot(root);
-  // Build products, then measure a cache-hot frame and a real scrolled frame.
   tui.doRender();
   const frames = 10;
   const start = performance.now();

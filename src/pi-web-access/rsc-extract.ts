@@ -15,7 +15,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
     return null;
   }
 
-  // Parse all RSC chunks into a map
   const chunkMap = new Map<string, string>();
   const scriptRegex = /<script>self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)<\/script>/g;
 
@@ -51,11 +50,9 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
 
   if (chunkMap.size === 0) return null;
 
-  // Extract title
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/);
   const title = titleMatch?.[1]?.split("|")[0]?.trim() || "";
 
-  // Parse and cache parsed chunks
   const parsedCache = new Map<string, unknown>();
 
   function getParsedChunk(id: string): unknown | null {
@@ -92,7 +89,7 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
       const refMatch = node.match(/^\$L([0-9a-f]+)$/i);
       if (refMatch) {
         const refId = refMatch[1];
-        if (visitedRefs.has(refId)) return ""; // Prevent cycles
+        if (visitedRefs.has(refId)) return "";
         visitedRefs.add(refId);
         const refNode = getParsedChunk(refId);
         const result = refNode ? extractNode(refNode, ctx) : "";
@@ -113,7 +110,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
       const tag = node[1] as string;
       const props = (node[3] || {}) as Record<string, unknown>;
 
-      // Skip non-content
 
       if (skipTags.includes(tag)) return "";
 
@@ -122,7 +118,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
         const refId = tag.slice(2);
         if (visitedRefs.has(refId)) return "";
 
-        // Check for heading components with baseId
         if (props.baseId && props.children) {
           return `## ${String(props.children)}\n\n`;
         }
@@ -179,7 +174,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
       }
     }
 
-    // Array of child nodes
     return (node as Node[]).map(n => extractNode(n, ctx)).join("");
   }
 
@@ -191,7 +185,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
     function walkTable(node: unknown, isHeader = false): void {
       if (node === null || node === undefined) return;
 
-      // Handle string refs
       if (typeof node === "string") {
         const refMatch = node.match(/^\$L([0-9a-f]+)$/i);
         if (refMatch && !visitedRefs.has(refMatch[1])) {
@@ -209,7 +202,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
         const tag = node[1] as string;
         const nodeProps = (node[3] || {}) as Record<string, unknown>;
 
-        // Handle component refs
         if (tag.startsWith("$L")) {
           const refId = tag.slice(2);
           if (!visitedRefs.has(refId)) {
@@ -239,7 +231,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
     function walkCells(node: unknown, cells: string[]): void {
       if (node === null || node === undefined) return;
 
-      // Handle string refs
       if (typeof node === "string") {
         const refMatch = node.match(/^\$L([0-9a-f]+)$/i);
         if (refMatch && !visitedRefs.has(refMatch[1])) {
@@ -259,10 +250,9 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
           .trim()
           .replace(/\n/g, " ")
           .replace(/\\/g, "\\\\")  // Escape backslashes first
-          .replace(/\|/g, "\\|");  // Then escape pipes
+          .replace(/\|/g, "\\|");
         cells.push(text);
       } else if (node[0] === "$" && typeof node[1] === "string" && (node[1] as string).startsWith("$L")) {
-        // Component ref for a cell
         const refId = (node[1] as string).slice(2);
         if (!visitedRefs.has(refId)) {
           visitedRefs.add(refId);

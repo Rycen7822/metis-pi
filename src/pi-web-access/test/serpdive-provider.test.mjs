@@ -46,9 +46,8 @@ test("le modèle par défaut est krill, et aucune synthèse n'est demandée", as
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.url, "https://api.serpdive.com/v1/search");
 	assert.equal(output.auth, "Bearer serpdive-test-key");
-	// Le point central de la revue : installer ce provider ne doit RIEN dépenser.
 	assert.equal(output.body.model, "krill");
-	assert.equal("answer" in output.body, false); // krill ne synthétise pas
+	assert.equal("answer" in output.body, false);
 	// …mais SearchResponse.answer reste rempli, assemblé depuis les sources,
 	// comme le font brave.ts et searxng.ts pour les providers sans synthèse.
 	assert.match(output.answer, /repo content/);
@@ -99,7 +98,7 @@ test("la récence est un indice de requête, pas un paramètre temporel", async 
 
 	assert.equal(child.status, 0, child.stderr);
 	const body = JSON.parse(child.stdout.trim()).body;
-	assert.equal(body.query, "ai news past week"); // l'indice voyage DANS la question
+	assert.equal(body.query, "ai news past week");
 	for (const param of ["time_range", "recency", "start_date", "end_date", "days"]) {
 		assert.equal(param in body, false, `${param} n'existe pas dans l'API`);
 	}
@@ -151,7 +150,7 @@ test("une erreur HTTP remonte le statut sans jamais laisser fuir la clé", async
 	assert.equal(output.threw, true);
 	assert.match(output.message, /SERPdive API error 401/);
 	assert.match(output.message, /invalid_api_key/);
-	assert.equal(output.message.includes("serpdive-secret-key"), false); // redacted
+	assert.equal(output.message.includes("serpdive-secret-key"), false);
 });
 
 // Répond directement à la revue : « uses the shared request-time
@@ -185,8 +184,8 @@ test("la clé passe par le chemin de credentials partagé, résolue à la requê
 
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	assert.equal(output.availableBefore, true);   // disponible sans exécuter la commande
-	assert.equal(output.ranBefore, false);        // rien n'a tourné au chargement
-	assert.equal(output.ranAfter, true);          // résolue au moment de la requête
+	assert.equal(output.availableBefore, true);
+	assert.equal(output.ranBefore, false);
+	assert.equal(output.ranAfter, true);
 	assert.equal(output.auth, "Bearer serpdive-command-key");
 });

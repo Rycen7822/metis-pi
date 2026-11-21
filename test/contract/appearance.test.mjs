@@ -40,7 +40,7 @@ function providerEvent(handlers, message, type, delta = "") {
     }
     if (tool) {
       producer.argumentsJson += delta;
-      try { partial.content[0].arguments = JSON.parse(producer.argumentsJson); } catch { /* Partial JSON. */ }
+      try { partial.content[0].arguments = JSON.parse(producer.argumentsJson); } catch { }
     } else partial.content[0].text += delta;
     stream.push({ type: tool ? "toolcall_delta" : "text_delta", contentIndex: 0, delta, partial });
   }

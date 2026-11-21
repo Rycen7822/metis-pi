@@ -353,7 +353,6 @@ describe("OptionListView.render — cursor position via inputCursorOffset props"
 		const lines = s.render(width);
 		// Cursor at position 5 in a long string → cursor appears on the first wrapped line
 		expect(lines[0]).toContain(CURSOR_MARKER);
-		// Width invariant
 		for (const l of lines) {
 			expect(visibleWidth(l)).toBeLessThanOrEqual(width);
 		}

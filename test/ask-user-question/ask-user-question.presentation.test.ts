@@ -110,7 +110,6 @@ describe("inline presentation", () => {
 				expect(lines.length).toBeLessThanOrEqual(budget);
 				// The host clips the editor slot from the bottom, so the hint row must be last.
 				expect(lines.at(-1)).toContain(HINT_PART_CANCEL);
-				// The question being answered stays pinned while the options scroll.
 				expect(lines.some((line) => line.includes("Which approach should we take"))).toBe(true);
 			}
 			expect(component.render(100).some((line) => line.includes("Option 4"))).toBe(true);

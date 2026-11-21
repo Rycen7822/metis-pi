@@ -159,7 +159,7 @@ class BuiltinSurfacePlan(unittest.TestCase):
 
     def test_surface_plan_covers_every_restricting_profile(self):
         partial=self.spec('default','write',tools=['read','bash','edit','write'])
-        self.assertTrue(partial['surface'])          # powershell is still restricted
+        self.assertTrue(partial['surface'])
         self.assertIn(str(SURFACE),partial['argv'])
         self.assertEqual(partial['builtins'],['read','bash','edit','write'])
         extra=self.spec('default','write',tools=['read','bash','edit','write','grep'])

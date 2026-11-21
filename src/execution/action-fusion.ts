@@ -203,7 +203,7 @@ export async function executeFusion(options: {
   run: FusionCommandRunner;
   onUpdate?: ((result: FusionResult) => void) | undefined;
 }): Promise<AgentToolResult<unknown>> {
-  const input = validateThenRun(options.thenRun); // Validate before any side effect.
+  const input = validateThenRun(options.thenRun);
   return withFusionPaths(options.paths, options.signal, async () => {
     let mutation: AgentToolResult<unknown>;
     try {

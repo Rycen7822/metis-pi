@@ -639,7 +639,6 @@ function coordinateSubtree(
       // exists. Its transient control must be replaced by the first update;
       // otherwise gestures on that displayed control cannot survive rebuilds.
       readyPeek ||= peeking && plan !== undefined;
-      // Remember the native node so the unwrap pass (step 1) restores it.
       (node as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
         (child as { child: unknown }).child = node;

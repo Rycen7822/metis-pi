@@ -43,7 +43,7 @@ export function tokenizeBashLine(line: string): BashSpan[] {
   let quote: "none" | "single" | "double" = "none";
   let escape = false;
   let inComment = false;
-  let afterControl = true; // line start is command position
+  let afterControl = true;
   let wordStarted = false;
   let sawExpansion = false;
 
@@ -58,7 +58,7 @@ export function tokenizeBashLine(line: string): BashSpan[] {
     if (afterControl) {
       const bare = word.replace(/^\$\{?/, "").replace(/\}$/, "");
       if (BUILTINS.has(bare)) return "builtin";
-      return "function"; // executable (with or without a path)
+      return "function";
     }
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) return "parameter";
     if (/^[0-9]+$/.test(word)) return "number";
@@ -175,7 +175,6 @@ export function tokenizeBashLine(line: string): BashSpan[] {
  * carry the Mocha base foreground so the palette stays consistent. */
 export function highlightBashLine(line: string, level: ColorLevel): string {
   if (level.kind === "none") return line;
-  // Every line start is a command position; there is no script-start state.
   return tokenizeBashLine(line)
     .map((span) => {
       if (span.token === "plain") {

@@ -581,7 +581,6 @@ export default function (pi: ExtensionAPI) {
 						setOverlayStatus("Ready");
 						await ensureOverlay(ctx);
 					}
-					// null = user cancelled (Esc), do nothing
 				} else {
 					await resetThread();
 					setOverlayStatus("Ready");

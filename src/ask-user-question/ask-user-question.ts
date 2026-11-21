@@ -501,7 +501,6 @@ export function registerAskUserQuestionTool(
 				});
 				let result = await mount(INLINE_PRESENTATION);
 				if (result === YIELD_TO_OVERLAY) {
-					// Stay visible above another overlay (see mustYieldInlineSlot).
 					result = await mount(OVERLAY_PRESENTATION);
 				}
 

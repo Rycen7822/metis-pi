@@ -524,7 +524,6 @@ for (const targetPlatform of ["linux", "darwin"]) {
 			}
 			assert.deepEqual(result.second.cookies, cookies);
 			assert.deepEqual(result.third.cookies, cookies);
-			// The failed lookup is retried; the subsequent success is cached.
 			assert.equal(readFileSync(countPath, "utf8"), "2");
 			if (targetPlatform === "linux") assert.equal(existsSync(kwalletCount), false);
 		} finally {

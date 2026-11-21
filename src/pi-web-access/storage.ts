@@ -468,7 +468,6 @@ export function clearResults(): void {
 	resultHolders.clear();
 }
 
-/** Record that one more live session holds each of these results. */
 export function holdResults(ids: Iterable<string>): void {
 	for (const id of ids) resultHolders.set(id, (resultHolders.get(id) ?? 0) + 1);
 }

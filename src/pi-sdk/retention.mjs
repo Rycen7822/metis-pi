@@ -30,7 +30,7 @@ async function linuxInUse(root, obsolete) {
     const owner = await lstat(dir).catch(error => { if (error.code !== "ENOENT") throw error; });
     if (owner?.uid !== uid) continue;
     const command = await readProc(dir + "/cmdline");
-    if (!command) continue; // Exited or zombie.
+    if (!command) continue;
     if (obsolete.some(directory => command.includes(directory + "/"))) return true;
     if (name !== "pi" && name !== "pi-rpc") continue;
     // Pi overwrites argv with its process title; an older launcher may not identify its release.

@@ -26,7 +26,7 @@ class ClientTimeoutBudget(unittest.TestCase):
         self.assertGreaterEqual(call_timeout('close',{},None),budget)
         for op in ('soft_interrupt','message','followup'):
             self.assertGreaterEqual(call_timeout(op,{},None),budget)
-        self.assertGreater(budget,45)                  # the old flat 45s was the bug
+        self.assertGreater(budget,45)
     def test_autostart_keeps_its_budget_after_process_creation(self):
         from metis_subagent import client
         peer = (object(), object())
@@ -284,7 +284,6 @@ class SdkTransport(unittest.TestCase):
             cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             argv=[sys.executable,str(cli),'--mode','rpc']
-            # Build metadata does not change the release, so it stays admissible.
             for version in ('1.6.0','1.6.0+build.5','1.6.0+sha.abcdef'):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):

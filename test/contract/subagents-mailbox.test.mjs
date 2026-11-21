@@ -481,7 +481,7 @@ test("foreign sessions and nested request signals cannot consume the frontend ma
   for (const [sessionId, signal] of [["foreign", f.ctx().signal], [f.manager.getSessionId(), new AbortController().signal]]) {
     const count = f.requests.length;
     const result = f.models.streamSimple(f.model, { messages: [{ role: "user", content: "outside", timestamp: 1 }] }, { sessionId, signal });
-    const drained = (async () => { for await (const _event of result) { /* consume the lazy stream */ } return result.result(); })();
+    const drained = (async () => { for await (const _event of result) { } return result.result(); })();
     await until(() => f.requests.length === count + 1);
     const r = f.requests.at(-1); r.endBlock(); await tick(); await tick();
     assert.equal(r.options.signal.aborted, false); assert.equal(f.operations.filter(v => v.op === "pi_claim").length, 0);

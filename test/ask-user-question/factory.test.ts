@@ -6,7 +6,6 @@ import { registerAskUserQuestionTool } from "../../src/ask-user-question/ask-use
 import type { QuestionAnswer, QuestionnaireResult, QuestionParams } from "../../src/ask-user-question/tool/types.ts";
 import { QuestionParamsSchema } from "../../src/ask-user-question/tool/types.ts";
 
-/** Narrowed tool-result shape for test assertions. */
 interface ToolResult {
 	content: Array<{ type: string; text: string }>;
 	details: QuestionnaireResult;

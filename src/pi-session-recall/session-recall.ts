@@ -2,24 +2,6 @@
 // Source version: 1.0.7; commit: 92964e4c7023ae88788181bb2eeea4497a97de9d
 // Local changes use Metis TOML and the host ModelRuntime. See METIS.md.
 
-/**
- * Session Recall Extension - Search and query past pi sessions
- *
- * Two tools:
- *
- * 1. session_search - Find relevant past sessions by keywords.
- *    Use when the user mentions something from a previous conversation
- *    and you need to find which session it was in.
- *
- * 2. session_query - Deep dive into a specific session.
- *    Use after session_search to get detailed information from a
- *    specific session, or when you already know the session path
- *    (e.g., from a handoff).
- *
- * Typical flow: user says "remember when we tried X?" →
- *   session_search("X") → find the right session →
- *   session_query(path, "what approach did we take for X?")
- */
 
 import type { Model, Api } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -44,11 +26,7 @@ import { readSessionLines } from "./session-file.ts";
 import { recallScope, searchRecall } from "./runtime.ts";
 import { safeText } from "../presentation/terminal-text.ts";
 
-// ── Config ───────────────────────────────────────────────────────────────────
 
-/**
- * Resolve the query model from Metis TOML → fallback to current session model.
- */
 function resolveQueryModel(ctx: ExtensionContext): Model<Api> | undefined {
 	const section = readMetisConfig(getAgentDir()).config["sessionRecall"];
 	const identifier = isMetisConfigTable(section) ? section["queryModel"] : undefined;
@@ -59,11 +37,9 @@ function resolveQueryModel(ctx: ExtensionContext): Model<Api> | undefined {
 			if (found) return found;
 		}
 	}
-	// Fallback: current session model
 	return ctx.model;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 const encodeProjectPath = (path: string) => path.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
 
@@ -84,15 +60,11 @@ export function getSessionsDir(ctx: ExtensionContext): string {
  * This handles both Unix (/) and Windows (\, C:\) paths.
  */
 function projectFromPath(sessionPath: string): string {
-	// Match the encoded directory name — handle both / and \ separators
 	const match = sessionPath.match(/sessions[/\\](--.*?--)[/\\]/);
 	if (!match || !match[1]) return "unknown project";
 
-	// Decode: strip leading/trailing --, replace internal - with /
-	let encoded = match[1].slice(2, -2); // remove -- from both ends
+	let encoded = match[1].slice(2, -2);
 
-	// Encode homedir with the same scheme session-manager uses,
-	// so it works on both Unix (/home/can) and Windows (C:\Users\Pc)
 	const homeEncoded = encodeProjectPath(homedir());
 
 	if (encoded.startsWith(homeEncoded + "-")) {
@@ -104,13 +76,11 @@ function projectFromPath(sessionPath: string): string {
 	return encoded.replace(/-/g, "/") || "~";
 }
 
-/** Extract date from session filename */
 function dateFromPath(sessionPath: string): string {
 	const match = sessionPath.match(/(\d{4}-\d{2}-\d{2})T/);
 	return match?.[1] ?? "unknown";
 }
 
-/** Parse a JSONL line and extract the text content if it's a message */
 function extractMessageText(jsonLine: string): { role: string; text: string } | null {
 	try {
 		const entry = JSON.parse(jsonLine);
@@ -129,7 +99,6 @@ function extractMessageText(jsonLine: string): { role: string; text: string } | 
 	}
 }
 
-/** Get a snippet of text around a keyword match */
 function snippetAround(text: string, keyword: string, radius = 100): string {
 	const lower = text.toLowerCase();
 	const idx = lower.indexOf(keyword.toLowerCase());
@@ -144,7 +113,6 @@ function snippetAround(text: string, keyword: string, radius = 100): string {
 const MAX_SEARCH_RESULTS = 10;
 const MAX_SNIPPETS_PER_SESSION = 3;
 
-// ── Extension ────────────────────────────────────────────────────────────────
 
 export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 	registerTool?: <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => void;
@@ -158,7 +126,6 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 	};
 	const searchName = options.toolName ? `${options.toolName} action=search` : "session_search";
 	const queryName = options.toolName ? `${options.toolName} action=query` : "session_query";
-	// ── session_search tool ────────────────────────────────────────────────
 
 	registerTool("search", {
 		name: "session_search",
@@ -345,7 +312,6 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		},
 	});
 
-	// ── session_query tool ─────────────────────────────────────────────────
 
 	registerTool("query", {
 		name: "session_query",
@@ -420,7 +386,6 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 				details: { status: "loading", question },
 			});
 
-			// Load the session
 			let sessionManager: SessionManager;
 			try {
 				const entries: ReturnType<typeof parseSessionEntries> = [];

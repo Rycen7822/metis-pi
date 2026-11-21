@@ -8,7 +8,6 @@ import { CURSOR_MARKER, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface RenderInlineInputOptions {
-	/** Live inline-input buffer. */
 	buffer: string;
 	/** Cursor offset; `undefined` / out-of-range → end-of-buffer fallback. */
 	cursorOffset: number | undefined;

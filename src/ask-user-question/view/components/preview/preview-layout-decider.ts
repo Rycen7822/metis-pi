@@ -3,7 +3,6 @@ import type { QuestionData } from "../../../tool/types.ts";
 import type { QuestionRow } from "../../../state/row-intent.ts";
 import { BORDER_HORIZONTAL_OVERHEAD, BORDER_INNER_PADDING_HORIZONTAL } from "./preview-box-renderer.ts";
 
-/** Min terminal/pane width for the side-by-side layout to engage. */
 export const PREVIEW_MIN_WIDTH = 100;
 /** Visual gap between options column and preview column in side-by-side. */
 export const PREVIEW_COLUMN_GAP = 2;

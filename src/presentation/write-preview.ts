@@ -21,7 +21,6 @@ export function resolveWriteStage(argsComplete: boolean, executionStarted: boole
 
 export const WRITE_PREVIEW_MAX_ROWS = 12;
 
-/** Status text for the write stage. */
 export function stageLabel(stage: WriteStage): string {
   switch (stage) {
     case "receiving-arguments":

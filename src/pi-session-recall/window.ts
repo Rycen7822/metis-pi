@@ -37,7 +37,6 @@ export function createWindow(total: number, budget: number, measure: QueryInputB
 			if (replaced) {
 				available += replaced.cost;
 			} else {
-				// Inserting in a gap removes its old marker and introduces up to two smaller ones.
 				const before = entries[start - 1]?.index ?? -1;
 				const after = entries[start]?.index ?? total;
 				available += gapCost(after - before - 1) - gapCost(index - before - 1) - gapCost(after - index - 1);

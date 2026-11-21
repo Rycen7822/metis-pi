@@ -59,9 +59,7 @@ describe("resolveCollapseKey", () => {
 		for (const collapseKey of ["+ctrl+]", "ctrl+", "++", "ctrl+++", "ctrl++a"]) {
 			expect(resolveCollapseKey({ collapseKey })).toBe(DEFAULT_COLLAPSE_KEY);
 		}
-		// The default itself is valid
 		expect(resolveCollapseKey({ collapseKey: "ctrl+]" })).toBe("ctrl+]");
-		// Multi-modifier specs are valid
 		expect(resolveCollapseKey({ collapseKey: "ctrl+shift+h" })).toBe("ctrl+shift+h");
 	});
 
@@ -70,7 +68,6 @@ describe("resolveCollapseKey", () => {
 		expect(resolveCollapseKey({ collapseKey: "control+]" })).toBe(DEFAULT_COLLAPSE_KEY);
 		expect(resolveCollapseKey({ collapseKey: "ctrl+nosuchkey" })).toBe(DEFAULT_COLLAPSE_KEY);
 		expect(resolveCollapseKey({ collapseKey: "hello" })).toBe(DEFAULT_COLLAPSE_KEY);
-		// Duplicate modifiers are not part of the KeyId grammar
 		expect(resolveCollapseKey({ collapseKey: "ctrl+ctrl+]" })).toBe(DEFAULT_COLLAPSE_KEY);
 	});
 

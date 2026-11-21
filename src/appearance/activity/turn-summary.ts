@@ -117,7 +117,6 @@ export class TurnSummary {
     this.#deps.registerEntryRenderer?.(SUMMARY_CUSTOM_TYPE, makeEntryRenderer());
   }
 
-  /** Called from the metrics onSettled callback with the frozen verdict. */
   record(
     snapshot: InteractionSnapshot,
     verdict: {

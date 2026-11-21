@@ -312,7 +312,6 @@ export default function (pi: ExtensionAPI, options: {
 		widgetUnsubscribe = null;
 		if (liveInstances.size <= 1) activityMonitor.clear();
 		if (widgetVisible) {
-			// Re-subscribe with new ctx
 			widgetUnsubscribe = activityMonitor.onUpdate(() => updateWidget(ctx));
 			updateWidget(ctx);
 		}
@@ -379,7 +378,6 @@ export default function (pi: ExtensionAPI, options: {
 	const pendingFetches = new Map<string, AbortController>();
 	let sessionActive = false;
 	let sessionGeneration = 0;
-	/** Ids of the results this instance's session holds in memory. */
 	const ownedResults = new Set<string>();
 
 	function abortPendingFetches(): void {
@@ -1288,7 +1286,7 @@ export default function (pi: ExtensionAPI, options: {
 				const box = new Box(0, 0);
 				box.addChild(new Text(statusLine, 0, 0));
 
-				let collapsedLines = 1; // statusLine
+				let collapsedLines = 1;
 				const summaryPreview = details?.summary?.text?.trim() || "";
 				if (summaryPreview) {
 					const preview = summaryPreview.length > 120 ? summaryPreview.slice(0, 117) + "..." : summaryPreview;

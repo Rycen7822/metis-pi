@@ -20,7 +20,6 @@ export function computeScrollStart(
 	if (!bodyRange) return 0;
 	const focusedRowInMiddle = rowsBeforeBody + bodyRange[0];
 	const focusedHeight = bodyRange[1] - bodyRange[0];
-	// Center the focused item vertically in the available middle space.
 	const idealStart = focusedRowInMiddle - Math.floor(Math.max(0, availableMiddle - focusedHeight) / 2);
 	return Math.max(0, Math.min(idealStart, middleRows - availableMiddle));
 }

@@ -33,7 +33,6 @@ const wrapCells = (text, width) => text ? Tui.wrapTextWithAnsi(text, width) : []
 const layout = { visibleWidth: Tui.visibleWidth, wrap: wrapCells };
 const colorLevel = detectColorLevel({ COLORTERM: "truecolor" });
 
-// The production renderers, driven through the same entry points Pi calls.
 const makeTextComponent = (text) => ({
   text,
   render: (width) => text.split("\n").flatMap((line) => wrapCells(line, width)),
@@ -43,7 +42,7 @@ const transcript = new TranscriptState();
 const renderers = makeRenderers(
   makeTextComponent,
   () => "ctrl+o to expand",
-  null, // no external highlighter: shell rows use the built-in Mocha lexer
+  null,
   // Width-aware diff component factory — the same lazy-render shape index.ts
   // hands to the live adapter, so diff width follows the preview width.
   (input) => ({
@@ -97,7 +96,7 @@ const renderers = makeRenderers(
   layout,
 );
 const WIDTH = 112;
-const SEPARATOR_LINE = `─`.repeat(WIDTH); // light rule (dim in ANSI render)
+const SEPARATOR_LINE = `─`.repeat(WIDTH);
 
 /** ToolLifecycleRenderer pair, exactly as the Pi adapter invokes them. */
 function lifecycle(name, args, value, context = {}) {
@@ -184,14 +183,12 @@ transcript.apply({ type: "tool_execution_end", toolCallId: "pvbash", toolName: "
 const sep2 = textSeparator("next");
 const examples = [
   groupRows.join("\n"),
-  // Exploration rows (Codex: cyan titles, dim " in ").
   lifecycle(
     "read",
     { path: "src/server.ts", offset: 1, limit: 120 },
     result("This source text is folded, not removed from model context."),
   ),
   lifecycle("grep", { pattern: "createServer|listen", path: "src" }, result("src/server.ts:12:createServer(...)")),
-  // Golden command 1: rtk git diff --numstat -- ...
   lifecycle(
     "bash",
     { command: "rtk git diff --numstat -- src/renderers.ts" },
@@ -201,7 +198,6 @@ const examples = [
       },
     }),
   ),
-  // Golden command 2: CJK + options.
   lifecycle(
     "bash",
     { command: "grep -n -e '略过' src/*.ts" },
@@ -210,13 +206,11 @@ const examples = [
     }),
   ),
   lifecycle("bash", { command: "npm test" }, result(testOutput, { details: { aggregatedOutput: testOutput } })),
-  // Golden command 3: python3 heredoc.
   lifecycle(
     "bash",
     { command: "python3 - <<'EOF'\nprint(1)\nEOF" },
     result("1", { details: { aggregatedOutput: "1" } }),
   ),
-  // Golden command 4: pipes.
   lifecycle(
     "bash",
     { command: "bash script.sh 2>&1 | tail -50" },
@@ -224,7 +218,6 @@ const examples = [
       details: { aggregatedOutput: "script output line one\nscript output line two" },
     }),
   ),
-  // Edit diff with Codex full-row surfaces.
   lifecycle(
     "edit",
     { path: ".work/EverTrace_development_plan.md" },
@@ -232,7 +225,6 @@ const examples = [
       details: { diff: ["  2029 ", `- 2030 ${longOld}`, `+ 2030 ${longNew}`, "  2031 "].join("\n") },
     }),
   ),
-  // Write lifecycle: new file (Added) — rows from the tracker's structured diff.
   lifecycle(
     "write",
     { path: "docs/new-guide.md", content: "# Guide\n\nContent lines.\nFinal.\n" },
@@ -252,11 +244,9 @@ const examples = [
       },
     },
   ),
-  // Write lifecycle: unchanged content (expandable full text, not empty).
   lifecycle("write", { path: "docs/same.md", content: "Same text.\n" }, result("File written successfully."), {
     writeChanges: { path: "docs/same.md", kind: "unchanged", added: 0, removed: 0, lines: 1 },
   }),
-  // Write lifecycle: unavailable snapshot (preview from args, no fake +N/-0).
   lifecycle(
     "write",
     { path: "docs/legacy.md", content: "Recovered content line.\n" },
@@ -271,7 +261,6 @@ const examples = [
     result("Permission denied", { isError: true }),
     { isError: true },
   ),
-  // Image preview disabled.
   lifecycle(
     "read",
     { path: "figures/teaser.png" },
@@ -314,8 +303,8 @@ const transcriptOut =
   [
     examples[0],
     ...examples.slice(1).flatMap((e, i) => {
-      const isGroupTail = i === GROUP_IMAGES.length - 2; // last grouped read → group boundary
-      const isBashTail = i === 3; // bash segment → second tool→text boundary
+      const isGroupTail = i === GROUP_IMAGES.length - 2;
+      const isBashTail = i === 3;
       return isGroupTail ? [e, sep1] : isBashTail ? [e, sep2] : [e];
     }),
   ].join("\n\n") + "\n";

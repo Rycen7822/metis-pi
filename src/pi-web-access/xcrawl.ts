@@ -169,7 +169,6 @@ export async function searchWithXCrawl(query: string, options: SearchOptions = {
 			if (typeof parsed.message === "string") detail = parsed.message.slice(0, 300);
 			else if (typeof parsed.error === "string") detail = parsed.error.slice(0, 300);
 		} catch {
-			// keep raw text slice
 		}
 		throw new SearchHttpError(response.status, `XCrawl API error (${response.status}): ${detail}`);
 	}

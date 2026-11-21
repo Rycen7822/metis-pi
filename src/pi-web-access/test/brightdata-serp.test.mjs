@@ -221,7 +221,6 @@ test("availability requires both halves of the configuration and never spends to
 		assert.equal(partialChild.status, 0, partialChild.stderr);
 		const output = JSON.parse(partialChild.stdout.trim());
 		assert.equal(output.available, false, label);
-		// A half-finished setup fails loudly and never reaches the billable endpoint.
 		assert.equal(output.fetchCalls, 0, label);
 		assert.match(
 			output.error,
@@ -284,14 +283,11 @@ test("an invalid zone makes Bright Data unavailable, never fatal for the other p
 
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	// A predicate, not a diagnostic: it answers false and does not throw.
 	assert.equal(output.availabilityError, null);
 	assert.equal(output.available, false);
-	// And the routed search still gets an answer from the next provider.
 	assert.equal(output.searchError, null);
 	assert.equal(output.routed, "brave");
 	assert.ok(output.calls.every((url) => !url.startsWith("https://api.brightdata.com/")), "the invalid zone never reached the paid endpoint");
-	// The request path is where the mistake is reported, in full.
 	assert.match(output.requestError, /Bright Data SERP zone is invalid: BRIGHTDATA_SERP_ZONE must be a zone name/);
 	assert.match(output.requestError, /pi serp/);
 });
@@ -340,7 +336,6 @@ test("an HTTP error surfaces the status and never leaks the key", async () => {
 	// A paid failure throws. It never degrades into an empty result set that
 	// looks like "the web had no answer".
 	assert.equal(output.results, null);
-	// The received status remains in the diagnostic; routing uses its typed HTTP fact.
 	assert.match(output.error, /Bright Data API error 401/);
 	assert.match(output.error, /unauthorized/);
 	assert.match(output.error, /\[redacted\]/);
@@ -397,7 +392,6 @@ test("a billed 200 that is not SERP JSON fails loudly and quotes what came back"
 	assert.match(errors[5], /code zone_missing/);
 	assert.match(errors[6], /Bright Data reported an error instead of a SERP/);
 	assert.match(errors[6], /bad zone type/);
-	// The missing-organic envelope names the likeliest cause: the wrong zone type.
 	assert.match(errors[7], /expected an organic array and the envelope carried none/);
 	assert.match(errors[7], /`unblocker`/);
 });
@@ -443,7 +437,6 @@ test("a quoted upstream body cannot forge our HTTP status for routing", async ()
 		assert.equal(output.ok, false, body);
 		assert.match(output.error, /brightdata search failed \(invalid-response\)/, body);
 		assert.deepEqual(output.calls, ["https://api.brightdata.com/request"], body);
-		// The number survives, attributed to the upstream rather than to us.
 		assert.match(output.error, /upstream 503/, body);
 		assert.doesNotMatch(output.error, /(?:error|status|http)[\s]+503/i, body);
 	}
@@ -525,7 +518,6 @@ test("truncation cannot forge a status in a non-2xx message or a rejected-zone e
 	`, { BRIGHTDATA_API_KEY: "bd-test-key", BRIGHTDATA_SERP_ZONE: "pi_serp" });
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	// Exactly one status-shaped phrase, and it is the status we actually received.
 	assert.deepEqual(output.statuses, ["error 404"]);
 	assert.match(output.error, /upstream 503/);
 
@@ -639,9 +631,9 @@ test("the key uses the shared credential-source path, resolved at request time",
 
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	assert.equal(output.availableBefore, true);   // available without running the command
-	assert.equal(output.ranBefore, false);        // nothing ran at module load
-	assert.equal(output.ranAfter, true);          // resolved at request time
+	assert.equal(output.availableBefore, true);
+	assert.equal(output.ranBefore, false);
+	assert.equal(output.ranAfter, true);
 	assert.equal(output.auth, "Bearer bd-command-key");
 });
 
@@ -844,17 +836,15 @@ test("the activity entry is opened once and closed with the outcome that happene
 
 	assert.equal(child.status, 0, child.stderr);
 	const entries = JSON.parse(child.stdout.trim());
-	// Exactly one entry per request: logStart is called once, on the request path.
 	assert.equal(entries.length, 5);
 	for (const entry of entries) {
 		assert.equal(entry.type, "api");
-		// The logged query is the one actually sent, site: operators included.
 		assert.equal(entry.query, "vector dbs site:github.com");
 		// No path leaves the entry open, or the TUI shows a spinner forever.
 		assert.equal(entry.closed, true);
 	}
 	assert.deepEqual(entries.map((entry) => entry.status), [
-		200,   // success
+		200,
 		401,   // a billed non-2xx is logged as the status it was, never as 200
 		200,   // an unreadable 200 was still billed, and is logged as a 200
 		null,  // a transport error has no status
@@ -926,7 +916,6 @@ test("BRIGHTDATA_SERP_ZONE takes precedence over brightdataSerpZone, valid or no
 	const output = JSON.parse(malformed.stdout.trim());
 	assert.equal(output.fetchCalls, 0, "a malformed env zone never falls back to the config zone");
 	assert.equal(output.sentZone, null);
-	// The setting the user actually filled in is the setting the error names.
 	assert.match(output.error, /Bright Data SERP zone is invalid: BRIGHTDATA_SERP_ZONE must be a zone name/);
 	assert.doesNotMatch(output.error, /config_zone/);
 
@@ -1019,7 +1008,6 @@ test("Bright Data's 200 error envelope is reported whatever shape it arrives in"
 
 	assert.equal(child.status, 0, child.stderr);
 	const errors = JSON.parse(child.stdout.trim()).errors;
-	// A non-string error is serialized rather than reported as "[object Object]".
 	assert.match(errors[0], /Bright Data reported an error instead of a SERP: \{"reason":"wrong zone type"\}/);
 	assert.match(errors[0], /error_code 42/);
 	assert.match(errors[1], /Bright Data reported an error instead of a SERP: two things went wrong/);
@@ -1050,7 +1038,6 @@ test("site: operators, filter normalization and an unknown recency window", asyn
 
 	assert.equal(child.status, 0, child.stderr);
 	const sent = JSON.parse(child.stdout.trim());
-	// A single include is a bare site:, not a one-armed OR group.
 	assert.equal(sent[0].q, "q site:github.com");
 	// An exclude with no include is still expressed to the engine.
 	assert.equal(sent[1].q, "q -site:example.com");
@@ -1061,7 +1048,6 @@ test("site: operators, filter normalization and an unknown recency window", asyn
 	// never a query-text hint.
 	assert.equal(sent[3].tbs, null);
 	assert.equal(sent[3].q, "q");
-	// A non-finite count falls back to the default of 5, plus the headroom.
 	assert.equal(sent[4].num, "10");
 });
 
@@ -1090,7 +1076,6 @@ test("organic entries missing fields are mapped, and unparseable links are dropp
 		{ title: "Bad link", url: "not-a-url", snippet: "" },
 		{ title: "T2", url: "https://b.example/2", snippet: "s2 s2" },
 	]);
-	// The assembled answer omits the "snippet\n" half for a snippet-less source.
 	assert.equal(
 		output.unfiltered.answer,
 		"Source: Source 1 (https://a.example/1)\n\nSource: Bad link (not-a-url)\n\ns2 s2\nSource: T2 (https://b.example/2)",

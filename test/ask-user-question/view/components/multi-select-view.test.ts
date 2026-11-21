@@ -60,7 +60,6 @@ describe("MultiSelectView.render", () => {
 		const q = question();
 		const m = makeView(q, makeProps(q));
 		const lines = m.render(80);
-		// Strip any ANSI escapes from line 0 to match raw glyph positioning.
 		const raw = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
 		// Active row 0 = `❯ 1. [ ] FE` (pointer 2 + "1." 2 + space 1 + "[ ]" 3 + space 1 + label).
 		expect(raw).toMatch(/\[[ ✔]\] FE/);

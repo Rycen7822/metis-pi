@@ -152,7 +152,7 @@ export async function readLineCount(path: string): Promise<LineCount | undefined
   } catch {
     return undefined;
   } finally {
-    await handle?.close().catch(() => { /* read-only handle */ });
+    await handle?.close().catch(() => { });
   }
 }
 
@@ -492,7 +492,7 @@ export function createGitChangesTracker(deps: {
     lastReadMs = now() - started;
     lastReadAt = now();
 
-    if (result.kind === "error") return; // keep the last good numbers
+    if (result.kind === "error") return;
     if (result.kind === "no-repo") {
       resetSample();
       clearSnapshot();

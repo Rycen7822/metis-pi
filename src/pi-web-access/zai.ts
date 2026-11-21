@@ -94,7 +94,6 @@ export async function searchWithZai(query: string, options: SearchOptions = {}):
 	let headers: Headers;
 	try { headers = new Headers({ Authorization: `Bearer ${apiKey}` }); }
 	catch { throw new Error("Z.ai credential resolution failed: invalid-header-value"); }
-	// Load the protocol client only when this explicit provider is selected.
 	const [{ Client }, { StreamableHTTPClientTransport }] = await Promise.all([
 		import("@modelcontextprotocol/sdk/client/index.js"),
 		import("@modelcontextprotocol/sdk/client/streamableHttp.js"),

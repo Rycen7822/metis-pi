@@ -16,6 +16,7 @@ npm run prepare:subagents
 | --- | --- |
 | TypeScript 源码、测试或类型配置 | 见[类型检查与类型感知 lint](#类型检查与类型感知-lint) |
 | 测试同步规则 | `npm run lint:tests` |
+| Recall Query 源码注释 | `npm run lint:comments` |
 | 规则与渲染 | `npm run test:fast`、`npm run test:chrome` |
 | 宿主、包内容与协议 | `npm run test:host`、`npm run test:protocol` |
 | 存储与资源释放 | `npm run test:io`、`npm run test:resource` |
@@ -61,6 +62,10 @@ PTY 检查使用真实 Pi CLI 和 tmux、离线提供商与测试剪贴板。E1 
 ### 测试同步规则
 
 修改测试的等待、轮询或定时逻辑时，运行 `npm run lint:tests`。它不需要类型信息。CI 用 [Landmines](https://github.com/interfere-inc/landmines) 拦截对 spy 或请求记录的无信号轮询，问卷 Vitest 测试另禁止固定休眠。优先等待操作、回调信号或假时钟。外部进程没有事件时可有界检查就绪条件；真实计时测试可等待时间经过。保留故障超时和协议边界的离线替身。不启用其他上游规则。
+
+### 源码注释基线
+
+`lint:comments` 只检查 Recall Query 的 `context.ts`、`input-budget.ts`、`session-recall.ts` 和 `window.ts`。新增或改写的注释必须是许可、必要的工具指令、对外契约或可核实的外部约束。确认属于这些类别后，才按 lint 提示更新 [保留清单](../config/lint/recall-comments.json)。删除注释时同时删掉对应条目；每个条目只准许该文件中一处出现。实现取舍记在[架构决策](decisions.md)。
 
 ## 重建 Pi SDK
 

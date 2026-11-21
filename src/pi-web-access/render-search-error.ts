@@ -35,7 +35,6 @@ export interface SearchErrorDetails {
 	browserConnected?: boolean;
 	/** Age (ms) of the last curator heartbeat at cancel time, if known. */
 	lastHeartbeatAgeMs?: number | null;
-	/** Total queries the user requested. */
 	queryCount?: number;
 	/** Partial per-query results gathered before the cancel/error. */
 	cancelledQueries?: CancelledQueryDetail[];
@@ -114,7 +113,6 @@ export function buildSearchErrorPlan(details: SearchErrorDetails | undefined | n
 		for (const line of diag) expanded.push(`  ${line}`);
 	}
 
-	// --- per-query results gathered before cancel ---
 	if (queries.length > 0) {
 		expanded.push("");
 		expanded.push("Per-query results (gathered before cancel):");
@@ -129,14 +127,12 @@ export function buildSearchErrorPlan(details: SearchErrorDetails | undefined | n
 		}
 	}
 
-	// --- arbitrary extra detail (non-cancel errors) ---
 	if (extras.length > 0) {
 		expanded.push("");
 		expanded.push("Details:");
 		for (const e of extras) expanded.push(`  ${e}`);
 	}
 
-	// --- collapsed preview ---
 	const collapsed: string[] = [];
 	const parts: string[] = [];
 	if (queryCount > 0) {
@@ -160,7 +156,6 @@ export function buildSearchErrorPlan(details: SearchErrorDetails | undefined | n
 		}
 	}
 
-	// --- expand hint ---
 	const hiddenLines = Math.max(0, expanded.length - (1 + collapsed.length)); // headline + preview shown when collapsed
 	const expandHint = hiddenLines > 0
 		? `... (${hiddenLines} more lines, ${expanded.length} total, ctrl+o to expand)`

@@ -53,7 +53,6 @@ function tabSwitchAction(
 	return null;
 }
 
-// DOWN at the last item wraps to the first (cycle through [option0, …, optionLast]).
 function nextNavOnDown(state: QuestionnaireState, runtime: QuestionnaireRuntime): QuestionnaireAction {
 	return {
 		kind: "nav",
@@ -62,7 +61,6 @@ function nextNavOnDown(state: QuestionnaireState, runtime: QuestionnaireRuntime)
 	};
 }
 
-// UP at the first item wraps to the last (symmetric with nextNavOnDown).
 function prevNavOnUp(state: QuestionnaireState, runtime: QuestionnaireRuntime): QuestionnaireAction {
 	return {
 		kind: "nav",

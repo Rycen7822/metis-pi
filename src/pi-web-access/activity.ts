@@ -1,14 +1,11 @@
-// Types
 export interface ActivityEntry {
 	id: string;
 	type: "api" | "fetch";
 	startTime: number;
 	endTime?: number;
 
-	// For API calls
 	query?: string;
 
-	// For URL fetches
 	url?: string;
 
 	// Result - status is number (HTTP code) or null (pending/network error)

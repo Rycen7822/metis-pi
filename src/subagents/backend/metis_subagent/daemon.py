@@ -31,7 +31,7 @@ async def serve(home: Path):
     idle_since = None
     try:
         runtime = Runtime(home)
-        notifications = runtime.parent_notifications  # One idle-drain fact for admission and watchers.
+        notifications = runtime.parent_notifications
 
         def begin_shutdown():
             # Synchronous: callers must close admission before yielding their idle snapshot.

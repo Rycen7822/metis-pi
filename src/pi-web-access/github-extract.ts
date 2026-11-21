@@ -91,11 +91,9 @@ function normalizePositiveNumber(value: unknown, fallback: number): number {
 
 function expandPath(value: string): string {
 	let expanded = value;
-	// Expand ~ at the start of the path
 	if (expanded.startsWith("~/") || expanded === "~") {
 		expanded = expanded.replace(/^~/, process.env.HOME || process.env.USERPROFILE || "");
 	}
-	// Expand environment variables like $HOME, $USER, etc.
 	expanded = expanded.replace(/\$([A-Z_][A-Z0-9_]*)/gi, (match, varName) => {
 		return process.env[varName] ?? match;
 	});

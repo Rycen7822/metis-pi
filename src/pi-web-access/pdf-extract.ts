@@ -337,9 +337,6 @@ function shouldRethrowExtractionError(
 	return message.startsWith("Failed to parse ");
 }
 
-/**
- * Extract a reasonable title from URL
- */
 function extractTitleFromURL(url: string): string {
 	try {
 		const urlObj = new URL(url);
@@ -362,9 +359,6 @@ function extractTitleFromURL(url: string): string {
 	}
 }
 
-/**
- * Sanitize string for use as filename
- */
 function sanitizeFilename(name: string): string {
 	return (
 		name
@@ -377,9 +371,6 @@ function sanitizeFilename(name: string): string {
 	);
 }
 
-/**
- * Check if URL or content-type indicates a PDF
- */
 export function isPDF(url: string, contentType?: string): boolean {
 	if (contentType?.includes("application/pdf")) {
 		return true;

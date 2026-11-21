@@ -35,7 +35,6 @@ def check_previous(owner_path: Path):
             raise RuntimeError("Previous session owner is still live or unverifiable")
 
 
-# --- POSIX ------------------------------------------------------------------
 
 def stop_children():
     """The kernel adopts orphan descendants here, including detached groups.
@@ -110,7 +109,6 @@ def posix_main():
     sys.exit(rc if rc >= 0 else 128-rc)
 
 
-# --- Windows ----------------------------------------------------------------
 
 def windows_main():
     """Own a job object, prove self-membership, then start Pi inside it."""

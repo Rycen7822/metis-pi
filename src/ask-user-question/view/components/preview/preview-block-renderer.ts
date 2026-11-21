@@ -61,7 +61,6 @@ function fitBlock(
 	return fitted >= 1 ? { contentRows: fitted, affordance: false } : undefined;
 }
 
-/** Inner (padding-aware) content width for a total block width. */
 function innerWidthFor(width: number): number {
 	return Math.max(1, width - BORDER_HORIZONTAL_OVERHEAD - 2 * BORDER_INNER_PADDING_HORIZONTAL);
 }

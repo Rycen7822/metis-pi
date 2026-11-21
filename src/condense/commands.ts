@@ -228,7 +228,6 @@ function startPrunerWidget(
     receivedChars: 0,
   }));
 
-  // Capture tui reference from the factory so updateRow can call requestRender.
   let requestRender: (() => void) | undefined;
   let animationTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -694,7 +693,7 @@ export function registerCommands(
               `Protected ${label} (comma-separated ${tools ? "tool names" : "globs"}; empty or 'none' to clear)`,
               currentConfig.value[field].join(", "),
             );
-            if (entered === undefined) return; // user cancelled
+            if (entered === undefined) return;
             raw = entered.trim();
           }
           const nextList = raw === "" || /^(none|clear)$/i.test(raw)

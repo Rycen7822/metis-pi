@@ -120,7 +120,6 @@ export interface CompressEligibleDeps {
   blockRefs: BlockRefIssuer;
   /** pi.appendEntry binding — routes to session or runtime depending on caller context */
   appendEntry: (customType: string, data: unknown) => void;
-  /** Injectable clock for deterministic tests */
   now: () => number;
   /**
    * Optional range-summary fuser (B). When present, a span with >= 2 per-batch

@@ -4,7 +4,6 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 export const BORDER_VERTICAL_OVERHEAD = 2;
 /** Left + right vertical bar columns (`│ ... │`) consumed by `renderBorderedBox`. */
 export const BORDER_HORIZONTAL_OVERHEAD = 2;
-/** Inner horizontal padding (1 col) between each border bar and content area. */
 export const BORDER_INNER_PADDING_HORIZONTAL = 1;
 /** Floor for the preview box's inner content width — CC parity (`PreviewBox.minWidth`). */
 export const BOX_MIN_CONTENT_WIDTH = 40;

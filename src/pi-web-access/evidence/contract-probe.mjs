@@ -49,7 +49,6 @@ async function call(body, { key = KEY, abortAfterMs = null } = {}) {
   }
 }
 
-// Reduce a response to its SHAPE: keep the structure, truncate the content.
 function shape(j) {
   if (!j) return null;
   const c = JSON.parse(JSON.stringify(j));

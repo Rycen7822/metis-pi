@@ -1,4 +1,3 @@
-// Pi browser/window adaptation shared by the tool and command hosts.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";

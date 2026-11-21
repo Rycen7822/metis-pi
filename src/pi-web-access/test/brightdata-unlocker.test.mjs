@@ -249,7 +249,6 @@ test("Bright Data Web Unlocker blocks API redirects to private targets", async (
 	);
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	// The hop was validated before it was followed, so only the first request happened.
 	assert.deepEqual(output.calls, ["https://api.brightdata.com/request"]);
 	assert.match(output.redirectError, /Blocked internal address/);
 });
@@ -356,7 +355,6 @@ test("Bright Data Web Unlocker requires its own zone and never borrows the SERP 
 	);
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	// A SERP-only configuration must not opt the user into Web Unlocker spend.
 	assert.equal(output.available, false);
 	assert.equal(output.fetchCalls, 0);
 	assert.match(
@@ -466,7 +464,6 @@ test("Bright Data Web Unlocker HTTP failures surface the status and redact the c
 	);
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	// A paid failure throws; it is never collapsed into a silent null.
 	assert.equal(output.result, "not-reached");
 	assert.match(output.message, /Bright Data Web Unlocker error 402/);
 	assert.match(output.message, /payment required/);
@@ -558,7 +555,6 @@ test("Bright Data Web Unlocker returns null only for genuinely empty content", a
 	const results = JSON.parse(child.stdout.trim()).results;
 	assert.equal(results[0], null);
 	assert.equal(results[1], null);
-	// Short content is billed content: it is returned, not silently dropped.
 	assert.deepEqual(results[2], {
 		url: "https://example.com/a",
 		title: "",
@@ -642,14 +638,12 @@ test("Bright Data Web Unlocker uses fetch_content's timeoutMs and its own 60s de
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.sawSignal, true);
-	// The caller's budget is used verbatim, not clamped and not ignored.
 	assert.deepEqual(output.explicit, [12345]);
 	// With no caller budget the module's own EXTRACT_TIMEOUT_MS applies. This is
 	// deliberately 60s, not the 30s of the direct HTTP path, because Bright Data is
 	// retrying and rendering on our behalf; it matches firecrawl.ts:10.
 	assert.deepEqual(output.fallback, [60_000]);
 	assert.deepEqual(output.tiny, [25]);
-	// A timeout is a thrown abort, never a silent null the chain walks past.
 	assert.equal(output.timedOutResult, "not-reached");
 	assert.equal(output.timedOutName, "AbortError");
 });

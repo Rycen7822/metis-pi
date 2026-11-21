@@ -155,71 +155,11 @@ function requestSignal(signal?: AbortSignal): AbortSignal {
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-// Text that did not originate here — a proxied response body, a `JSON.parse`
-// message quoting that body, a config value — is quoted into Error messages, and
-// `search-router.ts` classifies routing failures by reading a status back out of
-// the message text (`providerErrorStatus`, /\b(?:error|status|http)\s+(\d{3})\b/).
-// A proxied Google interstitial that merely mentions "Error 503" would otherwise
-// be read as *our* status and retried as a transient failure, when what actually
-// happened is that a 200 was billed and is unusable. Status-shaped phrases in
-// quoted text are rewritten to `upstream <code>`: the number is still reported,
-// but only this module's own wording can name the status we received.
 const STATUS_SHAPED_PATTERN = /\b(?:error|status|http)[\s:=-]{1,4}(\d{3})\b/gi;
 
-// `providerErrorStatus` is not the only thing that reads our message.
-// `classifyProviderError` also matches bare keyword phrases, and its branch order
-// decides which ones can reach us: `searchRouting.fallbackOn` accepts only
-// `transient`, `quota` and `network`, and of those three only the `quota` branch
-// (/rate limit|quota|too many requests/) runs BEFORE the `invalid-response` branch
-// that this module's own wording always triggers. So a billed 200 whose body reads
-// "You have exceeded your rate limit" would classify as `quota`, and with
-// `fallbackOn: ["quota"]` the user is charged, silently served the next provider's
-// answer, and shown no diagnostic — the failure mode this module exists to prevent.
-// `transient` and `network` sit after `invalid-response` and are unreachable for the
-// same reason; the test suite pins that ordering assumption rather than trusting it.
-//
-// The phrase is replaced rather than removed: the reader still learns the upstream
-// page mentioned a rate limit, but no substring of the replacement matches any
-// classifier branch ("rate-limit" is hyphenated, so /rate limit/ cannot match).
 const QUOTA_SHAPED_PATTERN = /rate limit|quota|too many requests/gi;
 
-// The complete inventory of places foreign text is quoted into a message or a log
-// line, and what each one is required to apply. Adding a fifth means adding it here:
-//
-// | site                                            | redactCredential | untrustedText |
-// | ----------------------------------------------- | ---------------- | ------------- |
-// | non-2xx response body                           | yes              | yes (300)     |
-// | invalid-JSON raw body                           | yes              | yes (300)     |
-// | Bright Data's own 200 error envelope            | yes              | yes (200)     |
-// | transport/abort error from `fetch`               | yes              | n/a — see (a) |
-// | rejected zone value                             | n/a — see (b)    | yes (60)      |
-// | `JSON.parse` message on a response body         | n/a — see (c)    | n/a — see (c) |
-// | `JSON.parse` failure on `web-search.json`       | n/a — see (c)    | n/a — see (c) |
-//
-// (a) That message is generated locally by undici or by `AbortSignal`, never by the
-//     proxied page, and the abort branch below matches on it; collapsing and
-//     truncating it would buy nothing and could break that match.
-// (b) The zone is resolved *before* the credential on purpose, so that a config
-//     mistake never spawns a `!command` resolver. There is therefore no key to redact
-//     against yet, and the value being echoed is the user's own zone setting.
-// (c) Neither parser message is quoted at all, so neither needs a filter or a cap. V8
-//     embeds a *prefix* of the offending input in its message, and `redactCredential`
-//     substitutes whole values, so a prefix cannot be redacted out of it. Dropping the
-//     message removes the leak by construction — see the shared configuration reader and the
-//     `JSON.parse` catch on the response path.
 
-// Truncation happens BEFORE the rewrite, and the order is the whole point.
-// `STATUS_SHAPED_PATTERN` requires `(\d{3})\b`, so `error 5031` is deliberately left
-// alone — it is not a status. Sanitising first and slicing second let the cut land on
-// the 4th digit and hand back a freshly forged `error 503`, which
-// `search-router.ts`'s `providerErrorStatus` then reads as *our* status: a billed 200
-// classified `transient` and silently re-run on the next provider. Slicing first means
-// the rewrite always sees the exact text that will be quoted.
-//
-// The rewrite runs last and is therefore allowed to push the result a few characters
-// past `limit` ("error 503" → "upstream 503"). `limit` bounds how much upstream text is
-// quoted, not the final string length; a second `slice()` after the rewrite would
-// re-open exactly the hole this ordering closes.
 function untrustedText(text: string, limit = 300): string {
 	return text
 		.replace(/\s+/g, " ")

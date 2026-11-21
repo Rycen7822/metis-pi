@@ -45,17 +45,11 @@ function formatOptionLine(option: Option, index: number): string {
 	return `${index + 1}. ${option.label} — ${option.description}`;
 }
 
-/**
- * Parse a user-entered (or select-returned) "N…" token to a 0-based option
- * index. `parseInt` reads the leading digits of "2. B — b" as 2; NaN and
- * out-of-range fail the bounds check and return null.
- */
 function parseIndex(token: string, count: number): number | null {
 	const i = Number.parseInt(token, 10) - 1;
 	return i >= 0 && i < count ? i : null;
 }
 
-/** Previews folded into the select title — RPC has no side-by-side pane. */
 function buildPreviewBlock(question: QuestionData): string {
 	const blocks = question.options.flatMap((o, i) =>
 		o.preview && o.preview.length > 0
@@ -190,6 +184,5 @@ async function askMultiSelect(
 			selected,
 		};
 	}
-	// Preserve unparseable input verbatim as custom text rather than dropping it.
 	return { questionIndex, question: q.question, kind: "multi", answer: value, selected: [] };
 }

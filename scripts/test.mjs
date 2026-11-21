@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// File selection only. Each test still runs in Node's own isolated test process.
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";

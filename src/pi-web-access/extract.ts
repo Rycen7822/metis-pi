@@ -345,7 +345,6 @@ async function extractWithJinaReader(
 
 		const markdownPart = content.slice(contentStart + 17).trim(); // 17 = "Markdown Content:".length
 
-		// Check for failed JS rendering or minimal content
 		if (markdownPart.length < 100 ||
 			markdownPart.startsWith("Loading...") ||
 			markdownPart.startsWith("Please enable JavaScript")) {

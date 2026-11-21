@@ -30,7 +30,6 @@ export type ScalarValue = ScalarConfigValue;
 
 export interface ScalarRow {
   readonly id: string;
-  /** An existing scalar field owned by config. */
   readonly path: ScalarConfigKey;
   readonly label: string;
   readonly options: readonly FieldOption[];
@@ -461,7 +460,6 @@ export function parseScalar(row: ScalarRow, raw: string): ScalarValue | undefine
   return row.loose && row.path === "pruneOn" || isScalarConfigValue(row.path, raw) ? raw : undefined;
 }
 
-/** Current value formatted for the SettingsList cycle. */
 export function displayValue(row: ScalarRow, config: ContextPruneConfig): string {
   const value = readScalarConfig(config, row.path);
   const raw = value == null ? "0" : String(value);

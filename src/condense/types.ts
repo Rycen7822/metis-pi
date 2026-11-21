@@ -91,7 +91,6 @@ export interface ContextPruneConfig {
   /** Opt in to shared rewrite buffering and ordinary-Pi opportunistic compaction. */
   opportunisticCompaction: boolean;
   enabled: boolean;
-  /** Whether to show the prune footer status line and queued turn messages */
   showPruneStatusLine: boolean;
   showOccStatusLine: boolean;
   /** Additional output-token ceiling for Pi compaction summaries; 0 keeps Pi's native limit. */

@@ -662,7 +662,7 @@ test(
     const reopenDeadline = Date.now() + 5000;
     while (!popup && Date.now() < reopenDeadline) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.ok(popup, "a completed child's new run reappears and opens its viewer before parent shutdown");
-    const header = popup.render(60)[0]; // The frameless viewer starts with its tab header.
+    const header = popup.render(60)[0];
     assert.match(header, /\[direct-proof\]/);
     assert.doesNotMatch(header, /\[<\]|\[>\]|nested-proof/, "reopening shows the active child, not earlier completed agents or their extra pages");
     writeFileSync(join(dir, "metis-pi.toml"), "[subagents]\nenabled=false\n");

@@ -623,7 +623,6 @@ function hostRowInner(hostRow: string, padX: number, contentWidth: number, fns: 
   return fns.stripTerminalSequences(fns.sliceByColumn(hostRow, padX, contentWidth, true));
 }
 
-/** Add left/right margin decoration spans and shift content spans. */
 function marginRow(row: CopyRow, padX: number, width: number, contentWidth: number): CopyRow {
   return {
     ...row,

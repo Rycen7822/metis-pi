@@ -374,7 +374,7 @@ export class HistoryWindow {
     if (this.#promptPreview?.component !== target) this.#promptPreview = undefined;
     if (this.#pinned && this.#pinned !== target && !this.#blocks.get(this.#pinned)?.rows) this.#evict(this.#pinned);
     this.#pinned = target;
-    if (!target) return; // Original is still (partly) visible.
+    if (!target) return;
     if (!this.#promptPreview || this.#promptPreview.width !== this.#width) {
       // Reuse the native visible rendering, including Markdown transformers.
       // An off-window prompt may render once; never retain its full row cache.

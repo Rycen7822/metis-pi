@@ -69,7 +69,6 @@ export interface TabContentStrategy {
 	/** Variable rows above the body, after top chrome (border + tabBar + Spacer). */
 	headingRows(state: DialogState): Component[];
 
-	/** Body Component placed at the body slot. */
 	bodyComponent(state: DialogState): Component;
 
 	/** Natural rendered height of `bodyComponent(state)` at given width. */

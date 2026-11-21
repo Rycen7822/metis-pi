@@ -587,7 +587,6 @@ export class TranscriptState {
     return adopted;
   }
 
-  /** Current segment head (for finalized-message registration fallback). */
   lastNodeKind(): PresentationKind {
     return this.lastNode;
   }

@@ -1,12 +1,3 @@
-// Codex transcript display components: the separator, the live write call,
-// and the thinking header, rail, peek window and click layer.
-//
-// These are the leaf display classes the appearance entry used to own; they
-// moved here so the entry stays a thin host-wiring file. Every host TYPE they
-// need is structural (see TranscriptChild/TranscriptMouseEvent) and the entry
-// injects the pipeline ColorLevel, so this module never imports the host
-// packages (src/ rule) while rendering exactly what it rendered before.
-
 import { decorationRow, registerProduct, copySourceFor, publishRows } from "../../selection-copy/model.ts";
 import { clipLine, formatDuration } from "../segments.ts";
 import { stripAnsi } from "../../selection-copy/wrap.ts";
@@ -126,7 +117,7 @@ export class CodexWriteCallComponent implements Component {
       colorLevel: this.#input.colorLevel,
       layout: this.#input.layout,
       gutter: "  │ ",
-      maxRows: maxRows === undefined ? undefined : Math.max(0, maxRows - 1), // config.writePreview.rows (0 = body off)
+      maxRows: maxRows === undefined ? undefined : Math.max(0, maxRows - 1),
       copyOut,
     });
     for (const line of body) out.push(line);

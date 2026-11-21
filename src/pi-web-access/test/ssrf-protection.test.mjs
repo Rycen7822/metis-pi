@@ -155,7 +155,6 @@ test("allowLoopback exempts only the configured origin, not redirect targets", a
 	);
 	assert.deepEqual(requested, ["http://127.0.0.1:11235/md"]);
 
-	// Nor does localhost.
 	requested.length = 0;
 	await assert.rejects(
 		fetchRemoteUrl("http://127.0.0.1:11235/md", {}, {
@@ -222,14 +221,12 @@ test("allowRanges exempts a synthetic fake-IP range (e.g. 198.18.0.0/15)", async
 		/Blocked internal address for example\.test: 198\.18\.0\.56/,
 	);
 
-	// With allowRanges it passes.
 	const url = await validateRemoteUrl("https://example.test/", {
 		lookup: fakeIpLookup,
 		allowRanges: ["198.18.0.0/15"],
 	});
 	assert.equal(url.hostname, "example.test");
 
-	// A bare literal IP in the range is also exempted.
 	assert.equal((await validateRemoteUrl("http://198.18.0.99/", { allowRanges: ["198.18.0.0/15"] })).hostname, "198.18.0.99");
 });
 

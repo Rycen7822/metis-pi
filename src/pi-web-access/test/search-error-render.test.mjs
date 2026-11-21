@@ -45,14 +45,11 @@ test("cancel/error path is NOT a dead-end single line: expanded plan has >1 line
 test("expanded plan surfaces the diagnostics that were previously discarded", () => {
 	const plan = buildSearchErrorPlan(staleCancel);
 	const expanded = plan.expanded.join("\n");
-	// cancel reason
 	assert.match(expanded, /cancel reason\s*:\s*stale/);
 	// browser state — the #1 stale cause, previously invisible
 	assert.match(expanded, /browser\s*:\s*never connected/);
-	// query progress (2 of 3 done)
 	assert.match(expanded, /queries started\s*:\s*3/);
 	assert.match(expanded, /queries done\s*:\s*2/);
-	// per-query results: the completed one (with source count) AND the errored one
 	assert.match(expanded, /z\.ai API usage endpoint/);
 	assert.match(expanded, /5 sources/);
 	assert.match(expanded, /\[err\]/);
@@ -61,7 +58,6 @@ test("expanded plan surfaces the diagnostics that were previously discarded", ()
 
 test("collapsed view is a short summary WITH a ctrl+o expand hint (Ctrl+O now does something)", () => {
 	const plan = buildSearchErrorPlan(staleCancel);
-	// collapsed preview summarizes progress + browser state
 	const collapsed = plan.collapsed.join("\n");
 	assert.match(collapsed, /2\/3 queries completed/);
 	assert.match(collapsed, /browser never connected/);
@@ -69,7 +65,6 @@ test("collapsed view is a short summary WITH a ctrl+o expand hint (Ctrl+O now do
 	// so Ctrl+O did nothing). Mutation: dropping the hint fails here.
 	assert.equal(typeof plan.expandHint, "string");
 	assert.match(plan.expandHint, /ctrl\+o to expand/i, "expand hint must mention ctrl+o");
-	// and the hint correctly counts the hidden lines
 	assert.match(plan.expandHint, /\d+ more lines/);
 });
 
@@ -98,7 +93,6 @@ test("fetch_content-style error (extras, no cancel) is expandable without browse
 	assert.ok(plan.expanded.length > 1);
 	assert.match(expanded, /urls: 1\/2 succeeded/);
 	assert.match(expanded, /resp_abc/);
-	// MUST NOT show curator/browser diagnostics for a non-cancel error.
 	assert.doesNotMatch(expanded, /browser|cancel reason|queries started/);
 	assert.equal(typeof plan.expandHint, "string");
 	assert.match(plan.expandHint, /ctrl\+o to expand/i);
