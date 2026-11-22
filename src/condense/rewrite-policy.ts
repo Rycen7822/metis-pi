@@ -473,6 +473,11 @@ export class RewriteBudget {
     return forecast.cold + this.fees + fee < forecast.savings;
   }
 
+  firstRequestDelta(before: number, gain: number, prefix: number, model: Model | undefined, context: RewriteContext): number {
+    const rates = this.prices(model);
+    return coldCost(totalInput(before, context), gain, this.cachedPrefix(before, prefix, model, context), rates, model?.priceTiers);
+  }
+
   published(before: number, gain: number, prefix: number, model: Model | undefined, context?: RewriteContext) {
     const prices = this.prices(model);
     const total = totalInput(before, context);

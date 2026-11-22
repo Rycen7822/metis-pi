@@ -460,9 +460,6 @@ test("independent small chains publish without paid summaries while preserving t
       perTurn: 8500, publish: true, selected: 1,
       rates: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
         tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }] } },
-    // When both repay, retain the largest body rather than maximizing the gain/cold-suffix ratio.
-    { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
-      price: 20, perTurn: 8500, publish: true, selected: 0 },
   ]) await t.test(JSON.stringify(scenario), async t => {
     const f = await independentTasks(t, scenario);
     if (scenario.providerTokens) f.ctx.getContextUsage = () => ({ tokens: scenario.providerTokens, contextWindow: 2000000 });
@@ -481,15 +478,15 @@ test("independent small chains publish without paid summaries while preserving t
       assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[0].id), f.tasks[0].result);
       return;
     }
-    const selected = f.tasks[scenario.selected ?? 0];
-    assert.notEqual(entries[0].data.kind, "shared-v1");
-    assert.deepEqual(entries[0].data.droppedToolCallIds, [selected.id]);
-    for (const task of f.tasks.filter(task => task !== selected))
-      assert.deepEqual(projected.find(message => message.toolCallId === task.id), task.result);
+    const selectedIndex = scenario.selected ?? 0;
+    const selected = f.tasks[selectedIndex];
+    assert.ok(!projected.some(message => message.toolCallId === selected.id));
+    for (const task of f.tasks.slice(0, selectedIndex))
+      assert.deepEqual(projected.find(message => message.toolCallId === task.id), task.result, "earlier rejected work keeps its prefix");
     let cursor, recovered = "", pages = 0, eof = false;
     do {
       const page = await f.tools.get("context_tree_query").execute("recall",
-        { toolCallIds: [entries[0].data.blockId], cursor }, undefined, undefined, f.ctx);
+        { toolCallIds: [selected.id], cursor }, undefined, undefined, f.ctx);
       assert.equal(page.isError, false);
       for (const result of page.details.results) {
         assert.equal(result.offsetBytes, Buffer.byteLength(recovered));
@@ -502,6 +499,58 @@ test("independent small chains publish without paid summaries while preserving t
     assert.ok(recovered === selected.result.content[0].text, "all recall pages reconstruct the exact original result");
     await f.emit("agent_settled"); await f.waitMaintenance();
     assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
+  });
+});
+
+test("an earlier rewrite includes eligible later chains in the first request without extra summaries", async t => {
+  const f = await independentTasks(t, { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
+    perTurn: 8500, price: 20 });
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  const cut = raw.findIndex(message => message.role === "user" && message.content === f.tasks[0].user) + 1;
+  assert.ok(cut > 0);
+  assert.deepEqual(projected.slice(0, cut), raw.slice(0, cut), "joining the suffix does not change the reusable prefix");
+  const tokens = messages => messages.reduce((total, message) => total + estimateTokens(message), 0);
+  assert.ok(tokens(raw) - tokens(projected) > estimateTokens(f.tasks[0].result), "the first input saves more than the first result");
+  await f.emit("session_start"); await f.waitMaintenance();
+  assert.deepEqual((await f.emit("context", { messages: raw }))?.messages, projected, "resume retains the same combined replacement");
+  for (const task of f.tasks.slice(0, 2)) {
+    assert.ok(!projected.some(message => message.toolCallId === task.id), `first request retains raw ${task.id}`);
+    assert.ok(projected.some(message => message.role === "user" && message.content === task.user));
+    assert.ok(projected.some(message => message.role === "assistant" && message.content?.some(block => block.text === task.final)));
+    const page = await f.tools.get("context_tree_query").execute("recall", { toolCallIds: [task.id], maxBytes: 2048 },
+      undefined, undefined, f.ctx);
+    assert.equal(page.isError, false);
+    assert.equal(page.details.results[0].text.slice(0, 1024), task.result.content[0].text.slice(0, 1024));
+  }
+  for (const call of f.active) assert.deepEqual(projected.find(message => message.toolCallId === call.id), call.result);
+  assert.equal(projected.filter(message => message.metisDerived?.kind === "condense-chain").length, 1);
+  assert.equal(f.calls.length, 0);
+});
+
+test("an earlier rewrite leaves later chains alone when joining would lose a cheaper cache ending", async t => {
+  for (const bounded of [false, true]) await t.test(bounded ? "bounded Responses lookup" : "plain lookup", async t => {
+    const f = await independentTasks(t, { total: 240000, sizes: [49000, ...Array(6).fill(2500)], perTurn: 8500, price: 10 });
+    if (bounded) {
+      f.ctx.model.api = "openai-responses";
+      f.ctx.model.compat = { supportsExplicitPromptCacheMode: true };
+    }
+    const raw = f.sm.buildSessionProjection().messages;
+    const input = raw.map(message => ({ role: "user", content: JSON.stringify(message) }));
+    for (let i = 0; i < 3; i++) {
+      await f.emit("context", { messages: raw });
+      await f.emit("before_provider_request", { payload: { model: f.ctx.model.id, input } });
+      await f.emit("message_end", { message: { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider,
+        model: f.ctx.model.id, content: [{ type: "text", text: "Already consumed" }], stopReason: "stop",
+        timestamp: f.nextTimestamp(), usage: { ...usage, input: 4800, cacheRead: 235200 } } });
+    }
+    await f.emit("agent_settled"); await f.waitMaintenance();
+    const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    assert.ok(!projected.some(message => message.toolCallId === f.tasks[0].id), "the approved earlier cut should still publish");
+    const laterIds = f.tasks.slice(1).map(task => task.id);
+    assert.deepEqual(projected.map(message => message.toolCallId).filter(id => laterIds.includes(id)), bounded ? laterIds : []);
+    assert.equal(f.calls.length, 0);
   });
 });
 
@@ -548,27 +597,21 @@ test("remote and bounded Responses cache credit require an observed request and 
     });
 });
 
-test("independent selection and shared fallback keep distinct admission contracts", async t => {
+test("scoped rewrites and shared fallback both include eligible later chains", async t => {
   for (const scenario of [
-    { total: 1000000, sizes: [32000, 6000], price: 10, shared: false },
-    { total: 1000000, sizes: [300000, 6000], price: 10, shared: true },
-    { total: 300000, sizes: Array(30).fill(5000), price: 5, shared: true },
-    { total: 110000, sizes: Array(4).fill(10000), perTurn: 12000, price: 20, shared: true },
+    { total: 1000000, sizes: [32000, 6000], price: 10 },
+    { total: 1000000, sizes: [300000, 6000], price: 10 },
+    { total: 300000, sizes: Array(30).fill(5000), price: 5 },
+    { total: 110000, sizes: Array(4).fill(10000), perTurn: 12000, price: 20 },
   ]) await t.test(`${scenario.sizes.length} chains at ${scenario.price}:1`, async t => {
     const f = await independentTasks(t, scenario);
     await f.emit("agent_settled"); await f.waitMaintenance();
     const entries = f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].data.kind === "shared-v1", scenario.shared);
-    if (scenario.shared) {
-      const dropped = entries[0].data.members.flatMap(member => member.droppedToolCallIds);
-      assert.ok(dropped.length > 1);
-      assert.ok(dropped.includes(f.tasks.at(-1).id), "legacy sharing still includes the independently refused candidate");
-    } else {
-      assert.deepEqual(entries[0].data.droppedToolCallIds, [f.tasks[0].id]);
-      const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
-      assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[1].id), f.tasks[1].result);
-    }
+    const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+    assert.ok(!projected.some(message => message.toolCallId === f.tasks.at(-1).id),
+      "the last closed candidate joins even if it cannot pay for an independent rewrite");
+    assert.equal(projected.filter(message => message.metisDerived?.kind === "condense-chain").length, 1);
     assert.equal(f.calls.length, 0);
   });
 });

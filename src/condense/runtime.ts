@@ -46,6 +46,7 @@ import type {
   DeferredReason,
   ChainBounds,
   ChainCompressionEntry,
+  ChainRange,
   SingleChainCompressionEntry,
   SharedChainCompressionEntry,
   SummarizeBatchOptions,
@@ -94,6 +95,12 @@ type PreparedProjection = {
   projection: NativeProjection; leaf: ReturnType<ExtensionContext["sessionManager"]["getLeafId"]>;
   source?: { capture: ReturnType<typeof createSourceSnapshotter>; snapshot: string | undefined };
 };
+type ChainRewrite = { counts: TokenComparison; prefix: number };
+type SharedRewrite = ChainRewrite & { entry: SharedChainCompressionEntry; shape: string };
+
+function chainGain(counts: TokenComparison): number {
+  return Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
+}
 
 /** Let the TUI read cooperatively; publication guards remain synchronous and content-based. */
 async function readProjection(ctx: ExtensionContext, signal = ctx.signal): Promise<NativeProjection> {
@@ -530,15 +537,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (candidateTokens !== undefined && !independent) return false;
     const emergency = chainEmergency(ctx, counts.piBefore);
     if (independent && !emergency && !localRewritePrefixAllowed(counts.piBefore, prefix)) return false;
-    const gain = Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
     const policy = independent ?? { ...config, forecastRequests: 24 };
-    return rewriteBudget.admits(counts.piBefore, gain, prefix, policy, economicModel(ctx), emergency, 0, context);
+    return rewriteBudget.admits(counts.piBefore, chainGain(counts), prefix, policy, economicModel(ctx), emergency, 0, context);
   };
   const compressChains = async (ctx: any, rollingWindow: number,
     appendEntry: (type: string, data: unknown) => void,
     options: {
-      closingMessage?: any; signal?: AbortSignal; automatic?: boolean; chains?: import("./types.ts").ChainRange[];
-      candidate?: import("./types.ts").ChainRange; onPublished?: () => void;
+      closingMessage?: any; signal?: AbortSignal; automatic?: boolean; chains?: ChainRange[];
+      candidate?: ChainRange; onPublished?: () => void;
+      coalesce?: (anchor: ChainRewrite & { tokens: number }, before: any[]) => Promise<SharedRewrite | undefined>;
     } = {}) => {
     const { closingMessage, signal, automatic = false, onPublished } = options;
     const version = lifecycle;
@@ -549,12 +556,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const chains = options.candidate ? [options.candidate]
       : options.chains ?? detectChains(messages, protectionPredicate).filter(chain => findCompressibleRange(chain, messages));
     const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
+    const measurements = new Map<string, ChainRewrite & { shape?: string }>();
     const append = (type: string, data: unknown) => {
       assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
       if (!hasCustomEntryData(ctx.sessionManager, type, data))
         throw new Error("Chain evidence was not persisted on the current branch");
       if (type === CUSTOM_TYPE_CHAIN) {
-        lowerFloor(supersede, (data as SingleChainCompressionEntry).startUserTimestamp);
+        const entry = data as ChainCompressionEntry;
+        const shape = measurements.get(entry.blockId)?.shape;
+        if (shape !== undefined) sharedValidations.set(entry.blockId, { shape, hasGain: true });
+        lowerFloor(supersede, earliestChainStart(chainMembers(entry)));
         onPublished?.();
       }
     };
@@ -564,16 +575,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.hasRecord(key));
       if (fresh.length) await indexer.backfillChainRecords(fresh, { ...backfill, appendEntry: append });
     }
-    const measurements = new Map<string, { counts: TokenComparison; prefix: number }>();
     const result = await compressEligible(chains, rollingWindow, {
       indexer, blockRefs, appendEntry: append, now: () => Date.now(), fuseRange: makeFuseRange(ctx, signal, automatic),
-      messages, diagnostics, validate: async entry => {
+      messages, diagnostics, select: async entry => {
         const keys = entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds;
-        if (indexer.getOwnedSummaryText(keys) === null || !singleSummaryCurrent(entry, ctx)) return false;
+        if (indexer.getOwnedSummaryText(keys) === null || !singleSummaryCurrent(entry, ctx)) return;
         if (keys.some(key => { const record = indexer.getRecord(key);
-          return !record || record.metadataUnavailable || record.archiveComplete === false; })) return false;
+          return !record || record.metadataUnavailable || record.archiveComplete === false; })) return;
         const raw = ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages;
-        if (!resolveRange(entry, raw)) return false; // A preview final is not a persistence receipt.
+        if (!resolveRange(entry, raw)) return; // A preview final is not a persistence receipt.
         const source = projectionFingerprint(raw);
         const config = policyFingerprint(currentConfig.value);
         const before = economicMessages(projectContext(raw, ctx.model?.api, { ctx, probe: true }).messages);
@@ -589,35 +599,42 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         let candidateTokens: number | undefined;
         if (options.candidate) {
           const span = resolveRange(entry, before);
-          if (!span) return false;
+          if (!span) return;
           candidateTokens = before.slice(span.bodyStart, span.endIndex).reduce((sum, message) => sum + estimateTokens(message), 0);
         }
-        const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
-          && (!automatic || admitAutomaticChain(ctx, counts, prefix, costContext, candidateTokens))
-          && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages)
-          && config === policyFingerprint(currentConfig.value);
-        if (accepted && counts) measurements.set(entry.blockId, { counts, prefix });
-        return accepted;
+        if (!counts || chainGain(counts) <= 0 || (automatic && !admitAutomaticChain(ctx, counts, prefix, costContext, candidateTokens)))
+          return;
+        const single = { counts, prefix };
+        const shared = options.coalesce && candidateTokens !== undefined
+          ? await options.coalesce({ ...single, tokens: candidateTokens }, before) : undefined;
+        assertCurrent(version); signal?.throwIfAborted();
+        if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages)
+          || config !== policyFingerprint(currentConfig.value)) return;
+        const selected = shared?.entry ?? entry;
+        measurements.set(selected.blockId, shared ?? single);
+        return selected;
       },
       backfill,
     }, inGrace);
     assertCurrent(version);
-    let reclaimedTokens = 0, gain = 0, beforeTokens = 0, prefix = Infinity;
+    let reclaimedTokens = 0, gain = 0, beforeTokens = 0, prefix = Infinity, members = 0;
     for (const entry of result.compressedEntries) {
       const measured = measurements.get(entry.blockId);
       if (!measured) continue;
       const { counts } = measured;
       reclaimedTokens += counts.proxyDelta;
-      gain += Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta);
+      gain += chainGain(counts);
       beforeTokens = Math.max(beforeTokens, counts.piBefore);
       prefix = Math.min(prefix, measured.prefix);
+      members += isSharedChain(entry) ? entry.members.length : 1;
     }
-    if (result.compressedEntries.length > 0) {
+    if (members > 0) {
       // A new single view can change the baseline that authorized existing shared views.
-      if (indexer.getChainEntries().some(isSharedChain)) needsSharedValidation = true;
-      statsAccum.addChainsCompressed(result.compressedEntries.length);
+      if (result.compressedEntries.some(entry => !isSharedChain(entry)) && indexer.getChainEntries().some(isSharedChain))
+        needsSharedValidation = true;
+      statsAccum.addChainsCompressed(members);
       if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx),
-        { ...costContext, appendedCacheBoundaries: result.compressedEntries.length });
+        { ...costContext, appendedCacheBoundaries: members });
       else resetRewriteState();
       occ.rewrite(ctx, beforeRewrite);
     }
@@ -2620,8 +2637,50 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           throw new Error("Chain archive was not persisted on the current branch");
         if (type === CUSTOM_TYPE_CHAIN) publishedChains += chainMembers(data as SingleChainCompressionEntry | SharedChainCompressionEntry).length;
       };
+      const prepareSharedRewrite = async (chains: ChainRange[], baseline: any[],
+        anchor?: ChainRewrite & { tokens: number }): Promise<SharedRewrite | undefined> => {
+        const anchors = indexAnchorIds(sourceView.projection.entries);
+        const entry = await prepareSharedChain(chains, 0, { indexer, blockRefs, messages: raw,
+          now: () => Date.now(), appendEntry, diagnostics,
+          backfill: { ...archiveOptions(manager), assertValid: assertNewWork } }, anchors, grace, signal);
+        assertNewWork();
+        if (!entry || (anchor && entry.members[0]?.startUserTimestamp !== chains[0]?.startUserTimestamp)) return;
+        const preparedSource = manager.buildSessionProjection(MESSAGE_SOURCES);
+        if (source !== projectionFingerprint(preparedSource.messages)) return;
+        const currentSource = readSourceEdits(ctx, preparedSource);
+        const views = chainMembers(entry);
+        const current = currentChainViews(raw, ctx, currentSource);
+        const floor = earliestChainStart(views);
+        const after = economicMessages(projectContext(raw, ctx.model?.api,
+          { ctx, source: currentSource, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages);
+        const costContext = { ...rewriteContext(ctx, preparedSource, undefined, baseline), appendedCacheBoundaries: views.length };
+        const counts = await tokenEstimator.compare(baseline, after, signal);
+        assertNewWork();
+        if (!counts) { lastMaintenanceSource = undefined; return; }
+        const prefix = unchangedPrefixTokens(baseline, after);
+        const gain = chainGain(counts);
+        if (gain <= 0 || !admitAutomaticChain(ctx, counts, prefix, costContext, anchor?.tokens)) return;
+        if (anchor) {
+          // Join only at the already approved cut, with a smaller first request even after cache accounting.
+          if (prefix < anchor.prefix || counts.piAfter >= anchor.counts.piAfter || counts.proxyDelta <= anchor.counts.proxyDelta) return;
+          const model = economicModel(ctx);
+          const groupedCost = rewriteBudget.firstRequestDelta(counts.piBefore, gain, prefix, model, costContext);
+          const singleCost = rewriteBudget.firstRequestDelta(counts.piBefore, chainGain(anchor.counts), anchor.prefix,
+            model, { ...costContext, appendedCacheBoundaries: 1 });
+          if (groupedCost > singleCost) return;
+        }
+        const measuredSource = manager.buildSessionProjection(MESSAGE_SOURCES);
+        if (source !== projectionFingerprint(measuredSource.messages)) return;
+        const starts = new Set(views.map(view => view.startUserTimestamp));
+        if (indexer.getChainEntries().flatMap(chainMembers).some(member => starts.has(member.startUserTimestamp))) return;
+        const plain = projectContext(raw, ctx.model?.api,
+          { ctx, source: currentSource, chainViews: singles, probe: true, chainFloor: floor }).messages;
+        return { entry, counts, prefix, shape: sharedShape(indexChainProjection(plain), views) };
+      };
       for (const plan of independent) {
-        const result = await compressChains(ctx, 0, appendEntry, { signal, automatic: true, candidate: plan.chain });
+        const suffix = plans.slice(plans.indexOf(plan)).map(item => item.chain);
+        const result = await compressChains(ctx, 0, appendEntry, { signal, automatic: true, candidate: plan.chain,
+          coalesce: suffix.length > 1 ? (anchor, baseline) => prepareSharedRewrite(suffix, baseline, anchor) : undefined });
         if (result.compressedEntries.length > 0) return;
       }
       if (!fallbackReady) return;
@@ -2635,50 +2694,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return sum + (range ? JSON.stringify(before.slice(range.bodyStart, range.endIndex)).length : 0);
       }, 0);
       if (backlogChars < currentConfig.value.minBatchChars) return;
-      const anchors = indexAnchorIds(sourceView.projection.entries);
-      const entry = await prepareSharedChain(fallback, 0, { indexer, blockRefs, messages: raw,
-        now: Date.now, appendEntry, diagnostics,
-        backfill: { ...archiveOptions(manager), assertValid: assertNewWork } },
-        anchors, grace, signal);
-      assertNewWork();
-      if (!entry) return;
-      const preparedSource = manager.buildSessionProjection(MESSAGE_SOURCES);
-      if (source !== projectionFingerprint(preparedSource.messages)) return;
-      sourceView = readSourceEdits(ctx, preparedSource);
-      const views = chainMembers(entry);
-      const current = currentChainViews(raw, ctx, sourceView);
-      const floor = earliestChainStart(views);
-      const after = economicMessages(projectContext(raw, ctx.model?.api,
-        { ctx, source: sourceView, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages);
-      const costContext = rewriteContext(ctx, sourceView.projection, undefined, before);
-      costContext.appendedCacheBoundaries = views.length;
-      const counts = await tokenEstimator.compare(before, after, signal);
-      assertNewWork();
-      if (!counts) {
-        lastMaintenanceSource = undefined;
-        return;
-      }
-      const prefix = unchangedPrefixTokens(before, after);
-      if (counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0
-        || !admitAutomaticChain(ctx, counts, prefix, costContext)) return;
-      const measuredSource = manager.buildSessionProjection(MESSAGE_SOURCES);
-      if (source !== projectionFingerprint(measuredSource.messages)) return;
-      if (
-        indexer
-          .getChainEntries()
-          .flatMap(chainMembers)
-          .some((member) => views.some((view) => view.startUserTimestamp === member.startUserTimestamp))
-      )
-        return;
+      const shared = await prepareSharedRewrite(fallback, before);
+      if (!shared) return;
+      const { entry, counts, prefix, shape } = shared;
       appendEntry(CUSTOM_TYPE_CHAIN, entry);
       indexer.registerChain(entry);
-      const plain = projectContext(raw, ctx.model?.api,
-        { ctx, source: readSourceEdits(ctx, measuredSource), chainViews: singles, probe: true, chainFloor: floor }).messages;
-      sharedValidations.set(entry.blockId, { shape: sharedShape(indexChainProjection(plain), views), hasGain: true });
-      lowerFloor(supersede, floor);
-      statsAccum.addChainsCompressed(views.length);
-      rewriteBudget.published(counts.piBefore, Math.min(counts.piBefore - counts.piAfter, counts.proxyDelta),
-        prefix, economicModel(ctx), costContext);
+      sharedValidations.set(entry.blockId, { shape, hasGain: true });
+      lowerFloor(supersede, earliestChainStart(entry.members));
+      statsAccum.addChainsCompressed(entry.members.length);
+      rewriteBudget.published(counts.piBefore, chainGain(counts), prefix, economicModel(ctx),
+        { ...rewriteContext(ctx, sourceView.projection, undefined, before), appendedCacheBoundaries: entry.members.length });
       occ.rewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;

@@ -146,7 +146,7 @@ export interface CompressEligibleDeps {
     sessionId: string;
     assertValid?: () => void;
   };
-  validate?: (entry: SingleChainCompressionEntry) => Promise<boolean>;
+  select?: (entry: SingleChainCompressionEntry) => Promise<ChainCompressionEntry | undefined>;
 }
 
 /**
@@ -256,6 +256,16 @@ export async function compressEligible(
   const eligible = selectEligible(chains, rollingWindow, alreadyCompressedTimestamps, inGraceToolCallIds);
 
   const compressedEntries: ChainCompressionEntry[] = [];
+  const publish = async (entry: SingleChainCompressionEntry) => {
+    const selected = deps.select ? await deps.select(entry) : entry;
+    if (!selected) {
+      skipped.push({ startUserTimestamp: entry.startUserTimestamp, reason: "no-gain" });
+      return;
+    }
+    deps.appendEntry(CUSTOM_TYPE_CHAIN, selected);
+    deps.indexer.registerChain(selected);
+    compressedEntries.push(selected);
+  };
   for (const chain of eligible) {
     // summaryBodies / toolRefs live in occurrence-key space (src/indexer.ts).
     // Bare ids would match nothing and silently skip every chain.
@@ -321,13 +331,7 @@ export async function compressEligible(
         ...(chain.protectedToolCallIds?.length ? { protectedToolCallIds: chain.protectedToolCallIds } : {}),
         ...(chain.middleOccurrenceKeys?.length ? { droppedOccurrenceKeys: chain.middleOccurrenceKeys } : {}),
       };
-      if (deps.validate && !(await deps.validate(entry))) {
-        skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" });
-        continue;
-      }
-      deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
-      deps.indexer.registerChain(entry);
-      compressedEntries.push(entry);
+      await publish(entry);
       continue;
     }
 
@@ -370,10 +374,7 @@ export async function compressEligible(
       } catch { /* retain per-batch concatenation */ }
     }
 
-    if (deps.validate && !await deps.validate(entry)) { skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" }); continue; }
-    deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
-    deps.indexer.registerChain(entry);
-    compressedEntries.push(entry);
+    await publish(entry);
   }
 
   return { compressedEntries, skipped };
