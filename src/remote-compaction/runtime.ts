@@ -43,17 +43,19 @@ function isRemoteModel(model: CodexCompactionOwnerRequest["model"]): boolean {
     && (model.provider === "openai" || model.provider === "openai-codex");
 }
 
-function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManager"] }) {
-  const projection = ctx.sessionManager.buildSessionProjection();
-  const wrapper = projection.entries.find(e => e.sourceEntry.type === "compaction" && e.messages.length);
-  const entry = wrapper?.sourceEntry;
+function active({ sessionManager }: { sessionManager: CodexCompactionOwnerRequest["sessionManager"] }) {
+  const branch = sessionManager.getBranchMetadata();
+  const entryIndex = branch.findLastIndex(e => e.type === "compaction");
+  if (entryIndex < 0) return;
+  const entry = sessionManager.getEntry(branch[entryIndex]!.id);
   if (!entry || !ours(entry)) return;
+  const projection = sessionManager.buildSessionProjection({ entries: "message-sources" });
+  const wrapper = projection.entries.find(e => e.sourceEntry.id === entry.id && e.messages.length);
+  if (!wrapper) return;
   const data = checkpoint(entry);
   // A context edit of the summary invalidates its opaque history.
   const message = wrapper.messages.find(m => m.role === "compactionSummary");
-  const branch = ctx.sessionManager.getBranchMetadata();
   const covered = new Set(branch.slice(0, branch.findIndex(e => e.id === entry.firstKeptEntryId)).map(e => e.id));
-  const entryIndex = branch.findIndex(e => e.id === entry.id);
   const edited = branch.slice(entryIndex + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
   const origin = branch.slice(0, entryIndex).findLast(e => e.type === "model_change");
   return { entry, origin: origin?.type === "model_change" ? origin : undefined,

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export const sdkVersion = "1.6.0";
 export const sdkUpstreamCommit = "faac585884ae2c013a6b1400f3e9e77f10b34bac";
-export const sdkPatchCount = 29;
+export const sdkPatchCount = 30;
 export const sdkPackages = ["ai", "tui", "codemode", "coding-agent"];
 export const sdkRuntimePackages = [...sdkPackages, "agent-core", "mcp", "schema", "telemetry"];
 export const sdkFiles = ["coding-agent/docs/codemode.md"];

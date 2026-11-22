@@ -1,0 +1,185 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -857,7 +857,8 @@
+ 		const model = this.model;
+ 		if (model && !isVirtualModel(model) && model.contextWindow > 0) {
+ 			const fast = estimateContextUsageFromTail(session);
+-			const projection = fast === undefined ? session.buildSessionProjection() : undefined;
++			const projection =
++				fast === undefined ? session.buildSessionProjection({ entries: "message-sources" }) : undefined;
+ 			const tokens = projection
+ 				? estimateProjectedContextTokens(projection, session.getBranchMetadata()).tokens
+ 				: fast;
+@@ -880,7 +881,7 @@
+ 				const model = this.agent.state.model;
+ 				const projection =
+ 					(model && isVirtualModel(model)) || previousPrepareRequest
+-						? this.sessionManager.buildSessionProjection()
++						? this.sessionManager.buildSessionProjection({ entries: "message-sources" })
+ 						: undefined;
+ 				const canonicalContext = {
+ 					...request.context,
+@@ -929,7 +930,10 @@
+ 			// The route stands: the router already decided this request. The state entry does not change
+ 			// the projection.
+ 			if (
+-				this._exceedsCompactionThreshold(route.model, projection ?? this.sessionManager.buildSessionProjection())
++				this._exceedsCompactionThreshold(
++					route.model,
++					projection ?? this.sessionManager.buildSessionProjection({ entries: "message-sources" }),
++				)
+ 			) {
+ 				await this._runAutoCompaction("threshold", false);
+ 				({ previous, context } = await prepare());
+@@ -1095,24 +1099,31 @@
+ 	): BoundaryContextPreview {
+ 		const projection = drafts.length
+ 			? this._createBoundaryPreviewManager(drafts).buildSessionProjection()
+-			: this.sessionManager.buildSessionProjection();
++			: this.sessionManager.captureBoundaryProjection();
+ 		const pendingMessages = this._getPendingBoundaryMessages();
+-		const llmMessages = convertToLlm(projection.messages);
+-		const finalRole = llmMessages[llmMessages.length - 1]?.role;
+-		const hasNonSystemContext = llmMessages.some((message) => message.role !== "system");
+-		const contextCanContinue = hasNonSystemContext && finalRole !== "assistant";
+-		const pendingCustomContext = this._pendingCustomMessages.length > 0;
++		const queued = this.agent.hasQueuedMessages();
++		const pendingCustom = this._pendingCustomMessages.length > 0;
++		let llmMessages = drafts.length ? convertToLlm(projection.messages) : undefined;
++		const llm = () => (llmMessages ??= convertToLlm(projection.messages));
+ 		return {
+-			contextEntries: projection.entries,
+-			contextMessages: projection.messages,
+-			llmMessages,
++			get contextEntries() {
++				return projection.entries;
++			},
++			get contextMessages() {
++				return projection.messages;
++			},
++			get llmMessages() {
++				return llm();
++			},
+ 			pendingMessages,
+-			canContinue:
+-				contextCanContinue ||
+-				pendingCustomContext ||
+-				(boundary === "turn_end"
+-					? this.agent.hasQueuedMessages()
+-					: finalRole === "assistant" && this.agent.hasQueuedMessages()),
++			get canContinue() {
++				if (pendingCustom || (boundary === "turn_end" && queued)) return true;
++				const messages = llm();
++				const finalRole = messages.at(-1)?.role;
++				return finalRole === "assistant"
++					? boundary === "agent_before_settle" && queued
++					: messages.some((message) => message.role !== "system");
++			},
+ 		};
+ 	}
+ 
+@@ -2149,10 +2160,9 @@
+ 			);
+ 			this._commitBoundaryDrafts(result.entries);
+ 			this._flushPendingCustomMessages();
+-			const finalContext = this._buildBoundaryContext([], "agent_before_settle");
+ 			if (this._abortDuringBeforeSettle) return false;
+ 			const shouldContinue = result.continue || this.agent.hasQueuedMessages();
+-			if (shouldContinue && !finalContext.canContinue) {
++			if (shouldContinue && !this._buildBoundaryContext([], "agent_before_settle").canContinue) {
+ 				if (result.continue) this._reportInvalidBoundaryContinuation("agent_before_settle");
+ 				return false;
+ 			}
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -69,6 +69,10 @@
+ 		this.byId.set(entry.id, record);
+ 	}
+ 
++	get projectionEpoch(): number {
++		return this.rewriteEpoch;
++	}
++
+ 	get size(): number {
+ 		return this.byId.size;
+ 	}
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -1260,12 +1260,15 @@
+ 
+ 	/** Facts on the requested branch, in root-to-leaf order. */
+ 	getBranchMetadata(fromId?: string): SessionEntryMetadata[] {
++		return this.branchMetadata(this.store, fromId ?? this.leafId);
++	}
++
++	private branchMetadata(store: SessionEntryStore, startId: string | null): SessionEntryMetadata[] {
+ 		const path: SessionEntryMetadata[] = [];
+-		const startId = fromId ?? this.leafId;
+-		let current = startId ? this.store.getMetadata(startId) : undefined;
++		let current = startId ? store.getMetadata(startId) : undefined;
+ 		while (current) {
+ 			path.push(current);
+-			current = current.parentId ? this.store.getMetadata(current.parentId) : undefined;
++			current = current.parentId ? store.getMetadata(current.parentId) : undefined;
+ 		}
+ 		path.reverse();
+ 		return path;
+@@ -1379,6 +1382,55 @@
+ 		);
+ 	}
+ 
++	/** Capture a boundary view without reading bodies or adopting later branch appends. */
++	captureBoundaryProjection(): Pick<SessionProjection, "entries" | "messages"> {
++		const store = this.store,
++			leaf = this.leafId,
++			epoch = store.projectionEpoch,
++			source = this.sessionFile;
++		let path: SessionEntryMetadata[] | undefined;
++		let scoped: SessionProjection | undefined;
++		let entries: ProjectedSessionEntry[] | undefined;
++		const capturedPath = () => {
++			if (store.projectionEpoch !== epoch || (this.store !== store && this.sessionFile === source)) {
++				throw new SessionEntryStoreChangedError();
++			}
++			return (path ??= this.branchMetadata(store, leaf));
++		};
++		const messageProjection = () => {
++			if (scoped) return scoped;
++			const branch = capturedPath();
++			return (scoped = projectContextEntries(
++				store.readProjectionEntries(selectProjectionEntries(branch, "message-sources"), branch),
++				getSessionContextSettings(branch),
++			));
++		};
++		return {
++			get messages() {
++				return messageProjection().messages;
++			},
++			get entries() {
++				if (entries) return entries;
++				const branch = capturedPath();
++				if (!scoped) {
++					scoped = projectContextEntries(
++						store.readProjectionEntries(selectContextEntries(branch), branch),
++						getSessionContextSettings(branch),
++					);
++					return (entries = scoped.entries);
++				}
++				const selected = selectContextEntries(branch);
++				const existing = new Map(scoped.entries.map((entry) => [entry.sourceEntry.id, entry]));
++				const missing = store.readProjectionEntries(
++					selected.filter((entry) => !existing.has(entry.id)),
++					branch,
++				);
++				for (const sourceEntry of missing) existing.set(sourceEntry.id, { sourceEntry, messages: [] });
++				return (entries = selected.map((entry) => existing.get(entry.id)!));
++			},
++		};
++	}
++
+ 	/** Cooperative body loading with the same projection rules; callers still revalidate source content after awaits. */
+ 	async buildSessionProjectionAsync(
+ 		options: SessionProjectionOptions & { signal?: AbortSignal } = {},
