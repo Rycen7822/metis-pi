@@ -28,6 +28,7 @@ export interface UnifiedExecResult {
 	chunk_id: string;
 	wall_time_seconds: number;
 	output: string;
+	outputOmitted?: string | undefined;
 	exit_code?: number | undefined;
 	session_id?: number | undefined;
 	original_token_count?: number | undefined;

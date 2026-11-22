@@ -42,7 +42,7 @@ export interface CondenseMaintenanceRequest { pending?: Promise<void> }
 // Ownership needs model identity and native history reads, not a full SDK ctx.
 export interface CodexCompactionOwnerRequest {
   readonly model?: { readonly api: string; readonly provider: string };
-  readonly sessionManager: Readonly<Pick<ExtensionContext["sessionManager"], "buildSessionProjection" | "getBranchMetadata">>;
+  readonly sessionManager: Pick<ExtensionContext["sessionManager"], "buildSessionProjection" | "getBranchMetadata" | "getEntry">;
   owns: boolean;
 }
 
@@ -82,5 +82,5 @@ export function isCodexCompactionOwnerRequest(value: unknown): value is CodexCom
     && (value["model"] === undefined || (record(value["model"]) && typeof value["model"]["api"] === "string"
       && typeof value["model"]["provider"] === "string"))
     && record(value["sessionManager"]) && typeof value["sessionManager"]["buildSessionProjection"] === "function"
-    && typeof value["sessionManager"]["getBranchMetadata"] === "function";
+    && typeof value["sessionManager"]["getBranchMetadata"] === "function" && typeof value["sessionManager"]["getEntry"] === "function";
 }

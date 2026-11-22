@@ -1,10 +1,14 @@
-import { ExecOutputArchive } from "./output-archive.ts";
+import type { ExecOutputArchive } from "./output-archive.ts";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const MAX_RESIDENT_CHARS = 1024 * 1024;
+const MAX_FALLBACK_CHARS = 8 * MAX_RESIDENT_CHARS; // 16 MiB at two bytes per UTF-16 code unit.
 const IO_CHUNK_CHARS = 64 * 1024;
+let fallbackCharsInUse = 0;
+
+const detach = (text: string) => Buffer.from(text, "utf16le").toString("utf16le");
 
 /** A UTF-16 ring: retain the configured character budget without keeping it all on the heap. */
 export class ExecOutputBuffer {
@@ -12,7 +16,8 @@ export class ExecOutputBuffer {
 	endOffset = 0;
 	private memory = "";
 	private spool: { directory: string; fd: number } | undefined;
-	private spoolDisabled = false;
+	private fallbackLength?: number;
+	private fallbackOmitted = false;
 	private failure: Error | undefined;
 	private disposed = false;
 	private readonly maxChars: number;
@@ -27,44 +32,59 @@ export class ExecOutputBuffer {
 		return this.endOffset - this.startOffset;
 	}
 
+	get fallbackStartOffset(): number | undefined {
+		return this.fallbackOmitted ? this.startOffset : undefined;
+	}
+
 	append(text: string): void {
 		if (this.disposed || this.failure || text.length === 0) return;
-		if (!this.spool && !this.spoolDisabled && Math.min(this.maxChars, this.length + text.length) > MAX_RESIDENT_CHARS) {
-			this.openSpool();
-		}
 		const end = this.endOffset + text.length;
 		const start = Math.max(this.startOffset, end - this.maxChars);
-		const suffix = text.slice(Math.max(0, start - this.endOffset));
-		if (this.spool) {
-			try {
-				this.writeRing(suffix, Math.max(start, this.endOffset));
-			} catch {
-				// Ring writes can only overwrite the prefix that this append evicts. The
-				// retained old range is still recoverable, even after a partial write.
-				try {
-					this.memory = this.readRange(Math.min(start, this.endOffset), this.endOffset) + suffix;
-				} catch (error) {
-					this.fail(error);
-				}
-				this.closeSpool();
-				this.spoolDisabled = true;
-			}
-		} else {
-			this.memory = this.memory.slice(Math.min(start - this.startOffset, this.memory.length)) + suffix;
-			if (start > this.startOffset) this.memory = Buffer.from(this.memory, "utf16le").toString("utf16le");
+		if (!this.spool && this.fallbackLength === undefined && end - start > MAX_RESIDENT_CHARS) this.openSpool();
+		if (!this.spool) { this.appendResident(text, start, end); return; }
+		try {
+			this.writeRing(text.slice(Math.max(0, start - this.endOffset)), Math.max(start, this.endOffset));
+		} catch {
+			this.fallbackLength = 0;
+			try { this.appendResident(text, start, end); }
+			finally { this.closeSpool(); }
+			return;
 		}
 		this.startOffset = start;
 		this.endOffset = end;
-		if (start > 0 && this.length > 0 && !this.failure) {
-			try {
-				if (/[\uDC00-\uDFFF]/.test(this.readRange(start, start + 1))) {
-					this.startOffset++;
-					if (!this.spool) this.memory = this.memory.slice(1);
-				}
-			} catch (error) {
-				this.fail(error);
-			}
+		if (start === 0) return;
+		try { if (/[\uDC00-\uDFFF]/.test(this.readRange(start, start + 1))) this.startOffset++; }
+		catch (error) { this.fail(error); }
+	}
+
+	private appendResident(text: string, diskStart: number, end: number): void {
+		let start = diskStart;
+		if (this.fallbackLength !== undefined) {
+			const available = MAX_FALLBACK_CHARS - fallbackCharsInUse + this.fallbackLength;
+			start = Math.max(start, end - Math.min(MAX_RESIDENT_CHARS, available));
 		}
+		let previous = "";
+		if (start < this.endOffset) {
+			// Even after a partial ring write, the bounded range above diskStart is intact.
+			if (this.spool) {
+				try { previous = this.readRange(start, this.endOffset); }
+				catch { start = this.endOffset; }
+			} else previous = this.memory.slice(start - this.startOffset);
+		}
+		let memory = previous + text.slice(Math.max(0, start - this.endOffset));
+		if (start > 0 && /^[\uDC00-\uDFFF]/.test(memory)) { start++; memory = memory.slice(1); }
+		this.fallbackOmitted ||= this.fallbackLength !== undefined && start > diskStart;
+		this.setMemory(start > this.startOffset ? detach(memory) : memory);
+		this.startOffset = start;
+		this.endOffset = end;
+	}
+
+	private setMemory(text: string): void {
+		if (this.fallbackLength !== undefined) {
+			fallbackCharsInUse += text.length - this.fallbackLength;
+			this.fallbackLength = text.length;
+		}
+		this.memory = text;
 	}
 
 	/** String.slice semantics, but only the requested range is materialized. */
@@ -87,7 +107,7 @@ export class ExecOutputBuffer {
 	dispose(): void {
 		this.disposed = true;
 		this.archive?.close();
-		this.memory = "";
+		this.setMemory("");
 		this.closeSpool();
 	}
 
@@ -99,11 +119,9 @@ export class ExecOutputBuffer {
 			this.writeRing(this.memory, this.startOffset);
 			this.memory = "";
 		} catch {
-			// A full/unwritable temp volume must not truncate output or stop a tool.
-			// Fall back to the pre-existing in-memory retention budget for this session.
-			this.closeSpool();
-			if (directory) fs.rmSync(directory, { recursive: true, force: true });
-			this.spoolDisabled = true;
+			if (this.spool) this.closeSpool();
+			else if (directory) fs.rmSync(directory, { recursive: true, force: true });
+			this.fallbackLength = 0;
 		}
 	}
 
@@ -126,7 +144,7 @@ export class ExecOutputBuffer {
 		if (!this.spool) {
 			const text = this.memory.slice(start - this.startOffset, end - this.startOffset);
 			// Detach small results/replay tails from a potentially large backing string.
-			return Buffer.from(text, "utf16le").toString("utf16le");
+			return detach(text);
 		}
 		const bytes = Buffer.allocUnsafe((end - start) * 2);
 		for (let read = 0; read < bytes.length;) {
@@ -141,9 +159,8 @@ export class ExecOutputBuffer {
 
 	private fail(error: unknown): void {
 		this.failure ??= new Error("Cannot recover exec output from its temporary spool", { cause: error });
+		this.setMemory("");
 		this.closeSpool();
-		this.spoolDisabled = true;
-		this.memory = "";
 	}
 
 	private closeSpool(): void {

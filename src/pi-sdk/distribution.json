@@ -118,13 +118,17 @@
     {
       "file": "0029-report-received-tool-arguments.patch",
       "sha256": "6f61708204f9d28a488f3d2412e2be74b4fb54fc2aeb59a08d79e539c132c81d"
+    },
+    {
+      "file": "0030-load-boundary-projection-on-demand.patch",
+      "sha256": "02456fa827b570ef7aa26260c8da86befbed698fff590d63018ce24353b67761"
     }
   ],
-  "patchSet": "eafcab050ed4da36683a3d8133841950c1ad7051aab1772f7327b217212a9e05",
+  "patchSet": "386be3e662023f64b64a915035c9f75d17747152a9b5750b9e116d52ba97cef9",
   "archive": {
     "file": "pi-1.6.0.tgz",
-    "sha256": "fee73246c1dbdb851fe8da1686330ef3ae920508928d686a68e6754cb7cb262c",
-    "bytes": 6062778,
-    "unpackedBytes": 27076148
+    "sha256": "b787ee1fa2d16358e674e7905b078f3f7e673d1f6595dc29ec5bf9af3f2fccaf",
+    "bytes": 6135415,
+    "unpackedBytes": 27320375
   }
 }

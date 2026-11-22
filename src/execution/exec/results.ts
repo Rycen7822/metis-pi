@@ -3,13 +3,16 @@ export const EXEC_OUTPUT_SCHEMA = Type.Object({
   output: Type.String(), chunk_id: Type.String(), wall_time_seconds: Type.Number(),
   session_id: Type.Optional(Type.Number()), exit_code: Type.Optional(Type.Number()),
   original_token_count: Type.Optional(Type.Number()), interrupted: Type.Optional(Type.Boolean()),
+  outputOmitted: Type.Optional(Type.String()),
   fullOutputPath: Type.Optional(Type.String()), fullOutputBytes: Type.Optional(Type.Number()),
   fullOutputComplete: Type.Optional(Type.Boolean()), fullOutputAppendOnly: Type.Optional(Type.Boolean()),
   fullOutputError: Type.Optional(Type.String()),
 });
 import type { ExecSessionSnapshot, UnifiedExecResult } from "./session-manager.ts";
 import { formatUnifiedExecResult } from "./format.ts";
-import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, type ExecOutputSessionState } from "./output.ts";
+import {
+  consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, type ExecOutputDelivery, type ExecOutputSessionState,
+} from "./output.ts";
 
 export interface ExecResultSessionState extends ExecOutputSessionState {
 	id: number;
@@ -25,23 +28,22 @@ export interface ExecResultSessionState extends ExecOutputSessionState {
 function fromSnapshot(
   session: ExecResultSessionState,
   waitMs: number,
-  snapshot: { output: string; original_token_count?: number | undefined },
+  snapshot: ExecOutputDelivery,
   originalChars: number,
 ): UnifiedExecResult {
   const result: UnifiedExecResult = {
     chunk_id: generateChunkId(),
     wall_time_seconds: waitMs / 1000,
-    output: snapshot.output,
+    ...snapshot,
   };
   if (session.posixShell) result.posixShell = true;
-  if (snapshot.original_token_count !== undefined) result.original_token_count = snapshot.original_token_count;
   if (session.exitCode === undefined || session.exitCode === null) result.session_id = session.id;
   else result.exit_code = session.exitCode;
   if (snapshot.output.length < originalChars) session.buffer.archive?.preserve();
   Object.assign(result, session.buffer.archive?.info());
-  if (session.outputError) {
+  if (session.outputError || (result.outputOmitted && !result.fullOutputPath)) {
     result.fullOutputComplete = false;
-    result.fullOutputError ??= session.outputError;
+    result.fullOutputError ??= session.outputError ?? "Full output archive unavailable";
   }
   return result;
 }
@@ -76,10 +78,9 @@ export function makeSnapshotResult(
   maxOutputTokens?: number,
   unconsumedOnly = false,
 ): UnifiedExecResult {
-  const snapshot = unconsumedOnly
-    ? peekUnconsumedOutput(session, maxOutputTokens)
-    : peekOutputSince(session, session.buffer.startOffset, maxOutputTokens);
-  const start = unconsumedOnly ? session.emittedOffset : session.buffer.startOffset;
+  const start = unconsumedOnly ? session.emittedOffset
+    : session.buffer.fallbackStartOffset === undefined ? session.buffer.startOffset : 0;
+  const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : peekOutputSince(session, start, maxOutputTokens);
   return fromSnapshot(session, waitMs, snapshot, session.buffer.endOffset - start);
 }
 

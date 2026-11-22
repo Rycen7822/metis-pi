@@ -3,6 +3,12 @@ import type { ExecOutputBuffer } from "./output-buffer.ts";
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 
+export interface ExecOutputDelivery {
+  output: string;
+  original_token_count?: number | undefined;
+  outputOmitted?: string | undefined;
+}
+
 export interface ExecOutputSessionState {
 	buffer: ExecOutputBuffer;
 	emittedOffset: number;
@@ -93,19 +99,24 @@ function outputSince(
   session: ExecOutputSessionState,
   offset: number,
   maxOutputTokens?: number,
-): { output: string; original_token_count?: number | undefined } {
+): ExecOutputDelivery {
   const endOffset = session.buffer.endOffset;
   const retainedStart = Math.max(offset, session.buffer.startOffset);
   // Include one extra code unit so truncateOutput preserves its surrogate boundary rule.
   const startOffset = Math.max(retainedStart, endOffset - maxCharsForTokens(maxOutputTokens) - 1);
   const text = session.buffer.slice(startOffset - session.buffer.startOffset);
-  return truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
+  const result: ExecOutputDelivery = truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
+  const fallbackStart = session.buffer.fallbackStartOffset;
+  if (fallbackStart !== undefined && fallbackStart > offset) {
+    result.outputOmitted = `Output spool unavailable; UTF-16 offsets [${offset}, ${fallbackStart}) omitted from the retained tail`;
+  }
+  return result;
 }
 
 export function consumeOutput(
   session: ExecOutputSessionState,
   maxOutputTokens?: number,
-): { output: string; original_token_count?: number | undefined } {
+): ExecOutputDelivery {
   const output = outputSince(session, session.emittedOffset, maxOutputTokens);
   session.emittedOffset = session.buffer.endOffset;
   return output;
@@ -114,7 +125,7 @@ export function consumeOutput(
 export function peekUnconsumedOutput(
   session: ExecOutputSessionState,
   maxOutputTokens?: number,
-): { output: string; original_token_count?: number | undefined } {
+): ExecOutputDelivery {
   return outputSince(session, session.emittedOffset, maxOutputTokens);
 }
 
@@ -122,6 +133,6 @@ export function peekOutputSince(
   session: ExecOutputSessionState,
   baselineOffset: number,
   maxOutputTokens?: number,
-): { output: string; original_token_count?: number | undefined } {
+): ExecOutputDelivery {
   return outputSince(session, baselineOffset, maxOutputTokens);
 }

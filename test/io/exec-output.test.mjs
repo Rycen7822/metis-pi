@@ -77,7 +77,7 @@ test("snapshot tails skip the buffer at zero and keep positive/default limits", 
 	assert.equal(slice.mock.callCount(), 2, "zero remains read-free after positive reads");
 });
 
-test("partial spool writes fall back without losing retained output and release the file", (t) => {
+test("partial spool writes keep a bounded tail and release the file", (t) => {
 	const buffer = bufferFor(t, Mi + 300);
 	buffer.append("a".repeat(Mi + 200));
 	const { directory, fd } = buffer.spool;
@@ -91,8 +91,11 @@ test("partial spool writes fall back without losing retained output and release 
 		if (calls++ === 0) return write(args[0], args[1], args[2], 17, args[4]);
 		throw new Error("ENOSPC injected after a partial write");
 	});
+	const read = t.mock.method(fs, "readSync");
 	buffer.append("b".repeat(1000));
-	assert.equal(buffer.slice(), "a".repeat(Mi - 700) + "b".repeat(1000));
+	assert.equal(buffer.slice(), "a".repeat(Mi - 1000) + "b".repeat(1000));
+	assert.equal(buffer.fallbackStartOffset, 1200);
+	assert.ok(read.mock.calls.reduce((bytes, call) => bytes + call.arguments[3], 0) <= 2 * Mi);
 	assert.equal(buffer.spool, undefined);
 	assert.equal(fs.existsSync(directory), false);
 	assert.throws(() => fs.fstatSync(fd), { code: "EBADF" });
@@ -101,13 +104,19 @@ test("partial spool writes fall back without losing retained output and release 
 
 });
 
-for (const method of ["mkdtempSync", "openSync"]) test(`${method} failure preserves memory and removes any allocated spool directory`, (t) => {
+for (const method of ["mkdtempSync", "openSync"]) test(`${method} failure keeps a bounded tail and cleans up`, (t) => {
 	const directories = trackExecSpools(t);
 	const buffer = bufferFor(t, 3 * Mi);
 	buffer.append("prefix");
 	t.mock.method(fs, method, () => { throw new Error("spool creation unavailable"); });
 	buffer.append("x".repeat(2 * Mi));
-	assert.equal(buffer.slice(), "prefix" + "x".repeat(2 * Mi));
+	const state = { buffer, emittedOffset: 0 };
+	assert.deepEqual(consumeOutput(state, Mi), {
+		output: "x".repeat(Mi), original_token_count: Math.ceil((2 * Mi + 6) / 4),
+		outputOmitted: `Output spool unavailable; UTF-16 offsets [0, ${Mi + 6}) omitted from the retained tail`,
+	});
+	assert.equal(state.emittedOffset, 2 * Mi + 6);
+	assert.deepEqual(consumeOutput(state, Mi), { output: "" });
 	assert.equal(buffer.spool, undefined);
 	assert.equal(directories.length, method === "openSync" ? 1 : 0);
 	assert.ok(directories.every((directory) => !fs.existsSync(directory)));

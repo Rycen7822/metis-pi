@@ -36,6 +36,7 @@ export function formatUnifiedExecResult(result: UnifiedExecResult, command?: str
   }
 
   if (result.fullOutputError) sections.push(result.fullOutputError);
+  if (result.outputOmitted) sections.push(result.outputOmitted);
   sections.push("Output:");
   sections.push(result.output);
 
