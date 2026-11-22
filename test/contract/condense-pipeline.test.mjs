@@ -3,7 +3,8 @@ import { once } from "node:events";
 import test from "node:test";
 import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { SessionManager, createEventBus, estimateTokens, initTheme } from "@earendil-works/pi-coding-agent";
+import { SessionManager, convertToLlm, createEventBus, estimateTokens, initTheme } from "@earendil-works/pi-coding-agent";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { SettingsList } from "@earendil-works/pi-tui";
 import { fixture, usage } from "../helpers/condense-pipeline.mjs";
 import { TokenEstimator } from "../../src/condense/token-estimator.ts";
@@ -529,29 +530,74 @@ test("an earlier rewrite includes eligible later chains in the first request wit
   assert.equal(f.calls.length, 0);
 });
 
-test("an earlier rewrite leaves later chains alone when joining would lose a cheaper cache ending", async t => {
-  for (const bounded of [false, true]) await t.test(bounded ? "bounded Responses lookup" : "plain lookup", async t => {
-    const f = await independentTasks(t, { total: 240000, sizes: [49000, ...Array(6).fill(2500)], perTurn: 8500, price: 10 });
-    if (bounded) {
-      f.ctx.model.api = "openai-responses";
-      f.ctx.model.compat = { supportsExplicitPromptCacheMode: true };
+test("bounded Responses lookup counts the rendered shared summary and not each replaced chain", async t => {
+  const f = await independentTasks(t, { total: 240000, sizes: [49000, ...Array(6).fill(2500)], perTurn: 8500, price: 10 });
+  const model = Object.assign(f.ctx.model, { api: "openai-responses", compat: { supportsExplicitPromptCacheMode: true } });
+  const raw = f.sm.buildSessionProjection().messages;
+  const toInput = messages => convertResponsesMessages(model, { messages: convertToLlm(messages) }, new Set([model.provider]));
+  const input = toInput(raw);
+  for (let i = 0; i < 3; i++) {
+    await f.emit("context", { messages: raw });
+    await f.emit("before_provider_request", { payload: { model: model.id, input } });
+    await f.emit("message_end", { message: { role: "assistant", api: model.api, provider: model.provider,
+      model: model.id, content: [{ type: "text", text: "Already consumed" }], stopReason: "stop",
+      timestamp: f.nextTimestamp(), usage: { ...usage, input: 4800, cacheRead: 235200 } } });
+  }
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  const after = toInput(projected);
+  const cut = input.findIndex(item => item.role === "user" && item.content.some(block => block.text === f.tasks[0].user)) + 1;
+  assert.ok(cut > 0);
+  assert.deepEqual(after.slice(0, cut), input.slice(0, cut));
+  assert.deepEqual(after.filter(item => item.type === "function_call_output").map(item => item.call_id),
+    f.active.map(call => call.id));
+  assert.equal(projected.filter(message => message.metisDerived?.kind === "condense-chain").length, 1);
+  assert.equal(f.calls.length, 0);
+});
+
+test("a suffix archive failure does not block an already-approved earlier rewrite", async t => {
+  const f = await independentTasks(t, { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
+    perTurn: 8500, price: 20 });
+  const [earlier, later] = f.tasks;
+  const append = f.sm.appendCustomEntry.bind(f.sm);
+  let rejected = false;
+  t.mock.method(f.sm, "appendCustomEntry", (type, data) => {
+    if (type === "context-prune-index" && data.backfilled && data.toolCalls.some(call => call.toolCallId === later.id)) {
+      rejected = true;
+      throw new Error("fixture: suffix index write fails");
     }
-    const raw = f.sm.buildSessionProjection().messages;
-    const input = raw.map(message => ({ role: "user", content: JSON.stringify(message) }));
-    for (let i = 0; i < 3; i++) {
-      await f.emit("context", { messages: raw });
-      await f.emit("before_provider_request", { payload: { model: f.ctx.model.id, input } });
-      await f.emit("message_end", { message: { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider,
-        model: f.ctx.model.id, content: [{ type: "text", text: "Already consumed" }], stopReason: "stop",
-        timestamp: f.nextTimestamp(), usage: { ...usage, input: 4800, cacheRead: 235200 } } });
-    }
-    await f.emit("agent_settled"); await f.waitMaintenance();
-    const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
-    assert.ok(!projected.some(message => message.toolCallId === f.tasks[0].id), "the approved earlier cut should still publish");
-    const laterIds = f.tasks.slice(1).map(task => task.id);
-    assert.deepEqual(projected.map(message => message.toolCallId).filter(id => laterIds.includes(id)), bounded ? laterIds : []);
-    assert.equal(f.calls.length, 0);
+    return append(type, data);
   });
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  assert.ok(rejected, "the suffix staging was attempted");
+  assert.ok(!projected.some(message => message.toolCallId === earlier.id), "the earlier replacement still publishes");
+  assert.deepEqual(projected.find(message => message.toolCallId === later.id), later.result);
+  assert.equal(f.calls.length, 0);
+});
+
+test("a packed batch uses the earlier committed cut instead of paying for a separate rewrite", async t => {
+  const f = await fixture(t, { batchingMode: "turn", autoBudgetThreshold: null, chainCompression: { enabled: false } });
+  f.ctx.getContextUsage = () => undefined;
+  Object.assign(f.ctx.model.cost, { input: 3, cacheRead: 1, cacheWrite: 3 });
+  const receipt = { ...usage, input: 500, cacheRead: 24500 };
+  for (let i = 0; i < 3; i++) await f.emit("message_end", { message: {
+    role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id, content: [],
+    stopReason: "stop", timestamp: f.nextTimestamp(), usage: receipt,
+  } });
+  const log = (name, lines) => Array.from({ length: lines }, (_, i) => `built ${name} item ${i}: ${"x".repeat(48)}`).join("\n");
+  const first = f.add(log("early", 620), "npm run build", "batch-early");
+  const second = f.add(log("late", 95), "npm run build", "batch-later");
+  f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "unchanged tail ".repeat(2250) }],
+    stopReason: "stop", timestamp: f.nextTimestamp() });
+  await f.finish(true, receipt);
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  for (const call of [first, second])
+    assert.match(projected.find(message => message.toolCallId === call.id).content[0].text, /^\[Captured /);
+  assert.equal(projected.filter(message => message.details?.representation === "packed").length, 2);
+  assert.equal(f.calls.length, 0);
 });
 
 test("remote and bounded Responses cache credit require an observed request and matching namespace", async t => {

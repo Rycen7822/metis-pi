@@ -392,8 +392,9 @@ export async function prepareSharedChain(
   const members: SharedChainMember[] = [];
   const resolve = createRangeResolver(deps.messages);
   let bodyText = "";
+  const assertValid = () => { signal.throwIfAborted(); deps.backfill.assertValid?.(); };
   for (const chain of eligible) {
-    await setImmediate(); signal.throwIfAborted();
+    await setImmediate(); assertValid();
     const range = findCompressibleRange(chain, deps.messages, resolve);
     if (!range || chain.finalAssistantTimestamp === null) continue;
     const startEntryId = anchorId("start", chain.startUserTimestamp, chain.checkpointBoundary?.startRole);
@@ -408,9 +409,16 @@ export async function prepareSharedChain(
     const owned = deps.indexer.getOwnedSummaryText(keys);
     if (owned === null) continue;
     const fresh = extractChainRecords(deps.messages, { ...chain, protectedToolCallIds: [] }, key => deps.indexer.hasRecord(key));
-    if (fresh.length) await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry,
-      assertValid: () => { signal.throwIfAborted(); deps.backfill.assertValid?.(); } });
-    signal.throwIfAborted();
+    if (fresh.length) {
+      try {
+        await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry, assertValid });
+      } catch (error) {
+        assertValid();
+        deps.diagnostics.report("backfill-empty", String(chain.startUserTimestamp), String(error));
+        continue;
+      }
+    }
+    assertValid();
     const records = keys.map(key => deps.indexer.getRecord(key));
     if (records.some(record => !record || record.metadataUnavailable || record.archiveComplete === false)) continue;
     const uncovered = records.filter((record): record is ToolCallRecord => !!record && (!owned || record.archiveOnly === true));

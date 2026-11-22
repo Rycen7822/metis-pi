@@ -13,7 +13,7 @@ export type Model = { id: string; provider: string; api: string; baseUrl?: strin
   cost?: Prices & { output?: number; tiers?: Array<Partial<Prices> & { inputTokensAbove: number; output?: number }> };
   priceTiers?: PriceTier[]; pricing?: "pi" | "models.dev" | "pending" };
 export type RewriteContext = { tokens?: number | null; opaque?: boolean; cacheKey?: string; messages?: any[];
-  appendedCacheBoundaries?: number };
+  rendered?: { messages: any[]; tokens: number }; appendedCacheBoundaries?: number };
 type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & {
   minimumGain?: number;
   forecastRequests?: number;
@@ -45,6 +45,7 @@ function searchablePrefix(messages: any[], before: number, prefix: number, appen
 }
 const WARM_REQUESTS = 3;
 const DEFAULT_FORECAST_REQUESTS = 3;
+const BOUNDED_FORECAST_REQUESTS = 32;
 const MIN_CACHE_HIT = 0.9;
 const FORECAST_CACHE_HIT = 0.98;
 const FORECAST_GROWTH_TOKENS = 2000;
@@ -214,7 +215,7 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
 export function boundedRewritePolicy(config: ChainCompressionConfig, tokens: number) {
   if (tokens < 2048 || tokens > 65536) return undefined;
   return { minGainTokens: config.minGainTokens, minGainFraction: config.minGainFraction,
-    minimumGain: Math.max(Math.min(2048, config.minGainTokens), tokens * config.minGainFraction), forecastRequests: 32 };
+    minimumGain: Math.max(Math.min(2048, config.minGainTokens), tokens * config.minGainFraction), forecastRequests: BOUNDED_FORECAST_REQUESTS };
 }
 
 /** This is a selection boundary, not a hard context limit; the recent working set is protected separately. */
@@ -254,15 +255,23 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
     return count ? { localPrefix, tokens, allClosed, prefix: Math.min(prefix, localPrefix) } : undefined;
   };
   return {
-    accepts(keys: Iterable<string>, gain: RewriteGain, fee = 0) {
+    accepts(keys: Iterable<string>, gain: RewriteGain, fee = 0, mode?: "packed") {
       const plan = selection(keys);
       if (!plan) return false;
-      // Ordinary aggregate admission keeps its own proxy gain floor and three-request forecast.
-      if (budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), plan.prefix,
-        { ...config, minimumGain: 0 }, model, false, fee, costContext(publications + 1))) return true;
+      const totalGain = Math.min(pi + gain.pi, proxy + gain.proxy);
+      const proposed = costContext(publications + 1);
+      let forecastRequests = DEFAULT_FORECAST_REQUESTS;
+      if (mode === "packed" && publications > 0) {
+        const committedGain = Math.min(pi, proxy);
+        if (Math.min(gain.pi, gain.proxy) <= 0) return false;
+        const currentCost = budget.firstRequestDelta(before, committedGain, prefix, model, costContext(publications));
+        if (budget.firstRequestDelta(before, totalGain, plan.prefix, model, proposed) > currentCost) return false;
+        if (plan.prefix === prefix) forecastRequests = BOUNDED_FORECAST_REQUESTS;
+      }
+      if (budget.admits(before, totalGain, plan.prefix, { ...config, minimumGain: 0, forecastRequests }, model, false, fee, proposed)) return true;
       const policy = plan.allClosed ? boundedRewritePolicy(config, plan.tokens) : undefined;
       return !!policy && localRewritePrefixAllowed(before, plan.localPrefix)
-        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.prefix, policy, model, false, fee, costContext(publications + 1));
+        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.prefix, policy, model, false, fee, proposed);
     },
     published(keys: Iterable<string>, gain: RewriteGain) {
       const plan = selection(keys);
@@ -352,7 +361,10 @@ export class RewriteBudget {
     if (stable === 0) return 0;
     if (bounded) {
       if (!cached.implicit) return 0; // Explicit-only endpoints need proof beyond our implicit message-ending model.
-      prefix = searchablePrefix(context.messages, before, Math.min(prefix, stable), context.appendedCacheBoundaries ?? 1);
+      const limit = Math.min(prefix, stable);
+      prefix = context.rendered
+        ? searchablePrefix(context.rendered.messages, context.rendered.tokens, limit, 0)
+        : searchablePrefix(context.messages, before, limit, context.appendedCacheBoundaries ?? 1);
       if (prefix === 0) return 0;
     }
     const available = Math.max(0, cached.cacheRead - Math.max(cached.tokens - stable, before - prefix));

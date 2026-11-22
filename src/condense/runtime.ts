@@ -95,7 +95,7 @@ type PreparedProjection = {
   projection: NativeProjection; leaf: ReturnType<ExtensionContext["sessionManager"]["getLeafId"]>;
   source?: { capture: ReturnType<typeof createSourceSnapshotter>; snapshot: string | undefined };
 };
-type ChainRewrite = { counts: TokenComparison; prefix: number };
+type ChainRewrite = { counts: TokenComparison; prefix: number; context: RewriteContext };
 type SharedRewrite = ChainRewrite & { entry: SharedChainCompressionEntry; shape: string };
 
 function chainGain(counts: TokenComparison): number {
@@ -556,7 +556,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const chains = options.candidate ? [options.candidate]
       : options.chains ?? detectChains(messages, protectionPredicate).filter(chain => findCompressibleRange(chain, messages));
     const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
-    const measurements = new Map<string, ChainRewrite & { shape?: string }>();
+    const measurements = new Map<string, { counts: TokenComparison; shape?: string }>();
+    let automaticRewrite: ChainRewrite | undefined;
     const append = (type: string, data: unknown) => {
       assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
       if (!hasCustomEntryData(ctx.sessionManager, type, data))
@@ -587,8 +588,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const source = projectionFingerprint(raw);
         const config = policyFingerprint(currentConfig.value);
         const before = economicMessages(projectContext(raw, ctx.model?.api, { ctx, probe: true }).messages);
-        costContext.messages ??= before;
-        costContext.appendedCacheBoundaries = measurements.size + 1;
         const views = currentChainViews(raw, ctx).concat(entry);
         const after = economicMessages(projectContext(raw, ctx.model?.api,
           { ctx, chainViews: views, probe: true, chainFloor: entry.startUserTimestamp }).messages);
@@ -602,30 +601,27 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           if (!span) return;
           candidateTokens = before.slice(span.bodyStart, span.endIndex).reduce((sum, message) => sum + estimateTokens(message), 0);
         }
-        if (!counts || chainGain(counts) <= 0 || (automatic && !admitAutomaticChain(ctx, counts, prefix, costContext, candidateTokens)))
-          return;
-        const single = { counts, prefix };
+        if (!counts || chainGain(counts) <= 0) return;
+        const context = { ...costContext, messages: before, rendered: { messages: after, tokens: counts.piAfter } };
+        if (automatic && !admitAutomaticChain(ctx, counts, prefix, context, candidateTokens)) return;
+        const single = { counts, prefix, context };
         const shared = options.coalesce && candidateTokens !== undefined
           ? await options.coalesce({ ...single, tokens: candidateTokens }, before) : undefined;
         assertCurrent(version); signal?.throwIfAborted();
         if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages)
           || config !== policyFingerprint(currentConfig.value)) return;
         const selected = shared?.entry ?? entry;
-        measurements.set(selected.blockId, shared ?? single);
+        const rewrite = shared ?? single;
+        if (automatic) automaticRewrite = rewrite;
+        measurements.set(selected.blockId, { counts: rewrite.counts, shape: shared?.shape });
         return selected;
       },
       backfill,
     }, inGrace);
     assertCurrent(version);
-    let reclaimedTokens = 0, gain = 0, beforeTokens = 0, prefix = Infinity, members = 0;
+    let reclaimedTokens = 0, members = 0;
     for (const entry of result.compressedEntries) {
-      const measured = measurements.get(entry.blockId);
-      if (!measured) continue;
-      const { counts } = measured;
-      reclaimedTokens += counts.proxyDelta;
-      gain += chainGain(counts);
-      beforeTokens = Math.max(beforeTokens, counts.piBefore);
-      prefix = Math.min(prefix, measured.prefix);
+      reclaimedTokens += measurements.get(entry.blockId)?.counts.proxyDelta ?? 0;
       members += isSharedChain(entry) ? entry.members.length : 1;
     }
     if (members > 0) {
@@ -633,9 +629,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (result.compressedEntries.some(entry => !isSharedChain(entry)) && indexer.getChainEntries().some(isSharedChain))
         needsSharedValidation = true;
       statsAccum.addChainsCompressed(members);
-      if (automatic) rewriteBudget.published(beforeTokens, gain, prefix, economicModel(ctx),
-        { ...costContext, appendedCacheBoundaries: members });
-      else resetRewriteState();
+      if (automaticRewrite) {
+        const { counts, prefix, context } = automaticRewrite;
+        rewriteBudget.published(counts.piBefore, chainGain(counts), prefix, economicModel(ctx), context);
+      } else if (!automatic) resetRewriteState();
       occ.rewrite(ctx, beforeRewrite);
     }
     return { ...result, reclaimedTokens };
@@ -1211,19 +1208,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let nextRequest = 0, failedRequest = Infinity;
       const controller = fallbackController;
       const config = currentConfig.value;
-      const admitBatch = (record: BatchRecord, gain: RewriteGain, fee = 0) => {
+      const admitBatch = (record: BatchRecord, gain: RewriteGain, fee = 0, mode?: "packed") => {
         assertPendingOwnership();
         if (trigger === "manual") return true;
         batchAdmission ??= batchRewriteAdmission(rewriteBudget,
           economicMessages(withClosingMessage(visibleForPlanning(), options.closingMessage)),
           config.chainCompression, economicModel(ctx), rewriteContext(ctx, sourceProjection, options.closingMessage));
-        const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee);
+        const allowed = batchAdmission.accepts(record.plan!.replacements.keys(), gain, fee, mode);
         if (!allowed) record.deferredReason = "economics";
         return allowed;
       };
       const evaluateBatch = async (record: BatchRecord, text: string, deterministic = false) => {
         const gain = await record.plan!.evaluate(text, deterministic);
-        return gain && admitBatch(record, gain) ? gain : undefined;
+        return gain && admitBatch(record, gain, 0, deterministic ? "packed" : undefined) ? gain : undefined;
       };
       const checkActive = () => { assertCurrent(version); signal.throwIfAborted(); assertPendingOwnership(); };
       const checkSource = (projection?: NativeProjection) => {
@@ -1253,23 +1250,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               : config.autoBudgetThreshold === null ? "automatic-disabled" : "pressure";
             record.result = "deferred"; continue;
           }
-          const deterministic = kind === "packed";
           record.plan = await prepareReplacement(record.batch, ctx, {
             appendEntry: appendEntry!, signal, visible: visibleForPlanning(),
             onDeferred: reason => { record.deferredReason = reason; },
           });
           checkActive();
           if (!record.plan) { record.result = "deferred"; continue; }
-          if (!deterministic && record.plan.budget.limit < record.plan.budget.target) {
+          if (kind === "packed") {
+            // Price local work at commit, after the previous replacements are known.
+            record.result = { summaryText: record.prepared.packedText, deterministic: true };
+            continue;
+          }
+          if (record.plan.budget.limit < record.plan.budget.target) {
             record.deferredReason = "budget"; record.result = "deferred"; continue;
           }
-          if (!deterministic && !admitBatch(record, record.plan.upperGain)) {
+          if (!admitBatch(record, record.plan.upperGain)) {
             record.result = "deferred"; continue;
-          }
-          if (deterministic) {
-            record.result = await evaluateBatch(record, record.prepared.packedText, true)
-              ? { summaryText: record.prepared.packedText, deterministic: true } : "deferred";
-            continue;
           }
           // Rejected plans cannot publish. Read fresh source only before real provider work.
           checkSource(await readProjection(ctx, signal));
@@ -1321,6 +1317,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         attemptKey?: string;
       };
       const preparePublication = async (items: { record: BatchRecord; result: BatchSummary }[]): Promise<Publication | undefined> => {
+        const packed = items.length === 1 && items[0]?.result.deterministic ? items[0] : undefined;
+        const packedGain = packed && await evaluateBatch(packed.record, packed.result.summaryText, true);
+        if (packed && !packedGain) return;
         const projection = await readProjection(ctx, signal);
         const visible = projectContext(projection.messages, ctx.model?.api,
           { ctx, source: readSourceEdits(ctx, projection), probe: true }).messages;
@@ -1354,7 +1353,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         let gain: RewriteGain | undefined;
         if (rendered.length === 1) {
           visible.forEach(replace);
-          gain = await evaluateBatch(first.record, first.result.summaryText, first.result.deterministic);
+          if (!packed) gain = await evaluateBatch(first.record, first.result.summaryText);
+          else if (packedGain && admitBatch(first.record, packedGain, 0, "packed")) gain = packedGain;
         } else {
           const after = visible.map(replace);
           const counts = await tokenEstimator.compare(visible, [...after, summary], signal);
@@ -2653,20 +2653,20 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const floor = earliestChainStart(views);
         const after = economicMessages(projectContext(raw, ctx.model?.api,
           { ctx, source: currentSource, chainViews: current.concat(views), probe: true, chainFloor: floor }).messages);
-        const costContext = { ...rewriteContext(ctx, preparedSource, undefined, baseline), appendedCacheBoundaries: views.length };
         const counts = await tokenEstimator.compare(baseline, after, signal);
         assertNewWork();
         if (!counts) { lastMaintenanceSource = undefined; return; }
         const prefix = unchangedPrefixTokens(baseline, after);
         const gain = chainGain(counts);
-        if (gain <= 0 || !admitAutomaticChain(ctx, counts, prefix, costContext, anchor?.tokens)) return;
+        const context = { ...(anchor?.context ?? rewriteContext(ctx, preparedSource, undefined, baseline)),
+          rendered: { messages: after, tokens: counts.piAfter } };
+        if (gain <= 0 || !admitAutomaticChain(ctx, counts, prefix, context, anchor?.tokens)) return;
         if (anchor) {
           // Join only at the already approved cut, with a smaller first request even after cache accounting.
           if (prefix < anchor.prefix || counts.piAfter >= anchor.counts.piAfter || counts.proxyDelta <= anchor.counts.proxyDelta) return;
           const model = economicModel(ctx);
-          const groupedCost = rewriteBudget.firstRequestDelta(counts.piBefore, gain, prefix, model, costContext);
-          const singleCost = rewriteBudget.firstRequestDelta(counts.piBefore, chainGain(anchor.counts), anchor.prefix,
-            model, { ...costContext, appendedCacheBoundaries: 1 });
+          const groupedCost = rewriteBudget.firstRequestDelta(counts.piBefore, gain, prefix, model, context);
+          const singleCost = rewriteBudget.firstRequestDelta(counts.piBefore, chainGain(anchor.counts), anchor.prefix, model, anchor.context);
           if (groupedCost > singleCost) return;
         }
         const measuredSource = manager.buildSessionProjection(MESSAGE_SOURCES);
@@ -2675,7 +2675,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (indexer.getChainEntries().flatMap(chainMembers).some(member => starts.has(member.startUserTimestamp))) return;
         const plain = projectContext(raw, ctx.model?.api,
           { ctx, source: currentSource, chainViews: singles, probe: true, chainFloor: floor }).messages;
-        return { entry, counts, prefix, shape: sharedShape(indexChainProjection(plain), views) };
+        return { entry, counts, prefix, context, shape: sharedShape(indexChainProjection(plain), views) };
       };
       for (const plan of independent) {
         const suffix = plans.slice(plans.indexOf(plan)).map(item => item.chain);
@@ -2696,14 +2696,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (backlogChars < currentConfig.value.minBatchChars) return;
       const shared = await prepareSharedRewrite(fallback, before);
       if (!shared) return;
-      const { entry, counts, prefix, shape } = shared;
+      const { entry, counts, prefix, context, shape } = shared;
       appendEntry(CUSTOM_TYPE_CHAIN, entry);
       indexer.registerChain(entry);
       sharedValidations.set(entry.blockId, { shape, hasGain: true });
       lowerFloor(supersede, earliestChainStart(entry.members));
       statsAccum.addChainsCompressed(entry.members.length);
-      rewriteBudget.published(counts.piBefore, chainGain(counts), prefix, economicModel(ctx),
-        { ...rewriteContext(ctx, sourceView.projection, undefined, before), appendedCacheBoundaries: entry.members.length });
+      rewriteBudget.published(counts.piBefore, chainGain(counts), prefix, economicModel(ctx), context);
       occ.rewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;

@@ -221,6 +221,8 @@ test("one flush reserves every new summary and keeps the earliest published rewr
   frame.published(["t0@2"], gain);
   assert.equal(frame.accepts(["t1@6"], gain), false,
     "a second summary cannot reuse its own later prefix while the first rewrite lies outside the lookup window");
+  assert.equal(frame.accepts(["t1@6"], gain, 0, "packed"), false,
+    "a local suffix must not move the earlier cut outside the lookup window and raise the first request cost");
 });
 
 test("both forecast paths apply their own context tier while opaque cold costs remain funded", () => {
