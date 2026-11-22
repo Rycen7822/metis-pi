@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { Api, Model as PiModel, Usage } from "@earendil-works/pi-ai";
 import { createRangeResolver } from "./chain-range-prune.ts";
@@ -13,7 +14,7 @@ export type Model = { id: string; provider: string; api: string; baseUrl?: strin
   cost?: Prices & { output?: number; tiers?: Array<Partial<Prices> & { inputTokensAbove: number; output?: number }> };
   priceTiers?: PriceTier[]; pricing?: "pi" | "models.dev" | "pending" };
 export type RewriteContext = { tokens?: number | null; opaque?: boolean; cacheKey?: string; messages?: any[];
-  appendedCacheBoundaries?: number };
+  rendered?: { messages: any[]; tokens: number }; appendedCacheBoundaries?: number };
 type RewritePolicy = Pick<ChainCompressionConfig, "minGainTokens" | "minGainFraction"> & {
   minimumGain?: number;
   forecastRequests?: number;
@@ -45,6 +46,7 @@ function searchablePrefix(messages: any[], before: number, prefix: number, appen
 }
 const WARM_REQUESTS = 3;
 const DEFAULT_FORECAST_REQUESTS = 3;
+const BOUNDED_FORECAST_REQUESTS = 32;
 const MIN_CACHE_HIT = 0.9;
 const FORECAST_CACHE_HIT = 0.98;
 const FORECAST_GROWTH_TOKENS = 2000;
@@ -95,7 +97,8 @@ function forecastRewrite(before: number, gain: number, prefix: number, price: Pr
 const totalInput = (visible: number, context?: RewriteContext) => Math.max(visible, finite(context?.tokens) ? context.tokens : 0);
 
 /** Unknown primary prices use relative input units, never another model's dollar receipt. */
-export function summaryRequestCost(primary: Model | undefined, model: Model, inputTokens: number, maxOutputTokens: number) {
+export function summaryRequestCost(primary: Model | undefined, model: Model, inputTokens: number, maxOutputTokens: number,
+  mode?: "manual") {
   const main = knownPrices(primary), price = model.cost;
   const inputRate = price?.input, outputRate = price?.output;
   const resolved = model.pricing === "pi" || model.pricing === "models.dev";
@@ -106,11 +109,11 @@ export function summaryRequestCost(primary: Model | undefined, model: Model, inp
   const cacheRead = known && finite(price?.cacheRead) ? price.cacheRead * scale : input / 10;
   const cacheWrite = known && finite(price?.cacheWrite) ? price.cacheWrite * scale : input;
   return {
-    cost: model.pricing === "pending" ? Infinity : inputTokens * input + maxOutputTokens * output,
+    cost: model.pricing === "pending" && mode !== "manual" ? Infinity : inputTokens * input + maxOutputTokens * output,
     actual(usage: Usage) {
       const billed = usage.cost?.totalFromProvider === true || (known && model.pricing === undefined);
       if (main && billed && finite(usage.cost?.total)) return usage.cost.total * 1_000_000;
-      if (![usage.input, usage.output, usage.cacheRead, usage.cacheWrite].every(finite)) return Infinity;
+      if (![usage.input, usage.output, usage.cacheRead, usage.cacheWrite].every(finite)) return;
       return usage.input * input + usage.output * output + usage.cacheRead * cacheRead + usage.cacheWrite * cacheWrite;
     },
   };
@@ -214,7 +217,7 @@ export function protectChainWorkingSet(chains: ChainRange[], raw: any[], visible
 export function boundedRewritePolicy(config: ChainCompressionConfig, tokens: number) {
   if (tokens < 2048 || tokens > 65536) return undefined;
   return { minGainTokens: config.minGainTokens, minGainFraction: config.minGainFraction,
-    minimumGain: Math.max(Math.min(2048, config.minGainTokens), tokens * config.minGainFraction), forecastRequests: 32 };
+    minimumGain: Math.max(Math.min(2048, config.minGainTokens), tokens * config.minGainFraction), forecastRequests: BOUNDED_FORECAST_REQUESTS };
 }
 
 /** This is a selection boundary, not a hard context limit; the recent working set is protected separately. */
@@ -254,15 +257,23 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
     return count ? { localPrefix, tokens, allClosed, prefix: Math.min(prefix, localPrefix) } : undefined;
   };
   return {
-    accepts(keys: Iterable<string>, gain: RewriteGain, fee = 0) {
+    accepts(keys: Iterable<string>, gain: RewriteGain, fee = 0, mode?: "packed") {
       const plan = selection(keys);
       if (!plan) return false;
-      // Ordinary aggregate admission keeps its own proxy gain floor and three-request forecast.
-      if (budget.admits(before, Math.min(pi + gain.pi, proxy + gain.proxy), plan.prefix,
-        { ...config, minimumGain: 0 }, model, false, fee, costContext(publications + 1))) return true;
+      const totalGain = Math.min(pi + gain.pi, proxy + gain.proxy);
+      const proposed = costContext(publications + 1);
+      let forecastRequests = DEFAULT_FORECAST_REQUESTS;
+      if (mode === "packed" && publications > 0) {
+        const committedGain = Math.min(pi, proxy);
+        if (Math.min(gain.pi, gain.proxy) <= 0) return false;
+        const currentCost = budget.firstRequestDelta(before, committedGain, prefix, model, costContext(publications));
+        if (budget.firstRequestDelta(before, totalGain, plan.prefix, model, proposed) > currentCost) return false;
+        if (plan.prefix === prefix) forecastRequests = BOUNDED_FORECAST_REQUESTS;
+      }
+      if (budget.admits(before, totalGain, plan.prefix, { ...config, minimumGain: 0, forecastRequests }, model, false, fee, proposed)) return true;
       const policy = plan.allClosed ? boundedRewritePolicy(config, plan.tokens) : undefined;
       return !!policy && localRewritePrefixAllowed(before, plan.localPrefix)
-        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.prefix, policy, model, false, fee, costContext(publications + 1));
+        && budget.admits(before, Math.min(gain.pi, gain.proxy), plan.prefix, policy, model, false, fee, proposed);
     },
     published(keys: Iterable<string>, gain: RewriteGain) {
       const plan = selection(keys);
@@ -270,10 +281,20 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
       prefix = plan.prefix; pi += gain.pi; proxy += gain.proxy; publications++;
     },
     finish() {
-      if (pi > 0 && proxy > 0) budget.published(before, Math.min(pi, proxy), prefix, model, costContext(publications));
+      if (pi > 0 && proxy > 0) return budget.published(before, Math.min(pi, proxy), prefix, model, costContext(publications));
     },
   };
 }
+
+type ColdRewrite = { before: number; opaqueOverhead?: number; outstanding: number; reserve: number };
+type Repayment = { input: number; cold?: ColdRewrite; needsWarmRecovery?: boolean };
+type RewriteCheckpoint = { version: 1; key: string; debt: number | null; gain: number; input?: number;
+  cold?: Omit<ColdRewrite, "outstanding" | "reserve"> & { outstanding: number | null; reserve: number | null };
+  usage?: number; work?: number; growth: number; needsWarmRecovery?: boolean; fees?: number; unknownFees?: number };
+
+const storedCost = (value: number) => finite(value) ? value : null;
+const validCost = (value: unknown): value is number | null => value === null || finite(value);
+const checkpointKey = (identity: string) => createHash("sha256").update(identity).digest("hex");
 
 /** Shared incremental-cost estimate, not credit for the cache spending that would also occur without compression. */
 export class RewriteBudget {
@@ -281,8 +302,7 @@ export class RewriteBudget {
   private discounted = false;
   private warmRequests = 0;
   private debt = 0;
-  private repayment?: { input: number; cold?: { before: number; fees: number; reserve: number };
-    needsWarmRecovery?: boolean };
+  private repayment?: Repayment;
   private fees = 0;
   private unknownFees = 0;
   private generation = 0;
@@ -293,24 +313,67 @@ export class RewriteBudget {
   private request?: CacheRequest;
   private cached?: CacheRequest & { cacheRead: number };
 
+  private readonly readCheckpoint?: (key: string) => unknown;
+
+  constructor(readCheckpoint?: (key: string) => unknown) { this.readCheckpoint = readCheckpoint; }
+
+  invalidateCache() {
+    this.request = this.cached = undefined;
+    this.warmRequests = 0;
+  }
+
   reset() {
     this.model = undefined;
     this.discounted = false;
     this.repayment = undefined;
-    this.request = this.cached = undefined;
-    this.warmRequests = this.debt = this.fees = this.unknownFees = this.growth = this.lastGain = 0;
+    this.invalidateCache();
+    this.debt = this.fees = this.unknownFees = this.growth = this.lastGain = 0;
     this.lastUsage = this.lastWork = -Infinity;
     this.generation++;
   }
 
-  private prices(model: Model | undefined): Prices {
+  useModel(model: Model | undefined): Prices {
     const quoted = knownPrices(model), price = quoted ?? FALLBACK_PRICES;
     const identity = model && JSON.stringify([
       model.provider, model.id, model.api, model.baseUrl, model.priceTiers ?? price, quoted ? "quoted" : model.pricing,
     ]);
-    if (identity !== this.model) { this.reset(); this.model = identity; }
+    if (identity !== this.model) {
+      this.reset();
+      this.model = identity;
+      if (identity && this.readCheckpoint) this.restore(this.readCheckpoint(checkpointKey(identity)));
+    }
     this.discounted = price.input > price.cacheRead;
     return price;
+  }
+
+  private restore(data: unknown) {
+    if (!data || typeof data !== "object") return;
+    const value = data as Partial<RewriteCheckpoint>;
+    if (value.version !== 1 || !validCost(value.debt) || !finite(value.gain) || !finite(value.growth)) return;
+    const { cold, input, fees = 0, unknownFees = 0 } = value;
+    if (!finite(fees) || !finite(unknownFees) || !Number.isSafeInteger(unknownFees)) return;
+    if (!finite(input) && (input !== undefined || value.gain !== 0 || value.debt !== 0 || cold !== undefined)) return;
+    if (cold !== undefined && (!cold || !finite(cold.before) || !validCost(cold.outstanding) || !validCost(cold.reserve)
+      || (cold.opaqueOverhead !== undefined && !finite(cold.opaqueOverhead)))) return;
+    this.fees = fees;
+    this.unknownFees = unknownFees;
+    this.debt = value.debt ?? Infinity;
+    this.lastGain = value.gain;
+    this.growth = value.growth;
+    this.lastUsage = finite(value.usage) ? value.usage : -Infinity;
+    this.lastWork = finite(value.work) ? value.work : -Infinity;
+    if (input !== undefined) this.repayment = { input, needsWarmRecovery: value.needsWarmRecovery === true,
+      cold: cold && { ...cold, outstanding: cold.outstanding ?? Infinity, reserve: cold.reserve ?? Infinity } };
+  }
+
+  checkpoint(): RewriteCheckpoint | undefined {
+    if (!this.model) return;
+    const { input, cold, needsWarmRecovery } = this.repayment ?? {};
+    return { version: 1, key: checkpointKey(this.model), debt: storedCost(this.debt), gain: this.lastGain, input,
+      fees: this.fees || undefined, unknownFees: this.unknownFees || undefined,
+      growth: this.growth, needsWarmRecovery, usage: finite(this.lastUsage) ? this.lastUsage : undefined,
+      work: finite(this.lastWork) ? this.lastWork : undefined,
+      cold: cold && { ...cold, outstanding: storedCost(cold.outstanding), reserve: storedCost(cold.reserve) } };
   }
 
   /** Retain only a Responses request whose visible input and cache namespace were observed together. */
@@ -320,7 +383,7 @@ export class RewriteBudget {
       this.cached = undefined;
       return;
     }
-    this.prices(model);
+    this.useModel(model);
     const cacheOptions = "prompt_cache_options" in payload ? payload.prompt_cache_options : undefined;
     const implicit = !cacheOptions || typeof cacheOptions !== "object" || !("mode" in cacheOptions)
       || cacheOptions.mode === undefined || cacheOptions.mode === "implicit";
@@ -352,7 +415,10 @@ export class RewriteBudget {
     if (stable === 0) return 0;
     if (bounded) {
       if (!cached.implicit) return 0; // Explicit-only endpoints need proof beyond our implicit message-ending model.
-      prefix = searchablePrefix(context.messages, before, Math.min(prefix, stable), context.appendedCacheBoundaries ?? 1);
+      const limit = Math.min(prefix, stable);
+      prefix = context.rendered
+        ? searchablePrefix(context.rendered.messages, context.rendered.tokens, limit, 0)
+        : searchablePrefix(context.messages, before, limit, context.appendedCacheBoundaries ?? 1);
       if (prefix === 0) return 0;
     }
     const available = Math.max(0, cached.cacheRead - Math.max(cached.tokens - stable, before - prefix));
@@ -360,9 +426,9 @@ export class RewriteBudget {
   }
 
   observe(message: any, model: Model | undefined, workTokens = 0) {
-    const price = this.prices(model);
     if (!model || message?.role !== "assistant" || message.provider !== model.provider || message.model !== model.id || message.api !== model.api
       || !finite(message.timestamp)) return;
+    const price = this.useModel(model);
     if (workTokens > 0 && finite(workTokens)) {
       if (["error", "aborted", "length"].includes(message.stopReason) || message.timestamp <= this.lastWork) return;
       this.lastWork = message.timestamp;
@@ -385,21 +451,27 @@ export class RewriteBudget {
     this.cached = !truncated && validInput && this.request ? { ...this.request, cacheRead: usage.cacheRead } : undefined;
     this.request = undefined;
     const repayment = this.repayment;
+    const priorDebt = this.debt, neededWarmRecovery = repayment?.needsWarmRecovery;
     if (repayment && !validInput) repayment.needsWarmRecovery = true;
     if (repayment?.cold) {
       const cold = repayment.cold;
       repayment.cold = undefined;
       this.warmRequests = 0;
-      if (!validInput) { this.debt = Math.max(this.debt, cold.reserve); return; }
-      const original = input + this.lastGain;
-      const baseline = requestCost(original, cold.before, pricesAt(price, model.priceTiers, original));
-      // The first normal receipt corrects the forecast; a missing one still retains its cold reservation.
-      const actual = Math.max(0, cold.fees + inputCost(usage, pricesAt(price, model.priceTiers, input)) - baseline);
-      this.debt = truncated ? Math.max(this.debt, actual) : actual;
-      repayment.input = input;
+      if (!validInput) this.debt = Math.max(this.debt, cold.reserve);
+      else {
+        const original = input + this.lastGain;
+        const baseline = requestCost(original, cold.before, pricesAt(price, model.priceTiers, original));
+        const actual = Math.max(0, cold.outstanding + inputCost(usage, pricesAt(price, model.priceTiers, input)) - baseline);
+        this.debt = truncated ? Math.max(this.debt, actual) : actual;
+        repayment.input = input;
+      }
+      return this.checkpoint();
+    }
+    if (truncated || !validInput) {
+      this.warmRequests = 0;
+      if (repayment?.needsWarmRecovery !== neededWarmRecovery) return this.checkpoint();
       return;
     }
-    if (truncated || !validInput) { this.warmRequests = 0; return; }
     const warm = usage.cacheRead / input >= MIN_CACHE_HIT;
     this.warmRequests = warm ? Math.min(WARM_REQUESTS, this.warmRequests + 1) : 0;
     if (!repayment) return;
@@ -416,27 +488,30 @@ export class RewriteBudget {
       this.debt = Math.max(0, this.debt - credit);
     }
     repayment.input = input;
+    if (this.debt !== priorDebt || repayment.needsWarmRecovery !== neededWarmRecovery) return this.checkpoint();
   }
 
   /** Keep the reservation when a paid request has no usage receipt; it is not evidence of a free attempt. */
-  reserveFee(cost: number): (actual: number) => void {
+  reserveFee(cost: number) {
     const generation = this.generation;
     if (finite(cost)) this.fees += cost;
     else this.unknownFees++;
     let settled = false;
-    return actual => {
+    return (actual: number) => {
       if (settled || generation !== this.generation) return;
       settled = true;
-      if (finite(cost)) this.fees -= cost;
+      if (cost === actual) return;
+      if (finite(cost)) this.fees = Math.max(0, this.fees - cost);
       else this.unknownFees--;
       if (finite(actual)) this.fees += actual;
       else this.unknownFees++;
+      return this.checkpoint();
     };
   }
 
   /** Recover completed work missed by a live callback; never replay historical spending receipts. */
   observeWork(raw: any[], model: Model | undefined) {
-    this.prices(model);
+    this.useModel(model);
     const rounds = [];
     for (const round of usefulRounds(raw)) {
       if (round.message.timestamp <= this.lastWork) break;
@@ -462,7 +537,7 @@ export class RewriteBudget {
 
   admits(before: number, gain: number, prefix: number, config: RewritePolicy,
     model: Model | undefined, emergency: boolean, fee = 0, context?: RewriteContext): boolean {
-    const prices = this.prices(model);
+    const prices = this.useModel(model);
     const total = totalInput(before, context);
     if (!this.ready(total, gain, config, emergency) || gain > before || !finite(prefix) || prefix > before) return false;
     if (emergency) return true;
@@ -473,19 +548,31 @@ export class RewriteBudget {
     return forecast.cold + this.fees + fee < forecast.savings;
   }
 
+  firstRequestDelta(before: number, gain: number, prefix: number, model: Model | undefined, context: RewriteContext): number {
+    const rates = this.useModel(model);
+    return coldCost(totalInput(before, context), gain, this.cachedPrefix(before, prefix, model, context), rates, model?.priceTiers);
+  }
+
   published(before: number, gain: number, prefix: number, model: Model | undefined, context?: RewriteContext) {
-    const prices = this.prices(model);
-    const total = totalInput(before, context);
-    const cold = coldCost(total, gain, this.cachedPrefix(before, prefix, model, context), prices, model?.priceTiers);
-    // A profitable first request cannot repay already-spent summary fees before it happens.
-    const fees = this.unknownFees > 0 ? Infinity : this.fees;
-    const reserve = Math.max(0, coldCost(total, gain, 0, prices, model?.priceTiers)) + fees;
-    this.debt = Math.max(0, cold) + fees;
-    this.repayment = { input: total - gain, cold: { before: total, fees, reserve } };
-    this.fees = this.unknownFees = this.growth = this.warmRequests = 0;
+    const prices = this.useModel(model);
+    const pending = this.repayment?.cold;
+    // Rewrites before the same request share one cache rebuild; keep all costs already incurred.
+    const pendingGain = pending ? this.lastGain : 0;
+    // The last provider count already includes the pending gain. A remote carrier can hide tokens from the measured view.
+    const opaqueOverhead = pending ? pending.opaqueOverhead : context?.opaque ? totalInput(before, context) - before : undefined;
+    const total = Math.max(totalInput(before + pendingGain + (opaqueOverhead ?? 0), context), pending?.before ?? 0);
+    gain += pendingGain;
+    const outstanding = this.unknownFees > 0 ? Infinity : (pending?.outstanding ?? this.debt) + this.fees;
+    const cached = pending ? 0 : this.cachedPrefix(before, prefix, model, context);
+    const debtAt = (prefix: number) => outstanding + Math.max(0, coldCost(total, gain, prefix, prices, model?.priceTiers));
+    const reserve = debtAt(0);
+    this.debt = cached > 0 ? debtAt(cached) : reserve;
+    this.repayment = { input: total - gain, cold: { before: pending?.before ?? total, opaqueOverhead, outstanding, reserve } };
+    this.fees = this.unknownFees = this.growth = 0;
     this.lastGain = gain;
-    this.request = this.cached = undefined;
+    this.invalidateCache();
     // Late or replayed receipts cannot settle another publication or make old work spendable again.
     this.generation++;
+    return this.checkpoint();
   }
 }

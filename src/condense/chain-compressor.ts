@@ -146,7 +146,7 @@ export interface CompressEligibleDeps {
     sessionId: string;
     assertValid?: () => void;
   };
-  validate?: (entry: SingleChainCompressionEntry) => Promise<boolean>;
+  select?: (entry: SingleChainCompressionEntry) => Promise<ChainCompressionEntry | undefined>;
 }
 
 /**
@@ -256,6 +256,16 @@ export async function compressEligible(
   const eligible = selectEligible(chains, rollingWindow, alreadyCompressedTimestamps, inGraceToolCallIds);
 
   const compressedEntries: ChainCompressionEntry[] = [];
+  const publish = async (entry: SingleChainCompressionEntry) => {
+    const selected = deps.select ? await deps.select(entry) : entry;
+    if (!selected) {
+      skipped.push({ startUserTimestamp: entry.startUserTimestamp, reason: "no-gain" });
+      return;
+    }
+    deps.appendEntry(CUSTOM_TYPE_CHAIN, selected);
+    deps.indexer.registerChain(selected);
+    compressedEntries.push(selected);
+  };
   for (const chain of eligible) {
     // summaryBodies / toolRefs live in occurrence-key space (src/indexer.ts).
     // Bare ids would match nothing and silently skip every chain.
@@ -321,13 +331,7 @@ export async function compressEligible(
         ...(chain.protectedToolCallIds?.length ? { protectedToolCallIds: chain.protectedToolCallIds } : {}),
         ...(chain.middleOccurrenceKeys?.length ? { droppedOccurrenceKeys: chain.middleOccurrenceKeys } : {}),
       };
-      if (deps.validate && !(await deps.validate(entry))) {
-        skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" });
-        continue;
-      }
-      deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
-      deps.indexer.registerChain(entry);
-      compressedEntries.push(entry);
+      await publish(entry);
       continue;
     }
 
@@ -370,10 +374,7 @@ export async function compressEligible(
       } catch { /* retain per-batch concatenation */ }
     }
 
-    if (deps.validate && !await deps.validate(entry)) { skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" }); continue; }
-    deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
-    deps.indexer.registerChain(entry);
-    compressedEntries.push(entry);
+    await publish(entry);
   }
 
   return { compressedEntries, skipped };
@@ -391,8 +392,9 @@ export async function prepareSharedChain(
   const members: SharedChainMember[] = [];
   const resolve = createRangeResolver(deps.messages);
   let bodyText = "";
+  const assertValid = () => { signal.throwIfAborted(); deps.backfill.assertValid?.(); };
   for (const chain of eligible) {
-    await setImmediate(); signal.throwIfAborted();
+    await setImmediate(); assertValid();
     const range = findCompressibleRange(chain, deps.messages, resolve);
     if (!range || chain.finalAssistantTimestamp === null) continue;
     const startEntryId = anchorId("start", chain.startUserTimestamp, chain.checkpointBoundary?.startRole);
@@ -407,9 +409,16 @@ export async function prepareSharedChain(
     const owned = deps.indexer.getOwnedSummaryText(keys);
     if (owned === null) continue;
     const fresh = extractChainRecords(deps.messages, { ...chain, protectedToolCallIds: [] }, key => deps.indexer.hasRecord(key));
-    if (fresh.length) await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry,
-      assertValid: () => { signal.throwIfAborted(); deps.backfill.assertValid?.(); } });
-    signal.throwIfAborted();
+    if (fresh.length) {
+      try {
+        await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry, assertValid });
+      } catch (error) {
+        assertValid();
+        deps.diagnostics.report("backfill-empty", String(chain.startUserTimestamp), String(error));
+        continue;
+      }
+    }
+    assertValid();
     const records = keys.map(key => deps.indexer.getRecord(key));
     if (records.some(record => !record || record.metadataUnavailable || record.archiveComplete === false)) continue;
     const uncovered = records.filter((record): record is ToolCallRecord => !!record && (!owned || record.archiveOnly === true));

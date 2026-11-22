@@ -965,24 +965,23 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         a, b = await asyncio.gather(self.rt.dispatch("spawn", p), self.rt.dispatch("spawn", p))
         self.assertEqual(a["agent_id"], b["agent_id"])
 
-    async def test_steering_consumed_receipt(self):
-        s = await self.spawn("delay=0.4|work")
-        r = await self.mutation("send", s["agent_id"], mode="steer", message="Only inspect")
-        await self.wait(s["run_id"])
-        receipt = self.rt.store.one("SELECT * FROM receipts WHERE id=?", (r["receipt_id"],))
-        self.assertEqual(receipt["state"], "consumed")
-
-    async def test_unconsumed_steering_is_not_success(self):
-        # The turn must still be running when the steer arrives, otherwise the
-        # steer is rejected (agent_idle) or lands after the fake server dropped
-        # its queue and the run can never finish; a 1s window keeps the steer
-        # inside the turn and the wait outcome is asserted rather than implied.
-        s = await self.spawn("delay=1.0|NO_CONSUME")
-        r = await self.mutation("send", s["agent_id"], mode="steer", message="Too late")
+    async def steer_during_turn(self, task):
+        gate = self.root / "release-steered-turn"
+        s = await self.spawn(f"gate={gate}|{task}")
+        try:
+            r = await self.mutation("send", s["agent_id"], mode="steer", message="Only inspect")
+        finally:
+            gate.touch()
         terminal = await self.wait(s["run_id"])
         self.assertFalse(terminal["timed_out"])
-        state = self.rt.store.one("SELECT state FROM receipts WHERE id=?", (r["receipt_id"],))["state"]
-        self.assertEqual(state, "not_consumed")
+        self.assertEqual(terminal["runs"][0]["state"], "completed")
+        return self.rt.store.one("SELECT state FROM receipts WHERE id=?", (r["receipt_id"],))["state"]
+
+    async def test_steering_consumed_receipt(self):
+        self.assertEqual(await self.steer_during_turn("work"), "consumed")
+
+    async def test_unconsumed_steering_is_not_success(self):
+        self.assertEqual(await self.steer_during_turn("NO_CONSUME"), "not_consumed")
 
     async def test_followup_is_separate_durable_run(self):
         s = await self.spawn("delay=0.2|first")

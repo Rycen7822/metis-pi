@@ -3,7 +3,8 @@ import { once } from "node:events";
 import test from "node:test";
 import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { SessionManager, createEventBus, estimateTokens, initTheme } from "@earendil-works/pi-coding-agent";
+import { SessionManager, convertToLlm, createEventBus, estimateTokens, initTheme } from "@earendil-works/pi-coding-agent";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { SettingsList } from "@earendil-works/pi-tui";
 import { fixture, usage } from "../helpers/condense-pipeline.mjs";
 import { TokenEstimator } from "../../src/condense/token-estimator.ts";
@@ -460,9 +461,6 @@ test("independent small chains publish without paid summaries while preserving t
       perTurn: 8500, publish: true, selected: 1,
       rates: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5,
         tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }] } },
-    // When both repay, retain the largest body rather than maximizing the gain/cold-suffix ratio.
-    { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
-      price: 20, perTurn: 8500, publish: true, selected: 0 },
   ]) await t.test(JSON.stringify(scenario), async t => {
     const f = await independentTasks(t, scenario);
     if (scenario.providerTokens) f.ctx.getContextUsage = () => ({ tokens: scenario.providerTokens, contextWindow: 2000000 });
@@ -481,15 +479,15 @@ test("independent small chains publish without paid summaries while preserving t
       assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[0].id), f.tasks[0].result);
       return;
     }
-    const selected = f.tasks[scenario.selected ?? 0];
-    assert.notEqual(entries[0].data.kind, "shared-v1");
-    assert.deepEqual(entries[0].data.droppedToolCallIds, [selected.id]);
-    for (const task of f.tasks.filter(task => task !== selected))
-      assert.deepEqual(projected.find(message => message.toolCallId === task.id), task.result);
+    const selectedIndex = scenario.selected ?? 0;
+    const selected = f.tasks[selectedIndex];
+    assert.ok(!projected.some(message => message.toolCallId === selected.id));
+    for (const task of f.tasks.slice(0, selectedIndex))
+      assert.deepEqual(projected.find(message => message.toolCallId === task.id), task.result, "earlier rejected work keeps its prefix");
     let cursor, recovered = "", pages = 0, eof = false;
     do {
       const page = await f.tools.get("context_tree_query").execute("recall",
-        { toolCallIds: [entries[0].data.blockId], cursor }, undefined, undefined, f.ctx);
+        { toolCallIds: [selected.id], cursor }, undefined, undefined, f.ctx);
       assert.equal(page.isError, false);
       for (const result of page.details.results) {
         assert.equal(result.offsetBytes, Buffer.byteLength(recovered));
@@ -503,6 +501,164 @@ test("independent small chains publish without paid summaries while preserving t
     await f.emit("agent_settled"); await f.waitMaintenance();
     assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
   });
+});
+
+test("an earlier rewrite includes eligible later chains in the first request without extra summaries", async t => {
+  const f = await independentTasks(t, { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
+    perTurn: 8500, price: 20 });
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  const cut = raw.findIndex(message => message.role === "user" && message.content === f.tasks[0].user) + 1;
+  assert.ok(cut > 0);
+  assert.deepEqual(projected.slice(0, cut), raw.slice(0, cut), "joining the suffix does not change the reusable prefix");
+  const tokens = messages => messages.reduce((total, message) => total + estimateTokens(message), 0);
+  assert.ok(tokens(raw) - tokens(projected) > estimateTokens(f.tasks[0].result), "the first input saves more than the first result");
+  await f.emit("session_start"); await f.waitMaintenance();
+  assert.deepEqual((await f.emit("context", { messages: raw }))?.messages, projected, "resume retains the same combined replacement");
+  for (const task of f.tasks.slice(0, 2)) {
+    assert.ok(!projected.some(message => message.toolCallId === task.id), `first request retains raw ${task.id}`);
+    assert.ok(projected.some(message => message.role === "user" && message.content === task.user));
+    assert.ok(projected.some(message => message.role === "assistant" && message.content?.some(block => block.text === task.final)));
+    const page = await f.tools.get("context_tree_query").execute("recall", { toolCallIds: [task.id], maxBytes: 2048 },
+      undefined, undefined, f.ctx);
+    assert.equal(page.isError, false);
+    assert.equal(page.details.results[0].text.slice(0, 1024), task.result.content[0].text.slice(0, 1024));
+  }
+  for (const call of f.active) assert.deepEqual(projected.find(message => message.toolCallId === call.id), call.result);
+  assert.equal(projected.filter(message => message.metisDerived?.kind === "condense-chain").length, 1);
+  assert.equal(f.calls.length, 0);
+});
+
+test("bounded Responses lookup counts the rendered shared summary and not each replaced chain", async t => {
+  const f = await independentTasks(t, { total: 240000, sizes: [49000, ...Array(6).fill(2500)], perTurn: 8500, price: 10 });
+  const model = Object.assign(f.ctx.model, { api: "openai-responses", compat: { supportsExplicitPromptCacheMode: true } });
+  const raw = f.sm.buildSessionProjection().messages;
+  const toInput = messages => convertResponsesMessages(model, { messages: convertToLlm(messages) }, new Set([model.provider]));
+  const input = toInput(raw);
+  for (let i = 0; i < 3; i++) {
+    await f.emit("context", { messages: raw });
+    await f.emit("before_provider_request", { payload: { model: model.id, input } });
+    await f.emit("message_end", { message: { role: "assistant", api: model.api, provider: model.provider,
+      model: model.id, content: [{ type: "text", text: "Already consumed" }], stopReason: "stop",
+      timestamp: f.nextTimestamp(), usage: { ...usage, input: 4800, cacheRead: 235200 } } });
+  }
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  const after = toInput(projected);
+  const cut = input.findIndex(item => item.role === "user" && item.content.some(block => block.text === f.tasks[0].user)) + 1;
+  assert.ok(cut > 0);
+  assert.deepEqual(after.slice(0, cut), input.slice(0, cut));
+  assert.deepEqual(after.filter(item => item.type === "function_call_output").map(item => item.call_id),
+    f.active.map(call => call.id));
+  assert.equal(projected.filter(message => message.metisDerived?.kind === "condense-chain").length, 1);
+  assert.equal(f.calls.length, 0);
+});
+
+test("reload preserves payback; only a repaid rewrite or the pre-Native emergency band permits another", async t => {
+  for (const mode of ["unchanged", "reload", "repaid then reload", "emergency", "native handoff"]) await t.test(mode, async t => {
+    const capacity = mode === "emergency" || mode === "native handoff";
+    const f = await fixture(t, { pruneOn: "on-demand", autoBudgetThreshold: null, capacity,
+      spillThreshold: 300000, frontierGapThresholdTokens: null, budgetTurnDelta: null,
+      chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false } });
+    Object.assign(f.ctx.model, { cost: { input: 10, output: 0, cacheRead: 1, cacheWrite: 10 } });
+    let tokens = 56000;
+    f.ctx.getContextUsage = () => ({ tokens, contextWindow: 100000 });
+    const log = (size, prefix = "value") => `${prefix}_0123456789 = 0xabcdef123456;\n`.repeat(Math.ceil(4 * size / 32));
+    const observe = async (input, cacheRead) => {
+      const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+        timestamp: f.nextTimestamp(), stopReason: "stop", content: [{ type: "text", text: "Main reply" }],
+        usage: { ...usage, input, cacheRead } };
+      await f.emit("message_end", { message });
+      f.sm.appendMessage(message);
+    };
+    const user = content => f.sm.appendMessage({ role: "user", content, timestamp: f.nextTimestamp() });
+    const add = (name, size) => { user(name); return f.add(log(size, name), "inspect-source", name); };
+    const visible = async () => {
+      const raw = f.sm.buildSessionProjection().messages;
+      return (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    };
+    const settle = async () => { await f.emit("agent_settled"); await f.waitMaintenance(); };
+    f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: log(21000) }],
+      stopReason: "stop", timestamp: f.nextTimestamp() });
+    for (let i = 0; i < 3; i++) await observe(1120, 54880);
+    const first = add("earlier", 32000);
+    await observe(1120, 54880);
+    user("Next task");
+    await settle();
+    const initial = await visible();
+    assert.ok(!initial.some(message => message.toolCallId === first.id), JSON.stringify(f.notices));
+    const count = messages => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    const after = count(initial);
+    await observe(after, 0);
+    if (mode === "repaid then reload") {
+      for (let i = 0; i < 8; i++) await observe(after * 0.02, after * 0.98);
+    }
+    if (mode.endsWith("reload")) await f.emit("session_start");
+    const second = add("later", 32000);
+    await f.emit("turn_end", { message: second.assistant, toolResults: [second.result], turnIndex: 1 });
+    await f.waitMaintenance();
+    for (let i = 0; i < 3; i++) await observe(1200, 58800);
+    user("Following task");
+    if (capacity) {
+      f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: log(mode === "emergency" ? 26000 : 31000) }],
+        stopReason: "stop", timestamp: f.nextTimestamp() });
+      tokens = count(await visible());
+      assert.ok(tokens >= 99500 - 16384, `capacity band ${tokens}`);
+      assert.equal(tokens >= 99500 * 0.9, mode === "native handoff", `capacity band ${tokens}`);
+    }
+    await settle();
+    const next = await visible();
+    assert.ok(!next.some(message => message.toolCallId === first.id));
+    const shouldPublish = mode === "repaid then reload" || mode === "emergency";
+    assert.equal(next.some(message => message.toolCallId === second.id), !shouldPublish);
+    assert.equal(f.calls.length, 0);
+  });
+});
+
+test("a suffix archive failure does not block an already-approved earlier rewrite", async t => {
+  const f = await independentTasks(t, { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
+    perTurn: 8500, price: 20 });
+  const [earlier, later] = f.tasks;
+  const append = f.sm.appendCustomEntry.bind(f.sm);
+  let rejected = false;
+  t.mock.method(f.sm, "appendCustomEntry", (type, data) => {
+    if (type === "context-prune-index" && data.backfilled && data.toolCalls.some(call => call.toolCallId === later.id)) {
+      rejected = true;
+      throw new Error("fixture: suffix index write fails");
+    }
+    return append(type, data);
+  });
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  assert.ok(rejected, "the suffix staging was attempted");
+  assert.ok(!projected.some(message => message.toolCallId === earlier.id), "the earlier replacement still publishes");
+  assert.deepEqual(projected.find(message => message.toolCallId === later.id), later.result);
+  assert.equal(f.calls.length, 0);
+});
+
+test("a packed batch uses the earlier committed cut instead of paying for a separate rewrite", async t => {
+  const f = await fixture(t, { batchingMode: "turn", autoBudgetThreshold: null, chainCompression: { enabled: false } });
+  f.ctx.getContextUsage = () => undefined;
+  Object.assign(f.ctx.model.cost, { input: 3, cacheRead: 1, cacheWrite: 3 });
+  const receipt = { ...usage, input: 500, cacheRead: 24500 };
+  for (let i = 0; i < 3; i++) await f.emit("message_end", { message: {
+    role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id, content: [],
+    stopReason: "stop", timestamp: f.nextTimestamp(), usage: receipt,
+  } });
+  const log = (name, lines) => Array.from({ length: lines }, (_, i) => `built ${name} item ${i}: ${"x".repeat(48)}`).join("\n");
+  const first = f.add(log("early", 620), "npm run build", "batch-early");
+  const second = f.add(log("late", 95), "npm run build", "batch-later");
+  f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "unchanged tail ".repeat(2250) }],
+    stopReason: "stop", timestamp: f.nextTimestamp() });
+  await f.finish(true, receipt);
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  for (const call of [first, second])
+    assert.match(projected.find(message => message.toolCallId === call.id).content[0].text, /^\[Captured /);
+  assert.equal(projected.filter(message => message.details?.representation === "packed").length, 2);
+  assert.equal(f.calls.length, 0);
 });
 
 test("remote and bounded Responses cache credit require an observed request and matching namespace", async t => {
@@ -548,27 +704,21 @@ test("remote and bounded Responses cache credit require an observed request and 
     });
 });
 
-test("independent selection and shared fallback keep distinct admission contracts", async t => {
+test("scoped rewrites and shared fallback both include eligible later chains", async t => {
   for (const scenario of [
-    { total: 1000000, sizes: [32000, 6000], price: 10, shared: false },
-    { total: 1000000, sizes: [300000, 6000], price: 10, shared: true },
-    { total: 300000, sizes: Array(30).fill(5000), price: 5, shared: true },
-    { total: 110000, sizes: Array(4).fill(10000), perTurn: 12000, price: 20, shared: true },
+    { total: 1000000, sizes: [32000, 6000], price: 10 },
+    { total: 1000000, sizes: [300000, 6000], price: 10 },
+    { total: 300000, sizes: Array(30).fill(5000), price: 5 },
+    { total: 110000, sizes: Array(4).fill(10000), perTurn: 12000, price: 20 },
   ]) await t.test(`${scenario.sizes.length} chains at ${scenario.price}:1`, async t => {
     const f = await independentTasks(t, scenario);
     await f.emit("agent_settled"); await f.waitMaintenance();
     const entries = f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].data.kind === "shared-v1", scenario.shared);
-    if (scenario.shared) {
-      const dropped = entries[0].data.members.flatMap(member => member.droppedToolCallIds);
-      assert.ok(dropped.length > 1);
-      assert.ok(dropped.includes(f.tasks.at(-1).id), "legacy sharing still includes the independently refused candidate");
-    } else {
-      assert.deepEqual(entries[0].data.droppedToolCallIds, [f.tasks[0].id]);
-      const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
-      assert.deepEqual(projected.find(m => m.toolCallId === f.tasks[1].id), f.tasks[1].result);
-    }
+    const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+    assert.ok(!projected.some(message => message.toolCallId === f.tasks.at(-1).id),
+      "the last closed candidate joins even if it cannot pay for an independent rewrite");
+    assert.equal(projected.filter(message => message.metisDerived?.kind === "condense-chain").length, 1);
     assert.equal(f.calls.length, 0);
   });
 });
@@ -853,11 +1003,13 @@ test("session restore drops the previous queue while a tree switch keeps its own
     join(f.dir, "metis-pi.toml"),
     stringify({ ...settings, contextPrune: { ...settings.contextPrune, showPruneStatusLine: false } }),
   );
-  const afterBody = "later detail\n".repeat(1800);
+  const afterBody = "later detail\n".repeat(3200);
   f.add(afterBody, "inspect-after-tree");
   await f.emit("session_tree");
   assert.match(f.statuses.get("context-prune"), /\n.*recovered.*current branch/i);
-  await f.finish(false);
+  const raw = f.sm.buildSessionProjection().messages;
+  const sent = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  await f.finish(false, { ...usage, input: sent.reduce((sum, message) => sum + estimateTokens(message), 0) });
   await f.emit("turn_end", {});
   assert.equal(f.calls.length, 2, "the tree probe re-arms only this branch's unindexed work");
   assert.equal(f.widgets.filter(([id]) => id === "pruner-boot").length, 1);
@@ -1476,6 +1628,7 @@ test("automatic and manual chunks keep durable progress through a failure inside
           if (fail && n === 2) failedInput = input;
           return fail && input === failedInput ? "error" : "stop";
         },
+        protectedPaths: ["keep.txt"],
         chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false },
       });
       const ids = Array.from({ length: 130 }, (_, i) => `large-chain-${i}`);
@@ -1528,10 +1681,18 @@ test("automatic and manual chunks keep durable progress through a failure inside
       fail = false;
       await f.emit("session_start");
       await flush();
+      if (path === "automatic") {
+        assert.equal(f.calls.length, attempted, "reload alone cannot fund a second rewrite");
+        const work = f.add("new evidence\n".repeat(4500), "cat keep.txt");
+        await f.emit("turn_end", { message: work.assistant, toolResults: [work.result], turnIndex: 1 });
+        const raw = f.sm.buildSessionProjection().messages;
+        const sent = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+        await f.finish(true, { ...usage, input: sent.reduce((sum, message) => sum + estimateTokens(message), 0) });
+      }
       assert.equal(
         summaries().flatMap((e) => e.details.toolCallRefs).length,
         ids.length + 1,
-        "reload resumes all remaining occurrences",
+        "after reload, manual or repaid automatic work resumes all remaining occurrences",
       );
       assert(
         f.calls.slice(attempted).every((call) => !JSON.stringify(call).includes('"cat evidence-0.txt"')),

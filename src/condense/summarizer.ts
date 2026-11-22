@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Model, ModelsSimpleStreamOptions, UserMessage } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, ModelsSimpleStreamOptions, Usage, UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   CapturedBatch,
@@ -9,6 +9,13 @@ import type {
 } from "./types.ts";
 import { serializeBatchForSummarizer, SUMMARY_INPUT_CHARS } from "./batch-capture.ts";
 import type { FallbackTransition } from "./summarizer-fallback.ts";
+
+function hasSummaryReceipt(usage: Usage): boolean {
+  const { cost, input, output, cacheRead, cacheWrite } = usage;
+  if (cost?.totalFromProvider && Number.isFinite(cost.total) && cost.total >= 0) return true;
+  // Pi initializes failed streams with all-zero usage until the provider returns counts.
+  return [input, output, cacheRead, cacheWrite].some(tokens => Number.isFinite(tokens) && tokens > 0);
+}
 
 // Response-space allowances, not provider thinking settings or a tokenizer conversion.
 const SUMMARY_THINKING_TOKENS: Record<SummarizerThinking, number> = {
@@ -231,20 +238,17 @@ async function runOnce(
       // reasoning-heavy model stays alive via thinking_delta and is never
       // false-aborted for being quiet on text while it reasons.
       bumpIdle();
-      // Belt-and-suspenders: break early when signal fires mid-stream.
-      if (options.signal?.aborted) break;
+      if (options.signal?.aborted && event.type !== "done" && event.type !== "error") {
+        throw new Error("summarize: aborted during stream");
+      }
       if (event.type === "text_start" || event.type === "text_delta" || event.type === "text_end") {
         reportTextProgress(event.partial);
       }
     }
 
-    // If signal fired while we were iterating, propagate the abort so
-    // flushPending can detect it and restore batches.
-    if (options.signal?.aborted) throw new Error("summarize: aborted during stream");
-
     const response = await responseStream.result();
+    if (hasSummaryReceipt(response.usage)) options.onUsage?.(response.usage);
     if (options.signal?.aborted) throw new Error("summarize: aborted before result delivery");
-    options.onUsage?.(response.usage);
     reportTextProgress(response);
     // stopReason "aborted" means the provider cut the stream short (e.g. signal
     // fired just before the final chunk). Treat identically to the signal check
