@@ -472,7 +472,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const measured = activeSignal && await tokenEstimator.measureRewrite([request.message], [], activeSignal);
     if (!measured && mode !== "manual") return;
     const input = (measured ? Math.max(measured.piBefore, measured.before) : estimateTokens(request.message)) + 256;
-    return summaryRequestCost(economicModel(ctx), economicModel(ctx, request.model, input) ?? request.model, input, request.maxOutputTokens);
+    const model = economicModel(ctx, request.model, input) ?? request.model;
+    return summaryRequestCost(economicModel(ctx), model, input, request.maxOutputTokens, mode);
   };
   const summaryCharges = (ctx: ExtensionContext, append: typeof pi.appendEntry, options: {
     signal?: AbortSignal;
@@ -487,7 +488,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const quote = await quoteSummary(ctx, { model, message, maxOutputTokens }, options.signal, options.admit ? undefined : "manual");
         options.validate();
         const admission = options.admit?.(quote, model) ?? true;
-        if (!(typeof admission === "boolean" ? admission : await admission) || !quote) return false;
+        if (!(typeof admission === "boolean" ? admission : await admission) || !quote || !Number.isFinite(quote.cost)) return false;
         options.signal?.throwIfAborted();
         assertCurrent(version);
         if (epoch !== nativeWindowEpoch) throw new CondenseContextChangedError("summary accounting window changed");
@@ -496,7 +497,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const checkpoint = rewriteBudget.checkpoint();
         try { if (checkpoint) append(REWRITE_CHECKPOINT, checkpoint); }
         catch (error) { debit(0); throw error; }
-        settle = usage => savePayback(ctx, debit(quote.actual(usage)), append);
+        settle = usage => {
+          const actual = quote.actual(usage);
+          if (actual !== undefined) savePayback(ctx, debit(actual), append);
+        };
         return true;
       },
       onUsage: usage => {

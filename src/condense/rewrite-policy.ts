@@ -97,7 +97,8 @@ function forecastRewrite(before: number, gain: number, prefix: number, price: Pr
 const totalInput = (visible: number, context?: RewriteContext) => Math.max(visible, finite(context?.tokens) ? context.tokens : 0);
 
 /** Unknown primary prices use relative input units, never another model's dollar receipt. */
-export function summaryRequestCost(primary: Model | undefined, model: Model, inputTokens: number, maxOutputTokens: number) {
+export function summaryRequestCost(primary: Model | undefined, model: Model, inputTokens: number, maxOutputTokens: number,
+  mode?: "manual") {
   const main = knownPrices(primary), price = model.cost;
   const inputRate = price?.input, outputRate = price?.output;
   const resolved = model.pricing === "pi" || model.pricing === "models.dev";
@@ -108,11 +109,11 @@ export function summaryRequestCost(primary: Model | undefined, model: Model, inp
   const cacheRead = known && finite(price?.cacheRead) ? price.cacheRead * scale : input / 10;
   const cacheWrite = known && finite(price?.cacheWrite) ? price.cacheWrite * scale : input;
   return {
-    cost: model.pricing === "pending" ? Infinity : inputTokens * input + maxOutputTokens * output,
+    cost: model.pricing === "pending" && mode !== "manual" ? Infinity : inputTokens * input + maxOutputTokens * output,
     actual(usage: Usage) {
       const billed = usage.cost?.totalFromProvider === true || (known && model.pricing === undefined);
       if (main && billed && finite(usage.cost?.total)) return usage.cost.total * 1_000_000;
-      if (![usage.input, usage.output, usage.cacheRead, usage.cacheWrite].every(finite)) return Infinity;
+      if (![usage.input, usage.output, usage.cacheRead, usage.cacheWrite].every(finite)) return;
       return usage.input * input + usage.output * output + usage.cacheRead * cacheRead + usage.cacheWrite * cacheWrite;
     },
   };
