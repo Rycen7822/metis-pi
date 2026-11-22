@@ -129,7 +129,9 @@ jobs:
           npm run verify:native-assets && npm run check && npm run check:test
       - name: Require rebuilt Web Access bundles to match the checkout
         if: runner.os == 'Linux' && matrix.lane.name == 'Web 1'
-        run: git diff --exit-code -- src/pi-web-access/dist
+        run: |
+          changes=$(git status --porcelain -- src/pi-web-access/dist)
+          if [[ -n "$changes" ]]; then printf '%s\n' "$changes"; exit 1; fi
       - name: Run ${{ matrix.lane.name }} tests
         if: matrix.lane.shard
         run: node scripts/test.mjs ${{ matrix.lane.suite }} --test-shard=${{ matrix.lane.shard }}

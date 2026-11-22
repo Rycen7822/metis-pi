@@ -3,7 +3,6 @@ import { normalizeHostname } from "./hostname.ts";
 import { resolveWebProxy, webFetch, type ProxiedRequestInit } from "./proxy-transport.ts";
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
-import { Agent, fetch as undiciFetch } from "undici";
 
 const DEFAULT_MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -210,6 +209,7 @@ export async function fetchRemoteUrl(
 	const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
 	const validationOptions = { ...options, proxy: options.proxy ?? (init as ProxiedRequestInit).__proxy };
 	let resolved = await resolveRemoteUrl(url, validationOptions);
+	const { Agent, fetch: undiciFetch } = await import("undici");
 	const configuredOrigin = resolved.url.origin;
 	let requestInit = init;
 

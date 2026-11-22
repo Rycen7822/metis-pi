@@ -3793,7 +3793,6 @@ var init_querit = __esm({
 // src/pi-web-access/ssrf-protection.ts
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
-import { Agent, fetch as undiciFetch } from "undici";
 function loadFetchContentDomainPolicy() {
   const parsed = loadWebAccessConfig();
   const fetchContent = parsed.fetchContent;
@@ -3911,6 +3910,7 @@ async function fetchRemoteUrl(url, init = {}, options = {}) {
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const validationOptions = { ...options, proxy: options.proxy ?? init.__proxy };
   let resolved = await resolveRemoteUrl(url, validationOptions);
+  const { Agent, fetch: undiciFetch } = await import("undici");
   const configuredOrigin = resolved.url.origin;
   let requestInit = init;
   for (let redirects = 0; redirects <= maxRedirects; redirects++) {

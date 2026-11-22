@@ -2,7 +2,7 @@
 // curator-workflow; the tool host returns its result while this host sends follow-ups.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { startCuratorServer, type CuratorServerHandle, type IndexedCuratorSearchEntry } from "./curator-server.ts";
+import type { CuratorServerHandle, IndexedCuratorSearchEntry } from "./curator-server.ts";
 import { search } from "./search-router.ts";
 import type { SearchProviderSelection } from "./search-providers.ts";
 import type { QueryResultData } from "./search-types.ts";
@@ -92,6 +92,8 @@ export function registerWebSearchCommand(pi: ExtensionAPI, buildSearchReturn: (o
 			}
 
 			try {
+				const { startCuratorServer } = await import("./curator-server.ts");
+				if (!isCommandActive()) return;
 				const handle = await startCuratorServer(
 					{
 						queries,

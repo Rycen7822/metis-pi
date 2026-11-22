@@ -27,7 +27,7 @@ import {
 	type StoredSearchData,
 } from "./storage.ts";
 import { activityMonitor, type ActivityEntry } from "./activity.ts";
-import { startCuratorServer, type CuratorServerHandle, type IndexedCuratorSearchEntry } from "./curator-server.ts";
+import type { CuratorServerHandle, IndexedCuratorSearchEntry } from "./curator-server.ts";
 import {
 	generateSummaryDraft,
 	loadSummaryModelChoices,
@@ -549,6 +549,8 @@ export default function (pi: ExtensionAPI, options: {
 				? AbortSignal.any([pc.signal, searchAbort.signal])
 				: searchAbort.signal;
 
+			const { startCuratorServer } = await import("./curator-server.ts");
+			if (pendingCurates.get(callId) !== pc) return;
 			const sessionToken = randomUUID();
 			handle = await startCuratorServer(
 				{

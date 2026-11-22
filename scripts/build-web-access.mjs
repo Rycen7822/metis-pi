@@ -9,7 +9,8 @@
 //
 // The standalone MCP bin (dist/mcp-cli.js) bundles typebox: it stays a
 // pi-hosted peer for the extension, but the bin must run without Pi installed.
-import { chmodSync, readFileSync } from "node:fs";
+import { chmodSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -51,6 +52,14 @@ const options = {
   absWorkingDir: root, outdir: "src/pi-web-access/dist", outbase: "src/pi-web-access",
   logLevel: "info",
 };
-await build({ ...options, plugins: [extensionSources], entryPoints: ["src/pi-web-access/index.ts"], external: externals });
+const dist = new URL(`../${options.outdir}/`, import.meta.url);
+const { metafile } = await build({
+  ...options, plugins: [extensionSources], entryPoints: ["src/pi-web-access/index.ts"], external: externals,
+  splitting: true, chunkNames: "chunk-[hash]", metafile: true,
+});
+const emitted = new Set(Object.keys(metafile.outputs).map(file => basename(file)));
+for (const name of readdirSync(dist)) {
+  if (/^chunk-[A-Z0-9]{8}\.js$/.test(name) && !emitted.has(name)) rmSync(new URL(name, dist));
+}
 await build({ ...options, plugins: [standaloneConfig], entryPoints: ["src/pi-web-access/mcp-cli.ts"], external: externals.filter((name) => name !== "typebox") });
 chmodSync(new URL("../src/pi-web-access/dist/mcp-cli.js", import.meta.url), 0o755);
