@@ -100,6 +100,36 @@ test("cold cost is not repaid twice and actual 98% receipts repay the matching f
   }
 });
 
+test("an emergency rewrite retains the unpaid cost of an earlier publication", () => {
+  const budget = new RewriteBudget();
+  warm(budget);
+  assert.equal(budget.admits(300000, 80000, 200000, config, model, false), true);
+  budget.published(300000, 80000, 200000, model);
+  budget.observe({ ...completion(4, 0), usage: { input: 220000, cacheRead: 0, cacheWrite: 0 } }, model);
+  assert.equal(budget.admits(260000, 30000, 230000, config, model, true), true);
+  budget.published(260000, 30000, 230000, model);
+  budget.observe(completion(5, 230000), model);
+  budget.observe(completion(6), model, 40000);
+  const admit = () => budget.admits(260000, 30000, 230000, config, model, false);
+  warm(budget, model, 6);
+  assert.equal(admit(), false, "the cheap emergency receipt and three warm requests cannot pay off the previous loss");
+  for (let time = 9; time < 85; time++) budget.observe(completion(time), model);
+  assert.equal(admit(), true, "sufficient realized savings release the ordinary gate");
+});
+
+test("two rewrites before the next request settle one cold bill and all incurred fees", () => {
+  const budget = new RewriteBudget(), quote = { ...model, cost: { input: 1, cacheRead: 1 } };
+  assert.equal(budget.admits(100000, 30000, 0, config, quote, false, 60000), true);
+  budget.reserveFee(60000)(60000);
+  budget.published(100000, 30000, 0, quote);
+  budget.published(70000, 20000, 0, quote);
+  budget.observe(completion(1), quote, 15000);
+  budget.observe(completion(1, 50000), quote);
+  assert.equal(budget.waitingForWork(config), true, "the first 50k in request savings do not repay both publications yet");
+  budget.observe(completion(2, 50000), quote);
+  assert.equal(budget.waitingForWork(config), false);
+});
+
 test("opaque requests use their full input and budget a cold rebuild even with an unchanged local prefix", () => {
   const quote = { ...model, cost: { input: 2, cacheRead: 0.1, cacheWrite: 2.5 } }, budget = new RewriteBudget();
   warm(budget, quote);

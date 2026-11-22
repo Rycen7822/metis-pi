@@ -555,6 +555,67 @@ test("bounded Responses lookup counts the rendered shared summary and not each r
   assert.equal(f.calls.length, 0);
 });
 
+test("reload preserves payback; only a repaid rewrite or the pre-Native emergency band permits another", async t => {
+  for (const mode of ["unchanged", "reload", "repaid then reload", "emergency", "native handoff"]) await t.test(mode, async t => {
+    const capacity = mode === "emergency" || mode === "native handoff";
+    const f = await fixture(t, { pruneOn: "on-demand", autoBudgetThreshold: null, capacity,
+      spillThreshold: 300000, frontierGapThresholdTokens: null, budgetTurnDelta: null,
+      chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false } });
+    Object.assign(f.ctx.model, { cost: { input: 10, output: 0, cacheRead: 1, cacheWrite: 10 } });
+    let tokens = 56000;
+    f.ctx.getContextUsage = () => ({ tokens, contextWindow: 100000 });
+    const log = (size, prefix = "value") => `${prefix}_0123456789 = 0xabcdef123456;\n`.repeat(Math.ceil(4 * size / 32));
+    const observe = async (input, cacheRead) => {
+      const message = { role: "assistant", api: f.ctx.model.api, provider: f.ctx.model.provider, model: f.ctx.model.id,
+        timestamp: f.nextTimestamp(), stopReason: "stop", content: [{ type: "text", text: "Main reply" }],
+        usage: { ...usage, input, cacheRead } };
+      await f.emit("message_end", { message });
+      f.sm.appendMessage(message);
+    };
+    const user = content => f.sm.appendMessage({ role: "user", content, timestamp: f.nextTimestamp() });
+    const add = (name, size) => { user(name); return f.add(log(size, name), "inspect-source", name); };
+    const visible = async () => {
+      const raw = f.sm.buildSessionProjection().messages;
+      return (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    };
+    const settle = async () => { await f.emit("agent_settled"); await f.waitMaintenance(); };
+    f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: log(21000) }],
+      stopReason: "stop", timestamp: f.nextTimestamp() });
+    for (let i = 0; i < 3; i++) await observe(1120, 54880);
+    const first = add("earlier", 32000);
+    await observe(1120, 54880);
+    user("Next task");
+    await settle();
+    const initial = await visible();
+    assert.ok(!initial.some(message => message.toolCallId === first.id), JSON.stringify(f.notices));
+    const count = messages => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    const after = count(initial);
+    await observe(after, 0);
+    if (mode === "repaid then reload") {
+      for (let i = 0; i < 8; i++) await observe(after * 0.02, after * 0.98);
+    }
+    if (mode.endsWith("reload")) await f.emit("session_start");
+    const second = add("later", 32000);
+    await f.emit("turn_end", { message: second.assistant, toolResults: [second.result], turnIndex: 1 });
+    await f.waitMaintenance();
+    for (let i = 0; i < 3; i++) await observe(1200, 58800);
+    user("Following task");
+    if (capacity) {
+      f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: log(mode === "emergency" ? 26000 : 31000) }],
+        stopReason: "stop", timestamp: f.nextTimestamp() });
+      tokens = count(await visible());
+      assert.ok(tokens >= 99500 - 16384, `capacity band ${tokens}`);
+      assert.equal(tokens >= 99500 * 0.9, mode === "native handoff", `capacity band ${tokens}`);
+    }
+    await settle();
+    const next = await visible();
+    assert.ok(!next.some(message => message.toolCallId === first.id));
+    const shouldPublish = mode === "repaid then reload" || mode === "emergency";
+    assert.equal(next.some(message => message.toolCallId === second.id), !shouldPublish);
+    assert.equal(f.calls.length, 0);
+  });
+});
+
 test("a suffix archive failure does not block an already-approved earlier rewrite", async t => {
   const f = await independentTasks(t, { total: 240000, sizes: [49000, 31000, 2500, 2500, 2500, 2500],
     perTurn: 8500, price: 20 });
@@ -942,11 +1003,13 @@ test("session restore drops the previous queue while a tree switch keeps its own
     join(f.dir, "metis-pi.toml"),
     stringify({ ...settings, contextPrune: { ...settings.contextPrune, showPruneStatusLine: false } }),
   );
-  const afterBody = "later detail\n".repeat(1800);
+  const afterBody = "later detail\n".repeat(3200);
   f.add(afterBody, "inspect-after-tree");
   await f.emit("session_tree");
   assert.match(f.statuses.get("context-prune"), /\n.*recovered.*current branch/i);
-  await f.finish(false);
+  const raw = f.sm.buildSessionProjection().messages;
+  const sent = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  await f.finish(false, { ...usage, input: sent.reduce((sum, message) => sum + estimateTokens(message), 0) });
   await f.emit("turn_end", {});
   assert.equal(f.calls.length, 2, "the tree probe re-arms only this branch's unindexed work");
   assert.equal(f.widgets.filter(([id]) => id === "pruner-boot").length, 1);
@@ -1565,6 +1628,7 @@ test("automatic and manual chunks keep durable progress through a failure inside
           if (fail && n === 2) failedInput = input;
           return fail && input === failedInput ? "error" : "stop";
         },
+        protectedPaths: ["keep.txt"],
         chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false },
       });
       const ids = Array.from({ length: 130 }, (_, i) => `large-chain-${i}`);
@@ -1617,10 +1681,18 @@ test("automatic and manual chunks keep durable progress through a failure inside
       fail = false;
       await f.emit("session_start");
       await flush();
+      if (path === "automatic") {
+        assert.equal(f.calls.length, attempted, "reload alone cannot fund a second rewrite");
+        const work = f.add("new evidence\n".repeat(4500), "cat keep.txt");
+        await f.emit("turn_end", { message: work.assistant, toolResults: [work.result], turnIndex: 1 });
+        const raw = f.sm.buildSessionProjection().messages;
+        const sent = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+        await f.finish(true, { ...usage, input: sent.reduce((sum, message) => sum + estimateTokens(message), 0) });
+      }
       assert.equal(
         summaries().flatMap((e) => e.details.toolCallRefs).length,
         ids.length + 1,
-        "reload resumes all remaining occurrences",
+        "after reload, manual or repaid automatic work resumes all remaining occurrences",
       );
       assert(
         f.calls.slice(attempted).every((call) => !JSON.stringify(call).includes('"cat evidence-0.txt"')),
