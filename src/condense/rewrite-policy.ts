@@ -285,11 +285,11 @@ export function batchRewriteAdmission(budget: RewriteBudget, messages: any[], co
   };
 }
 
-type ColdRewrite = { before: number; outstanding: number; reserve: number };
+type ColdRewrite = { before: number; opaqueOverhead?: number; outstanding: number; reserve: number };
 type Repayment = { input: number; cold?: ColdRewrite; needsWarmRecovery?: boolean };
-type RewriteCheckpoint = { version: 1; key: string; debt: number | null; gain: number; input: number;
-  cold?: { before: number; outstanding: number | null; reserve: number | null };
-  usage?: number; work?: number; growth: number; needsWarmRecovery?: boolean };
+type RewriteCheckpoint = { version: 1; key: string; debt: number | null; gain: number; input?: number;
+  cold?: Omit<ColdRewrite, "outstanding" | "reserve"> & { outstanding: number | null; reserve: number | null };
+  usage?: number; work?: number; growth: number; needsWarmRecovery?: boolean; fees?: number; unknownFees?: number };
 
 const storedCost = (value: number) => finite(value) ? value : null;
 const validCost = (value: unknown): value is number | null => value === null || finite(value);
@@ -348,25 +348,31 @@ export class RewriteBudget {
   private restore(data: unknown) {
     if (!data || typeof data !== "object") return;
     const value = data as Partial<RewriteCheckpoint>;
-    if (value.version !== 1 || !validCost(value.debt) || !finite(value.gain) || !finite(value.input) || !finite(value.growth)) return;
-    const cold = value.cold;
-    if (cold !== undefined && (!cold || !finite(cold.before) || !validCost(cold.outstanding) || !validCost(cold.reserve))) return;
+    if (value.version !== 1 || !validCost(value.debt) || !finite(value.gain) || !finite(value.growth)) return;
+    const { cold, input, fees = 0, unknownFees = 0 } = value;
+    if (!finite(fees) || !finite(unknownFees) || !Number.isSafeInteger(unknownFees)) return;
+    if (!finite(input) && (input !== undefined || value.gain !== 0 || value.debt !== 0 || cold !== undefined)) return;
+    if (cold !== undefined && (!cold || !finite(cold.before) || !validCost(cold.outstanding) || !validCost(cold.reserve)
+      || (cold.opaqueOverhead !== undefined && !finite(cold.opaqueOverhead)))) return;
+    this.fees = fees;
+    this.unknownFees = unknownFees;
     this.debt = value.debt ?? Infinity;
     this.lastGain = value.gain;
     this.growth = value.growth;
     this.lastUsage = finite(value.usage) ? value.usage : -Infinity;
     this.lastWork = finite(value.work) ? value.work : -Infinity;
-    this.repayment = { input: value.input, needsWarmRecovery: value.needsWarmRecovery === true,
-      cold: cold && { before: cold.before, outstanding: cold.outstanding ?? Infinity, reserve: cold.reserve ?? Infinity } };
+    if (input !== undefined) this.repayment = { input, needsWarmRecovery: value.needsWarmRecovery === true,
+      cold: cold && { ...cold, outstanding: cold.outstanding ?? Infinity, reserve: cold.reserve ?? Infinity } };
   }
 
-  private checkpoint(): RewriteCheckpoint | undefined {
-    if (!this.model || !this.repayment) return;
-    const { input, cold, needsWarmRecovery } = this.repayment;
+  checkpoint(): RewriteCheckpoint | undefined {
+    if (!this.model) return;
+    const { input, cold, needsWarmRecovery } = this.repayment ?? {};
     return { version: 1, key: checkpointKey(this.model), debt: storedCost(this.debt), gain: this.lastGain, input,
+      fees: this.fees || undefined, unknownFees: this.unknownFees || undefined,
       growth: this.growth, needsWarmRecovery, usage: finite(this.lastUsage) ? this.lastUsage : undefined,
       work: finite(this.lastWork) ? this.lastWork : undefined,
-      cold: cold && { before: cold.before, outstanding: storedCost(cold.outstanding), reserve: storedCost(cold.reserve) } };
+      cold: cold && { ...cold, outstanding: storedCost(cold.outstanding), reserve: storedCost(cold.reserve) } };
   }
 
   /** Retain only a Responses request whose visible input and cache namespace were observed together. */
@@ -485,18 +491,20 @@ export class RewriteBudget {
   }
 
   /** Keep the reservation when a paid request has no usage receipt; it is not evidence of a free attempt. */
-  reserveFee(cost: number): (actual: number) => void {
+  reserveFee(cost: number) {
     const generation = this.generation;
     if (finite(cost)) this.fees += cost;
     else this.unknownFees++;
     let settled = false;
-    return actual => {
+    return (actual: number) => {
       if (settled || generation !== this.generation) return;
       settled = true;
-      if (finite(cost)) this.fees -= cost;
+      if (cost === actual) return;
+      if (finite(cost)) this.fees = Math.max(0, this.fees - cost);
       else this.unknownFees--;
       if (finite(actual)) this.fees += actual;
       else this.unknownFees++;
+      return this.checkpoint();
     };
   }
 
@@ -549,14 +557,16 @@ export class RewriteBudget {
     const pending = this.repayment?.cold;
     // Rewrites before the same request share one cache rebuild; keep all costs already incurred.
     const pendingGain = pending ? this.lastGain : 0;
-    const total = totalInput(before, context) + pendingGain;
+    // The last provider count already includes the pending gain. A remote carrier can hide tokens from the measured view.
+    const opaqueOverhead = pending ? pending.opaqueOverhead : context?.opaque ? totalInput(before, context) - before : undefined;
+    const total = Math.max(totalInput(before + pendingGain + (opaqueOverhead ?? 0), context), pending?.before ?? 0);
     gain += pendingGain;
     const outstanding = this.unknownFees > 0 ? Infinity : (pending?.outstanding ?? this.debt) + this.fees;
     const cached = pending ? 0 : this.cachedPrefix(before, prefix, model, context);
     const debtAt = (prefix: number) => outstanding + Math.max(0, coldCost(total, gain, prefix, prices, model?.priceTiers));
     const reserve = debtAt(0);
     this.debt = cached > 0 ? debtAt(cached) : reserve;
-    this.repayment = { input: total - gain, cold: { before: pending?.before ?? total, outstanding, reserve } };
+    this.repayment = { input: total - gain, cold: { before: pending?.before ?? total, opaqueOverhead, outstanding, reserve } };
     this.fees = this.unknownFees = this.growth = 0;
     this.lastGain = gain;
     this.invalidateCache();
