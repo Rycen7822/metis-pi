@@ -21,7 +21,6 @@ import { createGitChangesTracker } from "./git-changes.ts";
 import { createGlyphPresentation } from "./chrome/glyph-presentation.ts";
 import { createSnapshotSource } from "./chrome/snapshots.ts";
 import { createChromeLifecycle, SUMMARY_STATUS_KEY } from "./chrome/install.ts";
-import { registerDiagnosticsCommand } from "./diagnostics.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "../selection-copy/index.ts";
 import { createFullscreenLayout, type FullscreenLayoutHost } from "./chrome/fullscreen-layout.ts";
@@ -341,24 +340,17 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     }
   });
 
-  registerDiagnosticsCommand({
-    api: bindings.api,
-    appearanceVersion: bindings.appearanceVersion,
-    piVersion: bindings.piVersion,
-    getConfig: () => config,
-    chrome: chrome.state,
-    hostData,
-    metrics,
-    outcome,
-    ledger,
-    outputSpeed,
-    gitChanges,
-    selectionCopy,
-    fullscreenLayout,
-    glyphPresentation,
-    getHandle: () => handle,
-    getDecorations: () => decorations,
-    hasSurfaceBinding: bindings.surface !== undefined,
+  (bindings.api as Partial<Pick<ExtensionAPI, "registerCommand">> | undefined)?.registerCommand?.("codex-ui", {
+    description: "metis-pi capability diagnostics",
+    async handler(_args, ctx) {
+      const { formatDiagnostics } = await import("./diagnostics.ts");
+      ctx.ui.notify(formatDiagnostics({
+        appearanceVersion: bindings.appearanceVersion, piVersion: bindings.piVersion,
+        config, chrome: chrome.state, hostData, metrics, outcome, ledger, outputSpeed, gitChanges,
+        selectionCopy, fullscreenLayout, glyphPresentation,
+        getHandle: () => handle, getDecorations: () => decorations, hasSurfaceBinding: bindings.surface !== undefined,
+      }));
+    },
   });
 
   function renderersFor(view: RendererSession) {

@@ -7,7 +7,8 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { FallbackController } from "../../src/condense/summarizer-fallback.ts";
-import { summarizeBatch, summarizeRange, summarizerInputBudget } from "../../src/condense/summarizer.ts";
+import { summarizeBatch, summarizeRange } from "../../src/condense/summarizer.ts";
+import { summarizerInputBudget } from "../../src/condense/summarizer-models.ts";
 import { disableNetwork } from "../helpers/native-provider.mjs";
 
 test.beforeEach(disableNetwork);

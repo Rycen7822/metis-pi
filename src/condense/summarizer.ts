@@ -7,7 +7,8 @@ import type {
   SummarizeBatchOptions,
   SummarizeResult,
 } from "./types.ts";
-import { serializeBatchForSummarizer, SUMMARY_INPUT_CHARS } from "./batch-capture.ts";
+import { serializeBatchForSummarizer } from "./batch-capture.ts";
+import { modelKey, summarizerInputBudget, summarizerLimits, summarizerModels } from "./summarizer-models.ts";
 import type { FallbackTransition } from "./summarizer-fallback.ts";
 
 function hasSummaryReceipt(usage: Usage): boolean {
@@ -73,51 +74,6 @@ export function summarizerThinkingOptions(config: ContextPruneConfig): Pick<Mode
   // The native registry accepts provider-neutral reasoning. An absent level
   // selects the provider's non-thinking mode.
   return { reasoning: level === "off" ? undefined : level };
-}
-
-function resolveModel(identifier: string, ctx: ExtensionContext): any {
-  if (identifier === "default") return ctx.model;
-  const slash = identifier.indexOf("/");
-  if (slash <= 0 || slash === identifier.length - 1) {
-    ctx.ui.notify(`pruner: invalid summarizer model "${identifier}", expected "provider/model-id". Skipping model.`, "warning");
-    return undefined;
-  }
-  const model = ctx.modelRegistry.find(identifier.slice(0, slash), identifier.slice(slash + 1));
-  if (!model) ctx.ui.notify(`pruner: model "${identifier}" not found in registry. Skipping model.`, "warning");
-  return model;
-}
-
-function modelKey(model: any): string {
-  return model ? `${model.provider}/${model.id}` : "unavailable";
-}
-
-export function summarizerModels(config: ContextPruneConfig, ctx: ExtensionContext): (Model<Api> | undefined)[] {
-  // Keep the primary slot even when unresolved; recovery probes still start here.
-  const models = [resolveModel(config.summarizerModel, ctx)];
-  const seen = new Set([modelKey(models[0])]);
-  for (const identifier of config.summarizerFallbackModels ?? []) {
-    const model = resolveModel(identifier, ctx);
-    const key = modelKey(model);
-    if (!model || seen.has(key) || key === modelKey(ctx.model)) continue;
-    seen.add(key);
-    models.push(model);
-  }
-  if (ctx.model && !seen.has(modelKey(ctx.model))) models.push(ctx.model);
-  return models;
-}
-
-function summarizerLimits(model: any) {
-  const window = model?.contextWindow > 0 ? model.contextWindow : Infinity;
-  const maxTokens = Math.max(16, Math.min(model?.maxTokens > 0 ? model.maxTokens : 8192, Math.floor(window / 4)));
-  // Reserve output and prompt overhead. At most three UTF-8 bytes per UTF-16
-  // code unit avoids treating non-ASCII characters as one token each.
-  const inputChars = Math.max(0, Math.min(SUMMARY_INPUT_CHARS, Math.floor((window - maxTokens - 2048) / 3)));
-  return { inputChars, maxTokens };
-}
-
-export function summarizerInputBudget(config: ContextPruneConfig, ctx: ExtensionContext): number {
-  // Serialize once: the same evidence must fit every resolved chain candidate.
-  return Math.min(...summarizerModels(config, ctx).map(model => summarizerLimits(model).inputChars));
 }
 
 function receivedTextChars(message: AssistantMessage): number {

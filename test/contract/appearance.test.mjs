@@ -239,7 +239,7 @@ for (const [rail, streaming] of [[false, "full"], [true, "full"], [true, "peek"]
     t.mock.timers.tick(5_000);
     assert.equal(frames.length, afterSettle, "settlement stops the shared heading refresh");
     const report = [];
-    commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
+    await commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
     assert.match(report.join("\n"), rail ? /thinking-rail=applied/ : /thinking-rail=disabled\(config\)/);
     assert.match(report.join("\n"), /history-window:.*"installed":true/);
     assert.doesNotMatch(slots.notifications.map(n => n.text).join("\n"), /decorations partially unavailable/,
@@ -260,9 +260,9 @@ for (const enabled of [false, true]) {
         registerCommand: (name, command) => commands.set(name, command),
       },
     });
-    const diagnostic = () => {
+    const diagnostic = async () => {
       const report = [];
-      commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
+      await commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
       return report.join("\n");
     };
     handlers.get("agent_start")();
@@ -273,11 +273,11 @@ for (const enabled of [false, true]) {
     handlers.get("message_end")({ message });
     handlers.get("agent_settled")();
     handlers.get("agent_settled")();
-    assert.match(diagnostic(), /outcome: failed \(evidence=assistant-error, attempt=1, toolErrors=1\)/);
+    assert.match(await diagnostic(), /outcome: failed \(evidence=assistant-error, attempt=1, toolErrors=1\)/);
     assert.equal(appended.length, enabled ? 1 : 0, "the summary toggle controls delivery, not verdict finalization");
     now += 1_000;
     handlers.get("agent_start")();
-    assert.match(diagnostic(), /outcome: pending \(attempts=0, toolErrors=0\)/, "a new interaction clears the prior verdict");
+    assert.match(await diagnostic(), /outcome: pending \(attempts=0, toolErrors=0\)/, "a new interaction clears the prior verdict");
   });
 }
 
@@ -796,7 +796,7 @@ test("selection changes cancel throughput sampling, including late producer even
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
     assert.match(frame(), /gen≈\(last\) 10 tok\/s/);
     let report;
-    commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
+    await commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
     assert.match(report,
       /out\(last\) 0\.2 tok\/s \(output=2 tokens, duration=10100ms, samples=1, scope=last completed\)/);
     assert.match(report, /includes initial wait\/TTFT, thinking and transfer; excludes tools, pre-request compaction and consumer delays/);

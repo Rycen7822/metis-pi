@@ -26,10 +26,9 @@ import type { SelectionCopySystem } from "../selection-copy/index.ts";
 
 /** Mutable things the diagnostics read but activate() owns/reassigns. */
 export interface DiagnosticsDeps {
-  api: unknown;
   appearanceVersion: string | undefined;
   piVersion: string | undefined;
-  getConfig: () => AppearanceConfig;
+  config: AppearanceConfig;
   chrome: {
     surfaceApplied: boolean; prefixApplied: boolean;
     editorInstalled: boolean; footerInstalled: boolean; headerInstalled: boolean;
@@ -54,14 +53,14 @@ const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : Str
 const pct = (x: number): number => Math.round(x * 10) / 10;
 const seconds = (ms: number): number => Math.round(ms / 1000);
 
-const composerLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
-  const surface = deps.chrome.surfaceApplied
+const composerLine = ({ config, chrome, hasSurfaceBinding }: DiagnosticsDeps): string => {
+  const surface = chrome.surfaceApplied
     ? "applied"
     : config.composer.surface
-      ? `fallback (${deps.hasSurfaceBinding ? "color level" : "no surface binding"})`
+      ? `fallback (${hasSurfaceBinding ? "color level" : "no surface binding"})`
       : "disabled(config)";
-  const prefix = deps.chrome.prefixApplied ? "applied" : "off";
-  const metadata = config.composer.metadata && deps.chrome.footerInstalled
+  const prefix = chrome.prefixApplied ? "applied" : "off";
+  const metadata = config.composer.metadata && chrome.footerInstalled
     ? "applied"
     : config.composer.metadata ? "fallback (footer unavailable)" : "disabled(config)";
   return `  composer: surface=${surface} prefix=${prefix} metadata=${metadata}`;
@@ -155,8 +154,8 @@ const transcriptLine = (deps: DiagnosticsDeps): string => {
   return `  transcript: ${state}`;
 };
 
-const decorationsLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
-  const decorations = deps.getDecorations();
+const decorationsLine = ({ config, getDecorations }: DiagnosticsDeps): string => {
+  const decorations = getDecorations();
   const detail = decorations
     ? decorations.features.map((f) => `${f.name}=${f.name === "thinking-rail" && !config.thinking.rail
       ? "disabled(config)" : f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
@@ -164,8 +163,8 @@ const decorationsLine = (deps: DiagnosticsDeps, config: AppearanceConfig): strin
   return `  decorations: ${detail}`;
 };
 
-const thinkingLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
-  const auto = deps.getDecorations()?.thinkingAutoApplied?.() ?? "n/a";
+const thinkingLine = ({ config, getDecorations }: DiagnosticsDeps): string => {
+  const auto = getDecorations()?.thinkingAutoApplied?.() ?? "n/a";
   return (
     "  thinking: policy=" +
     `${config.thinking.streaming}` +
@@ -179,11 +178,11 @@ const thinkingLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string =
   );
 };
 
-const fullscreenMarginLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
-  if (!deps.fullscreenLayout) {
+const fullscreenMarginLine = ({ config, fullscreenLayout }: DiagnosticsDeps): string => {
+  if (!fullscreenLayout) {
     return `  fullscreen-margin: ${config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`;
   }
-  const status = deps.fullscreenLayout.status().margin;
+  const status = fullscreenLayout.status().margin;
   return (
     "  fullscreen-margin: " +
     `${status.installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : status.reason}`
@@ -196,7 +195,7 @@ const glyphsLine = (deps: DiagnosticsDeps): string => {
   const status = g.status();
   if (!status.enabled) return "  glyphs: disabled(config)";
   const applied = status.installed ? `applied (${status.reason})` : status.reason;
-  const include = deps.getConfig().glyphs.include;
+  const include = deps.config.glyphs.include;
   const includeSuffix = include.length > 0 ? ` include=${include.join(" ")}` : "";
   return (
     "  glyphs: " +
@@ -276,7 +275,7 @@ const gitChangesLine = (deps: DiagnosticsDeps): string => {
 const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {
   if (!deps.selectionCopy) {
     return [
-      `  selection-copy: ${deps.getConfig().selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`,
+      `  selection-copy: ${deps.config.selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`,
     ];
   }
   const d = deps.selectionCopy.diagnostics();
@@ -336,45 +335,32 @@ const FOOTER_SOURCES_LINE =
   "source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd " +
   "source=ctx.cwd";
 
-/** Register the `/codex-ui` command (best-effort: absent host API → no-op). */
-export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
-  (deps.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
-    description: "metis-pi capability diagnostics",
-    handler: (_args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
-      if (!deps.hostData.bound) {
-        commandCtx?.ui?.notify?.("metis-pi: no active session");
-        return;
-      }
-      const config = deps.getConfig();
-      const snap = deps.metrics.snapshot();
-      const appearanceVersion = deps.appearanceVersion ?? "?";
-      const piVersion = deps.piVersion ?? "?";
-      const lines = [
-        `metis-pi ${appearanceVersion} diagnostics (mode=${deps.hostData.mode}, pi=${piVersion}, revision=${deps.hostData.revision}):`,
-        composerLine(deps, config),
-        workingLine(config, snap),
-        FOOTER_SOURCES_LINE,
-        modelLine(deps),
-        contextLine(deps),
-        sessionLine(deps),
-        cacheLine(deps),
-        speedLine(deps),
-        interactionLine(snap),
-        outcomeLine(deps),
-        chromeLine(deps),
-        transcriptLine(deps),
-        decorationsLine(deps, config),
-        thinkingLine(deps, config),
-        fullscreenMarginLine(deps, config),
-        glyphsLine(deps),
-        configLine(config),
-        resourcesLine(deps),
-        gitChangesLine(deps),
-        ...selectionCopyLines(deps),
-        historyLine(deps),
-      ];
-      // Return values are ignored by the host; surface via the command ctx.
-      commandCtx?.ui?.notify?.(lines.join("\n"));
-    },
-  });
+export function formatDiagnostics(deps: DiagnosticsDeps): string {
+  if (!deps.hostData.bound) return "metis-pi: no active session";
+  const { config, hostData, appearanceVersion = "?", piVersion = "?" } = deps;
+  const snap = deps.metrics.snapshot();
+  return [
+    `metis-pi ${appearanceVersion} diagnostics (mode=${hostData.mode}, pi=${piVersion}, revision=${hostData.revision}):`,
+    composerLine(deps),
+    workingLine(config, snap),
+    FOOTER_SOURCES_LINE,
+    modelLine(deps),
+    contextLine(deps),
+    sessionLine(deps),
+    cacheLine(deps),
+    speedLine(deps),
+    interactionLine(snap),
+    outcomeLine(deps),
+    chromeLine(deps),
+    transcriptLine(deps),
+    decorationsLine(deps),
+    thinkingLine(deps),
+    fullscreenMarginLine(deps),
+    glyphsLine(deps),
+    configLine(config),
+    resourcesLine(deps),
+    gitChangesLine(deps),
+    ...selectionCopyLines(deps),
+    historyLine(deps),
+  ].join("\n");
 }

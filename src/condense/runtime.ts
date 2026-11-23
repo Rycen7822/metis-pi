@@ -20,8 +20,8 @@ import {
 } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
 import { prepareBatch, splitPackingRuns } from "./packing.ts";
-import { planBatchSummary, summarizeBatch, summarizeRange, summarizerInputBudget, summarizerModels,
-  type SummaryRequest } from "./summarizer.ts";
+import { summarizerInputBudget, summarizerModels } from "./summarizer-models.ts";
+import type { SummaryRequest } from "./summarizer.ts";
 import { SummaryGroupAttempts, summaryGroupSource } from "./summary-group.ts";
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
@@ -542,6 +542,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection(MESSAGE_SOURCES).messages)
           || config !== policyFingerprint(currentConfig.value)) throw new CondenseContextChangedError("fusion source changed");
       };
+      const { summarizeRange } = await import("./summarizer.ts");
       valid();
       const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal,
         outputBudget: budget,
@@ -1335,6 +1336,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           if (!admitBatch(record, record.plan.upperGain)) {
             record.result = "deferred"; continue;
           }
+          const { summarizeBatch } = await import("./summarizer.ts");
           // Rejected plans cannot publish. Read fresh source only before real provider work.
           checkSource(await readProjection(ctx, signal));
           options.onProgress?.(i, records.length, record.batch, "start");
@@ -1436,6 +1438,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (trigger === "manual" || delivery !== "session" || selected.length !== 3
           || !selected.every(record => workKind(record) === "paid"
           && !record.job && record.plan && record.result === "deferred" && record.deferredReason === "economics")) return;
+        const { planBatchSummary, summarizeBatch } = await import("./summarizer.ts");
+        checkSource();
         const keys = selected.flatMap(record => [...record.plan!.replacements.keys()]);
         const keyFor = () => projectionFingerprint([summaryGroupSource(ctx.sessionManager, options.closingMessage), keys,
           policyFingerprint(currentConfig.value), [ctx.model, ...summarizerModels(config, ctx)].map(model => {

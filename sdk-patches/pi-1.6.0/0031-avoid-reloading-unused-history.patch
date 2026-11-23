@@ -1,0 +1,112 @@
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index 061dc91..5684ee1 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -173,11 +173,23 @@ export class SessionEntryStore {
+ 		)
+ 			return this.readEntries(metadata);
+ 		const admitted = this.projectionWindow(metadata, path);
+-		return metadata.map((entry) => {
++		const entries = metadata.map((entry) => {
+ 			const record = this.byId.get(entry.id);
+ 			if (!record) throw new Error(`Session entry not found: ${entry.id}`);
+-			return this.read(record, admitted.has(record) ? "retain" : "transient");
++			return this.read(record, "transient");
+ 		});
++		this.publishProjectionCache(entries, admitted);
++		return entries;
++	}
++
++	private publishProjectionCache(entries: readonly SessionEntry[], admitted: ReadonlySet<StoredSessionEntry>): void {
++		// A miss must not evict a still-unread hit from this same projection.
++		for (const entry of entries) {
++			const record = this.byId.get(entry.id);
++			if (record?.location && admitted.has(record) && !this.cachedEntry(record)) {
++				this.remember(record, entry, record.location.length);
++			}
++		}
+ 	}
+ 
+ 	/** Full bodies, one owned descriptor/buffer, and cooperative work slices, including cache-only reads. */
+@@ -196,6 +208,7 @@ export class SessionEntryStore {
+ 		assertCurrent();
+ 		const admitted = this.projectionWindow(metadata, path);
+ 		const entries: SessionEntry[] = [];
++		let admitMisses = false;
+ 		let file: FileHandle | undefined, buffer: Buffer | undefined;
+ 		let bufferedOffset = -1,
+ 			bufferedBytes = 0;
+@@ -238,8 +251,8 @@ export class SessionEntryStore {
+ 							bufferedBytes = read;
+ 						}
+ 					}
+-					const retain = admission === this.cacheEpoch && admitted.has(record);
+-					entries.push(this.decode(record, bytes, length, retain ? "retain" : "transient"));
++					admitMisses ||= admitted.has(record);
++					entries.push(this.decode(record, bytes, length, "transient"));
+ 				}
+ 				if (performance.now() - sliceStarted >= 8) {
+ 					await setImmediate(undefined, { signal });
+@@ -251,6 +264,7 @@ export class SessionEntryStore {
+ 			await file?.close();
+ 		}
+ 		assertCurrent();
++		if (admitMisses && admission === this.cacheEpoch) this.publishProjectionCache(entries, admitted);
+ 		return entries;
+ 	}
+ 
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 7761f94..d5746fd 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -1508,13 +1508,16 @@ export class SessionManager {
+ 		return context ?? this.buildSessionContext();
+ 	}
+ 
+-	/** @internal First render only; source selection, including edited and display-only rows, remains authoritative. */
+-	consumeInitialDisplayEntries(): SessionEntry[] {
++	/** @internal Read display sources, consuming the prepared first-frame bodies if present. */
++	consumeInitialDisplayEntries(hasCustomRenderer?: (customType: string) => boolean): SessionEntry[] {
+ 		const display = this.restoreDisplay;
+ 		this.restoreDisplay = undefined;
+-		if (!display?.size) return this.buildContextEntries();
+ 		const path = this.getBranchMetadata();
+-		const selected = selectContextEntries(path);
++		const context = selectContextEntries(path);
++		const selected = hasCustomRenderer
++			? context.filter((entry) => entry.type !== "custom" || hasCustomRenderer(entry.customType))
++			: context;
++		if (!display?.size) return this.store.readProjectionEntries(selected, path);
+ 		const missing = this.store.readProjectionEntries(
+ 			selected.filter((entry) => !display.has(entry.id)),
+ 			path,
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 3683ef3..1576b60 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -4447,9 +4447,14 @@ export class InteractiveMode {
+ 		this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
+ 	}
+ 
++	private readDisplayEntries(): SessionEntry[] {
++		return this.sessionManager.consumeInitialDisplayEntries(
++			(type) => this.session.extensionRunner.getEntryRenderer(type) !== undefined,
++		);
++	}
++
+ 	renderInitialMessages(): void {
+-		const entries = this.sessionManager.consumeInitialDisplayEntries();
+-		this.renderSessionEntries(entries, {
++		this.renderSessionEntries(this.readDisplayEntries(), {
+ 			updateFooter: true,
+ 			populateHistory: true,
+ 		});
+@@ -4502,7 +4507,7 @@ export class InteractiveMode {
+ 
+ 	private rebuildChatFromMessages(): void {
+ 		this.chatContainer.clear();
+-		this.renderSessionEntries(this.sessionManager.buildContextEntries());
++		this.renderSessionEntries(this.readDisplayEntries());
+ 	}
+ 
+ 	// =========================================================================

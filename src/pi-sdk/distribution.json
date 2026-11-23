@@ -122,13 +122,17 @@
     {
       "file": "0030-load-boundary-projection-on-demand.patch",
       "sha256": "02456fa827b570ef7aa26260c8da86befbed698fff590d63018ce24353b67761"
+    },
+    {
+      "file": "0031-avoid-reloading-unused-history.patch",
+      "sha256": "64292b9418f16cba353d017d515955e332f38a4bd18dcfa5ded00e6addbba1c9"
     }
   ],
-  "patchSet": "386be3e662023f64b64a915035c9f75d17747152a9b5750b9e116d52ba97cef9",
+  "patchSet": "d4e75082cfec4399c524cf45c6f1444aea8bcb960b1f2f239543bca4fdde5056",
   "archive": {
     "file": "pi-1.6.0.tgz",
-    "sha256": "b787ee1fa2d16358e674e7905b078f3f7e673d1f6595dc29ec5bf9af3f2fccaf",
-    "bytes": 6135415,
-    "unpackedBytes": 27320375
+    "sha256": "41d75324d941b91c61ec42bcaf3c93147d55e8ffc3692b34aaff20dcff3359d1",
+    "bytes": 6136173,
+    "unpackedBytes": 27323691
   }
 }
