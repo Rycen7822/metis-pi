@@ -126,13 +126,17 @@
     {
       "file": "0031-avoid-reloading-unused-history.patch",
       "sha256": "64292b9418f16cba353d017d515955e332f38a4bd18dcfa5ded00e6addbba1c9"
+    },
+    {
+      "file": "0032-anchor-fullscreen-scrollbars.patch",
+      "sha256": "5b5ca5bd8a561acf1e01a7b83b30fef0d96ebac7408d28c8379d2bf25c96b404"
     }
   ],
-  "patchSet": "d4e75082cfec4399c524cf45c6f1444aea8bcb960b1f2f239543bca4fdde5056",
+  "patchSet": "2b60f91d2fd6a2690377c02845f4dd3e7e2c07a2ef393d6daebc912cde5acfc1",
   "archive": {
     "file": "pi-1.6.0.tgz",
-    "sha256": "41d75324d941b91c61ec42bcaf3c93147d55e8ffc3692b34aaff20dcff3359d1",
-    "bytes": 6136173,
-    "unpackedBytes": 27323691
+    "sha256": "8cc6341dd94561dd52936e41c46e807ed507e74530525ba01d61e74c808c8326",
+    "bytes": 6133874,
+    "unpackedBytes": 27321339
   }
 }

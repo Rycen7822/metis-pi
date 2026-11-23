@@ -1,0 +1,83 @@
+diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
+index c90b56b..7fcff63 100644
+--- a/packages/tui/src/layout.ts
++++ b/packages/tui/src/layout.ts
+@@ -328,10 +328,19 @@ export function getScrollbarGeometry(box: LayoutBox, includeHiddenAuto = false):
+ 	};
+ }
+ 
++/** Resolve zero-width column markers only for physical output, after clipping and overlays. */
++export function serializeScrollbarAnchors(line: string, terminalWidth = 0): string {
++	return line.replace(/\x1b_pi:sb:(\d+)\x07/g, (_, digits: string) => {
++		const column = Number(digits);
++		return column > 0 && column <= terminalWidth ? `\x1b[${column}G` : "";
++	});
++}
++
+ function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): void {
+ 	const geometry = getScrollbarGeometry(box);
+ 	if (!geometry || !box.scrollView) return;
+ 
++	const anchor = `\x1b_pi:sb:${geometry.column + 1}\x07`;
+ 	for (let offset = 0; offset < geometry.trackHeight; offset++) {
+ 		const row = geometry.trackTop + offset;
+ 		if (row < box.clip.y || row >= box.clip.y + box.clip.height || row < 0 || row >= screen.length) continue;
+@@ -343,7 +352,7 @@ function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): v
+ 			screen[row] ?? "",
+ 			geometry.column,
+ 			totalWidth,
+-			replacement,
++			anchor + replacement,
+ 			box.scrollView.scrollbar !== "always",
+ 		);
+ 	}
+diff --git a/packages/tui/src/tui-alt-screen.ts b/packages/tui/src/tui-alt-screen.ts
+index 7cd6f59..9e77988 100644
+--- a/packages/tui/src/tui-alt-screen.ts
++++ b/packages/tui/src/tui-alt-screen.ts
+@@ -16,6 +16,7 @@ import {
+ 	type LayoutFrame,
+ 	renderLayoutFrame,
+ 	type ScrollbarGeometry,
++	serializeScrollbarAnchors,
+ } from "./layout.ts";
+ import { getLayoutNode } from "./layout-node.ts";
+ import type { Terminal } from "./terminal.ts";
+@@ -300,7 +301,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 	renderEmbeddedFrame(): string[] {
+ 		let frame: string[] = [];
+ 		this.embeddedFrameSink = (lines) => {
+-			frame = lines.slice();
++			frame = lines.map((line) => serializeScrollbarAnchors(line));
+ 		};
+ 		try {
+ 			this.renderNow();
+@@ -1815,6 +1816,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 			else if (this.imageProtocol === "kitty") buffer += deleteAllKittyPlacements();
+ 		}
+ 		buffer += preparedKittyScreen.evictedImageDeletion;
++		const outputLine = (line: string) => serializeScrollbarAnchors(line, this.embedded ? 0 : width);
+ 
+ 		// Some terminals store Kitty images in the cells they cover (WezTerm, xterm.js's image addon in Orca),
+ 		// so clearing or writing a covered row erases that part of the image. Draw placements after every clear
+@@ -1828,8 +1830,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 			}
+ 			for (let row = 0; row < height; row++) {
+ 				if (!fullRedraw && !imagesNeedRedraw && screen[row] === this.previousScreen[row]) continue;
+-				if (isImageLine(preparedKittyScreen.lines[row] ?? "")) continue;
+-				buffer += `\x1b[${row + 1};1H${preparedKittyScreen.lines[row] ?? ""}`;
++				const line = preparedKittyScreen.lines[row] ?? "";
++				if (isImageLine(line)) continue;
++				buffer += `\x1b[${row + 1};1H${outputLine(line)}`;
+ 			}
+ 			for (let row = 0; row < height; row++) {
+ 				if (!fullRedraw && !imagesNeedRedraw && screen[row] === this.previousScreen[row]) continue;
+@@ -1839,7 +1842,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
+ 		} else {
+ 			for (let row = 0; row < height; row++) {
+ 				if (!fullRedraw && !imagesNeedRedraw && screen[row] === this.previousScreen[row]) continue;
+-				buffer += `\x1b[${row + 1};1H\x1b[2K${preparedKittyScreen.lines[row] ?? ""}`;
++				buffer += `\x1b[${row + 1};1H\x1b[2K${outputLine(preparedKittyScreen.lines[row] ?? "")}`;
+ 			}
+ 		}
+ 
