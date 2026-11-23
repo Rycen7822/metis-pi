@@ -131,6 +131,11 @@ export class EditorSelection {
     }
   }
 
+  shouldKeepSelectionOnClick(clickCount = 1): boolean {
+    // Pi can dispatch a cursor click at the start of a newly selected word; consuming it clears that selection.
+    return clickCount > 1 && this.tui.getSelectionBounds?.() !== undefined;
+  }
+
   tryDelete(data: string): boolean {
     const kb = getKeybindings();
     if (!kb.matches(data, "tui.editor.deleteCharBackward") && !kb.matches(data, "tui.editor.deleteCharForward")

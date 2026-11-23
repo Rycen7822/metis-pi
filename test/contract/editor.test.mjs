@@ -7,7 +7,8 @@ import { makeCodexEditorFactory } from "../../src/appearance/chrome/editor.ts";
 import { createHardwareCursor } from "../../src/appearance/chrome/hardware-cursor.ts";
 import { CURSOR_MARKER, makeSurfaceOps } from "../../src/appearance/chrome/surface.ts";
 import { theme } from "../helpers/presentation.mjs";
-import { altScreen, container } from "../helpers/ui-fixtures.mjs";
+import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
+import { sgr } from "../helpers/terminal.mjs";
 
 initTheme("dark", false);
 // Native status text reads the global app binding; no personal config/files.
@@ -82,6 +83,29 @@ test("real editor surface, IME glyphs and hardware cursor survive one terminal l
   tui.setFocus(fallback);
   tui.doRender();
   assert.match(tui.previousScreen.join("\n"), /\x1b\[7ml\x1b\[27m/, "Pi draws the fake cursor when hardware visibility is off");
+});
+
+test("double-clicking the start of a word in the composer lets Delete remove only that word", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 10_000 });
+  const { tui } = altScreen();
+  const editor = nativeEditor({}, tui);
+  tui.setLayoutRoot(container(editor));
+  tui.setFocus(editor);
+  editor.setText("keep 中🙂文 keep");
+  tui.doRender();
+  const rows = screenLines(tui);
+  const row = rows.findIndex((line) => line.includes("keep 中🙂文 keep"));
+  assert.notEqual(row, -1);
+  const x = rows[row].indexOf("中") + 1, y = row + 1;
+  for (let i = 0; i < 2; i++) {
+    tui.handleTerminalInput(sgr(0, x, y));
+    tui.handleTerminalInput(sgr(0, x, y, true));
+    tui.doRender();
+  }
+  const selected = tui.getActiveSelectionText();
+  assert.equal(selected, "中");
+  tui.handleTerminalInput("\x1b[3~");
+  assert.equal(editor.getText(), "keep 🙂文 keep");
 });
 
 function compactionHost(t, surfaceEnabled = true) {

@@ -176,8 +176,9 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
     }
 
     override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-      const completingName = event.type === "click" && event.button === "left"
-        && this.isShowingAutocomplete?.() && slashCommandName.test(this.slashInput());
+      const leftClick = event.type === "click" && event.button === "left";
+      if (leftClick && this.selection.shouldKeepSelectionOnClick(event.clickCount)) return;
+      const completingName = leftClick && this.isShowingAutocomplete?.() && slashCommandName.test(this.slashInput());
       const result = super.handleMouse?.(event);
       if (completingName) this.completeSlashArguments();
       return result;
