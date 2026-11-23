@@ -346,6 +346,7 @@ test("pi update --models forces an enabled Metis catalog refresh through the pac
   }
   cpSync(new URL("../../extensions/model-catalog.ts", import.meta.url), join(packageDir, "extensions", "model-catalog.ts"));
   cpSync(new URL("../../src/model-catalog/", import.meta.url), join(packageDir, "src", "model-catalog"), { recursive: true });
+  cpSync(new URL("../../src/command-completions.ts", import.meta.url), join(packageDir, "src", "command-completions.ts"));
   writeFileSync(join(packageDir, "package.json"), JSON.stringify({
     name: "@rycen7822/metis-pi", pi: { extensions: ["./extensions/*.ts"] },
   }));

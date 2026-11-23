@@ -417,12 +417,12 @@ test("streamed write executes through the entry and real padded edits reach the 
   }
 });
 
-test("appearance entry registers diagnostics", (t) => {
+test("appearance entry registers diagnostics", async (t) => {
   const h = entry(t);
   const command = h.commands.find(({ name }) => name === "codex-ui");
   assert.ok(command, "real entry registers /codex-ui");
   const messages = [];
-  command.handler("", { ui: { notify: (text) => messages.push(text) } });
+  await command.handler("", { ui: { notify: (text) => messages.push(text) } });
   const diagnostic = messages.join("\n");
   for (const part of [/metis-pi [\w.-]+ diagnostics/, /thinking=peek\/collapsed/, /composer:/, /working:/, /chrome:/, /transcript:/, /outcome:/]) {
     assert.match(diagnostic, part);
