@@ -81,18 +81,21 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   };
   const persist = () => pi.appendEntry(STATE, { ...state });
   const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection({ entries: "message-sources" });
-  const visible = (ctx: ExtensionContext) => {
-    const projected = projection(ctx);
-    const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages,
-      api: ctx.model?.api, maintenance: true } satisfies CondenseProjectRequest;
+  const visible = (ctx: ExtensionContext, raw = projection(ctx).messages) => {
+    const request: CondenseProjectRequest = { sessionId: ctx.sessionManager.getSessionId(), messages: raw,
+      api: ctx.model?.api, maintenance: true };
     pi.events.emit(METIS_EVENTS.condenseProject, request);
-    return { messages: request.messages, sources: projected.entries.filter(e => e.messages.length).map(e => e.sourceEntry.id) };
+    return request;
   };
-  const signature = (ctx: ExtensionContext) => hash([
-    ctx.sessionManager.getSessionId(), visible(ctx), ctx.model,
-    projection(ctx).entries.filter(e => e.messages.length).map(e => [e.sourceEntry.id, e.messages]),
-    [...customEntries(ctx.sessionManager, "goal")].at(-1),
-  ]);
+  const signature = (ctx: ExtensionContext) => {
+    const raw = projection(ctx);
+    const { messages } = visible(ctx, raw.messages);
+    const entries = raw.entries.filter(e => e.messages.length);
+    return hash([
+      ctx.sessionManager.getSessionId(), { messages, sources: entries.map(e => e.sourceEntry.id) }, ctx.model,
+      entries.map(e => [e.sourceEntry.id, e.messages]), [...customEntries(ctx.sessionManager, "goal")].at(-1),
+    ]);
+  };
   const chars = (ctx: ExtensionContext) => JSON.stringify(visible(ctx).messages).length;
   const estimatedTokens = (messages: any[]) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
   const summaryLimit = (modelMaxTokens: number) => Math.min(
@@ -117,12 +120,12 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     pi.events.emit(METIS_EVENTS.executionStatus, request);
     return !!ctx.model && !request.busy;
   };
-  const rewrite = (ctx: ExtensionContext) => {
+  const rewrite = (ctx: ExtensionContext, messages?: unknown[]) => {
     if (!enabled()) return;
     ready = false;
     state.phase = "hold";
     state.atWork = state.work;
-    state.atChars = chars(ctx);
+    state.atChars = messages ? JSON.stringify(messages).length : chars(ctx);
     persist();
   };
   // Identity is not authority: retain the latest accepted user entry ID even
@@ -587,9 +590,14 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     measure(ctx: ExtensionContext, messages?: any[]) {
       return config.value.enabled ? estimatedTokens(messages ?? visible(ctx).messages) : 0;
     },
-    rewrite(ctx: ExtensionContext, before = 0) {
-      if (config.value.enabled) localTokensSaved += Math.max(0, before - estimatedTokens(visible(ctx).messages));
-      rewrite(ctx);
+    rewrite(ctx: ExtensionContext, before = 0): number | undefined {
+      if (!config.value.enabled) return;
+      const raw = projection(ctx).messages;
+      const { messages, busy } = visible(ctx, raw);
+      const tokens = estimatedTokens(messages);
+      localTokensSaved += Math.max(0, before - tokens);
+      rewrite(ctx, messages);
+      return !busy && messages !== raw ? tokens : undefined;
     },
   };
 }

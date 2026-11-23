@@ -48,6 +48,8 @@ async function changeSetting(f, id, selectedValue) {
 
 test("a busy TUI tool loop leaves automatic paid summaries for the idle session", { timeout: 20000 }, async t => {
   const f = await fixture(t, { mode: "tui", pruneOn: "on-demand", defer: true });
+  const contextUpdates = [];
+  t.after(f.events.on(METIS_EVENTS.condenseContextUsage, update => contextUpdates.push(update)));
   let idle = false;
   f.ctx.isIdle = () => idle;
   const { id } = f.add(buildLog, "produce-output");
@@ -69,10 +71,14 @@ test("a busy TUI tool loop leaves automatic paid summaries for the idle session"
   await waitForSummarizer(f);
   assert.equal(f.calls.length, 1);
   assert.equal(f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"), false);
+  assert.deepEqual(contextUpdates, [], "a pending replacement must not lower the visible estimate");
   f.release();
   await f.waitMaintenance();
   assert.ok(f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"
     && entry.details.toolCallRefs.some(ref => ref.toolCallId === id)));
+  const update = contextUpdates.at(-1);
+  assert.equal(update?.sessionId, f.sm.getSessionId());
+  assert.ok(update.tokens > 0 && update.tokens < estimateTokens({ role: "user", content: buildLog }));
 });
 
 test("fresh input does not wait for an idle summary and late output cannot replace its evidence", { timeout: 20000 }, async t => {

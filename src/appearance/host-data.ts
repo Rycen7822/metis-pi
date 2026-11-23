@@ -9,6 +9,7 @@
 // boundary — no unknown/as-any escape, invalid pieces degrade to "unknown".
 
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { CondenseContextUsage } from "../collaboration.ts";
 
 export interface ModelSnapshot {
   id: string;
@@ -122,10 +123,25 @@ export class HostData {
     value: ContextUsageSnapshot | undefined;
   } | undefined;
 
+  #projectedTokens: number | undefined;
+
   /** Bind the live context (session_start) or clear it (shutdown). */
   bind(ctx: HostContextLike | undefined): void {
     this.#ctx = ctx;
+    this.resetContextUsage();
+  }
+
+  resetContextUsage(): void {
+    this.#projectedTokens = undefined;
     this.bump();
+  }
+
+  setCondenseContextUsage({ sessionId, tokens }: CondenseContextUsage): boolean {
+    if (this.#ctx?.sessionManager?.getSessionId?.() !== sessionId) return false;
+    this.#projectedTokens = tokens ?? undefined;
+    if (tokens === null) this.bump();
+    else this.bumpDisplay();
+    return true;
   }
 
   /** Model/effort/context-impacting events bump the revision so a single
@@ -191,6 +207,12 @@ export class HostData {
   }
 
   getContextUsage(): ContextUsageSnapshot | undefined {
+    const usage = this.getNativeContextUsage();
+    const tokens = this.#projectedTokens;
+    return usage && tokens !== undefined ? { ...usage, tokens, percent: tokens / usage.contextWindow * 100 } : usage;
+  }
+
+  private getNativeContextUsage(): ContextUsageSnapshot | undefined {
     const read = this.#ctx?.getContextUsage;
     if (typeof read !== "function") return undefined;
     try {

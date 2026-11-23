@@ -1,5 +1,5 @@
 import { METIS_STATUS_IDS } from "../collaboration.ts";
-import { estimateTokens, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { calculateContextTokens, estimateTokens, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { ModelPricing } from "./model-pricing.ts";
 import { priceRefreshMarker } from "./refresh-prices.mjs";
@@ -84,7 +84,7 @@ import { DiagnosticSink } from "./diagnostics.ts";
 import { TokenEstimator, projectionFingerprint, unchangedPrefixTokens, type TokenComparison } from "./token-estimator.ts";
 import { createRangeResolver, resolveRange, perBatchSummaryOverlapsDropped } from "./chain-range-prune.ts";
 import {
-  METIS_EVENTS, isBeforeRemoteCompactRequest, isCondenseMaintenanceRequest, isCondenseProjectRequest,
+  METIS_EVENTS, isBeforeRemoteCompactRequest, isCondenseMaintenanceRequest, isCondenseProjectRequest, type CondenseContextUsage,
 } from "../collaboration.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
@@ -251,6 +251,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     rewriteBudget.invalidateCache();
     preparedCacheRequest = undefined;
   };
+  let projectedRevision: symbol | undefined, requestRevision: symbol | undefined;
+  const reportProjectedUsage = (ctx: ExtensionContext, tokens: number | null) => {
+    projectedRevision = tokens === null ? undefined : Symbol();
+    pi.events.emit(METIS_EVENTS.condenseContextUsage,
+      { sessionId: ctx.sessionManager.getSessionId(), tokens } satisfies CondenseContextUsage);
+  };
+  const resetProjectedUsage = () => { projectedRevision = requestRevision = undefined; };
   const resetRewriteState = () => {
     clearRewriteObservation();
     rewriteBudget.reset();
@@ -323,6 +330,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     await Promise.all([stopMaintenance(), idleFlush?.done]);
   });
   const occ = registerOcc(pi, indexer, currentConfig);
+  const finishLocalRewrite = (ctx: ExtensionContext, before: number, published = true) => {
+    const tokens = occ.rewrite(ctx, before);
+    if (published && ctx.mode === "tui" && tokens !== undefined) reportProjectedUsage(ctx, tokens);
+  };
   let activeFlushAbort: AbortController | undefined;
   const applyConfig = (config: ContextPruneConfig) => {
     const previousPolicy = policyFingerprint(currentConfig.value);
@@ -337,6 +348,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     clearRewriteObservation();
     lastMaintenanceSource = undefined;
     activeFlushAbort?.abort();
+    if (projectedRevision && projectionContext) reportProjectedUsage(projectionContext, null);
   };
   let previousFraction: number | null = null;
   // Set on session_start/session_tree when the branch rescan finds recoverable
@@ -698,7 +710,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (result.compressedEntries.some(entry => !isSharedChain(entry)) && indexer.getChainEntries().some(isSharedChain))
         needsSharedValidation = true;
       statsAccum.addChainsCompressed(members);
-      occ.rewrite(ctx, beforeRewrite);
+      finishLocalRewrite(ctx, beforeRewrite);
     }
     return { ...result, reclaimedTokens };
   };
@@ -1811,7 +1823,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (activeFlushAbort === abort) activeFlushAbort = undefined;
       isFlushing = false;
       finishBatchAccounting();
-      if (version === lifecycle && (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)) occ.rewrite(ctx, beforeRewrite);
+      const published = stubCount > 0 || publishedAliasesOrArchives;
+      if (version === lifecycle && (published || modelAttempted)) {
+        finishLocalRewrite(ctx, beforeRewrite, published && nativeEpoch === nativeWindowEpoch);
+      }
       emitFlushMetricsOnce();
       if (version === lifecycle && trigger !== "manual") notifyPruneActions(ctx, actions);
     }
@@ -1870,6 +1885,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     try { projectionContext?.ui.setWidget("pruner-boot", undefined); } catch { /* Previous UI may be gone. */ }
   };
   const restore = (ctx: ExtensionContext) => {
+    resetProjectedUsage();
     journalManager = ctx.sessionManager;
     jsonSizes.clear();
     resetNested();
@@ -2000,6 +2016,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     stopIdleFlush();
     pricing.start(ctx.modelRegistry.getAll());
     previousFraction = null;
+    resetProjectedUsage();
     resetRewriteState();
     maintenanceAbort?.abort(); tokenEstimator.clear(); sharedValidations.clear(); lastMaintenanceSource = undefined;
     needsSharedValidation = true;
@@ -2016,6 +2033,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   pi.on("session_compact", async (event, ctx) => {
     const version = lifecycle, nativeEpoch = ++nativeWindowEpoch;
+    resetProjectedUsage();
     stopIdleFlush();
     activeFlushAbort?.abort();
     // Late flushes must not rearm work for the discarded window.
@@ -2129,7 +2147,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           });
           assertCurrent(version);
           if (handled.size) {
-            occ.rewrite(ctx, beforeRewrite);
+            finishLocalRewrite(ctx, beforeRewrite);
             notifyPruneActions(ctx, { spilledCalls: handled.size });
           }
         } catch {
@@ -2765,7 +2783,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       lowerFloor(supersede, earliestChainStart(entry.members));
       statsAccum.addChainsCompressed(entry.members.length);
       savePayback(ctx, rewriteBudget.published(counts.piBefore, chainGain(counts), prefix, economicModel(ctx), context), appendEntry);
-      occ.rewrite(ctx, counts.piBefore);
+      finishLocalRewrite(ctx, counts.piBefore);
     })().catch(error => {
       lastMaintenanceSource = undefined;
       if (!signal.aborted && version === lifecycle) {
@@ -2797,6 +2815,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   pi.on("turn_end", (event, ctx) => {
+    const { message } = event;
+    // turn_end follows persistence. An older in-flight request cannot confirm a new view.
+    if (projectedRevision && requestRevision === projectedRevision && message.role === "assistant"
+      && message.stopReason !== "error" && message.stopReason !== "aborted"
+      && message.usage && calculateContextTokens(message.usage) > 0) {
+      reportProjectedUsage(ctx, null);
+    }
+    requestRevision = undefined;
     if (currentConfig.value.enabled && isUsefulWork(event.message, event.toolResults ?? [])) {
       const tokens = [event.message, ...event.toolResults].reduce((sum, message) => sum + estimateTokens(message), 0);
       rewriteBudget.observe(event.message, economicModel(ctx), tokens);
@@ -2892,6 +2918,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // Session delivery can append evidence after Pi took this request snapshot.
     // Carry only currently effective summaries; never resurrect a dropped chain.
     const version = lifecycle;
+    const revision = projectedRevision;
     const signal = ctx.signal;
     let projection: NativeProjection;
     try {
@@ -2906,6 +2933,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const messages = withDurableSummaries(event.messages, ctx, ctx.model?.api, false, source);
     const result = projectContext(messages, ctx.model?.api, { ctx, source });
     if (messages !== event.messages) result.changed = true;
+    requestRevision = revision;
     const cacheSource = remoteCacheSource(projection);
     preparedCacheRequest = currentConfig.value.enabled && (cacheSource || ctx.model?.api === "openai-responses") ? {
       session: ctx.sessionManager.getSessionId(), leaf: ctx.sessionManager.getLeafId(), source: cacheSource ?? "plain",
@@ -2979,6 +3007,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       lifecycle++;
       stopIdleFlush();
       journalManager = undefined;
+      resetProjectedUsage();
       resetRewriteState();
       nativeCompaction?.finish();
       contextMetrics.clear();

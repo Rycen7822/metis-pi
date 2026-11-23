@@ -13,6 +13,7 @@ export const METIS_EVENTS = {
   beforeRemoteCompact: "metis:before-remote-compact",
   condenseProject: "metis:condense-project",
   condenseMaintenance: "metis:condense-maintenance",
+  condenseContextUsage: "metis:condense-context-usage",
 } as const;
 
 // Shared status identities are consumed by both feature writers and chrome.
@@ -38,6 +39,8 @@ export interface CondenseProjectRequest {
   busy?: boolean;
 }
 export interface CondenseMaintenanceRequest { pending?: Promise<void> }
+/** Temporary estimate for the published model view; null restores the host's estimate. */
+export interface CondenseContextUsage { readonly sessionId: string; readonly tokens: number | null }
 
 // Ownership needs model identity and native history reads, not a full SDK ctx.
 export interface CodexCompactionOwnerRequest {
@@ -76,6 +79,11 @@ export function isCondenseProjectRequest(value: unknown): value is CondenseProje
 }
 export function isCondenseMaintenanceRequest(value: unknown): value is CondenseMaintenanceRequest {
   return record(value) && (value["pending"] === undefined || value["pending"] instanceof Promise);
+}
+export function isCondenseContextUsage(value: unknown): value is CondenseContextUsage {
+  if (!record(value) || typeof value["sessionId"] !== "string") return false;
+  const tokens = value["tokens"];
+  return tokens === null || (typeof tokens === "number" && Number.isFinite(tokens) && tokens >= 0);
 }
 export function isCodexCompactionOwnerRequest(value: unknown): value is CodexCompactionOwnerRequest {
   return record(value) && typeof value["owns"] === "boolean"

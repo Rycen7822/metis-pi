@@ -24,7 +24,7 @@ import { createChromeLifecycle, SUMMARY_STATUS_KEY } from "./chrome/install.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "../selection-copy/index.ts";
 import { createFullscreenLayout, type FullscreenLayoutHost } from "./chrome/fullscreen-layout.ts";
-import { METIS_EVENTS } from "../collaboration.ts";
+import { isCondenseContextUsage, METIS_EVENTS } from "../collaboration.ts";
 import { openAISafetyNotice } from "../openai-safety.ts";
 
 export type AppearanceAPI = Pick<ExtensionAPI, "on" | "getAllTools">;
@@ -75,6 +75,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   let decorations: DecorationHandle | undefined;
   let userTimestamps: ReturnType<typeof installUserTimestamps>;
   let stopEmbeddedTranscripts: (() => void) | undefined;
+  let stopContextUsage: (() => void) | undefined;
   let replyEndedAt: number | undefined;
   let pendingSafetyNotice: string | undefined;
   const replyTimes = new WeakMap<object, number>();
@@ -261,6 +262,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && enabled;
+    stopContextUsage?.();
+    stopContextUsage = chromeEnabled ? events?.on(METIS_EVENTS.condenseContextUsage, value => {
+      if (isCondenseContextUsage(value) && hostData.setCondenseContextUsage(value)) requestRender();
+    }) : undefined;
     if (enabled && !userTimestamps && bindings.interactivePrototype) {
       userTimestamps = installUserTimestamps(bindings.interactivePrototype, () => enabled);
     }
@@ -422,12 +427,17 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     outputSpeed.reset();
     refreshHost();
   };
-  pi.on("model_select", resetSpeed);
+  pi.on("model_select", () => {
+    outputSpeed.reset();
+    hostData.resetContextUsage();
+    requestRender();
+  });
   pi.on("thinking_level_select", resetSpeed);
   pi.on("session_compact_failed", refreshHost);
   const rebuildUsage = () => {
     ledger.rebuild(hostData.getSessionEntries());
-    refreshHost();
+    hostData.resetContextUsage();
+    requestRender();
   };
   pi.on("session_tree", () => {
     outputSpeed.reset();
@@ -581,6 +591,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     userTimestamps = undefined;
     stopEmbeddedTranscripts?.();
     stopEmbeddedTranscripts = undefined;
+    stopContextUsage?.();
+    stopContextUsage = undefined;
     fullscreenLayout?.dispose();
     selectionCopy?.dispose();
     glyphPresentation?.dispose();
