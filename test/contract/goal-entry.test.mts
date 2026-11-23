@@ -393,8 +393,10 @@ test("agent edit grants cannot survive goal changes, restoration or shutdown, an
     await assert.rejects(() => h.tool("edit", { objective: "stale edit", edit_token: token }), /authoriz/i, scenario);
   }
   const h = makeHost(t);
-  await h.command("agent-edit");
+  h.ctx.mode = "tui";
+  await h.command("agent-edit Keep the audit");
   assert.equal((await h.tool("get")).details.goal, null, "the command cannot create a goal");
+  assert.match(h.notifications.at(-1) ?? "", /requires an active goal/);
   await h.tool("create", { objective: "keep this goal" });
   await h.command("agent-edit");
   const old = (await h.tool("get")).details.agentEditToken;
@@ -403,9 +405,18 @@ test("agent edit grants cannot survive goal changes, restoration or shutdown, an
   const token = (await h.tool("get")).details.agentEditToken;
   assert.notEqual(token, old);
   await assert.rejects(() => h.tool("edit", { objective: "outdated request", edit_token: old }), /authoriz/i);
-  await h.command("agent-edit nonsense");
-  assert.equal((await h.tool("get")).details.goal.objective, "keep this goal");
-  await h.tool("edit", { objective: "fresh edit", edit_token: token });
+  h.ctx.isIdle = () => false;
+  const instructions = "保留 CI 的 Linux 检查\nAdd an OFFLINE Windows check.";
+  await h.command(`agent-edit ${instructions}`);
+  const grant = (await h.tool("get")).details;
+  assert.equal(grant.goal.objective, "keep this goal");
+  assert.equal(typeof grant.agentEditToken, "string");
+  assert.notEqual(grant.agentEditToken, token);
+  const { messages } = await h.fire("context", { messages: [h.sent.at(-1)] }, h.ctx);
+  assert.ok(messages[0]?.content.includes(instructions), "the model receives the original instructions including case and newlines");
+  assert.deepEqual(h.sentOptions.at(-1), { triggerTurn: true, deliverAs: "steer" });
+  assert.match(h.notifications.at(-1) ?? "", /edit instructions submitted/i);
+  await h.tool("edit", { objective: "fresh edit", edit_token: grant.agentEditToken });
   assert.equal((await h.tool("get")).details.goal.objective, "fresh edit");
 });
 

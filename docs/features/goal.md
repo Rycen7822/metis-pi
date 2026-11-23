@@ -6,7 +6,7 @@
 | --- | --- |
 | `/goal <objective>`、`/goal` | 创建或替换目标；查看当前目标。 |
 | `/goal edit`、`/goal pause`、`/goal resume`、`/goal clear` | 编辑、暂停、恢复或清除。 |
-| `/goal agent-edit`、`/goal agent-edit off` | 授权一次模型编辑，或撤销未用的授权。 |
+| `/goal agent-edit [修改要求]`、`/goal agent-edit off` | 授权一次模型编辑并可同时发送要求，或撤销未用的授权。 |
 
 ## 模型工具
 
@@ -34,7 +34,9 @@ autoCompactOnOpenAISafetyRefusal = true
 
 ## 一次性编辑授权
 
-用户执行 `/goal agent-edit` 后，模型用 `goal({ action: "get" })` 取授权令牌，再以 `action: "edit"`、完整 `objective` 和 `edit_token` 提交用户明确要求的文本。成功一次即消耗授权。文本不能为空或超过 4,000 字符；无效调用不消费授权。该操作不改变 ID、计时、状态、用量或预算。
+例如，`/goal agent-edit 保留现有验收条件，再加一项 Windows 验证` 同时授权和发送要求，不必再发一条消息。只输入 `/goal agent-edit` 则只授权。终端会立即提示是否授权成功；目标须处于 active 状态。
+
+获得授权后，模型用 `goal({ action: "get" })` 取授权令牌，再以 `action: "edit"`、完整 `objective` 和 `edit_token` 提交用户明确要求的文本。成功一次即消耗授权。文本不能为空或超过 4,000 字符；无效调用不消费授权。该操作不改变 ID、计时、状态、用量或预算。
 
 手动替换或编辑目标、暂停或结束目标、切换分支、重载和关闭会话都会撤销授权。令牌不是进程沙箱。
 

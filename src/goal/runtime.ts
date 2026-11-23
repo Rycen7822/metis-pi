@@ -778,7 +778,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
       const items = [
         { value: "clear", label: "clear", description: "clear the current goal" },
         { value: "edit", label: "edit", description: "edit the current goal objective" },
-        { value: "agent-edit", label: "agent-edit", description: "authorize one agent edit of the active goal" },
+        { value: "agent-edit", label: "agent-edit", description: "authorize one agent edit; optionally add instructions" },
         { value: "agent-edit off", label: "agent-edit off", description: "revoke unused agent editing authorization" },
         { value: "pause", label: "pause", description: "pause the current goal" },
         { value: "resume", label: "resume", description: "resume the current goal" },
@@ -816,14 +816,14 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
 
       const command = trimmed.toLowerCase();
       if (/^agent-edit(?:\s|$)/.test(command)) {
-        const option = command.slice("agent-edit".length).trim();
-        if (option === "off") {
+        const instructions = trimmed.slice("agent-edit".length).trim();
+        if (instructions.toLowerCase() === "off") {
           editGrant = undefined;
           showGoalMessage("Agent goal editing authorization revoked.");
-        } else if (option) {
-          showGoalMessage("Usage: /goal agent-edit [off]");
         } else if (state.current?.status !== "active") {
-          showGoalMessage("Agent editing requires an active goal. No authorization was granted.");
+          const notice = "Agent editing requires an active goal. No authorization was granted.";
+          if (ctx.mode === "tui") ctx.ui.notify(notice, "warning");
+          else showGoalMessage(notice);
         } else {
           clearOwed();
           editGrant = { token: randomUUID(), goalId: state.current.id, session: ctx.sessionManager.getSessionId() };
@@ -832,10 +832,15 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
             content: "The user authorized one objective edit of the current active goal. " +
               "Call goal get for the current objective and agentEditToken, then goal edit with objective and edit_token. " +
               "Only apply changes explicitly requested by the user; do not invent changes or narrow the scope to claim success. " +
-              "A successful edit consumes authorization. It cannot change budget, usage or status.",
+              "A successful edit consumes authorization. It cannot change budget, usage or status." +
+              (instructions ? `\n\nThe user's requested changes:\n${instructions}` : ""),
             display: true,
             details: { goalId: editGrant.goalId, editToken: editGrant.token },
           }, ctx.isIdle() ? { triggerTurn: true } : { triggerTurn: true, deliverAs: "steer" });
+          if (ctx.mode === "tui") {
+            ctx.ui.notify(instructions ? "Goal edit instructions submitted (one-time authorization)."
+              : "Goal agent edit authorized (once).", "info");
+          }
         }
         return;
       }
