@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ActionTool } from "../deferred-action-tool.ts";
 import type { HealthCheck } from "./native/binding/api.ts";
+import { commandChoices } from "../command-completions.ts";
 import { createSearchActions } from "./tools/actions.ts";
 import { scanOptOutReason } from "./native/paths.ts";
 import { loadConfig } from "./config.ts";
@@ -33,6 +34,7 @@ export default function createNeuralSearch(pi: ExtensionAPI, isAvailable?: () =>
 
   const registerCommand = () => pi.registerCommand("neural-search", {
     description: "Local search index: /neural-search health | rescan",
+    getArgumentCompletions: commandChoices(["health", "rescan"]),
     handler: async (args, ctx) => {
       if (!isActive()) {
         ctx.ui.notify("Neural search is inactive in this session.", "warning");

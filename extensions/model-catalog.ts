@@ -3,6 +3,7 @@ import { ModelRuntime, type ExtensionAPI } from "@earendil-works/pi-coding-agent
 import { withAccountCatalog } from "../src/model-catalog/provider.ts";
 import { withResponsesProgress } from "../src/model-catalog/responses-progress.ts";
 import { createResponsesDiagnostics } from "../src/model-catalog/responses-trace.ts";
+import { commandChoices } from "../src/command-completions.ts";
 
 export default async function (pi: ExtensionAPI) {
   const diagnostics = createResponsesDiagnostics();
@@ -11,6 +12,7 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_shutdown", diagnostics.disable);
   pi.registerCommand("responses-stream", {
     description: "Inspect recent OpenAI HTTP Responses stream progress (on/off/status)",
+    getArgumentCompletions: commandChoices(["on", "off", "status"]),
     handler: async (args, ctx) => {
       const action = args.trim();
       if (action === "on") diagnostics.enable();

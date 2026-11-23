@@ -8,6 +8,7 @@ import { runtimePackage } from "../src/subagents/host/runtime-package.ts";
 import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/ui/rendering.ts";
 import { SubagentSession } from "../src/subagents/host/session.ts";
 import { OWNED_TOOL_SEARCH_ENTRY } from "../src/extension-paths.ts";
+import { commandChoices } from "../src/command-completions.ts";
 
 const namespace = {
   name: "subagents",
@@ -143,6 +144,10 @@ export default function subagents(pi: ExtensionAPI) {
   });
   pi.registerCommand("metis-subagents", {
     description: "Subagent status; stop <agent>; continue <agent> <task>; answer <agent>",
+    getArgumentCompletions: commandChoices(prefix => {
+      const action = /^(stop|continue|answer) /.exec(prefix)?.[1];
+      return action ? (owner?.getCommandTargets(action) ?? []).map(id => `${action} ${id}`) : ["stop", "continue", "answer"];
+    }),
     handler: async (args, ctx) => {
       if (!owner || blocked) {
         ctx.ui.notify("Metis subagents inactive; choose one provider in pi config and reload", "warning");

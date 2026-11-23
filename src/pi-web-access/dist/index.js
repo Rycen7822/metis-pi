@@ -6870,6 +6870,15 @@ function registerWebToolActivation(pi, tools, mode) {
 // src/pi-web-access/tool-commands.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 
+// src/command-completions.ts
+function commandChoices(source) {
+  return (input) => {
+    const prefix = input.trimStart();
+    const values = typeof source === "function" ? source(prefix) : source;
+    return values.filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value }));
+  };
+}
+
 // src/pi-web-access/curator-workflow.ts
 function saveDefaultSearchProvider(provider) {
   saveWebAccessConfig({ searchProvider: provider, provider });
@@ -8846,6 +8855,7 @@ function registerWebSearchCommand(pi, buildSearchReturn) {
 function registerCuratorCommand(pi, webSearchToolName) {
   pi.registerCommand("curator", {
     description: "Toggle or configure the search curator workflow",
+    getArgumentCompletions: commandChoices(["on", "off", "summary-review", "auto-summary", "none"]),
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       let newWorkflow;

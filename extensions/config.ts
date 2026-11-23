@@ -1,10 +1,12 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { initializeMetisConfig, metisConfigPath, METIS_CONFIG_GUIDE } from "../src/configuration/store.ts";
+import { commandChoices } from "../src/command-completions.ts";
 
 export default function config(pi: ExtensionAPI): void {
   pi.registerCommand("metis-config", {
     description: "Show global config; init creates default settings",
+    getArgumentCompletions: commandChoices(["init"]),
     async handler(args, ctx) {
       const agentDir = getAgentDir(),
         action = args.trim();

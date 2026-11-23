@@ -2,6 +2,7 @@ import { isMetisConfigTable, metisConfigPath, readMetisConfig } from "../configu
 import { readHistoryEntries } from "../session-history.ts";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hasMetisHostSDK } from "../pi-sdk/host.ts";
+import { commandChoices } from "../command-completions.ts";
 import { DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "./policy.ts";
 
@@ -99,6 +100,7 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
 
   pi.registerCommand("dynamic-agents", {
     description: "Show active global policy; reload schedules a refresh for the next agent run",
+    getArgumentCompletions: commandChoices(["reload"]),
     handler: async (args, ctx) => {
       if (args.trim() === "reload") {
         dirty = true;

@@ -1,4 +1,5 @@
 import { METIS_STATUS_IDS } from "../collaboration.ts";
+import { commandChoices } from "../command-completions.ts";
 import {
   type ContextPruneConfig,
   type SummarizerStats,
@@ -88,6 +89,14 @@ const SUBCOMMANDS = [
   { value: "dedup",   label: "dedup     — toggle pre-flush content-hash dedup (on/off/status)" },
   { value: "help",    label: "help      — show this help" },
 ] as const;
+
+const PRUNER_ENUM_FIELDS = { thinking: "summarizerThinking", "prune-on": "pruneOn", batching: "batchingMode" } as const;
+const completePrunerValues = commandChoices(prefix => {
+  const [action] = prefix.split(/\s+/, 1);
+  if (action === "dedup") return ["dedup on", "dedup off", "dedup status"];
+  if (action !== "thinking" && action !== "prune-on" && action !== "batching") return [];
+  return optionValues(scalarRow(PRUNER_ENUM_FIELDS[action])).map(value => `${action} ${value}`);
+});
 
 function parseModelAndThinkingArg(
   value: string,
@@ -333,7 +342,8 @@ export function registerCommands(
   pi.registerCommand("pruner", {
     description: "Context-prune settings and commands",
     getArgumentCompletions(prefix: string) {
-      return SUBCOMMANDS.filter((s) => s.value.startsWith(prefix));
+      const query = prefix.trimStart();
+      return query.includes(" ") ? completePrunerValues(query) : SUBCOMMANDS.filter(s => s.value.startsWith(query));
     },
     async handler(args: string, ctx: ExtensionCommandContext) {
       const parts = args.trim().split(/\s+/);
@@ -483,7 +493,7 @@ export function registerCommands(
         case "batching": {
           const thinking = subcommand === "thinking";
           const trigger = subcommand === "prune-on";
-          const row = scalarRow(thinking ? "summarizerThinking" : trigger ? "pruneOn" : "batchingMode");
+          const row = scalarRow(PRUNER_ENUM_FIELDS[subcommand]);
           let raw = subArgs[0];
           if (!raw) {
             if (thinking) {

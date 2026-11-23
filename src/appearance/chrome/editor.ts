@@ -11,7 +11,7 @@
 // re-assertion after inner resets (see src/appearance/chrome/surface.ts).
 // Intentionally no per-line '›' prefix beyond the first row (deliberate Codex deviation).
 
-import { renderFakeCursor } from "@earendil-works/pi-tui";
+import { getKeybindings, matchesKey, renderFakeCursor, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { EditorSelection } from "./editor-selection.ts";
 import { CODEX_CYAN_RGB } from "../../presentation/palette.ts";
 import { isSkillPrefixOnly } from "../../skills/tokens.ts";
@@ -35,9 +35,9 @@ export interface CodexEditorRowHost {
   getPaddingX(): number;
   setPaddingX(padding: number): void;
   handleInput(data: string): void;
+  handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
   setWorkingStatusIndicator?(indicator: CodexStatusIndicator | undefined): void;
-  /** Base editor surface used by the multi-skill trigger hook (optional so
-   * test fakes without them stay valid — absent means "no hook"). */
+  /** Base editor surface used by the completion hooks. */
   getLines?: () => string[];
   getCursor?: () => { line: number; col: number };
   isShowingAutocomplete?: () => boolean;
@@ -84,6 +84,14 @@ export interface CodexEditorFactoryInput {
 }
 
 const CURSOR_CELL = renderFakeCursor(" ");
+const slashCommandName = /^\/[^\s/]*$/;
+const emptySlashArguments = /^\/[^\s/]+ $/;
+const slashArgumentSeparator = /^\/[^\s/]+ (?:.* )?$/;
+
+function textBeforeCursor(editor: CodexEditorRowHost): string | undefined {
+  const cursor = editor.getCursor?.();
+  return cursor && editor.getLines?.()[cursor.line]?.slice(0, cursor.col);
+}
 
 /**
  * Force the completion query the host skips for the second skill trigger.
@@ -102,11 +110,8 @@ function forceSkillCompletion(editor: CodexEditorRowHost, data: string): void {
   if (data !== "/") return;
   if (typeof editor.tryTriggerAutocomplete !== "function") return;
   if (editor.isShowingAutocomplete?.() === true) return;
-  const cursor = editor.getCursor?.();
-  const line = cursor ? (editor.getLines?.() ?? [])[cursor.line] : undefined;
-  if (cursor === undefined || line === undefined) return;
-  const beforeCursor = line.slice(0, cursor.col);
-  if (!beforeCursor.endsWith("/")) return;
+  const beforeCursor = textBeforeCursor(editor);
+  if (!beforeCursor?.endsWith("/")) return;
   if (!isSkillPrefixOnly(beforeCursor.slice(0, -1))) return;
   editor.tryTriggerAutocomplete();
 }
@@ -160,8 +165,30 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
       if (this.selection.tryDelete(data)) return;
       const hook = input.selectionCopy;
       if (hook && hook.tryConsume(data, this)) return;
+      const menuOpen = this.isShowingAutocomplete?.();
+      const completingName = menuOpen && getKeybindings().matches(data, "tui.input.tab") && slashCommandName.test(this.slashInput());
       super.handleInput(data);
+      if (completingName) this.completeSlashArguments();
+      else if (!menuOpen && matchesKey(data, "space") && slashArgumentSeparator.test(this.slashInput())) {
+        this.tryTriggerAutocomplete?.();
+      }
       if (input.skillTrigger) forceSkillCompletion(this, data);
+    }
+
+    override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+      const completingName = event.type === "click" && event.button === "left"
+        && this.isShowingAutocomplete?.() && slashCommandName.test(this.slashInput());
+      const result = super.handleMouse?.(event);
+      if (completingName) this.completeSlashArguments();
+      return result;
+    }
+
+    private slashInput(): string {
+      return this.getCursor?.().line === 0 ? textBeforeCursor(this)?.trimStart() ?? "" : "";
+    }
+
+    private completeSlashArguments(): void {
+      if (emptySlashArguments.test(this.slashInput()) && !this.isShowingAutocomplete?.()) this.tryTriggerAutocomplete?.();
     }
 
     override renderTopBorder(width: number, hiddenLineCount: number): string {

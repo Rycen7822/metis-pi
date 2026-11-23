@@ -683,6 +683,13 @@ export class SubagentSession {
       },
     };
   }
+  getCommandTargets(action: string): string[] {
+    if (!this.valid()) return [];
+    const agents = action === "stop" ? activeAgents(this.agents)
+      : action === "answer" ? this.agents.filter(agent => agent.state === "needs_input")
+      : this.agents;
+    return agents.map(agent => agent.id);
+  }
   async command(args: string, ctx: ExtensionContext) {
     this.update(ctx);
     const [operation, target, ...message] = args.trim().split(/\s+/);

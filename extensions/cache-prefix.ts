@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { comparePrefixes, observePrefix } from "../src/cache-prefix.ts";
+import { commandChoices } from "../src/command-completions.ts";
 
 interface Attempt {
   started: number;
@@ -37,6 +38,7 @@ export default function cachePrefix(pi: ExtensionAPI): void {
   });
   pi.registerCommand("cache-prefix", {
     description: "Opt in to a private, in-memory comparison of prepared request prefixes (on/off/status)",
+    getArgumentCompletions: commandChoices(["on", "off", "status"]),
     handler: async (args, ctx) => {
       const action = args.trim();
       if (!pi.onProviderRequestPrepared) {

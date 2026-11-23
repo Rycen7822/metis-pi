@@ -2,6 +2,7 @@
 // curator-workflow; the tool host returns its result while this host sends follow-ups.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
+import { commandChoices } from "../command-completions.ts";
 import type { CuratorServerHandle, IndexedCuratorSearchEntry } from "./curator-server.ts";
 import { search } from "./search-router.ts";
 import type { SearchProviderSelection } from "./search-providers.ts";
@@ -270,6 +271,7 @@ export function registerWebSearchCommand(pi: ExtensionAPI, buildSearchReturn: (o
 export function registerCuratorCommand(pi: ExtensionAPI, webSearchToolName: string | undefined): void {
 	pi.registerCommand("curator", {
 		description: "Toggle or configure the search curator workflow",
+		getArgumentCompletions: commandChoices(["on", "off", "summary-review", "auto-summary", "none"]),
 		handler: async (args, ctx) => {
 			const arg = args.trim().toLowerCase();
 

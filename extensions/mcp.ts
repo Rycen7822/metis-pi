@@ -1,6 +1,7 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { mcpEnabled, mcpNamespace, readMcpConfiguration, type McpConfiguration } from "../src/mcp/config.ts";
 import type { McpServerSession } from "../src/mcp/session.ts";
+import { commandChoices } from "../src/command-completions.ts";
 
 export default function mcp(pi: ExtensionAPI) {
   const agentDir = getAgentDir();
@@ -158,6 +159,9 @@ export default function mcp(pi: ExtensionAPI) {
   });
   pi.registerCommand("mcp", {
     description: "Metis MCP status; reload config or refresh [server] directory",
+    getArgumentCompletions: commandChoices(prefix => prefix.startsWith("refresh ")
+      ? Array.from(servers.keys(), name => `refresh ${name}`)
+      : ["reload", "refresh"]),
     async handler(args, ctx) {
       current = ctx;
       const [action, name] = args.trim().split(/\s+/);
