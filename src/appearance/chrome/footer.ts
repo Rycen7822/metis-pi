@@ -54,7 +54,7 @@ export interface FooterDeps {
 }
 
 export interface FooterDataView {
-  getGitBranch?: () => string | undefined;
+  getGitBranch?: () => string | null | undefined;
   getExtensionStatuses?: () => ReadonlyMap<string, string>;
   onBranchChange?: (cb: () => void) => () => void;
 }

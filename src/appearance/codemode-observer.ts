@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getPackageDir, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { loadNativeCodemodeSandboxClass } from "./codemode-sandbox.mjs";
-import type { CodemodeSandboxBase, CodemodeTool } from "@earendil-works/pi-codemode";
+import type { CodemodeSandboxBase, CodemodeStoreWrites, CodemodeTool } from "@earendil-works/pi-codemode";
+import { captureStoredChanges } from "./codemode-stored-changes.ts";
 import { asRecord } from "../presentation/tool-names.ts";
 import { isCodemodeHelper, type CodemodeAction, type CodemodeActions } from "./transcript/codemode-actions.ts";
 
@@ -21,6 +22,7 @@ class ActionRun {
   nativeCalls = 0;
   claimedSandbox = false;
   settled = false;
+  stored?: { initial: Readonly<Record<string, unknown>>; writes: CodemodeStoreWrites };
   private sequence = 0;
   private latest: Result = { content: [], details: {} };
   private readonly parent: string;
@@ -79,7 +81,10 @@ class ActionRun {
   finish(result: Result): Result {
     this.settled = true;
     for (const call of this.calls) if (call.status === "running") call.status = "cancelled";
-    return this.attach(result);
+    const final = this.attach(result);
+    if (!this.stored || !this.enabled() || asRecord(final).isError === true) return final;
+    const changes = captureStoredChanges(this.stored.initial, this.stored.writes);
+    return changes.length ? { ...final, details: { ...asRecord(final.details), metisStoredChanges: changes } } : final;
   }
 }
 
@@ -115,8 +120,13 @@ function sandboxLease(prototype: CodemodeSandboxBase): SandboxLease | undefined 
     const saved = globals.map(global => global.execute);
     globals.forEach(global => { global.execute = run.observe(global); });
     const restore = () => globals.forEach((global, index) => { global.execute = saved[index]!; });
-    try { return original.apply(this, args).finally(restore); }
-    catch (error) { restore(); throw error; }
+    try {
+      return original.apply(this, args).then(result => {
+        if (result.ok && Object.keys(result.storeWrites.set).length)
+          run.stored = { initial: args[1]?.store ?? {}, writes: result.storeWrites };
+        return result;
+      }).finally(restore);
+    } catch (error) { restore(); throw error; }
   };
   const lease: SandboxLease = {
     owners: 1, scope,

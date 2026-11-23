@@ -3,11 +3,12 @@
 // install must never take the session down. The five chrome modules are
 // preloaded on construction so session_start rarely waits for the imports.
 
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { diffSignFg } from "../../presentation/diff.ts";
 import type { SegmentTone } from "../../presentation/segments.ts";
 import type { ColorLevel } from "../../presentation/palette.ts";
 import type { AppearanceConfig } from "../config.ts";
-import type { HostData, UiAvailable } from "../host-data.ts";
+import type { HostData } from "../host-data.ts";
 import type { CodexSurfaceOps } from "./editor.ts";
 import { createHardwareCursor } from "./hardware-cursor.ts";
 import { WORKING_WIDGET_KEY, type WorkingComponent } from "./working.ts";
@@ -23,16 +24,13 @@ export interface ChromeState {
   /** Invalidates late async installs: a preload resolving after shutdown or a
    * new session must not touch the new UI. */
   generation: number;
-  editorFactory: object | undefined;
   editorInstalled: boolean;
   surfaceApplied: boolean;
   prefixApplied: boolean;
   footerInstalled: boolean;
   headerInstalled: boolean;
   widgetInstalled: boolean;
-  widgetFactory: unknown;
   workingComponent: WorkingComponent | undefined;
-  nativeLoaderHidden: boolean;
   fallbackMessage: boolean;
   /** Our captured renderer handle (`requestRender` source). */
   tui: { requestRender?: () => void } | undefined;
@@ -63,7 +61,7 @@ export interface ChromeDeps {
 export interface ChromeLifecycle {
   /** Mutable install state (diagnostics reads it; events write `tui`). */
   readonly state: ChromeState;
-  install(available: UiAvailable, generation: number): Promise<void>;
+  install(generation: number): Promise<void>;
   embeddedEditor(): Promise<((tui: unknown, theme: unknown, keybindings: unknown) => {
     component: import("./editor.ts").CodexEditorRowHost; dispose(): void;
   }) | undefined>;
@@ -76,7 +74,7 @@ export interface ChromeLifecycle {
 
 /** Tone painter for footer text (the theme may be an unbound proxy
  * early on — degrade to plain text instead of crashing). */
-function makeTonePainter(theme: { fg?: (key: string, text: string) => string } | undefined, colorLevel: ColorLevel) {
+function makeTonePainter(theme: ExtensionUIContext["theme"] | undefined, colorLevel: ColorLevel) {
   return (text: string, tone: SegmentTone): string => {
     if (tone === "normal" || !text) return text;
     if (tone === "add" || tone === "del") {
@@ -84,9 +82,8 @@ function makeTonePainter(theme: { fg?: (key: string, text: string) => string } |
       const fg = diffSignFg(tone === "add" ? "add" : "remove", colorLevel);
       return fg ? `${fg}${text}\x1b[39m` : text;
     }
-    const key = tone === "warning" ? "warning" : tone;
     try {
-      return typeof theme?.fg === "function" ? theme.fg(key as never, text) : text;
+      return theme?.fg?.(tone, text) ?? text;
     } catch {
       return text;
     }
@@ -98,31 +95,20 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
   const hardwareCursor = createHardwareCursor();
   const state: ChromeState = {
     generation: 0,
-    editorFactory: undefined,
     editorInstalled: false,
     surfaceApplied: false,
     prefixApplied: false,
     footerInstalled: false,
     headerInstalled: false,
     widgetInstalled: false,
-    widgetFactory: undefined,
     workingComponent: undefined,
-    nativeLoaderHidden: false,
     fallbackMessage: false,
     tui: undefined,
   };
 
-  const uiOf = () => hostData.ui as Partial<{
-    setEditorComponent: (factory: unknown) => void;
-    getEditorComponent: () => unknown;
-    setFooter: (factory: unknown) => void;
-    setHeader: (factory: unknown) => void;
-    setWidget: (key: string, content: unknown, options?: unknown) => void;
-    setWorkingVisible: (visible: boolean) => void;
-    setWorkingIndicator: (options?: unknown) => void;
-    setWorkingMessage: (message?: string) => void;
-    setStatus: (key: string, text: string | undefined) => void;
-  }>;
+  let installedEditor: Parameters<ExtensionUIContext["setEditorComponent"]>[0];
+  let widgetFactory: Parameters<ExtensionUIContext["setWidget"]>[1];
+  let nativeLoaderHidden = false;
 
   let chromeMods: Promise<ChromeMods | undefined> | undefined;
   const preloadChrome = (): Promise<ChromeMods | undefined> => {
@@ -147,11 +133,11 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
   });
 
   const setWidgetVisible = (visible: boolean): void => {
-    const ui = uiOf();
+    const ui = hostData.ui;
     if (typeof ui.setWidget !== "function") return;
     try {
-      if (visible && state.widgetInstalled && state.widgetFactory) {
-        ui.setWidget(WORKING_WIDGET_KEY, state.widgetFactory, { placement: "aboveEditor" });
+      if (visible && state.widgetInstalled && widgetFactory) {
+        ui.setWidget(WORKING_WIDGET_KEY, widgetFactory, { placement: "aboveEditor" });
       } else if (!visible) {
         ui.setWidget(WORKING_WIDGET_KEY, undefined);
       }
@@ -161,24 +147,23 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
   /** Install the Codex-style chrome through PUBLIC host APIs only. Preloaded
    * modules install synchronously when ready; a preload resolving after the
    * generation changed (shutdown/new session) is dropped. */
-  const install = async (available: UiAvailable, generation: number): Promise<void> => {
-    const ui = uiOf();
-    const snapshots = deps.getSnapshots();
+  const install = async (generation: number): Promise<void> => {
     const mods = await preloadChrome();
     if (!mods || generation !== state.generation) return;
+    const ui = hostData.ui;
+    const snapshots = deps.getSnapshots();
 
     // Editor factory: Codex surface composer. The gray surface (when the
     // terminal can carry it and surface ops were injected) replaces the
     // accent borders. Native compaction/retry status uses the public editor
     // slot; the regular Working line still lives in the above-editor widget.
-    if (available.setEditorComponent && !ui.getEditorComponent?.() && deps.editorHost?.CustomEditor) {
+    if (typeof ui.setEditorComponent === "function" && !ui.getEditorComponent?.() && deps.editorHost?.CustomEditor) {
       try {
         const surface = config.composer.surface ? deps.surface : undefined;
-        const factory = editorFactory(mods, hardwareCursor);
-        state.editorFactory = factory;
+        installedEditor = editorFactory(mods, hardwareCursor);
         state.surfaceApplied = surface !== undefined;
         state.prefixApplied = surface !== undefined && config.composer.promptPrefix;
-        ui.setEditorComponent?.(factory as never);
+        ui.setEditorComponent(installedEditor);
         state.editorInstalled = true;
       } catch {
         hardwareCursor.release(); // factory may have acquired before host install failed
@@ -186,14 +171,15 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       }
     }
 
-    if (available.setFooter && config.footer.enabled) {
+    if (typeof ui.setFooter === "function" && config.footer.enabled) {
       try {
-        ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
+        ui.setFooter((tui, theme, footerData) => {
           deps.captureTui(tui);
           return mods.createFooterComponent(
-            { getSnapshot: snapshots.getFooterSnapshot, requestRender: deps.requestRender, show: snapshots.footerShow(), openGoal: deps.openGoal,
+            { getSnapshot: snapshots.getFooterSnapshot, requestRender: deps.requestRender,
+              show: snapshots.footerShow, openGoal: deps.openGoal,
               initiallyExpanded: { location: config.footer.locationExpanded, prune: config.footer.pruneExpanded } },
-            footerData as never,
+            footerData,
             makeTonePainter(theme, deps.colorLevel),
           );
         });
@@ -201,9 +187,9 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       } catch { /* footer stays native */ }
     }
 
-    if (available.setHeader) {
+    if (typeof ui.setHeader === "function") {
       try {
-        ui.setHeader?.((_tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) =>
+        ui.setHeader((_tui, theme) =>
           mods.createHeaderComponent(
             {
               appearanceVersion: deps.appearanceVersion ?? "unknown",
@@ -219,57 +205,48 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
 
     // The native loader row is hidden ONLY after the widget installed; without
     // setWidget the old message-based fallback stays (never two Working rows).
-    if (available.setWidget) {
+    if (typeof ui.setWidget === "function") {
       try {
-        const factory = (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
+        widgetFactory = (tui, theme) => {
           deps.captureTui(tui);
-          const paint = (text: string, tone: "accent" | "dim" | "normal"): string => {
-            if (!text || tone === "normal") return text;
-            try {
-              return typeof theme?.fg === "function" ? theme.fg(tone as never, text) : text;
-            } catch {
-              return text;
-            }
-          };
           const component = mods.createWorkingComponent({
             getSnapshot: snapshots.getWorkingSnapshot,
             getShow: snapshots.workingShow,
             getAnimation: snapshots.workingAnimation,
             requestRender: deps.requestRender,
             colorKind: deps.colorLevel.kind,
-            paint,
+            paint: makeTonePainter(theme, deps.colorLevel),
           });
           state.workingComponent = component;
           return component;
         };
-        state.widgetFactory = factory;
         state.widgetInstalled = true;
         // agent_start may have fired while the preload resolved — if an
         // interaction is already active, show the widget immediately.
         setWidgetVisible(deps.isInteractionActive());
         ui.setWorkingVisible?.(false);
-        state.nativeLoaderHidden = true;
+        nativeLoaderHidden = true;
       } catch {
         state.widgetInstalled = false;
       }
     }
-    if (!state.widgetInstalled && available.setWorkingIndicator) {
+    if (!state.widgetInstalled && typeof ui.setWorkingIndicator === "function") {
       try {
-        ui.setWorkingIndicator?.({ frames: ["●"], intervalMs: 1000 });
+        ui.setWorkingIndicator({ frames: ["●"], intervalMs: 1000 });
         state.fallbackMessage = true;
       } catch { /* native spinner keeps its default */ }
     }
   };
 
   const restore = (): void => {
-    const ui = uiOf();
+    const ui = hostData.ui;
     try {
-      if (state.editorFactory && ui.getEditorComponent?.() === state.editorFactory) {
+      if (installedEditor && ui.getEditorComponent?.() === installedEditor) {
         ui.setEditorComponent?.(undefined);
       }
     } catch { /* keep current editor */ }
     hardwareCursor.release();
-    state.editorFactory = undefined;
+    installedEditor = undefined;
     state.editorInstalled = false;
     state.surfaceApplied = false;
     state.prefixApplied = false;
@@ -285,14 +262,14 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       if (state.widgetInstalled) ui.setWidget?.(WORKING_WIDGET_KEY, undefined);
     } catch { /* keep widget slot */ }
     state.widgetInstalled = false;
-    state.widgetFactory = undefined;
+    widgetFactory = undefined;
     state.workingComponent?.stopAnimation();
     state.workingComponent = undefined;
-    if (state.nativeLoaderHidden) {
+    if (nativeLoaderHidden) {
       try {
         ui.setWorkingVisible?.(true);
       } catch { /* native loader state is the host's */ }
-      state.nativeLoaderHidden = false;
+      nativeLoaderHidden = false;
     }
     state.fallbackMessage = false;
     try {

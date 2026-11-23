@@ -18,7 +18,7 @@ export function makeViewerRenderers(config: AppearanceConfig, transcript: Transc
   const { makeText, expandHint, highlight, makeShell, layoutOps } = bindings;
   const renderers = makeRenderers(makeText, expandHint, highlight, bindings.makeDiff, makeShell, bindings.makeWriteCall,
     { colorLevel, writeChanges: new Map(), transcript }, layoutOps);
-  const codemode = makeCodemodeRenderers({ makeText, expandHint, highlight, colorLevel,
+  const codemode = makeCodemodeRenderers({ makeText, expandHint, highlight, colorLevel, makeDiff: bindings.makeDiff,
     store: new CodemodeViewStore(), shell: renderers.bash, resolve: (name, result) => resolve(name, () => result) });
   const options = { renderers, codemode, ...createOwnedCommandStyle(bindings, colorLevel) };
   const execution: Record<string, Renderers> = {

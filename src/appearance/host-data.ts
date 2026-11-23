@@ -43,17 +43,12 @@ export interface HostContextLike {
     getLeafId?: () => string | null;
     getEntryMetadata?: (id: string) => unknown;
   };
-  ui?: Record<string, unknown>;
+  ui?: Partial<UiSurface>;
 }
 
-const UI_SURFACE_METHODS = [
-  "setEditorComponent", "getEditorComponent", "setFooter", "setHeader",
-  "setWidget", "setWorkingMessage", "setWorkingVisible", "setWorkingIndicator", "setStatus",
-] as const satisfies readonly (keyof ExtensionUIContext)[];
-
-/** Host-owned signatures; only the method names are maintained here. */
-export type UiSurface = Pick<ExtensionUIContext, typeof UI_SURFACE_METHODS[number] | "theme">;
-export type UiAvailable = Partial<Record<typeof UI_SURFACE_METHODS[number], boolean>>;
+type UiSurface = Pick<ExtensionUIContext,
+  "setEditorComponent" | "getEditorComponent" | "setFooter" | "setHeader" | "setWidget" |
+  "setWorkingMessage" | "setWorkingVisible" | "setWorkingIndicator" | "setStatus" | "theme">;
 
 /** Only verified journal-only changes can reuse the current usage sample. */
 function onlyJournalAppends(manager: HostContextLike["sessionManager"], leaf: string | null | undefined,
@@ -182,19 +177,6 @@ export class HostData {
     return this.mode === "tui";
   }
 
-  /**
-   * Probe the LIVE ctx.ui once per call and report which methods exist. The
-   * caller snapshots this at session_start and passes it down, so a mid-install
-   * re-bind cannot make the availability answer disagree with the ui handle
-   * that was captured next to it. Reading a method off ctx.ui cannot throw.
-   */
-  get available(): UiAvailable {
-    const ui = this.ui as Partial<UiSurface>;
-    const available: UiAvailable = {};
-    for (const method of UI_SURFACE_METHODS) available[method] = typeof ui[method] === "function";
-    return available;
-  }
-
   /** Read the model through the LIVE context (never a session_start copy). */
   getModel(): ModelSnapshot | undefined {
     return toModelSnapshot(this.#ctx?.model);
@@ -253,7 +235,7 @@ export class HostData {
     return typeof this.#ctx?.sessionManager?.getEntriesMetadata === "function";
   }
 
-  get ui(): Record<string, unknown> {
+  get ui(): Partial<UiSurface> {
     return this.#ctx?.ui ?? {};
   }
 

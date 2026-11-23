@@ -1,9 +1,12 @@
 import { CODEMODE_HELPERS, readCodemodeActions, type CodemodeAction } from "./codemode-actions.ts";
+import { readStoredChanges } from "../codemode-stored-changes.ts";
 import { asRecord } from "../../presentation/tool-names.ts";
 import { safeText, shellTitle } from "../../presentation/terminal-text.ts";
-import type { Component, Highlight, Palette, Renderers, TextFactory, ViewContext, ViewOptions } from "../../presentation/contracts.ts";
-import { MouseRegion } from "@earendil-works/pi-tui";
+import type { Component, DiffFactory, Highlight, Palette, Renderers, TextFactory, ViewContext, ViewOptions } from "../../presentation/contracts.ts";
+import { MouseRegion, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { createDiffComponent } from "../../presentation/components/tool-components.ts";
 import { createHangingText } from "../../presentation/components/rows.ts";
+import { diffStatsFromRows } from "../../presentation/diff.ts";
 import { toolResultBody } from "../../presentation/components/tool-layout.ts";
 import { stackComponents } from "../../selection-copy/stack.ts";
 import { copySourceFor, deferCopyProduct, resolveCopyProduct, registerProduct, sliceCopySource } from "../../selection-copy/model.ts";
@@ -213,6 +216,7 @@ interface ExpansionState {
   output?: boolean;
   allCalls?: boolean;
   slots: Map<string, NestedSlot>;
+  storedDiffOverrides?: Set<number>;
 }
 
 /** Own only codemode clicks; output selection, links and wheel input stay native. */
@@ -295,6 +299,7 @@ function livePreviews(makeText: TextFactory, build: (
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
   highlight?: Highlight;
+  makeDiff?: DiffFactory;
   colorLevel?: ColorLevel;
   store: CodemodeViewStore;
   shell: Renderers;
@@ -312,6 +317,7 @@ export function makeCodemodeRenderers(input: {
       // The host/global shortcut is authoritative; clicks never change its flag.
       view.expanded = expanded;
       view.script = view.output = view.allCalls = undefined;
+      view.storedDiffOverrides = undefined;
       for (const slot of view.slots.values()) slot.expanded = undefined;
     }
     return view;
@@ -320,6 +326,9 @@ export function makeCodemodeRenderers(input: {
   const labelColor = foregroundAnsi(CODEMODE_ORANGE, colorLevel);
   const label = (text: string) => labelColor ? `${labelColor}${text}${FG_DEFAULT}` : text;
   const scriptGlyph = colorLevel.kind === "none" ? "|" : label("│");
+  const makeDiff: DiffFactory = input.makeDiff ?? (({ rows, filePath, options }) => createDiffComponent({
+    rows, filePath, colorLevel, expanded: options.expanded === true, paint: input.highlight,
+  }, { wrap: wrapTextWithAnsi, visibleWidth }));
   return {
     renderCall(args, theme, context) {
       const timer = timerState(context);
@@ -397,6 +406,7 @@ export function makeCodemodeRenderers(input: {
       for (const [id, call] of liveCalls) if (!used.has(id)) calls.push(call);
       const actions = readCodemodeActions(details);
       const steps = commandSteps(calls, actions.calls);
+      const stored = options.isPartial ? [] : readStoredChanges(details.metisStoredChanges);
       const retainedSlots = new Set(steps.map(step => step.call.id));
       for (const id of view.slots.keys()) if (!retainedSlots.has(id)) view.slots.delete(id);
       const allCalls = view.allCalls ?? view.expanded;
@@ -415,7 +425,7 @@ export function makeCodemodeRenderers(input: {
           `(${totals.total} total, ${totals.error} failed)`)));
       if (typeof totals.unfinished === "number" && totals.unfinished > 0)
         parts.push(input.makeText(theme.fg("error", `${totals.unfinished} unfinished calls; external results unknown`)));
-      if (!steps.length) {
+      if (!steps.length && !stored.length) {
         const title = context.isError ? "Script failed" : options.isPartial ? "Running script" : "Ran script";
         parts.push(input.makeText(`${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(title))}`));
       }
@@ -521,6 +531,22 @@ export function makeCodemodeRenderers(input: {
       }
       if (missingResults)
         parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
+      for (const [index, { path, rows }] of stored.entries()) {
+        const overridden = view.storedDiffOverrides?.has(index) === true;
+        const expanded = overridden ? !view.expanded : view.expanded;
+        const title = theme.fg("toolTitle", theme.bold("Stored changes to be applied"));
+        const stats = rows && diffStatsFromRows(rows);
+        const counts = stats ? ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})` : "";
+        const heading = createHangingText(`${theme.fg("dim", "•")} ${title} ${theme.fg("toolTitle", path)}${counts}`);
+        const body = rows
+          ? makeDiff({ rows, filePath: path, theme, context, options: { expanded } })
+          : input.makeText(theme.fg("dim", "Diff unavailable within preview limits."));
+        parts.push(clickRegion(stackComponents([heading, body]), context, rows ? () => {
+          const overrides = view.storedDiffOverrides ??= new Set();
+          if (overridden) overrides.delete(index);
+          else overrides.add(index);
+        } : undefined));
+      }
       // Script output may be a computed summary, not a duplicate of tool output.
       // Retain it and its archive path, but build the full body only when opened.
       let toggleOutput: (() => void) | undefined;

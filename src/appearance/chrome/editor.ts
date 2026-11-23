@@ -11,12 +11,13 @@
 // re-assertion after inner resets (see src/appearance/chrome/surface.ts).
 // Intentionally no per-line '›' prefix beyond the first row (deliberate Codex deviation).
 
-import { getKeybindings, matchesKey, renderFakeCursor, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import {
+  getKeybindings, matchesKey, renderFakeCursor, type EditorComponent, type TuiMouseEvent, type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import { EditorSelection } from "./editor-selection.ts";
 import { CODEX_CYAN_RGB } from "../../presentation/palette.ts";
 import { isSkillPrefixOnly } from "../../skills/tokens.ts";
-import { cellWidth, clipLine } from "../../presentation/segments.ts";
-import { formatDuration } from "../../presentation/segments.ts";
+import { cellWidth, clipLine, formatDuration } from "../../presentation/segments.ts";
 
 /** Structural subset of the status passed through CustomEditor's public API. */
 export interface CodexStatusIndicator {
@@ -24,18 +25,14 @@ export interface CodexStatusIndicator {
   renderInBorder(width: number): string;
 }
 
-export interface CodexEditorRowHost {
+export interface CodexEditorRowHost extends EditorComponent {
   borderColor: (str: string) => string;
   paddingX: number;
   focused: boolean;
-  render(width: number): string[];
   renderTopBorder(width: number, hiddenLineCount: number): string;
   renderBottomBorder(width: number, hiddenLineCount: number): string;
-  getText: () => string;
   getPaddingX(): number;
   setPaddingX(padding: number): void;
-  handleInput(data: string): void;
-  handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
   setWorkingStatusIndicator?(indicator: CodexStatusIndicator | undefined): void;
   /** Base editor surface used by the completion hooks. */
   getLines?: () => string[];
@@ -223,7 +220,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
       return surface.paintRow("", width);
     }
 
-    override render(width: number): string[] {
+    override render(width: number): readonly string[] {
       const rows = super.render(width);
       if (!surface || rows.length === 0) {
         this.selection.capture(rows, width);

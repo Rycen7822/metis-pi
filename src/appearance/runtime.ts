@@ -14,7 +14,7 @@ import { OutputSpeedTracker } from "./activity/output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./activity/turn-summary.ts";
 import { formatBeijingTime, installUserTimestamps } from "./transcript/message-timestamp.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
-import { HostData, type HostContextLike, type UiSurface } from "./host-data.ts";
+import { HostData } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./activity/usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./activity/interaction-outcome.ts";
 import { createGitChangesTracker } from "./git-changes.ts";
@@ -175,9 +175,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         requestRender();
         if (chrome.state.widgetInstalled) return;
         if (chrome.state.fallbackMessage && config.working.elapsed) {
-          const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
           const label = snapshot.phase === "writing" ? "Writing" : snapshot.phase === "waiting-for-input" ? "Waiting for input" : "Working";
-          ui.setWorkingMessage?.(`${label} (${formatDuration(snapshot.elapsedMs)})`);
+          hostData.ui.setWorkingMessage?.(`${label} (${formatDuration(snapshot.elapsedMs)})`);
         }
       },
       onSettled: (snapshot) => {
@@ -187,8 +186,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         // zero timers.
         chrome.state.workingComponent?.stopAnimation();
         chrome.setWidgetVisible(false);
-        const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
-        ui.setWorkingMessage?.();
+        hostData.ui.setWorkingMessage?.();
         const verdict = outcome.freeze();
         if (!config.summary.enabled) return;
         const append = config.summary.persist ? turnSummary.record(snapshot, { ...verdict, replyEndedAt }) : undefined;
@@ -198,15 +196,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         const saveStatus = append === "unconfirmed" ? " · summary save unconfirmed"
           : append === "unavailable" ? " · summary not saved" : "";
         const line = `${formatSummaryLine(snapshot, verdict.outcome)} · ${formatBeijingTime(replyEndedAt ?? Date.now())}${saveStatus}`;
-        const u = hostData.ui as { setStatus?: (key: string, text: string | undefined) => void };
         try {
-          u.setStatus?.(SUMMARY_STATUS_KEY, line);
+          hostData.ui.setStatus?.(SUMMARY_STATUS_KEY, line);
         } catch { /* status slot is best-effort */ }
       },
     },
   );
   const snapshots = createSnapshotSource({
-    getConfig: () => config,
+    config,
     hostData,
     ledger,
     metrics,
@@ -224,36 +221,34 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     wall: () => Date.now(),
   });
 
+  const attachEmbeddedTui: EmbeddedSource["attachTui"] = (tui, root) => {
+    const releaseLayout = fullscreenLayout?.attachTui(tui, root);
+    const releaseCopy = selectionCopy?.attachTui(tui);
+    return () => { releaseCopy?.(); releaseLayout?.(); };
+  };
+
   pi.on("session_start", (_event, ctx) => {
     codemodeViews.clear();
-    const full = ctx as unknown as HostContextLike & { hasUI?: boolean; ui?: Record<string, unknown> };
     chrome.invalidate();
     chrome.restore();
-    hostData.bind(full);
+    hostData.bind(ctx);
     ledger.rebuild(hostData.getSessionEntries());
     outputSpeed.reset();
     outcome.reset();
     replyEndedAt = undefined;
     pendingSafetyNotice = undefined;
-    // One capability snapshot per session, from the same live ctx.ui that
-    // chrome.install captures below.
-    const available = hostData.available;
     enabled = (hostData.isTui || hostData.hasUI) && config.enabled !== false;
     stopEmbeddedTranscripts?.();
     const events = (bindings.api as Partial<Pick<ExtensionAPI, "events">> | undefined)?.events;
     const presentation: EmbeddedSource = {
-      attachTui(tui, root) {
-        const releaseLayout = fullscreenLayout?.attachTui(tui, root);
-        const releaseCopy = selectionCopy?.attachTui(tui);
-        return () => { releaseCopy?.(); releaseLayout?.(); };
-      },
+      attachTui: attachEmbeddedTui,
       async createTranscript(sourceInfo) {
         const generation = chrome.state.generation;
         const createEditor = await chrome.embeddedEditor();
         if (!enabled || generation !== chrome.state.generation) return;
         const embedded = createTranscriptSurface(session.colorLevel, sourceInfo);
         return {
-          attachTui: presentation.attachTui, surface: embedded, renderers: renderersFor(embedded.session), createEditor,
+          attachTui: attachEmbeddedTui, surface: embedded, renderers: renderersFor(embedded.session), createEditor,
           copyKey: selectionCopy?.editorHook()?.tryConsume,
         };
       },
@@ -272,7 +267,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     installation = gitChanges.dispose();
     if (chromeEnabled) {
       const generation = chrome.state.generation;
-      installation = installation.then(() => chrome.install(available, generation)).then(() => {
+      installation = installation.then(() => chrome.install(generation)).then(() => {
         // Wait for a successful footer install; neither a hidden changes
         // segment nor a late install from a disposed session needs a poller.
         if (
@@ -296,6 +291,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         makeCodemodeRenderers({
           makeText: bindings.makeText,
           highlight: bindings.highlight,
+          makeDiff: bindings.makeDiff,
           colorLevel: session.colorLevel,
           store: codemodeViews,
           shell: renderers.bash,
@@ -330,7 +326,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         requestRender,
         makeThoughtSummary: bindings.makeThoughtSummary && ((input) => bindings.makeThoughtSummary!({
           ...input, paint: (text) => {
-            const theme = (hostData.ui as Partial<UiSurface>).theme;
+            const theme = hostData.ui.theme;
             return typeof theme?.style === "function" ? theme.style(text, { fg: "thinkingText", italic: true }) : text;
           },
         })),
@@ -388,9 +384,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       // tool-error state may leak across interactions.
       outcome.reset();
       replyEndedAt = undefined;
-      const u = hostData.ui as { setStatus?: (key: string, text: string | undefined) => void };
       try {
-        u.setStatus?.(SUMMARY_STATUS_KEY, undefined);
+        hostData.ui.setStatus?.(SUMMARY_STATUS_KEY, undefined);
       } catch { /* status slot is best-effort */ }
     }
     metrics.agentStart();

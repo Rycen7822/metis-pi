@@ -14,7 +14,7 @@ import type { FooterShow, FooterSnapshot } from "./footer.ts";
 import type { WorkingAnimation, WorkingShow, WorkingSnapshotWithUsage } from "./working.ts";
 
 export interface SnapshotSourceDeps {
-  getConfig: () => AppearanceConfig;
+  config: AppearanceConfig;
   hostData: HostData;
   ledger: UsageLedger;
   metrics: UiMetrics;
@@ -23,8 +23,7 @@ export interface SnapshotSourceDeps {
 }
 
 export interface SnapshotSource {
-  /** Config-gated footer segments (read fresh per render). */
-  footerShow(): FooterShow;
+  footerShow: FooterShow;
   workingShow(): WorkingShow;
   workingAnimation(): WorkingAnimation;
   /** Interaction-scoped working snapshot (active phase, tools, uncached I/O). */
@@ -33,41 +32,14 @@ export interface SnapshotSource {
 }
 
 export function createSnapshotSource(deps: SnapshotSourceDeps): SnapshotSource {
-  const { getConfig, hostData, ledger, metrics, outputSpeed, gitChanges } = deps;
-  const footerShow = (): FooterShow => ({
-    metadata: getConfig().composer.metadata,
-    details: getConfig().footer.details,
-    showCache: getConfig().footer.showCache,
-    showChanges: getConfig().footer.showChanges,
-    showSpeed: getConfig().footer.showSpeed,
-  });
-  const workingShow = (): WorkingShow => ({
-    elapsed: getConfig().working.elapsed,
-    thought: getConfig().working.thought,
-    tool: getConfig().working.tool,
-    tokens: getConfig().working.tokens,
-  });
-  const workingAnimation = (): WorkingAnimation => ({
-    enabled: getConfig().working.animation,
-    intervalMs: getConfig().working.animationIntervalMs,
-  });
-  const getWorkingSnapshot = (): WorkingSnapshotWithUsage => {
-    const s = metrics.snapshot();
-    return {
-      active: s.active,
-      phase: s.phase,
-      elapsedMs: s.elapsedMs,
-      thinkingMs: s.thinkingMs,
-      thinkingOpen: s.thinkingOpen,
-      tools: s.tools,
-      usage: { input: s.usage.input, output: s.usage.output },
-    };
-  };
+  const { config, hostData, ledger, metrics, outputSpeed, gitChanges } = deps;
+  const footerShow = { ...config.footer, metadata: config.composer.metadata };
+  const animation = { enabled: config.working.animation, intervalMs: config.working.animationIntervalMs };
   const getFooterSnapshot = (): FooterSnapshot => {
     return {
       model: hostData.getModel(),
       thinkingLevel: hostData.getThinkingLevel(),
-      contextUsage: getConfig().composer.metadata ? hostData.getContextUsage() : undefined,
+      contextUsage: footerShow.metadata ? hostData.getContextUsage() : undefined,
       cwd: hostData.getCwd(),
       session: hostData.hasSessionManager ? ledger.totals() : undefined,
       cacheLastPct: ledger.cacheRateLast(),
@@ -76,5 +48,8 @@ export function createSnapshotSource(deps: SnapshotSourceDeps): SnapshotSource {
       revision: hostData.revision,
     };
   };
-  return { footerShow, workingShow, workingAnimation, getWorkingSnapshot, getFooterSnapshot };
+  return {
+    footerShow, getFooterSnapshot, getWorkingSnapshot: () => metrics.snapshot(),
+    workingShow: () => config.working, workingAnimation: () => animation,
+  };
 }

@@ -23,7 +23,7 @@ export function headerLines(deps: HeaderDeps): string[] {
   return lines;
 }
 
-export function createHeaderComponent(deps: HeaderDeps, theme: { fg?: (key: string, text: string) => string } | undefined) {
+export function createHeaderComponent(deps: HeaderDeps, theme: unknown) {
   // The host may pass a theme proxy that is not yet bound to a concrete
   // Theme instance (early header construction). Resolve the painter LAZILY at
   // render time via the shared probe (palette.resolveThemePainter).
