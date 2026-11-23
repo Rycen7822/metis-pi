@@ -2,8 +2,7 @@
 
 ## 斜杠命令
 
-使用 Metis Appearance 编辑器时，按 `Tab` 或点击补全命令名，已有候选的命令会接着显示参数。
-手动输入命令后的空格也可打开参数列表；在命令名菜单中按 `Enter` 仍直接执行命令。
+使用 Metis Appearance 编辑器时，按 `Tab` 或点击补全命令名；如果命令已有候选参数，参数列表会接着显示。输入命令后的空格也可打开参数列表。在命令名菜单中按 `Enter` 直接执行命令。
 
 | 命令 | 用途 |
 | --- | --- |
@@ -21,7 +20,7 @@
 | `/btw [问题]`、`/websearch`、`/curator`、`/search` | [旁路对话和网页工具](features/managed-plugins.md)。 |
 | `/skill:<name>`、`￥<name>` | 展开 [skill](features/skills.md)。 |
 
-`/settings`、`/reload` 和 `/compact` 是 Pi 命令。`/reload` 重载扩展，不替换运行中的 SDK。
+`/settings`、`/reload` 和 `/compact` 是 Pi 命令。`/reload` 仅重载扩展；SDK 更新需重启。
 
 ## 模型工具
 

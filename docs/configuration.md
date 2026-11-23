@@ -1,8 +1,8 @@
 # 配置参考
 
-Metis 读取全局的 `<agentDir>/metis-pi.toml`。`agentDir` 默认为 `~/.pi/agent`，可通过 `PI_CODING_AGENT_DIR` 覆盖。运行 `/metis-config` 查看实际路径；`/metis-config init` 创建缺失的配置和说明文件，不覆盖现有文件。
+Metis 读取全局的 `<agentDir>/metis-pi.toml`。`agentDir` 默认为 `~/.pi/agent`，可通过 `PI_CODING_AGENT_DIR` 覆盖。运行 `/metis-config` 查看实际路径；`/metis-config init` 仅创建缺失的配置和说明文件，现有文件保持原样。
 
-缺失字段使用[默认模板](../metis-pi.toml)中的值。完整字段、单位与默认值见[参数说明](../metis-pi-config.md)。在界面中保存时，Metis 保留未知字段，按模板重建注释；自定义说明请另存。无效的 TOML 不会被自动覆盖。
+缺失字段使用 [默认模板](../metis-pi.toml) 中的值。完整字段、单位与默认值见 [参数说明](../metis-pi-config.md)。在界面中保存时，Metis 保留未知字段，按模板重建注释；自定义说明请另存。TOML 解析失败时保留原文件。
 
 | 设置 | TOML 表 | 何时读取 |
 | --- | --- | --- |
@@ -22,15 +22,15 @@ Metis 读取全局的 `<agentDir>/metis-pi.toml`。`agentDir` 默认为 `~/.pi/a
 
 模型、认证、主题、包列表、项目信任和 MCP 服务器定义由 Pi 管理。网页工具的凭据放在 `<agentDir>/web-search.json` 或环境变量中。会话正文及其 `<sessionId>-blobs/` 归档与配置分开保存。
 
-## Pi 1.6.0 模型与预热
+## 模型目录与预热
 
-Metis 按当前 ChatGPT OAuth 登录刷新 `openai` 与 `openai-codex` 的账号目录。API key 和自定义地址沿用 Pi 的目录。`openai` 查询 `/v1/models`，`openai-codex` 使用本机 Codex 的版本号查询 Codex 后端；缺少模型参数时，Metis 会尝试用 `codex debug models` 补齐。缺少必需参数的条目不加入目录。
+Metis 按当前 ChatGPT OAuth 登录刷新 `openai` 与 `openai-codex` 的账号目录。API key 和自定义地址沿用 Pi 的目录。`openai` 查询 `/v1/models`，`openai-codex` 使用本机 Codex 的版本号查询 Codex 后端；缺少模型参数时，Metis 会尝试用 `codex debug models` 补齐。模型目录仅收录参数完整的条目。
 
 打开 `/model` 会触发查询。使用 Metis 随包 SDK 时，终端命令 `pi update --models` 强制刷新，跳过 60 秒缓存。
 同步失败时优先使用同一次登录、同一账号和服务地址的缓存，否则使用 Pi 的目录。
-随包 SDK 正常刷新 OAuth 令牌不会使这份缓存失效。旧版缓存仍需匹配原令牌，下次成功查询后会写入新版缓存。
+随包 SDK 正常刷新 OAuth 令牌后，这份缓存仍可复用。旧版缓存需匹配原令牌，下次成功查询后会写入新版缓存。
 
-预热在 Pi 的 `settings.json` 设置：`cacheWarming: "idle"`（默认）也可在空闲期预热，最长 30 分钟；`"streaming"` 只在运行中预热；`"off"` 关闭。主会话、BTW 和子代理沿用 Pi 的设置。独立的预热请求不计入[状态栏用量](features/interface.md#统计口径)，费用以提供商记录为准。
+预热在 Pi 的 `settings.json` 设置：`cacheWarming: "idle"`（默认）也可在空闲期预热，最长 30 分钟；`"streaming"` 只在运行中预热；`"off"` 关闭。主会话、BTW 和子代理沿用 Pi 的设置。[状态栏用量](features/interface.md#统计口径)排除独立的预热请求，费用以提供商记录为准。
 
 ### 自动压缩上限
 
@@ -40,11 +40,11 @@ contextWindowAbove = 400000
 autoCompactTokenLimit = 400000
 ```
 
-两个值都是正整数，单位为 token。Pi 的原阈值是模型窗口减去预留量。模型窗口严格大于 `contextWindowAbove` 时，Metis 取原阈值和 `autoCompactTokenLimit` 中较小的值。该设置不会启用已关闭的自动压缩，也不改变模型窗口或手动 `/compact`。
+两个值都是正整数，单位为 token。Pi 的原阈值是模型窗口减去预留量。模型窗口严格大于 `contextWindowAbove` 时，Metis 取原阈值和 `autoCompactTokenLimit` 中较小的值。该设置仅调整自动压缩阈值；模型窗口和手动 `/compact` 沿用 Pi 行为，已关闭的自动压缩保持关闭。
 
 ### OpenAI 兼容网关
 
-没有当前工具时，请求默认省略 `tools`。如果网关要求带工具历史的请求显式传 `tools: []`，在相应模型的 `models.json` 定义中设置 `compat.requiresToolsWithToolHistory: true`。只对确认需要该行为的模型开启。
+没有当前工具时，请求默认省略 `tools`。如果网关要求带工具历史的请求显式传 `tools: []`，在相应模型的 `models.json` 定义中设置 `compat.requiresToolsWithToolHistory: true`。按网关要求逐模型开启。
 
 ## 显示字段
 
@@ -80,9 +80,9 @@ Metis 使用 Pi 的 `<agentDir>/mcp.json` 和可信项目的 `<cwd>/.pi/mcp.json
 
 支持 stdio 和 Streamable HTTP。发现结果缓存在 `<agentDir>/cache/metis-mcp/`，其中只存目录信息；实际调用经过 Pi 的权限检查。显式会话过期可重连重试一次，其他失败按原样返回。
 
-HTTP JSON 回复及单个 SSE 事件最多 16 MiB。传输超限时没有完整结果可供恢复；优先使用服务器分页或资源链接。这与调用成功后面向模型的输出截断不同。
+HTTP JSON 回复及单个 SSE 事件最多 16 MiB。传输超限会终止结果接收；请使用服务器分页或资源链接。调用成功后的模型输出截断采用另一套限制。
 
-用 `/mcp` 查看状态、`/mcp reload` 重读配置、`/mcp refresh [server]` 刷新目录。停用时设 `mcp.enabled=false` 并重启，再选择所需的 MCP 提供者。配置与凭据不受影响。
+用 `/mcp` 查看状态、`/mcp reload` 重读配置、`/mcp refresh [server]` 刷新目录。停用时设 `mcp.enabled=false` 并重启，再选择所需的 MCP 提供者。配置与凭据保持原样。
 
 ## 颜色能力
 
@@ -108,6 +108,6 @@ HTTP JSON 回复及单个 SSE 事件最多 16 MiB。传输超限时没有完整�
 }
 ```
 
-规则使用 `-extensions/<name>.ts`。同时停用 skill 输入和折叠时，排除 `skill-mux` 与 `skill-entry`。停用 `dynamic-agents` 前，先恢复需要的全局指令；停用 `codex-compaction` 前，按[恢复指南](features/codex-compaction.md#失败处理与恢复)处理仍需读取的检查点。`extensions: []` 会停用此包的全部扩展，不影响同一包的主题与 skills。
+规则使用 `-extensions/<name>.ts`。同时停用 skill 输入和折叠时，排除 `skill-mux` 与 `skill-entry`。停用 `dynamic-agents` 前，先恢复需要的全局指令；停用 `codex-compaction` 前，按 [恢复指南](features/codex-compaction.md#失败处理与恢复)处理仍需读取的检查点。`extensions: []` 会停用此包的全部扩展；主题与 skills 由各自配置控制。
 
 移除排除项即可恢复。一般改动用 `/reload`；变更包的加载方式或 SDK 时重启。完整入口见仓库的 [extensions/](../extensions/)。

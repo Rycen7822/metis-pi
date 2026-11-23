@@ -1,6 +1,6 @@
 # Metis 文档
 
-安装见[中文 README](../README.zh-CN.md)或 [English README](../README.md)。安装后用 [配置参考](configuration.md) 查找配置文件，用 [操作速查](commands.md) 查命令和按键。
+安装见 [中文 README](../README.zh-CN.md) 或 [English README](../README.md)。安装后用 [配置参考](configuration.md) 查找配置文件，用 [操作速查](commands.md) 查命令和按键。
 
 ## 使用指南
 

@@ -19,7 +19,7 @@
 {"action":"fix","path":"src/main.py","server":"ruff","kind":"source.organizeImports"}
 ```
 
-只应用匹配的、未禁用的 source action。服务器返回的独立 Command 不会自动执行。修复只写入目标文件；不要同时让其他工具修改同一文件。
+Source action 需匹配请求且处于启用状态。服务器返回的独立 Command 仅作为结果返回。修复仅写入目标文件。
 
 ## 配置
 
@@ -34,4 +34,4 @@ extensions = [".py", ".pyi"]
 
 显式的 `servers` 替换整个内置服务器目录。省略时使用内置目录，设为 `{}` 停用全部路由。内置服务器的命令缺失时会跳过并报告；显式选择的服务器不可用时会报错。`command` 是参数数组，`env.PATH` 也参与命令查找。完整选项见 [LSP 参数](../../metis-pi-config.md#lsp)。
 
-诊断和预览不写源码，但会启动配置中的服务器进程并继承环境。仅按工具名放行 `lsp` 也会放行修复；只读策略应拒绝 `action: "fix"` 与 `write: true` 的组合。
+诊断和预览会启动配置中的服务器进程并继承环境，源码保持原样。工具名授权同时覆盖诊断和修复；只读策略应拒绝 `action: "fix"` 与 `write: true` 的组合。

@@ -10,4 +10,4 @@ Metis 维护 `src/execution/` 与 `extensions/execution.ts`，依赖和发布由
 
 本地实现提供 deferred PTY 工具、NDJSON 增量输出/退出/关闭协议、输出归档与 Action Fusion，使用 Pi 的权限、认证、工具事件和 codemode。Rust 工作区构建 `exec_bridge`；随包交付 TS、WASM、Linux x64 静态 helper 与 Windows x64 EXE，源码留在 Git。
 
-`native/tools/build-{linux,win32}-x64.mjs` 分别管理 Linux 静态 ELF 和 Windows 静态 CRT PE 构建与 ABI 核验；manifest 记录源码输入、工具链及随包字节。环境与检查范围见[开发说明](../../development.md)，musl 归属见 [musl-NOTICES](musl-NOTICES)，其余归属见根 [NOTICE](../../../NOTICE)。更新需保留取消、归档和 Pi 工具契约，并执行相关检查。
+`native/tools/build-{linux,win32}-x64.mjs` 分别管理 Linux 静态 ELF 和 Windows 静态 CRT PE 构建与 ABI 核验；manifest 记录源码输入、工具链及随包字节。环境与检查范围见 [开发说明](../../development.md)，musl 归属见 [musl-NOTICES](musl-NOTICES)，其余归属见根 [NOTICE](../../../NOTICE)。

@@ -20,4 +20,4 @@
 
 `/skill:<name>` 和 `￥<name>` 可以混用。名称以空白或输入末尾结束，正文按顺序展开。补全使用 Pi 当前加载的资源。
 
-转录中的折叠块会列出展开的 skill 名称；Ctrl+O 或单击标题可查看正文。折叠不减少模型收到的内容。要停用多 skill 输入和折叠，按[扩展过滤规则](../configuration.md#独立入口开关)同时排除 `skill-mux` 和 `skill-entry`。
+转录中的折叠块会列出展开的 skill 名称；Ctrl+O 或单击标题可查看正文。折叠仅改变显示，模型输入保持完整。要停用多 skill 输入和折叠，按 [扩展过滤规则](../configuration.md#独立入口开关)同时排除 `skill-mux` 和 `skill-entry`。
