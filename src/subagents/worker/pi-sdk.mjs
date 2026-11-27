@@ -57,6 +57,7 @@ const supported = new Set([
   "messages",
   "fileArgs",
   "unknownFlags",
+  "resumeFlags", // Pi's terminal resume metadata; managed children never replay it.
   "diagnostics",
 ]);
 for (const key of Object.keys(args)) {

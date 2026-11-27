@@ -1,5 +1,5 @@
 diff --git a/packages/codemode/src/index.ts b/packages/codemode/src/index.ts
-index 3eedea10e..a4b95204a 100644
+index 3eedea1..a4b9520 100644
 --- a/packages/codemode/src/index.ts
 +++ b/packages/codemode/src/index.ts
 @@ -43,6 +43,7 @@ export {
@@ -11,7 +11,7 @@ index 3eedea10e..a4b95204a 100644
  	CodemodeDeclaredGlobal,
  	CodemodeDeclaredTool,
 diff --git a/packages/codemode/src/portable.ts b/packages/codemode/src/portable.ts
-index 27069de33..0cee4c3d2 100644
+index 27069de..0cee4c3 100644
 --- a/packages/codemode/src/portable.ts
 +++ b/packages/codemode/src/portable.ts
 @@ -31,6 +31,7 @@ export {
@@ -23,7 +23,7 @@ index 27069de33..0cee4c3d2 100644
  	CodemodeDeclaredGlobal,
  	CodemodeDeclaredTool,
 diff --git a/packages/codemode/src/runtime/execution.ts b/packages/codemode/src/runtime/execution.ts
-index 06199e9f3..0d488542e 100644
+index 06199e9..0d48854 100644
 --- a/packages/codemode/src/runtime/execution.ts
 +++ b/packages/codemode/src/runtime/execution.ts
 @@ -24,6 +24,7 @@
@@ -311,7 +311,7 @@ index 06199e9f3..0d488542e 100644
  		});
  		this.running.add(execution);
 diff --git a/packages/codemode/src/runtime/prelude-source.ts b/packages/codemode/src/runtime/prelude-source.ts
-index 6cc9e641d..0166b2f7b 100644
+index 6cc9e64..0166b2f 100644
 --- a/packages/codemode/src/runtime/prelude-source.ts
 +++ b/packages/codemode/src/runtime/prelude-source.ts
 @@ -45,7 +45,7 @@ export const MAX_OUTPUT_ITEMS = 100_000;
@@ -358,7 +358,7 @@ index 6cc9e641d..0166b2f7b 100644
  				const error = new ErrorCtor(payload);
  				if (propertiesJson !== undefined) {
 diff --git a/packages/codemode/src/runtime/protocol.ts b/packages/codemode/src/runtime/protocol.ts
-index 0f1e126a4..ce34e1361 100644
+index 0f1e126..ce34e13 100644
 --- a/packages/codemode/src/runtime/protocol.ts
 +++ b/packages/codemode/src/runtime/protocol.ts
 @@ -1,4 +1,4 @@
@@ -392,7 +392,7 @@ index 0f1e126a4..ce34e1361 100644
  		type === "done" ||
  		type === "crash" ||
 diff --git a/packages/codemode/src/runtime/remote.ts b/packages/codemode/src/runtime/remote.ts
-index f5f02de26..a44de7ad4 100644
+index f5f02de..a44de7a 100644
 --- a/packages/codemode/src/runtime/remote.ts
 +++ b/packages/codemode/src/runtime/remote.ts
 @@ -168,6 +168,7 @@ export function serveCodemodeRemote(
@@ -404,7 +404,7 @@ index f5f02de26..a44de7ad4 100644
  					exchange([...takeBuffer(), typed]).then(reply, () => end(undefined));
  					break;
 diff --git a/packages/codemode/src/runtime/vm.ts b/packages/codemode/src/runtime/vm.ts
-index 2618eef9b..97b521c92 100644
+index 2618eef..97b521c 100644
 --- a/packages/codemode/src/runtime/vm.ts
 +++ b/packages/codemode/src/runtime/vm.ts
 @@ -197,6 +197,8 @@ export async function startVm(options: StartVmOptions): Promise<VmSession> {
@@ -425,7 +425,7 @@ index 2618eef9b..97b521c92 100644
  			),
  		);
 diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
-index e69cd290f..eb3c64cd6 100644
+index e69cd29..eb3c64c 100644
 --- a/packages/codemode/src/types.ts
 +++ b/packages/codemode/src/types.ts
 @@ -97,6 +97,7 @@ export type CodemodeResult =
@@ -468,7 +468,7 @@ index e69cd290f..eb3c64cd6 100644
  	timeoutMs?: number;
  	/**
 diff --git a/packages/codemode/test/sandbox.test.ts b/packages/codemode/test/sandbox.test.ts
-index 58a24f669..4f3a698dd 100644
+index 58a24f6..4f3a698 100644
 --- a/packages/codemode/test/sandbox.test.ts
 +++ b/packages/codemode/test/sandbox.test.ts
 @@ -3,7 +3,7 @@ import vm from "node:vm";
@@ -753,7 +753,7 @@ index 58a24f669..4f3a698dd 100644
  		it("returns the script's return value after a JSON round trip", async () => {
  			const sandbox = createSandbox();
 diff --git a/packages/coding-agent/docs/codemode.md b/packages/coding-agent/docs/codemode.md
-index 76512975a..fcac8a035 100644
+index 170512f..f3c597e 100644
 --- a/packages/coding-agent/docs/codemode.md
 +++ b/packages/coding-agent/docs/codemode.md
 @@ -15,7 +15,7 @@ A script may start with an options line. It must be the first line; an options l
@@ -780,7 +780,7 @@ index 76512975a..fcac8a035 100644
  ## Store values
  
  `store(key, value)` keeps a JSON value under a string key for later `codemode` calls; storing `undefined` deletes the key. `load(key)` returns the value, or `undefined`. Writes are kept only when the script succeeds: each successful script that stores values appends a `codemode-store` custom entry to the session, so resumed sessions keep the values and each branch sees only the values written on its path.
-@@ -231,3 +239,16 @@ for (const block of result.output) {
+@@ -242,3 +250,16 @@ for (const block of result.output) {
  - At most two codemode workers may be alive across all sessions in one pi process; `PI_CODEMODE_MAX_WORKERS` changes the limit. A cancelled worker occupies its slot until it exits. At capacity, new scripts wait for a free worker in arrival order. A script that gets no worker within 60 seconds, or before its `timeout_ms`, fails without running.
  - A script that waits on a promise that can never settle (no tool call pending) fails immediately, since there are no timers.
  - Scripts cannot start other `codemode` scripts.
@@ -799,7 +799,7 @@ index 76512975a..fcac8a035 100644
 +  the prelude changes; an incompatible durable checkpoint must fail closed, not silently replay.
 diff --git a/packages/coding-agent/src/extensions/codemode/call-tracker.ts b/packages/coding-agent/src/extensions/codemode/call-tracker.ts
 new file mode 100644
-index 000000000..296af9c0c
+index 0000000..296af9c
 --- /dev/null
 +++ b/packages/coding-agent/src/extensions/codemode/call-tracker.ts
 @@ -0,0 +1,68 @@
@@ -872,10 +872,10 @@ index 000000000..296af9c0c
 +	}
 +}
 diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
-index fa3e4956b..51cc652c3 100644
+index d2d964c..734caf4 100644
 --- a/packages/coding-agent/src/extensions/codemode/execute.ts
 +++ b/packages/coding-agent/src/extensions/codemode/execute.ts
-@@ -31,6 +31,7 @@ import { formatSize, sliceHead, sliceTail } from "../../core/tools/truncate.ts";
+@@ -32,6 +32,7 @@ import { formatSize, sliceHead, sliceTail } from "../../core/tools/truncate.ts";
  import { combineUsage } from "../../core/usage-totals.ts";
  import { writeOutputFile } from "../../utils/output-files.ts";
  import { Bm25Ranker, createToolSearchDocument, DEFAULT_TOOL_SEARCH_LIMIT } from "../tool-search/tool.ts";
@@ -883,7 +883,7 @@ index fa3e4956b..51cc652c3 100644
  import {
  	CODEMODE_DOCS_PATH,
  	CODEMODE_STORE_ENTRY_TYPE,
-@@ -57,6 +58,13 @@ const MAX_CONCURRENT_MODEL_CALLS = 4;
+@@ -58,6 +59,13 @@ const MAX_CONCURRENT_MODEL_CALLS = 4;
  const CODEMODE_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
  // Shared across calls and sessions. Allow one replacement while a cancelled worker is still exiting.
  const DEFAULT_MAX_CODEMODE_WORKERS = 2;
@@ -897,7 +897,7 @@ index fa3e4956b..51cc652c3 100644
  
  /** `PI_CODEMODE_MAX_WORKERS` if it is a positive integer. Read per call so SDK hosts can set it at runtime. */
  function maxCodemodeWorkers(): number {
-@@ -500,7 +508,9 @@ export async function executeCodemode(
+@@ -534,7 +542,9 @@ export async function executeCodemode(
  ): Promise<AgentToolResult<CodemodeToolDetails>> {
  	const startedAt = performance.now();
  	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
@@ -908,7 +908,7 @@ index fa3e4956b..51cc652c3 100644
  	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
  	let modelUsage: Usage | undefined;
  	// Images returned by `models.generateImages()`, to notice a script that never shows them.
-@@ -512,10 +522,8 @@ export async function executeCodemode(
+@@ -546,10 +556,8 @@ export async function executeCodemode(
  		modelUsage = modelUsage ? combineUsage(modelUsage, usage) : usage;
  	};
  
@@ -920,7 +920,7 @@ index fa3e4956b..51cc652c3 100644
  
  	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
  	// A callable tool_search replaces searchTools(), so scripts get one way to find tools.
-@@ -534,23 +542,34 @@ export async function executeCodemode(
+@@ -568,23 +576,34 @@ export async function executeCodemode(
  				name: tool.name,
  				args: previewArgs(args),
  				status: "running",
@@ -969,7 +969,7 @@ index fa3e4956b..51cc652c3 100644
  		},
  	}));
  
-@@ -573,7 +592,7 @@ export async function executeCodemode(
+@@ -607,7 +626,7 @@ export async function executeCodemode(
  				{ type: "text", text: `Script failed\nWall time ${waited} seconds\nOutput:\n` },
  				{ type: "text", text: `Script error:\n${error}\n\nThe script did not start.` },
  			],
@@ -978,7 +978,7 @@ index fa3e4956b..51cc652c3 100644
  			isError: true,
  		};
  	}
-@@ -589,7 +608,7 @@ export async function executeCodemode(
+@@ -623,7 +642,7 @@ export async function executeCodemode(
  			globals: [
  				...createDiscoveryGlobals(callable, samples, options, toolSearch),
  				...(options.models && ctx
@@ -987,7 +987,7 @@ index fa3e4956b..51cc652c3 100644
  					: []),
  			],
  			timeoutMs: Math.max(1, Math.round(deadline - waitedMs)),
-@@ -604,18 +623,15 @@ export async function executeCodemode(
+@@ -638,18 +657,15 @@ export async function executeCodemode(
  			},
  		});
  		const store = ctx ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
@@ -1008,7 +1008,7 @@ index fa3e4956b..51cc652c3 100644
  
  	const scriptOutput = [...result.output];
  	if (result.ok) {
-@@ -628,6 +644,16 @@ export async function executeCodemode(
+@@ -662,6 +678,16 @@ export async function executeCodemode(
  	}
  	const items = formatOutput(scriptOutput);
  	if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
@@ -1025,7 +1025,7 @@ index fa3e4956b..51cc652c3 100644
  	if (generatedImages > 0 && !items.some((item) => item.type === "image")) {
  		items.push({
  			type: "text",
-@@ -644,7 +670,6 @@ export async function executeCodemode(
+@@ -678,7 +704,6 @@ export async function executeCodemode(
  	const output = joinAdjacentText(await saveImages(truncated.items));
  	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
  	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
@@ -1033,7 +1033,7 @@ index fa3e4956b..51cc652c3 100644
  	if (truncated.fullOutputPath) details.fullOutputPath = truncated.fullOutputPath;
  	return {
  		content: [{ type: "text", text: header }, ...output],
-@@ -748,8 +773,7 @@ function createDiscoveryGlobals(
+@@ -782,8 +807,7 @@ function createDiscoveryGlobals(
  function createModelGlobals(
  	models: CodemodeModelRuntime,
  	toolCallId: string,
@@ -1043,7 +1043,7 @@ index fa3e4956b..51cc652c3 100644
  	addUsage: (usage: Usage) => void,
  	addGeneratedImages: (count: number) => void,
  ): CodemodeTool[] {
-@@ -766,6 +790,7 @@ function createModelGlobals(
+@@ -800,6 +824,7 @@ function createModelGlobals(
  		[model, context]: unknown[],
  		checkContext: (context: unknown) => TContext,
  		run: (resolved: ModelTypeMap[TType], context: TContext) => Promise<TResult>,
@@ -1051,7 +1051,7 @@ index fa3e4956b..51cc652c3 100644
  	): Promise<TResult> => {
  		const listHint = `List the ${type} models you can use with models.getAvailableOfType("${type}").`;
  		const given = model as ScriptValue;
-@@ -801,19 +826,32 @@ function createModelGlobals(
+@@ -835,19 +860,32 @@ function createModelGlobals(
  			args: `${resolved.provider}/${resolved.id}`,
  			status: "running",
  		};
@@ -1095,7 +1095,7 @@ index fa3e4956b..51cc652c3 100644
  	};
  	const implementations: Record<string, CodemodeTool["execute"]> = {
  		"models.getModelsOfType": (args) => {
-@@ -836,8 +874,13 @@ function createModelGlobals(
+@@ -870,8 +908,13 @@ function createModelGlobals(
  			return model === undefined ? undefined : toModelInfo(model);
  		},
  		"models.classify": (args, { signal }) =>
@@ -1109,18 +1109,18 @@ index fa3e4956b..51cc652c3 100644
 +				(resolved, context) => models.classify(resolved, context, { signal }),
 +				signal,
  			),
- 		"models.generateImages": (args, { signal }) =>
- 			runModelCall(
-@@ -850,6 +893,7 @@ function createModelGlobals(
+ 		"models.generateImages": (args, { signal }) => {
+ 			const [, , rawOptions] = args as unknown[];
+@@ -885,6 +928,7 @@ function createModelGlobals(
  					addGeneratedImages(result.output.filter((block) => block.type === "image").length);
  					return result;
  				},
 +				signal,
- 			),
+ 			);
+ 		},
  	};
- 	return Object.entries(implementations).map(([name, execute]) => ({ name, spread: true, execute }));
 diff --git a/packages/coding-agent/src/extensions/codemode/renderer.ts b/packages/coding-agent/src/extensions/codemode/renderer.ts
-index 660803e68..abefafc05 100644
+index 660803e..abefafc 100644
 --- a/packages/coding-agent/src/extensions/codemode/renderer.ts
 +++ b/packages/coding-agent/src/extensions/codemode/renderer.ts
 @@ -51,6 +51,8 @@ function statusIcon(call: CodemodeNestedCall, theme: Theme): string {
@@ -1173,7 +1173,7 @@ index 660803e68..abefafc05 100644
  			}
  			component.addChild(new Spacer(1));
 diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
-index bf9ef1002..2da6a0c40 100644
+index bf9ef10..2da6a0c 100644
 --- a/packages/coding-agent/src/extensions/codemode/tool.ts
 +++ b/packages/coding-agent/src/extensions/codemode/tool.ts
 @@ -88,7 +88,7 @@ export const codemodeSchema = Type.Object({
@@ -1229,7 +1229,7 @@ index bf9ef1002..2da6a0c40 100644
  
  /** One line per global. The details live in {@link CODEMODE_DOCS_PATH}. */
 diff --git a/packages/coding-agent/test/suite/agent-session-codemode.test.ts b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
-index 0ea7fb791..7e05f77ed 100644
+index 2dfb31b..28ee476 100644
 --- a/packages/coding-agent/test/suite/agent-session-codemode.test.ts
 +++ b/packages/coding-agent/test/suite/agent-session-codemode.test.ts
 @@ -335,6 +335,100 @@ describe("AgentSession codemode tool", () => {
@@ -1333,7 +1333,7 @@ index 0ea7fb791..7e05f77ed 100644
  	it("routes nested calls through extension hooks", async () => {
  		const harness = await setup([
  			(pi) => {
-@@ -890,6 +984,54 @@ describe("codemode models", () => {
+@@ -898,6 +992,106 @@ describe("codemode models", () => {
  		expect(plain?.description).not.toContain("`models`");
  	});
  
@@ -1382,6 +1382,58 @@ index 0ea7fb791..7e05f77ed 100644
 +		}
 +		await returned.promise;
 +		await new Promise<void>((resolve) => setImmediate(resolve));
++		expect(started).toBe(4);
++	});
++
++	it("does not dispatch a queued image call that the script aborted", async () => {
++		const { harness, imageRequests } = await setup();
++		const gate = Promise.withResolvers<void>(),
++			returned = Promise.withResolvers<void>();
++		let started = 0,
++			completed = 0;
++		harness.session.modelRuntime.registerProvider("scorer", {
++			apiKey: "fixture-key",
++			models: [scorerModel, painterModel],
++			classifiers: {
++				"test-classifier": {
++					classify: async (model): Promise<ClassifierResult> => {
++						started++;
++						await gate.promise;
++						if (++completed === 4) returned.resolve();
++						return {
++							api: model.api,
++							provider: model.provider,
++							model: model.id,
++							answers: {},
++							stopReason: "stop",
++							timestamp: 0,
++						};
++					},
++				},
++			},
++		});
++		try {
++			const result = await run(
++				harness,
++				'for(let i=0;i<4;i++) models.classify({provider:"scorer",id:"judge"}, ' +
++					`{state:{},questions:${questions}}); ` +
++					'models.generateImages({provider:"scorer",id:"painter"}, {input:[{type:"text",text:"a fox"}]}); ' +
++					'await describeTool("read");',
++			);
++			expect(result.isError).toBe(false);
++			expect(started).toBe(4);
++			expect((result.details as unknown as CodemodeToolDetails).callSummary).toMatchObject({
++				total: 5,
++				unfinished: 4,
++				cancelled: 1,
++				error: 0,
++			});
++		} finally {
++			gate.resolve();
++		}
++		await returned.promise;
++		for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
++		expect(imageRequests).toHaveLength(0);
 +		expect(started).toBe(4);
 +	});
 +

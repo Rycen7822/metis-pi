@@ -4,7 +4,7 @@ Metis 子代理在独立的 Pi 会话中执行任务。每个父会话有自己�
 
 ## 要求与配置
 
-需要 Pi 1.6.1、Node.js 22.19.0 或更新版本、Python 3.11 或更新版本。支持 Linux、WSL 和 Windows。子代理使用父端的 Node、SDK 和 agent 目录；Windows 从 PATH 或 `py` 查找 Python。
+需要 Pi 1.7.0、Node.js 22.19.0 或更新版本、Python 3.11 或更新版本。支持 Linux、WSL 和 Windows。子代理使用父端的 Node、SDK 和 agent 目录；Windows 从 PATH 或 `py` 查找 Python。
 
 全局 `[subagents]` 控制开关、容量、超时与额外环境变量。`[subagents.profiles.<name>]` 选择工具、扩展和 skills，也可覆盖模型和推理级别。模型与权限应在启动前确认。`access: "read"` 仅限制工具列表；操作系统隔离由外部沙箱负责。并发写入任务使用互不重叠的工作目录，实际文件访问由操作系统权限控制。配置字段见 [参数参考](../../metis-pi-config.md#subagentsnative-pi)。
 

@@ -857,6 +857,23 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(close['cleanup'],'verified')
 
 
+    async def test_sdk_default_and_reader_complete_tool_roundtrip(self):
+        file=self.workspace/'sdk-roundtrip.txt'
+        file.write_text('MANAGED_READ_ROUNDTRIP', encoding='utf-8')
+        self.write_config(PI_MOCK_READ_PATH=json.dumps(file.name), PI_MOCK_CONTEXT='"1"')
+        await self.initialize()
+        scope=(await self.call('scope_open',{'cwd':str(self.workspace)}))['scope']
+        for access in ('write','read'):
+            with self.subTest(access=access):
+                child=await self.call('spawn',{'scope':scope,'access':access,'task':'offline tool round trip',
+                    'request_id':f'sdk-smoke-{access}'})
+                done=await self.call('wait',{'scope':scope,'run_ids':[child['run_id']],'timeout_seconds':20})
+                self.assertEqual(done['reason'],'completed',done)
+                self.assertEqual(await self.results(scope,done['runs']),['MOCK_REPLY_2'])
+                trace=(self.home/'agents'/child['agent_id']/'stderr.log').read_text()
+                self.assertRegex(trace,r'PI_MOCK_CONTEXT 2 .*MANAGED_READ_ROUNDTRIP')
+                await self.call('close',{'scope':scope,'agent_id':child['agent_id'],'request_id':f'close-{access}'})
+
     async def test_sdk_thinking_and_silent_tool_outlive_idle_limit(self):
         self.write_config(PI_MOCK_PROGRESS='"thinking"',PI_MOCK_STREAM_MS='"2200"',PI_MOCK_TOOL_MS='"2200"')
         await self.initialize()

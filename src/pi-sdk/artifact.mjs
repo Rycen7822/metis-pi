@@ -3,8 +3,8 @@ import { cp, lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const sdkVersion = "1.6.1";
-export const sdkUpstreamCommit = "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe";
+export const sdkVersion = "1.7.0";
+export const sdkUpstreamCommit = "fb0fe823539f6d04850f6e34748c01f01f212e1f";
 export const sdkPatchCount = 33;
 export const sdkPackages = ["ai", "tui", "codemode", "coding-agent"];
 export const sdkRuntimePackages = [...sdkPackages, "agent-core", "mcp", "schema", "telemetry"];

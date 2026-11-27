@@ -10,13 +10,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import * as tar from "tar";
-import { digest, sdkPackages, sdkRuntimePackages, sdkFiles, sdkPatchCount } from "../../src/pi-sdk/artifact.mjs";
+import { digest, sdkPackages, sdkRuntimePackages, sdkFiles, sdkPatchCount, sdkVersion, sdkUpstreamCommit } from "../../src/pi-sdk/artifact.mjs";
 import { mockWindowsSdkProcessList } from "../helpers/windows-sdk-process-list.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const run = promisify(execFile);
-const releaseVersion = "1.6.1", releaseCommit = "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe";
-const futureVersion = "1.6.2", legacyVersion = "1.5.2", archiveName = `pi-${releaseVersion}.tgz`;
+const releaseVersion = sdkVersion, releaseCommit = sdkUpstreamCommit;
+const futureVersion = "99.0.0", legacyVersion = "1.6.1", archiveName = `pi-${releaseVersion}.tgz`;
 const managedMarker = { kind: "pi-managed-install", schemaVersion: 1, layout: "releases-v1" };
 
 async function fixture(t, { version = releaseVersion, cliVersion = releaseVersion, windowsProcesses } = {}) {

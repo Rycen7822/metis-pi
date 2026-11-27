@@ -262,12 +262,42 @@ class SdkTransport(unittest.TestCase):
                 self.assertNotIn('call-received',stages)
                 self.assertNotIn('resource-read-received',stages)
 
+    def test_managed_guard_ignores_only_pi_resume_metadata(self):
+        # Display-only resume metadata must not admit unsupported CLI options or future parsed fields.
+        sdk=(REPO_ROOT/'node_modules/@earendil-works/pi-coding-agent/dist/index.js').resolve()
+        base=['--offline','--no-skills','--no-context-files','--no-themes','--no-prompt-templates']
+        with tempfile.TemporaryDirectory(prefix='managed-guard-') as tmp:
+            root=Path(tmp)
+            env={**{k: os.environ[k] for k in WINDOWS_BASE_ENV if k in os.environ},
+                 'PATH':os.environ['PATH'],'HOME':tmp,'TMPDIR':tmp,'PI_CODING_AGENT_DIR':tmp,
+                 'XDG_CACHE_HOME':tmp,'XDG_CONFIG_HOME':tmp,'XDG_DATA_HOME':tmp,
+                 'PI_AGENTS_HOST':'pi','PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1'}
+            def boot(sdk_path, flags):
+                proc=subprocess.run(['node',str(WORKER_ROOT/'pi-sdk.mjs'),str(sdk_path),*base,*flags],
+                    cwd=tmp,env=env,text=True,capture_output=True,timeout=60,
+                    input='{"id":"ready","type":"get_state"}\n')
+                return proc.returncode,proc.stdout,proc.stderr
+            for flags,key in ((['--resume'],'resume'),(['--no-mcp'],'noMcp'),
+                              (['--approve'],'projectTrustOverride')):
+                with self.subTest(flags=flags):
+                    code,stdout,stderr=boot(sdk,flags)
+                    self.assertNotEqual(code,0,stderr)
+                    self.assertIn(f'Unsupported managed Pi option: {key}',stderr)
+                    self.assertNotIn('"ready"',stdout)
+            fake=root/'fake-sdk.mjs'
+            fake.write_text('export const parseArgs=()=>({mode:"rpc",messages:[],fileArgs:[],'
+                            'unknownFlags:new Map(),resumeFlags:[],diagnostics:[],futureField:1});\n')
+            code,stdout,stderr=boot(fake,[])
+            self.assertNotEqual(code,0,stderr)
+            self.assertIn('Unsupported managed Pi option: futureField',stderr)
+            self.assertNotIn('"ready"',stdout)
+
     def test_native_sdk_command_resolves_only_to_plugin_files(self):
         from metis_subagent.worker import managed_command
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
             node=str(root/'node'); Path(node).touch(); Path(node).chmod(0o755)
-            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.6.1"}')
+            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.7.0"}')
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli'); cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
@@ -284,7 +314,7 @@ class SdkTransport(unittest.TestCase):
             cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             argv=[sys.executable,str(cli),'--mode','rpc']
-            for version in ('1.6.1','1.6.1+build.5','1.6.1+sha.abcdef'):
+            for version in ('1.7.0','1.7.0+build.5','1.7.0+sha.abcdef'):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):
                     self.assertEqual(managed_command(argv,sdk_path=str(sdk)),
@@ -293,16 +323,16 @@ class SdkTransport(unittest.TestCase):
             # compatibility matrix and no implicit permission for unknown ones.
             for version in (
                 None, False, 152, [], {}, '', 'unknown', '0.85.1', '1.3.0', '1.4.0', '1.5.0', '1.5.1', '1.5.2',
-                '1.6.0', '1.6.1-rc.1', '1.6.2', '2.0.0', '01.6.1', '1.06.1', '1.6.10', '1.6.1+build..5', '1.6.1+.',
-                '1.6.1+build_5',
+                '1.6.0', '1.6.1', '1.7.0-rc.1', '1.7.1', '2.0.0', '01.7.0', '1.07.0', '1.7.00', '1.7.0+build..5',
+                '1.7.0+.', '1.7.0+build_5',
             ):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):
                     with self.assertRaises(AgentError) as error:
                         managed_command(argv,sdk_path=str(sdk))
                     self.assertEqual(error.exception.code,'unsupported_pi_version')
-            # A different package that happens to carry 1.6.1 is still not the Pi SDK.
-            manifest.write_text(json.dumps({'name':'@example/not-pi','version':'1.6.1'}))
+            # A different package that happens to carry 1.7.0 is still not the Pi SDK.
+            manifest.write_text(json.dumps({'name':'@example/not-pi','version':'1.7.0'}))
             with self.assertRaises(AgentError) as foreign:
                 managed_command(argv,sdk_path=str(sdk))
             self.assertEqual(foreign.exception.code,'unsupported_pi_version')

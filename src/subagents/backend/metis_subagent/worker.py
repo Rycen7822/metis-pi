@@ -33,7 +33,7 @@ SURFACE_PREFIX = 'metis-subagent-surface '
 # Maintenance gets one finite window, at least the shipped 30-minute idle
 # budget. Retries share that deadline rather than extending it.
 MAINTENANCE_MIN_SECONDS = 1800.0
-SUPPORTED_PI_VERSION = '1.6.1'
+SUPPORTED_PI_VERSION = '1.7.0'
 
 def message_text(message):
     content = message.get('content',[])

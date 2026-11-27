@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "piVersion": "1.6.1",
-  "upstreamCommit": "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe",
+  "piVersion": "1.7.0",
+  "upstreamCommit": "fb0fe823539f6d04850f6e34748c01f01f212e1f",
   "patches": [
     {
       "file": "0000-physical-workspace-bundling.patch",
@@ -45,7 +45,7 @@
     },
     {
       "file": "0011-bound-codemode-execution.patch",
-      "sha256": "084730115e17590e5b0061a2a05b604c254c7e6d1af0f00abf5206ac4c7e038b"
+      "sha256": "5b2ccd1486e008f1698725ca1d30a5b1fab1285a6a01884f6f755abaa0b4f97d"
     },
     {
       "file": "0012-add-programmatic-read-pages.patch",
@@ -136,11 +136,11 @@
       "sha256": "64a6532c34e4ae0b26549196889af97ad318f4aa087b14af55ddccbfaac47528"
     }
   ],
-  "patchSet": "baac63cafacae44523de68eacc338442334b197eec1301af40879b6a0fe139cd",
+  "patchSet": "fe341512fed114b54614c7cc7760d2e8a3d04480dfba6771053038b2fb0976da",
   "archive": {
-    "file": "pi-1.6.1.tgz",
-    "sha256": "0c7ff70a65c1e5d397c3935518c1d72d9000d7f3d2278db14496d8bd15a43868",
-    "bytes": 6182921,
-    "unpackedBytes": 27526928
+    "file": "pi-1.7.0.tgz",
+    "sha256": "ddb105b94d73194e1e1a24af96fc40b49b12dd9c22a389e941868ae535fa5a69",
+    "bytes": 6210692,
+    "unpackedBytes": 27664918
   }
 }

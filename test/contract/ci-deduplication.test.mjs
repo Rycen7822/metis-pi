@@ -27,7 +27,8 @@ function fixture() {
   const push = { ...run, id: 100, event: "push", created_at: "2026-10-16T07:03:24Z" };
   const pull = { number: 7, state: "open", mergeable: true, merge_commit_sha: mergeRef,
     head: { repo, ref: "feature", sha: head }, base: { repo, ref: "main" } };
-  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head, name: "Pi 1.6.1 · ubuntu-latest", status: "in_progress", runner_id: 3 });
+  const validation = id => ({ run_id: id, run_attempt: 1, head_sha: head,
+    name: "Pi SDK validation · ubuntu-latest · Root 1", status: "in_progress", runner_id: 3 });
   const sourceJobs = [validation(200)];
   const pushJobs = [validation(100), { run_id: 100, run_attempt: 1, head_sha: head,
     name: "Check duplicate feature push", status: "completed", conclusion: "success" }];
@@ -130,7 +131,8 @@ test("source scope, PR state and all three CI policies must authorize cleanup", 
 
 test("target needs matching branch/head, first attempt, older creation and branch-only admission", async t => {
   const cases = {
-    "older SDK validation": f => { f.sourceJobs[0].name = "Pi 1.4.0 · ubuntu-latest"; },
+    "older SDK validation": f => { f.sourceJobs[0].name = "Pi 1.6.1 · ubuntu-latest · Root 1"; },
+    "SDK summary is not validation": f => { f.sourceJobs[0].name = "Pi SDK · ubuntu-latest"; },
     "default branch": f => { f.push.head_branch = "main"; },
     "different head": f => { f.push.head_sha = "e".repeat(40); },
     "newer push": f => { f.push.created_at = "2026-10-16T07:03:35Z"; },

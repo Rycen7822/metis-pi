@@ -61,7 +61,7 @@ jobs:
           console.log(duplicate ? 'Matching mergeable PR covers this push; skipping duplicate tests.' : 'Full push validation required.');
           NODE
   validation:
-    name: Pi 1.6.1 · ${{ matrix.os }} · ${{ matrix.lane.name }}
+    name: Pi SDK validation · ${{ matrix.os }} · ${{ matrix.lane.name }}
     needs: admission
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:
@@ -141,6 +141,13 @@ jobs:
         run: node scripts/test.mjs ${{ matrix.lane.suite }} --test-shard=${{ matrix.lane.shard }}
       - run: npm run test:subagents
         if: matrix.lane.name == 'Python'
+      - name: Exercise the managed subagent SDK with an offline provider
+        if: matrix.lane.name == 'Python'
+        env:
+          SUBAGENT_PI_LIVE_PI: '1'
+        run: >-
+          node scripts/python.mjs -m pytest -q test/subagents/test_transport.py
+          -k sdk_default_and_reader_complete_tool_roundtrip -o cache_dir=.work/test-cache/subagents-sdk
       - name: Ensure tmux is available
         if: runner.os == 'Linux' && matrix.lane.name == 'Checks'
         run: |
@@ -154,7 +161,7 @@ jobs:
         env:
           PI_BIN: ${{ github.workspace }}/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
   test:
-    name: Pi 1.6.1 · ${{ matrix.os }}
+    name: Pi SDK · ${{ matrix.os }}
     needs: [admission, validation]
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:

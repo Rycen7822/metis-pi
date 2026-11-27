@@ -2,6 +2,7 @@
 // Prepare an isolated source build; never applies patches or changes an installed SDK.
 import { chmod, cp, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
+import { sdkRuntimePackages, sdkVersion } from "../../src/pi-sdk/artifact.mjs";
 
 const [sourceArgument, dependenciesArgument] = process.argv.slice(2);
 if (!sourceArgument || !dependenciesArgument) {
@@ -10,14 +11,14 @@ if (!sourceArgument || !dependenciesArgument) {
 const source = resolve(sourceArgument);
 const dependencies = resolve(dependenciesArgument);
 const target = resolve(source, "node_modules");
-const version = "1.6.1";
 const manifest = async (directory) => JSON.parse(await readFile(resolve(directory, "package.json"), "utf8"));
-if ((await manifest(resolve(source, "packages/coding-agent"))).version !== version) {
-  throw new Error(`This preparation recipe requires Pi ${version} source.`);
+if ((await manifest(resolve(source, "packages/coding-agent"))).version !== sdkVersion) {
+  throw new Error(`This preparation recipe requires Pi ${sdkVersion} source.`);
 }
-for (const name of ["pi-ai", "pi-tui", "pi-coding-agent", "pi-schema"]) {
-  if ((await manifest(resolve(dependencies, "@earendil-works", name))).version !== version) {
-    throw new Error(`Expected published ${name}@${version} in the supplied dependency tree.`);
+for (const name of sdkRuntimePackages) {
+  const id = `@earendil-works/pi-${name}`;
+  if ((await manifest(resolve(dependencies, id))).version !== sdkVersion) {
+    throw new Error(`Expected published ${id}@${sdkVersion} in the supplied dependency tree.`);
   }
 }
 
@@ -127,4 +128,4 @@ for (const name of ["typescript", "@biomejs/biome", "vitest"]) {
   }
 }
 await rejectLinks(target);
-console.log(`Prepared physical Pi ${version} build dependencies in ${source}; installed SDK untouched.`);
+console.log(`Prepared physical Pi ${sdkVersion} build dependencies in ${source}; installed SDK untouched.`);

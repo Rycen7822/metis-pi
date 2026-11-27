@@ -140,6 +140,12 @@ export default function (pi) {
         message.content = [{ type: "toolCall", id: "block-1", name: "mock_block", arguments: {} }] as any;
         message.stopReason = "toolUse";
       }
+      if (env.PI_MOCK_READ_PATH && call === 1) {
+        message.content = [{
+          type: "toolCall", id: "read-1", name: "read", arguments: { path: env.PI_MOCK_READ_PATH },
+        }] as any;
+        message.stopReason = "toolUse";
+      }
       if (env.PI_MOCK_FAIL) {
         message.stopReason = "error";
         (message as any).errorMessage = "Mock provider failed";
