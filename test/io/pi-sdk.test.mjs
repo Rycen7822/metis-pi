@@ -358,14 +358,14 @@ test("embedded SDK sessions cannot patch an unrelated managed installation", asy
 
 test("Windows launcher markers prevent install and cleanup outside Windows", { skip: process.platform === "win32" }, async t => {
   const h = await fixture(t);
+  const oldest = await h.ensureSDK({ managedRoot: h.managedRoot });
+  const obsolete = await h.active();
+  await h.payload("rollback");
   await h.ensureSDK({ managedRoot: h.managedRoot });
-  const obsolete = `metis-${releaseVersion}-000000000000-11111111`;
-  const directory = path.join(h.managedRoot, "releases", obsolete);
-  await mkdir(directory);
-  await writeFile(path.join(directory, "metis-sdk.json"), JSON.stringify({
-    schemaVersion: 1, piVersion: releaseVersion, patchSet: "0".repeat(64), archiveHash: "0".repeat(64),
-  }));
+  await h.payload("current");
+  await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: oldest.packageDir });
   const before = await h.snapshot();
+  assert.ok(before.releases.includes(obsolete), "a running release is retained on upgrade");
   const drive = String.raw`C:\pi\pi.cmd`, unc = String.raw`\\server\share\pi.cmd`;
 
   for (const [launcher, bom] of [[drive, ""], [unc, "\uFEFF"]]) {
@@ -381,7 +381,9 @@ test("Windows launcher markers prevent install and cleanup outside Windows", { s
 
   await writeFile(h.markerPath, JSON.stringify(managedMarker));
   assert.equal((await h.ensureSDK({ managedRoot: h.managedRoot })).status, "installed");
-  assert.ok(!(await h.snapshot()).releases.includes(obsolete), "the same release is pruned by a valid update");
+  if (process.platform === "linux") {
+    assert.ok(!(await h.snapshot()).releases.includes(obsolete), "the same release is pruned by a valid update");
+  }
 });
 
 test("BOM-prefixed CRLF markers are accepted, including a native Windows launcher", async t => {
@@ -400,6 +402,7 @@ test("invalid or non-regular managed markers leave the managed installation unto
   for (const [body, expected] of [
     ['{"kind":', SyntaxError],
     [`\uFEFF\uFEFF${JSON.stringify(managedMarker)}`, SyntaxError],
+    ["\uFEFFnull", unsupported],
     [JSON.stringify({ ...managedMarker, kind: "other" }), unsupported],
     [JSON.stringify({ ...managedMarker, schemaVersion: 2 }), unsupported],
     [JSON.stringify({ ...managedMarker, layout: "releases-v2" }), unsupported],

@@ -18,8 +18,7 @@ const inside = (root, target) => {
 };
 
 async function regularJSON(file, { stripBom = false } = {}) {
-  const stat = await lstat(file);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Expected a regular file: ${file}`);
+  if (!(await lstat(file)).isFile()) throw new Error(`Expected a regular file: ${file}`);
   const text = await readFile(file, "utf8");
   return JSON.parse(stripBom && text.startsWith("\uFEFF") ? text.slice(1) : text);
 }
@@ -122,10 +121,13 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
   const root = path.resolve(managedRoot ?? process.env.PI_MANAGED_INSTALL_ROOT ?? inferredRoot
     ?? path.join(process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"), "install"));
   let marker;
-  try { marker = await regularJSON(path.join(root, "managed-install.json"), { stripBom: true }); }
-  catch (error) { if (error.code === "ENOENT" && !managedRoot && !process.env.PI_MANAGED_INSTALL_ROOT)
-    return { status: "unmanaged", restartRequired: false }; throw error; }
-  if (marker.kind !== "pi-managed-install" || marker.schemaVersion !== 1 || marker.layout !== "releases-v1")
+  try {
+    marker = await regularJSON(path.join(root, "managed-install.json"), { stripBom: true });
+  } catch (error) {
+    if (error.code !== "ENOENT" || managedRoot || process.env.PI_MANAGED_INSTALL_ROOT) throw error;
+    return { status: "unmanaged", restartRequired: false };
+  }
+  if (marker?.kind !== "pi-managed-install" || marker.schemaVersion !== 1 || marker.layout !== "releases-v1")
     throw new Error("Unsupported Pi managed installation layout");
   const canonical = await realpath(root);
   const releases = path.join(canonical, "releases");
