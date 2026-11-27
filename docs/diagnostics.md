@@ -13,9 +13,25 @@
 | 模型、指令或整理状态有误 | 用 `/model` 核对当前模型；用 `/dynamic-agents` 或 `/pruner status` 查看策略。 |
 | Codemode 停在 `Receiving script from model` | 脚本正在生成，可用 Esc 中断。[OpenAI 流停滞](#openai-流停滞)说明自动报错条件。 |
 | `OpenAI safety policy blocked the response` | 这是 OpenAI 返回的安全拦截。见 [OpenAI 安全拦截](#openai-安全拦截)。 |
+| 长会话内存峰值过高 | 先区分短时峰值和空闲后的常驻占用。若需要降低峰值，见[自选 V8 参数](#内存峰值与自选-v8-参数)。 |
 | 工具未注册或不可用 | 用 [tool_search](features/tool-discovery.md) 核对目录；再检查 `/mcp`、`/lsp`、`/neural-search health` 或 `/metis-subagents`。 |
 
 报告问题时附上 Pi 与 Metis 版本、终端模式、复现步骤和相关诊断字段。发送前移除密钥、私人路径和会话正文。
+
+## 内存峰值与自选 V8 参数
+
+如果需要降低长会话的短时内存峰值，可在 Linux 或 WSL 的 Bash/Zsh 中只为本次启动减小 V8 新生代：
+
+```sh
+NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-semi-space-size=8" pi
+```
+
+这保留已有 `NODE_OPTIONS`，作用于本次启动及继承环境的 Node 子进程。若已设置同名参数，调整现有值即可。
+恢复默认时照常运行 `pi`，不需要改配置或启动器；此选项也不会改变已经运行的会话。
+
+在 Node 24.15 的三组全扩展长会话对照中，主进程匿名内存峰值降低约 13–22%，总 CPU 时间增加约 3–6%，空闲后的常驻内存没有稳定改善。
+它不是总内存上限，也不能减少历史索引。如果更看重吞吐或空闲占用，保持默认。
+不要把 `--optimize-for-size` 放进 `NODE_OPTIONS`；Node 会拒绝启动。
 
 ## OpenAI 流停滞
 

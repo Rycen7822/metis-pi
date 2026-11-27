@@ -1,0 +1,350 @@
+diff --git a/packages/coding-agent/src/core/cache-stats.ts b/packages/coding-agent/src/core/cache-stats.ts
+index b9d3046..a4d4f6a 100644
+--- a/packages/coding-agent/src/core/cache-stats.ts
++++ b/packages/coding-agent/src/core/cache-stats.ts
+@@ -1,9 +1,12 @@
+ import type { AssistantMessage } from "@earendil-works/pi-ai";
+ import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
++import type { SessionEntryStore } from "./session-entry-store.ts";
+ import type { SessionEntry } from "./session-types.ts";
+ 
+ type CacheHistoryEntry = SessionEntry | SessionEntryMetadata;
++type RecentCacheHistory = Pick<SessionEntryStore, "scanMetadataBackwards">;
+ type CacheRequest = Pick<AssistantMessage, "provider" | "model" | "usage" | "timestamp">;
++type CacheWarmRequest = Extract<SessionEntryMetadata, { type: "usage" }>;
+ 
+ /**
+  * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
+@@ -51,6 +54,10 @@ interface PreviousRequest {
+ 	reportedCache: boolean;
+ }
+ 
++function promptTokensOf(usage: CacheRequest["usage"]): number {
++	return usage.input + usage.cacheRead + usage.cacheWrite;
++}
++
+ /**
+  * Compute the cache miss for one assistant message relative to the previous
+  * request. Returns undefined when nothing is counted: first turn, after a
+@@ -63,7 +70,7 @@ function detectMiss(
+ 	models: ModelPriceSource,
+ ): CacheMiss | undefined {
+ 	const usage = message.usage;
+-	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
++	const promptTokens = promptTokensOf(usage);
+ 	// A zero-cache turn only counts when cache activity was reported before:
+ 	// on cache-read-only providers that is a total miss, while on providers
+ 	// that never report caching it means nothing.
+@@ -93,15 +100,12 @@ function detectMiss(
+ 	};
+ }
+ 
+-function asPreviousRequest(message: CacheRequest, reportedCache: boolean): PreviousRequest | undefined {
+-	const usage = message.usage;
+-	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+-	if (promptTokens <= 0) return undefined;
++function previousRequest(request: CacheRequest | CacheWarmRequest, promptTokens: number, reportedCache: boolean): PreviousRequest {
+ 	return {
+ 		promptTokens,
+-		modelKey: `${message.provider}/${message.model}`,
+-		timestamp: message.timestamp,
+-		reportedCache: reportedCache || usage.cacheRead + usage.cacheWrite > 0,
++		modelKey: `${request.provider}/${request.model}`,
++		timestamp: "kind" in request ? Date.parse(request.timestamp) : request.timestamp,
++		reportedCache,
+ 	};
+ }
+ 
+@@ -122,15 +126,8 @@ function scan<T extends CacheHistoryEntry>(
+ 			continue;
+ 		}
+ 		if (entry.type === "usage" && entry.kind === "cache_warm") {
+-			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+-			if (promptTokens > 0) {
+-				prev = {
+-					promptTokens,
+-					modelKey: `${entry.provider}/${entry.model}`,
+-					timestamp: Date.parse(entry.timestamp),
+-					reportedCache: true,
+-				};
+-			}
++			const promptTokens = promptTokensOf(entry.usage);
++			if (promptTokens > 0) prev = previousRequest(entry, promptTokens, true);
+ 		} else if (entry.type === "message" && entry.message.role === "assistant") {
+ 			const miss = detectMiss(prev, entry.message, models);
+ 			if (miss) {
+@@ -139,7 +136,10 @@ function scan<T extends CacheHistoryEntry>(
+ 				totals.missCount += 1;
+ 				misses.set(entry, miss);
+ 			}
+-			prev = asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
++			const usage = entry.message.usage;
++			const promptTokens = promptTokensOf(usage);
++			if (promptTokens <= 0) continue;
++			prev = previousRequest(entry.message, promptTokens, prev?.reportedCache || usage.cacheRead + usage.cacheWrite > 0);
+ 		}
+ 	}
+ 	return { prev, totals, misses };
+@@ -179,6 +179,29 @@ export function collectCacheMissesByEntryId(
+ 	return misses;
+ }
+ 
++/** The nearest request owns the amounts and time; older requests can only establish cache activity. */
++function findRecentRequest(source: RecentCacheHistory, needReportedCache: boolean): PreviousRequest | undefined {
++	let previous: PreviousRequest | undefined;
++	source.scanMetadataBackwards((entry) => {
++		if (entry.type === "compaction" || entry.type === "branch_summary") return true;
++		const warm = entry.type === "usage" && entry.kind === "cache_warm";
++		let request: CacheRequest | CacheWarmRequest;
++		if (warm) request = entry;
++		else if (entry.type === "message" && entry.message.role === "assistant") request = entry.message;
++		else return false;
++
++		const promptTokens = promptTokensOf(request.usage);
++		// Match the existing forward rules for historic as well as current usage records.
++		if (warm ? !(promptTokens > 0) : promptTokens <= 0) return false;
++
++		const reportedCache = warm || request.usage.cacheRead + request.usage.cacheWrite > 0;
++		previous ??= previousRequest(request, promptTokens, reportedCache);
++		if (reportedCache) previous.reportedCache = true;
++		return reportedCache || !needReportedCache;
++	});
++	return previous;
++}
++
+ /**
+  * Detect a cache miss on a just-completed assistant message.
+  * `entries` must not yet contain `message` (message_end fires before persistence).
+@@ -190,3 +213,19 @@ export function detectCacheMiss(
+ ): CacheMiss | undefined {
+ 	return detectMiss(scan(entries, models).prev, message, models);
+ }
++
++/**
++ * Same result as {@link detectCacheMiss} over the store's entries, reading only the
++ * recent tail in reverse file order instead of copying the whole session history.
++ * `source` must not yet contain `message` (message_end fires before persistence).
++ */
++export function detectCacheMissFromStore(
++	source: RecentCacheHistory,
++	message: AssistantMessage,
++	models: ModelPriceSource,
++): CacheMiss | undefined {
++	if (promptTokensOf(message.usage) <= 0) return undefined;
++	// The sticky flag only affects turns that report no cache activity at all.
++	const prev = findRecentRequest(source, message.usage.cacheRead + message.usage.cacheWrite === 0);
++	return prev && detectMiss(prev, message, models);
++}
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index 5684ee1..b4239a4 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -127,6 +127,13 @@ export class SessionEntryStore {
+ 		for (const record of this.byId.values()) yield record.metadata;
+ 	}
+ 
++	scanMetadataBackwards(visit: (metadata: SessionEntryMetadata) => boolean): void {
++		for (let index = this.records.length - 1; index >= 0; index--) {
++			const record = this.records[index];
++			if (record.kind === "entry" && visit(record.metadata)) return;
++		}
++	}
++
+ 	getLastMetadata(type: SessionEntryMetadata["type"]): SessionEntryMetadata | undefined {
+ 		for (let index = this.records.length - 1; index >= 0; index--) {
+ 			const record = this.records[index];
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 50cdeb4..1f0604b 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -1303,6 +1303,11 @@ export class SessionManager {
+ 		return selectContextEntries(this.getBranchMetadata());
+ 	}
+ 
++	/** Visit entry metadata in reverse file order until the visitor returns true. */
++	scanMetadataBackwards(visit: (metadata: SessionEntryMetadata) => boolean): void {
++		this.store.scanMetadataBackwards(visit);
++	}
++
+ 	/**
+ 	 * Get all direct children of an entry.
+ 	 */
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index caac059..2761caa 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -74,7 +74,7 @@ import {
+ 	type CacheMiss,
+ 	collectCacheMissesByEntryId,
+ 	computeCacheWaste,
+-	detectCacheMiss,
++	detectCacheMissFromStore,
+ } from "../../core/cache-stats.ts";
+ import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
+ import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
+@@ -4436,7 +4436,7 @@ export class InteractiveMode {
+ 		if (!this.settingsManager.getNotices().cacheMisses) return;
+ 
+ 		// Entries don't contain `message` yet: message_end fires before persistence.
+-		const miss = detectCacheMiss(this.sessionManager.getEntriesMetadata(), message, this.session.modelRuntime);
++		const miss = detectCacheMissFromStore(this.sessionManager, message, this.session.modelRuntime);
+ 		if (miss) this.addCacheMissNotice(miss);
+ 	}
+ 
+diff --git a/packages/coding-agent/test/cache-stats.test.ts b/packages/coding-agent/test/cache-stats.test.ts
+index d048912..9ae48b4 100644
+--- a/packages/coding-agent/test/cache-stats.test.ts
++++ b/packages/coding-agent/test/cache-stats.test.ts
+@@ -5,10 +5,11 @@ import {
+ 	collectCacheMissesByEntryId,
+ 	computeCacheWaste,
+ 	detectCacheMiss,
++	detectCacheMissFromStore,
+ 	type ModelPriceSource,
+ } from "../src/core/cache-stats.ts";
+ import { toSessionEntryMetadata } from "../src/core/session-entry-metadata.ts";
+-import type { SessionEntry } from "../src/core/session-manager.ts";
++import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
+ 
+ const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+ 
+@@ -48,7 +49,7 @@ function entry(message: AssistantMessage): SessionEntry {
+ 	return { type: "message", id: "x", parentId: null, timestamp: "", message } as SessionEntry;
+ }
+ 
+-function usageEntry(kind: string, timestamp: number): SessionEntry {
++function usageEntry(kind: string, timestamp: number): Extract<SessionEntry, { type: "usage" }> {
+ 	return {
+ 		type: "usage",
+ 		id: `usage-${kind}`,
+@@ -194,3 +195,65 @@ describe("detectCacheMiss", () => {
+ 		expect(detectCacheMiss([], turn1, models)).toBeUndefined();
+ 	});
+ });
++
++describe("detectCacheMissFromStore", () => {
++	const missMessage = () => assistant({ cacheWrite: 110_000, cost: { cacheWrite: 0.4125 }, timestamp: 600_000 });
++	const newStore = () => SessionManager.inMemory("/tmp/cache-stats-store-test");
++
++	const fromStore = (manager: SessionManager) =>
++		detectCacheMissFromStore(manager, missMessage(), models);
++
++	it("agrees with the full-history scan over the same records", () => {
++		const manager = newStore();
++		manager.appendMessage(turn1);
++		manager.appendMessage(turn2);
++		expect(fromStore(manager)).toEqual(detectCacheMiss(manager.getEntriesMetadata(), missMessage(), models));
++	});
++
++	it("treats a compaction or branch summary as a reset", () => {
++		const compacted = newStore();
++		compacted.appendMessage(turn1);
++		compacted.appendCompaction("summary", null, 100_000);
++		expect(fromStore(compacted)).toBeUndefined();
++
++		const branched = newStore();
++		branched.appendMessage(turn1);
++		branched.branchWithSummary(null, "summary");
++		expect(fromStore(branched)).toBeUndefined();
++	});
++
++	it("keeps the nearest request and detects older cache activity after the most recent reset", () => {
++		const manager = newStore();
++		const warm = usageEntry("cache_warm", 0);
++		manager.appendUsage(warm.kind, warm.provider, warm.model, warm.usage);
++		manager.appendMessage(assistant({ input: 55_000, timestamp: 60_000 }));
++		const current = assistant({ input: 110_000, timestamp: 120_000 });
++		expect(detectCacheMissFromStore(manager, current, models)).toMatchObject({
++			missedTokens: 55_000,
++			idleMs: 60_000,
++		});
++
++		manager.appendCompaction("summary", null, 55_000);
++		manager.appendMessage(assistant({ input: 55_000, timestamp: 60_000 }));
++		expect(detectCacheMissFromStore(manager, current, models)).toBeUndefined();
++	});
++
++	it("visits only the recent tail instead of the whole history", () => {
++		const manager = newStore();
++		for (let i = 0; i < 32; i++) manager.appendMessage(i % 2 === 0 ? turn2 : turn1);
++		let visited = 0;
++		const miss = detectCacheMissFromStore(
++			{
++				scanMetadataBackwards: (visit) =>
++					manager.scanMetadataBackwards((metadata) => {
++						visited++;
++						return visit(metadata);
++					}),
++			},
++			missMessage(),
++			models,
++		);
++		expect(miss).toEqual(detectCacheMiss(manager.getEntriesMetadata(), missMessage(), models));
++		expect(visited).toBeLessThan(5);
++	});
++});
+diff --git a/packages/coding-agent/test/interactive-mode-cache-notice.test.ts b/packages/coding-agent/test/interactive-mode-cache-notice.test.ts
+new file mode 100644
+index 0000000..c57181b
+--- /dev/null
++++ b/packages/coding-agent/test/interactive-mode-cache-notice.test.ts
+@@ -0,0 +1,59 @@
++import type { AssistantMessage } from "@earendil-works/pi-ai";
++import { Container } from "@earendil-works/pi-tui";
++import { expect, test, vi } from "vitest";
++import { SessionManager } from "../src/core/session-manager.ts";
++import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
++import { initTheme } from "../src/modes/interactive/theme/theme.ts";
++import { stripAnsi } from "../src/utils/ansi.ts";
++
++function assistant(cacheRead: number, cacheWrite: number, timestamp: number): AssistantMessage {
++	return {
++		role: "assistant",
++		content: [],
++		api: "anthropic-messages",
++		provider: "anthropic",
++		model: "test",
++		usage: {
++			input: 0,
++			output: 10,
++			cacheRead,
++			cacheWrite,
++			totalTokens: cacheRead + cacheWrite + 10,
++			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
++		},
++		stopReason: "stop",
++		timestamp,
++	};
++}
++
++test("a live assistant cache miss can be shown without copying the entire session history", async () => {
++	initTheme("dark");
++	const sessionManager = SessionManager.inMemory(process.cwd());
++	sessionManager.appendMessage(assistant(106_000, 0, 61_000));
++	vi.spyOn(sessionManager, "getEntriesMetadata").mockImplementation(() => {
++		throw new Error("full history copy");
++	});
++	const chatContainer = new Container();
++	const mode = Object.assign(Object.create(InteractiveMode.prototype), {
++		isInitialized: true,
++		streamingComponent: { updateContent() {} },
++		pendingTools: new Map(),
++		footer: { invalidate() {} },
++		programStatus: { handleEvent() {} },
++		ui: { requestRender() {} },
++		maybeSuggestBugReport() {},
++		maybeShowThinkingDropNotice() {},
++		chatContainer,
++		runtimeHost: {
++			session: {
++				sessionManager,
++				settingsManager: { getNotices: () => ({ cacheMisses: true }) },
++				modelRuntime: { getModel: () => ({ cost: { cacheRead: 0.3 } }) },
++			},
++		},
++	});
++
++	await mode.handleEvent({ type: "message_end", message: assistant(0, 110_000, 600_000) });
++
++	expect(stripAnsi(chatContainer.render(120).join("\n"))).toContain("Cache miss after 9m idle: 106k tokens re-billed");
++});

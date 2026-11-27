@@ -130,13 +130,17 @@
     {
       "file": "0032-anchor-fullscreen-scrollbars.patch",
       "sha256": "5b5ca5bd8a561acf1e01a7b83b30fef0d96ebac7408d28c8379d2bf25c96b404"
+    },
+    {
+      "file": "0033-avoid-full-history-on-live-cache-notices.patch",
+      "sha256": "64a6532c34e4ae0b26549196889af97ad318f4aa087b14af55ddccbfaac47528"
     }
   ],
-  "patchSet": "3b0cd283685a5dda2873d54f1485d8680cdb86ec39756e1f4f30d3fa29a4e657",
+  "patchSet": "baac63cafacae44523de68eacc338442334b197eec1301af40879b6a0fe139cd",
   "archive": {
     "file": "pi-1.6.1.tgz",
-    "sha256": "c99079071c7c32ef9411936c84c30de3b8327b20ad23e34a132ae41bc325704a",
-    "bytes": 6198793,
-    "unpackedBytes": 27598183
+    "sha256": "0c7ff70a65c1e5d397c3935518c1d72d9000d7f3d2278db14496d8bd15a43868",
+    "bytes": 6182921,
+    "unpackedBytes": 27526928
   }
 }
