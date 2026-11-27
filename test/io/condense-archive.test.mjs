@@ -96,6 +96,19 @@ test("cold directory preserves historical refs without retaining or loading payl
   assert.equal((await f.run({ toolCallIds: ["t70"] })).details.results[0].text, first.resultText);
   assert.ok(reads.length > 0 && reads.every(id => id === archive), "recall reads only the addressed archival entry");
   assert.equal(f.indexer.getRecord("reused@5").resultText, second.resultText);
+  assert.deepEqual(f.indexer.getRecordsForId("reused").map(call => call.resultTimestamp), [3, 5],
+    "repeated archive entries do not duplicate or reorder occurrences");
+});
+
+test("a modern occurrence disables the legacy bare-ID shortcut after reload", () => {
+  const legacy = { ...record("legacy", "legacy output"), resultTimestamp: undefined };
+  const f = queryFixture([legacy, legacy]);
+  assert.equal(f.indexer.hasLegacyBareRecord("legacy"), true);
+  f.ctx.sessionManager.appendCustomEntry("context-prune-index", { toolCalls: [record("legacy", "new output", 9)] });
+  f.indexer.reconstructFromSession(f.ctx);
+
+  assert.equal(f.indexer.hasLegacyBareRecord("legacy"), false);
+  assert.deepEqual(f.indexer.getRecordsForId("legacy").map(call => call.resultText), ["legacy output", "new output"]);
 });
 
 test("all archive publication paths preserve original evidence before and after Native compaction", async t => {

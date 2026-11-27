@@ -12,8 +12,10 @@ const MAX_BYTES = 32768;
 interface Cursor { selection: string; index: number; offset: number; version?: string }
 type Selection =
   | { kind: "tool-record"; ref: string; record: ToolCallRecord }
-  | { kind: "historical-source" | "evidence-directory"; ref: string; text: string }
+  | { kind: "historical-source"; ref: string; text: string }
+  | { kind: "evidence-directory"; ref: string; chunk: BytePage }
   | { kind: "missing"; ref: string };
+interface BytePage { bytes: Buffer; total: number; version: string }
 type ByteSource =
   | { kind: "text"; text: string }
   | { kind: "archive"; path: string; prefix: string; snapshot?: { bytes: number } };
@@ -61,6 +63,42 @@ function prefix(bytes: Buffer, length: number): string {
   return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, end));
 }
 
+/** Keep only the requested byte window, but hash every JSON line for compatibility with old cursors. */
+function scanDirectory(
+  indexer: ToolCallIndexer, offset: number, windowBytes: number, signal?: AbortSignal,
+): BytePage {
+  const hash = createHash("sha256");
+  const window = Buffer.alloc(windowBytes);
+  const end = offset + windowBytes;
+  let total = 0;
+  for (const r of indexer.directory()) {
+    signal?.throwIfAborted();
+    const line = JSON.stringify({
+      ref: r.ref,
+      occurrence: r.occurrence,
+      tool: r.toolName,
+      parentToolCallId: r.parentToolCallId,
+      status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
+      argsPreview: r.argsPreview,
+      archive: r.spillPath,
+      archiveComplete: r.archiveComplete,
+      source: r.archiveSource ?? "tool-result",
+    });
+    if (total > 0) {
+      if (total >= offset && total < end) window[total - offset] = 0x0a;
+      hash.update("\n");
+      total++;
+    }
+    const next = total + Buffer.byteLength(line);
+    const from = Math.max(offset, total);
+    const to = Math.min(end, next);
+    if (from < to) Buffer.from(line).copy(window, from - offset, from - total, to - total);
+    hash.update(line);
+    total = next;
+  }
+  return { bytes: window.subarray(0, Math.max(0, Math.min(windowBytes, total - offset))), total, version: hash.digest("hex") };
+}
+
 function outputSource(record: ToolCallRecord): ByteSource {
   if (!record.spillPath) return { kind: "text", text: record.resultText };
   return {
@@ -76,7 +114,8 @@ function selectionIdentity(material: Selection, component: "output" | "arguments
   if (material.kind === "missing") return [material.ref, undefined, undefined, undefined, undefined, undefined];
   if (material.kind !== "tool-record") {
     // This zero is an old cursor-format marker, not execution metadata.
-    return [material.ref, material.ref, undefined, 0, digest(material.text), undefined];
+    const version = material.kind === "evidence-directory" ? material.chunk.version : digest(material.text);
+    return [material.ref, material.ref, undefined, 0, version, undefined];
   }
   const record = material.record;
   return [material.ref, record.toolCallId, record.resultTimestamp, record.timestamp,
@@ -84,7 +123,7 @@ function selectionIdentity(material: Selection, component: "output" | "arguments
     record.spillPath];
 }
 
-async function readPage(source: ByteSource, offset: number, budget: number) {
+async function readPage(source: ByteSource, offset: number, budget: number): Promise<BytePage> {
   if (source.kind === "text") {
     const bytes = Buffer.from(source.text, "utf8");
     return { bytes: bytes.subarray(offset, offset + budget + 4), total: bytes.length, version: digest(source.text) };
@@ -203,6 +242,7 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer,
       const sourceBranch = params.sourceEntryIds
         ? [...readHistoryEntries(ctx.sessionManager, "branch", entry => sourceIds.has(entry.id))]
         : undefined;
+      const decoded = params.cursor ? decode(params.cursor) : undefined;
       const selected: Selection[] = params.sourceEntryIds
         ? params.sourceEntryIds.map((ref): Selection => {
             const entry = sourceBranch!.find((entry) => entry.id === ref);
@@ -233,27 +273,8 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer,
                   ? records.map((record) => ({ kind: "tool-record", ref, record }))
                   : [{ kind: "missing", ref }];
               })
-            : [
-                {
-                  kind: "evidence-directory",
-                  ref: "directory",
-                  text: [...indexer.directory()]
-                    .map((r) =>
-                      JSON.stringify({
-                        ref: r.ref,
-                        occurrence: r.occurrence,
-                        tool: r.toolName,
-                        parentToolCallId: r.parentToolCallId,
-                        status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
-                        argsPreview: r.argsPreview,
-                        archive: r.spillPath,
-                        archiveComplete: r.archiveComplete,
-                        source: r.archiveSource ?? "tool-result",
-                      }),
-                    )
-                    .join("\n"),
-                },
-              ];
+            : [{ kind: "evidence-directory", ref: "directory",
+                chunk: scanDirectory(indexer, decoded?.offset ?? 0, budget + 4, signal) }];
       // Stable across reloads and normal conversation growth; branch changes
       // invalidate the cursor if they change the selected occurrences.
       const selection = digest(
@@ -264,7 +285,7 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer,
           selected.map((material) => selectionIdentity(material, component)),
         ]),
       );
-      let current: Cursor = params.cursor ? decode(params.cursor) : { selection, index: 0, offset: 0 };
+      let current: Cursor = decoded ?? { selection, index: 0, offset: 0 };
       if (current.selection !== selection || current.index >= selected.length)
         throw new Error("Recall cursor no longer matches this session, branch or selection. Start a new query.");
       const results: Page[] = [];
@@ -284,7 +305,7 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer,
         if (material.kind === "missing") {
           page.error = "Not found in this branch's archive index.";
         } else {
-          let byteSource: ByteSource;
+          let source: ByteSource | BytePage;
           if (material.kind === "tool-record") {
             const record = material.record;
             const args = JSON.stringify(record.args);
@@ -307,17 +328,19 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer,
             if (record.metadataUnavailable)
               page.error =
                 "Legacy dedup source metadata is unavailable; this is the shared historical body, not verified output of this occurrence.";
-            byteSource = component === "arguments" ? { kind: "text", text: args } : outputSource(record);
-          } else {
-            const materialPage: MaterialPage = material.kind === "historical-source"
-              ? { ...page, source: material.kind, component: "historical-source" }
-              : { ...page, source: material.kind, component: "output" };
+            source = component === "arguments" ? { kind: "text", text: args } : outputSource(record);
+          } else if (material.kind === "evidence-directory") {
+            const materialPage: MaterialPage = { ...page, source: material.kind, component: "output" };
             page = materialPage;
-            byteSource = { kind: "text", text: material.text };
+            source = material.chunk;
+          } else {
+            const materialPage: MaterialPage = { ...page, source: material.kind, component: "historical-source" };
+            page = materialPage;
+            source = { kind: "text", text: material.text };
           }
-          let chunk;
+          let chunk: BytePage | undefined;
           try {
-            chunk = await readPage(byteSource, current.offset, budget);
+            chunk = "bytes" in source ? source : await readPage(source, current.offset, budget);
           } catch (error) {
             page.error = `Archive unavailable (${(error as NodeJS.ErrnoException).code ?? "read failed"}); preview is not the original output.`;
           }

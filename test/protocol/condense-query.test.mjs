@@ -8,6 +8,9 @@ import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.
 
 test("directory and historical pages carry their material identity without fabricated execution metadata", async () => {
   const { ctx, run, origin } = queryFixture([record("raw", "original output")]);
+  const empty = (await queryFixture([]).run({})).details;
+  assert.equal(empty.nextCursor, null);
+  assert.deepEqual(empty.results.map(page => [page.text, page.totalBytes, page.complete]), [["", 0, true]]);
   const directory = (await run({})).details.results[0];
   assert.equal(directory.source, "evidence-directory");
   assert.equal(JSON.parse(directory.text).occurrence, "raw@3");
@@ -21,6 +24,39 @@ test("directory and historical pages carry their material identity without fabri
       assert.equal(Object.hasOwn(page, field), false, `${page.source} is not a tool execution (${field})`);
     }
   }
+});
+
+test("directory cursors round-trip UTF-8 across pages and invalidate when the directory changes", async () => {
+  const args = { note: "中文😀".repeat(100) };
+  const records = Array.from({ length: 12 }, (_, i) => record(`call-${i}`, "output", i, { args }));
+  const f = queryFixture(records);
+  const maxBytes = 2048;
+  const first = (await f.run({ maxBytes })).details;
+  const savedCursor = first.nextCursor;
+  assert.ok(savedCursor);
+  f.indexer.reconstructFromSession(f.ctx);
+
+  let cursor = savedCursor;
+  let text = first.results[0].text;
+  for (let pages = 0; cursor; pages++) {
+    assert.ok(pages < 20, "paging must make progress");
+    const result = await f.run({ cursor, maxBytes });
+    assert.ok(Buffer.byteLength(result.content[0].text) <= maxBytes);
+    const page = result.details.results[0];
+    assert.equal(page.offsetBytes, Buffer.byteLength(text));
+    text += page.text;
+    cursor = result.details.nextCursor;
+    assert.equal(page.complete, cursor === null);
+  }
+  assert.equal(Buffer.byteLength(text), first.results[0].totalBytes);
+  assert.equal(text.endsWith("\n"), false);
+  const rows = text.split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(rows.map(row => row.occurrence), records.map(record => `${record.toolCallId}@${record.resultTimestamp}`));
+  assert.ok(rows.every(row => row.argsPreview === JSON.stringify(args).slice(0, 256)));
+
+  f.ctx.sessionManager.appendCustomEntry("context-prune-index", { toolCalls: [record("late", "output")] });
+  f.indexer.reconstructFromSession(f.ctx);
+  await assert.rejects(f.run({ cursor: savedCursor, maxBytes }), /no longer matches/);
 });
 
 test("recall pages round-trip Unicode, long lines, all repeated-ID occurrences and error status within one total budget", async () => {

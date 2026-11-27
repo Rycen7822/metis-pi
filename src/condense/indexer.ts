@@ -64,8 +64,8 @@ export class ToolCallIndexer {
   /** Persisted payloads stay in the session store; only legacy aliases without index entries need full fallback records. */
   private index = new Map<string, IndexedRecord>();
   private sourceReader?: RecordReader;
-  /** bare toolCallId -> its occurrence keys, in insertion order */
-  private bareIdToKeys = new Map<string, string[]>();
+  /** Only reused bare IDs need a list of occurrence keys. */
+  private bareIdToKeys = new Map<string, string | string[]>();
   private aliasToToolCallId = new Map<string, string>();
   private toolCallIdToAlias = new Map<string, string>();
   private nextShortAliasNumber = 1;
@@ -131,11 +131,7 @@ export class ToolCallIndexer {
       if (entry.customType === CUSTOM_TYPE_INDEX) {
         const data = entry.data as IndexEntryData;
         if (Array.isArray(data?.toolCalls)) for (const [position, record] of data.toolCalls.entries()) {
-          const key = this.indexRecord(record, { entryId: entry.id, position });
-          if (!data.backfilled) {
-            const originalHash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
-            if (!this.contentHashToOriginal.has(originalHash)) this.contentHashToOriginal.set(originalHash, key);
-          }
+          this.indexRecord(record, { entryId: entry.id, position, dedupSource: !data.backfilled });
         }
         if (data?.backfilled && Array.isArray(data.refs)) this.registerSummaryRefs(data.refs);
       } else if (entry.customType === CUSTOM_TYPE_CHAIN) {
@@ -184,16 +180,25 @@ export class ToolCallIndexer {
    * bare-id reverse index + legacy-shape tracking. Shared by `addBatch` and
    * `reconstructFromSession` so both paths key identically.
    */
-  private indexRecord(record: ToolCallRecord, source?: Pick<StoredRecord, "entryId" | "position">): string {
+  private indexRecord(record: ToolCallRecord, source?: Pick<StoredRecord, "entryId" | "position"> & { dedupSource?: boolean }): void {
     const key = occKey(record.toolCallId, record.resultTimestamp);
-    this.index.set(key, source ? {
-      ...directoryMetadata(record), ...projectionEvidence(record), ...source, argsPreview: argumentPreview(record.args),
-      contentHash: record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined),
-    } : { record });
-    const keys = this.bareIdToKeys.get(record.toolCallId) ?? [];
-    if (!keys.includes(key)) keys.push(key);
-    this.bareIdToKeys.set(record.toolCallId, keys);
-    return key;
+    if (source) {
+      const { entryId, position, dedupSource } = source;
+      const hash = record.contentHash
+        ?? (!record.spillPath || dedupSource ? hashToolResult(record.toolName, record.resultText) : undefined);
+      this.index.set(key, {
+        ...directoryMetadata(record), ...projectionEvidence(record), entryId, position,
+        argsPreview: argumentPreview(record.args),
+        contentHash: record.spillPath ? record.contentHash : hash,
+      });
+      if (dedupSource && hash !== undefined && !this.contentHashToOriginal.has(hash)) this.contentHashToOriginal.set(hash, key);
+    } else this.index.set(key, { record });
+
+    const known = this.bareIdToKeys.get(record.toolCallId);
+    if (known === undefined) this.bareIdToKeys.set(record.toolCallId, key);
+    else if (typeof known === "string") {
+      if (known !== key) this.bareIdToKeys.set(record.toolCallId, [known, key]);
+    } else if (!known.includes(key)) known.push(key);
   }
 
   /** Writers append one index entry synchronously to the bound session; retain its identity, never its payload. */
@@ -284,8 +289,7 @@ export class ToolCallIndexer {
     const aliased = this.aliasToToolCallId.get(input);
     if (aliased) return aliased;
     const keys = this.bareIdToKeys.get(input);
-    if (keys && keys.length === 1) return keys[0];
-    return undefined;
+    return typeof keys === "string" ? keys : undefined;
   }
 
   /**
@@ -344,7 +348,7 @@ export class ToolCallIndexer {
     const block = this.chainRegistry.get(input);
     if (block) return this.lookupToolCalls(chainMembers(block).flatMap(member => member.droppedOccurrenceKeys ?? member.droppedToolCallIds));
     const keys = this.bareIdToKeys.get(input);
-    const records = (keys ?? [])
+    const records = (typeof keys === "string" ? [keys] : keys ?? [])
       .map((k) => this.getRecord(k))
       .filter((r): r is ToolCallRecord => r !== undefined);
 
@@ -375,8 +379,7 @@ export class ToolCallIndexer {
   hasLegacyBareRecord(toolCallId: string): boolean {
     const item = this.index.get(toolCallId);
     if (!item || ("record" in item ? item.record : item).archiveOnly) return false;
-    const keys = this.bareIdToKeys.get(toolCallId);
-    return keys !== undefined && keys.length === 1;
+    return typeof this.bareIdToKeys.get(toolCallId) === "string";
   }
 
   /**
@@ -587,9 +590,7 @@ export class ToolCallIndexer {
 
     const entryId = this.appendIndex({ toolCalls: records, ...(archiveOnly ? { backfilled: true } : {}) }, appendEntry);
     for (const [position, record] of records.entries()) {
-      const key = this.indexRecord(record, { entryId, position });
-      const hash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
-      if (!archiveOnly && !this.contentHashToOriginal.has(hash)) this.contentHashToOriginal.set(hash, key);
+      this.indexRecord(record, { entryId, position, dedupSource: !archiveOnly });
     }
   }
 
