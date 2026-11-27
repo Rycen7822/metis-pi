@@ -1037,13 +1037,21 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.wait(s["run_id"])
 
     async def test_cancel_wait_never_cancels(self):
-        s = await self.spawn("delay=0.3|work")
-        task = asyncio.create_task(self.wait(s["run_id"]))
-        await asyncio.sleep(0.02)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
-        await self.wait(s["run_id"])
+        release = self.root / "finish-after-wait-cancel"
+        run_id = (await self.spawn(f"gate={release}|work"))["run_id"]
+        with m.patch.object(self.rt.changed, "wait", wraps=self.rt.changed.wait) as waiting:
+            task = asyncio.create_task(self.wait(run_id))
+            try:
+                await self.until(lambda: waiting.await_count or task.done())
+                self.assertFalse(task.done(), "wait returned before cancellation")
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(task.cancelled())
+        self.assertEqual(self.rt.store.run(self.scope, run_id)["state"], "running")
+
+        release.touch()
+        self.assertEqual((await self.wait(run_id))["reason"], "completed")
 
     async def test_wait_any_all(self):
         a = await self.spawn("delay=0.05|A")
