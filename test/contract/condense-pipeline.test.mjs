@@ -3,7 +3,9 @@ import { once } from "node:events";
 import test from "node:test";
 import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { SessionManager, convertToLlm, createEventBus, estimateTokens, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager, ExtensionRunner, convertToLlm, createEventBus, createExtensionRuntime, estimateTokens, initTheme,
+} from "@earendil-works/pi-coding-agent";
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { SettingsList } from "@earendil-works/pi-tui";
 import { fixture, usage } from "../helpers/condense-pipeline.mjs";
@@ -2126,14 +2128,24 @@ for (const kind of ["failed", "protected", "mixed", "recent", "fusion-failed"]) 
   });
 }
 
-test("shared chains preserve every endpoint, recover the block and stop deriving from an edited member", async (t) => {
+test("published shared chains reach the next Pi request without dropping system state or edited evidence", async (t) => {
   const f = await fixture(t, {
     pruneOn: "on-demand",
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true },
   });
+  const extension = { path: "condense", handlers: new Map([["context", [event => f.emit("context", event)]]]) };
+  const runner = new ExtensionRunner([extension], createExtensionRuntime(), f.dir, f.sm, f.ctx.modelRegistry);
+  const errors = [];
+  runner.onError(error => errors.push(error));
+  t.after(() => assert.deepEqual(errors, []));
+  const tool = { name: "follow_up", description: "Continue the investigation", parameters: { type: "object", properties: {} } };
+  const initialSystem = { role: "system", content: "Initial instructions", timestamp: f.nextTimestamp() };
+  f.sm.appendMessage(initialSystem);
   for (let i = 0; i < 2; i++) {
     f.sm.appendMessage({ role: "user", content: `shared-request-${i}`, timestamp: f.nextTimestamp() });
     f.add(`raw-shared-${i}`, `echo member-${i}`, `member-${i}`, "Independent intermediate reasoning. ".repeat(100));
+    if (i === 0) f.sm.appendMessage({ role: "system", content: "", sections: { task: "Updated instructions" },
+      toolsAdded: [tool], timestamp: f.nextTimestamp() });
     f.sm.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: `shared-final-${i}` }],
@@ -2144,17 +2156,22 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   await f.emit("agent_settled");
   await f.waitMaintenance();
   const block = f.sm.getBranch().find((e) => e.customType === "context-prune-chain").data;
-  const raw = () => f.sm.buildSessionProjection().messages;
-  const projected = (await f.emit("context", { messages: raw() })).messages;
+  assert.equal(block.members.length, 2);
+  f.sm.appendMessage({ role: "user", content: "Next request", timestamp: f.nextTimestamp() });
+  const project = () => runner.emitContext(f.sm.buildSessionProjection().messages);
+  const projected = await project();
   assert.equal(f.calls.length, 0);
-  assert.equal(projected.filter((m) => m.metisDerived?.kind === "condense-chain").length, 1);
+  const groups = projected.filter(m => m.metisDerived?.kind === "condense-chain");
+  assert.deepEqual(groups.map(m => m.metisDerived.blockId), [block.blockId]);
+  assert.ok(!projected.some(m => m.role === "toolResult" && (m.toolCallId === "member-0" || m.toolCallId === "member-1")));
+  assert.deepEqual(projected[0], { ...initialSystem, sections: { task: "Updated instructions" }, toolsAdded: [tool] });
   const settingsPath = join(f.dir, "metis-pi.toml");
   const settings = parseMetisConfig(readFileSync(settingsPath, "utf8"));
   settings.contextPrune.chainCompression.enabled = false;
   writeFileSync(settingsPath, stringify(settings));
   await f.emit("session_start");
   await f.emit("agent_settled"); await f.waitMaintenance();
-  assert.deepEqual((await f.emit("context", { messages: raw() })).messages, projected,
+  assert.deepEqual(await project(), projected,
     "committed shared ranges are revalidated on reload even with automatic scheduling disabled");
   assert.equal(f.calls.length, 0);
   for (let i = 0; i < 2; i++) {
@@ -2164,17 +2181,17 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   const page = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [block.blockId] }, undefined, undefined, f.ctx);
   assert.deepEqual(page.details.results.map(result => result.text), ["raw-shared-0", "raw-shared-1"]);
   const source = f.sm.getBranch().find(e => e.type === "message" && e.message.toolCallId === "member-0");
-  f.sm.appendContextEdit(source.id, { content: [{ type: "text", text: "CORRECTED_SHARED_EVIDENCE" }] });
-  const changed = (await f.emit("context", { messages: raw() }))?.messages ?? raw();
-  assert.match(JSON.stringify(changed), /CORRECTED_SHARED_EVIDENCE/);
+  const corrected = [{ type: "text", text: "CORRECTED_SHARED_EVIDENCE" }];
+  f.sm.appendContextEdit(source.id, { content: corrected });
+  assert.deepEqual((await project()).find(m => m.toolCallId === "member-0")?.content, corrected);
   await f.emit("agent_settled"); await f.waitMaintenance();
-  const partial = (await f.emit("context", { messages: raw() })).messages;
-  assert.match(JSON.stringify(partial), /CORRECTED_SHARED_EVIDENCE/);
+  const partial = await project();
+  assert.deepEqual(partial.find(m => m.toolCallId === "member-0")?.content, corrected);
   const body = partial.find(m => m.metisDerived?.kind === "condense-chain").content[0].text;
   assert.doesNotMatch(body, /member-0/);
   assert.match(body, /member-1/);
   await f.emit("session_start");
-  assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
+  assert.deepEqual(await project(), partial);
 });
 
 test("Native completion drops the stale queue while retaining pending work in its new window", async t => {

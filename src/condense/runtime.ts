@@ -2470,10 +2470,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   }
 
   function sharedShape(before: ReturnType<typeof indexChainProjection>, views: SingleChainCompressionEntry[]): string {
-    const middle = views.flatMap(view => {
+    // Pi omits system messages from the context hook, but source validation still checks the full range.
+    const middle: typeof before.messages = [];
+    for (const view of views) {
       const range = before.resolve(view);
-      return range ? before.messages.slice(range.startIndex, range.endIndex + 1) : [];
-    });
+      if (!range) continue;
+      for (let i = range.startIndex; i <= range.endIndex; i++) {
+        const message = before.messages[i];
+        if (message.role !== "system") middle.push(message);
+      }
+    }
     const keys = new Set(views.flatMap(view => view.droppedOccurrenceKeys ?? []));
     const summaries = before.summaries.filter(message => perBatchSummaryOverlapsDropped(message, keys, new Set()));
     return projectionFingerprint([views, middle, summaries, currentConfig.value.chainCompression]);
