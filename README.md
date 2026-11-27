@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Codex-style transcripts and workflow extensions for Pi. **This Metis checkout targets Pi 1.6.1 only**; Node.js **22.19.0+** is required.
+Codex-style transcripts and workflow extensions for Pi. **Metis 0.24.0 targets Pi 1.6.1 only**; Node.js **22.19.0+** is required.
 
 ## Installation
 

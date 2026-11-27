@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/metis-pi",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Codex-style terminal UI and workflow extensions for Pi, with context management, tool discovery, and subagents.",
   "type": "module",
   "license": "MIT",
