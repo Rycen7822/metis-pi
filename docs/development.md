@@ -76,7 +76,7 @@ PTY 检查使用真实 Pi CLI、tmux、离线提供商和测试剪贴板，E1 �
 
 ## 重建 Pi SDK
 
-补丁源码、上游基线与构建步骤见 [SDK 补丁说明](../sdk-patches/pi-1.6.0/README.md)。
+补丁源码、上游基线与构建步骤见 [SDK 补丁说明](../sdk-patches/pi-1.6.1/README.md)。
 
 ```bash
 npm run build:pi-sdk -- "$SDK"

@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
+import * as Core from "@earendil-works/pi-coding-agent";
+import { Container } from "@earendil-works/pi-tui";
+import { ConversationDocument } from "../../src/appearance/transcript/document.ts";
 import { TranscriptState, renderedThinkingRuns, assistantHasVisibleThinking } from "../../src/appearance/transcript/state.ts";
 import { makeRenderers } from "../../src/presentation/renderers.ts";
 import { createThinkingViewControl } from "../../src/presentation/thinking-view.ts";
@@ -130,4 +134,44 @@ test("read groups stop at tools, failures and visible thinking", () => {
     role: "assistant", content: [{ type: "thinking", thinking: "working" }],
   } });
   assert.deepEqual(read("after-thinking"), ["after-thinking"]);
+});
+
+function replayBashRecord(record) {
+  const rows = new Container();
+  const document = new ConversationDocument(rows, {
+    ui: { requestRender() {} }, settings: Core.SettingsManager.inMemory(), state: new TranscriptState(), cwd: "/work",
+    resolveTool: () => undefined,
+  });
+  const render = () => rows.render(100).map(line => stripVTControlCharacters(line).trim());
+  try {
+    document.append(record);
+    const collapsed = render();
+    document.toggleExpanded();
+    return { collapsed, expanded: render() };
+  } finally {
+    document.dispose();
+  }
+}
+
+test("bash replay reports the full-output save error, saved path or plain truncation", () => {
+  // Pi's bash row reads the process-global theme; other suites initialize it the same way.
+  Core.initTheme("dark", false);
+  const cases = [
+    { name: "save failed without a path", extra: { fullOutputError: "ENOSPC (fixture)" },
+      note: "Output truncated. Could not save the full output: ENOSPC (fixture)", other: /Full output: / },
+    { name: "saved with a path", extra: { fullOutputPath: "/work/full-output.log" },
+      note: "Output truncated. Full output: /work/full-output.log", other: /Could not save the full output/ },
+    { name: "legacy record with neither", extra: {},
+      note: "Output truncated", other: /Could not save the full output|Full output: / },
+  ];
+  for (const { name, extra, note, other } of cases) {
+    const { collapsed, expanded } = replayBashRecord({
+      role: "bashExecution", command: "printf record", output: "line", truncated: true,
+      exitCode: 0, cancelled: false, excludeFromContext: false, ...extra,
+    });
+    for (const [state, lines] of [["collapsed", collapsed], ["expanded", expanded]]) {
+      assert.ok(lines.includes(note), `${name} (${state}): expected ${JSON.stringify(note)} in ${JSON.stringify(lines)}`);
+      assert.doesNotMatch(lines.join("\n"), other, `${name} (${state})`);
+    }
+  }
 });

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "piVersion": "1.6.0",
-  "upstreamCommit": "faac585884ae2c013a6b1400f3e9e77f10b34bac",
+  "piVersion": "1.6.1",
+  "upstreamCommit": "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe",
   "patches": [
     {
       "file": "0000-physical-workspace-bundling.patch",
@@ -13,15 +13,15 @@
     },
     {
       "file": "0003-load-session-bodies-on-demand.patch",
-      "sha256": "92b30f66bab349537cfb781f1fb0dca6283241699a1dd2b18a28fdc562868351"
+      "sha256": "557f6e64194cee9c5305b3d6a00a8d1d13578f81b5bdb8b965cdd985401cdb8f"
     },
     {
       "file": "0004-preview-session-trees-without-history-bodies.patch",
-      "sha256": "750dcedd9a8884c6b514e97d44c444f476f035eb1f02e01fadf77d7e1df8dace"
+      "sha256": "cdaabae4740f4aa32cc6692173a8399262b54212cdf50be9a62b724417ef874a"
     },
     {
       "file": "0005-preserve-hot-bodies-during-history-scans.patch",
-      "sha256": "47dc84af3ad72957e5928830edea4497bd9c118a26d924ce8cd6fecf914a66c7"
+      "sha256": "6d0e28cd5a5cc69b780aabb5630e1bf471512c9ce669a6c4073c857b0b76a513"
     },
     {
       "file": "0006-preserve-oauth-login-continuity.patch",
@@ -132,11 +132,11 @@
       "sha256": "5b5ca5bd8a561acf1e01a7b83b30fef0d96ebac7408d28c8379d2bf25c96b404"
     }
   ],
-  "patchSet": "2b60f91d2fd6a2690377c02845f4dd3e7e2c07a2ef393d6daebc912cde5acfc1",
+  "patchSet": "3b0cd283685a5dda2873d54f1485d8680cdb86ec39756e1f4f30d3fa29a4e657",
   "archive": {
-    "file": "pi-1.6.0.tgz",
-    "sha256": "8cc6341dd94561dd52936e41c46e807ed507e74530525ba01d61e74c808c8326",
-    "bytes": 6133874,
-    "unpackedBytes": 27321339
+    "file": "pi-1.6.1.tgz",
+    "sha256": "c99079071c7c32ef9411936c84c30de3b8327b20ad23e34a132ae41bc325704a",
+    "bytes": 6198793,
+    "unpackedBytes": 27598183
   }
 }

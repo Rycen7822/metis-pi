@@ -81,7 +81,7 @@ async function liveCard(manager, entry) {
     isInitialized: true, sessionManager: manager, chatContainer: new Tui.Container(), outputPad: 1,
     loadedResourcesContainer: new Tui.Container(), pendingMessagesContainer: new Tui.Container(),
     toolOutputExpanded: false, footer: { invalidate() {} }, programStatus: { handleEvent() {} },
-    settingsManager: { getShowTerminalProgress: () => false, getShowCacheMissNotices: () => false },
+    settingsManager: Pi.SettingsManager.inMemory({ notices: { compactionCosts: false } }),
     ui: { requestRender() {} }, clearStatusIndicator() {}, flushCompactionQueue: async () => {},
     getMarkdownTransformers: () => [],
     renderSessionEntries(entries) { assert.deepEqual(entries, []); },

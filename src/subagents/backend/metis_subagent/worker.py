@@ -33,6 +33,7 @@ SURFACE_PREFIX = 'metis-subagent-surface '
 # Maintenance gets one finite window, at least the shipped 30-minute idle
 # budget. Retries share that deadline rather than extending it.
 MAINTENANCE_MIN_SECONDS = 1800.0
+SUPPORTED_PI_VERSION = '1.6.1'
 
 def message_text(message):
     content = message.get('content',[])
@@ -285,10 +286,7 @@ def check_surface(report):
 def managed_command(argv, sdk_path=None):
     """Locate the SDK beside the chosen Pi executable; never edit that install.
 
-    Admit exactly the supported stable SDK release (1.6.0), matching the exact npm
-    peer range: older releases lack the event and hook contracts this build uses,
-    prereleases are not supported, and future majors are not admitted implicitly.
-    Build metadata is tolerated because it does not change the release.
+    Match the exact npm peer release. Build metadata does not change SDK eligibility.
     Explicit non-Pi commands are protocol implementations (principally the offline
     fake in tests). Boot verifies the plugin protocol before accepting either.
     """
@@ -297,9 +295,11 @@ def managed_command(argv, sdk_path=None):
         try: package=json.loads((sdk.parent.parent/'package.json').read_text())
         except (OSError,ValueError): raise AgentError('sdk_unavailable','The parent Pi SDK is unavailable') from None
         version=package.get('version','') if isinstance(package,dict) else None
-        supported=isinstance(version,str) and re.fullmatch(r'1\.6\.0(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?',version)
+        supported=isinstance(version,str) and re.fullmatch(
+            re.escape(SUPPORTED_PI_VERSION)+r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?',version)
         if not supported or package.get('name')!='@earendil-works/pi-coding-agent':
-            raise AgentError('unsupported_pi_version','Native Pi subagents require exactly the host SDK 1.6.0')
+            raise AgentError('unsupported_pi_version',
+                f'Native Pi subagents require exactly the host SDK {SUPPORTED_PI_VERSION}')
         if not sdk.is_file() or not Path(argv[0]).is_file() or not os.access(argv[0],os.X_OK):
             raise AgentError('sdk_unavailable','Parent SDK and Node executable must still exist')
         return [argv[0],str(WORKER_DIR/'pi-sdk.mjs'),str(sdk),*argv[2:]]

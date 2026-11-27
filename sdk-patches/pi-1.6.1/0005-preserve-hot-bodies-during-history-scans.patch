@@ -1,0 +1,304 @@
+From 11a155fc461e76b285e6031cc7334c2194ec73e3 Mon Sep 17 00:00:00 2001
+From: agent <agent@local>
+Date: Fri, 27 Nov 2026 11:46:32 +0800
+Subject: [PATCH] author: bind native tree scan reader to store (0005)
+
+---
+ .../src/core/session-entry-store.ts           |  12 +-
+ .../coding-agent/src/core/session-manager.ts  |   8 ++
+ .../session-manager/file-operations.test.ts   |  54 ++++++++
+ .../coding-agent/test/tree-selector.test.ts   | 119 +++++++++++++++++-
+ 4 files changed, 188 insertions(+), 5 deletions(-)
+
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+index 2fad08e78..2ebe080bb 100644
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -127,6 +127,12 @@ export class SessionEntryStore {
+ 		return record ? this.read(record) : undefined;
+ 	}
+ 
++	/** Scan misses stay transient; existing cache hits retain normal identity and access semantics. */
++	getEntryForScan(id: string): SessionEntry | undefined {
++		const record = this.byId.get(id);
++		return record ? this.read(record, "transient") : undefined;
++	}
++
+ 	getEntries(): SessionEntry[] {
+ 		const entries: SessionEntry[] = [];
+ 		for (const record of this.records) if (record.kind === "entry") entries.push(this.read(record));
+@@ -141,7 +147,7 @@ export class SessionEntryStore {
+ 		this.add(entry);
+ 	}
+ 
+-	/** Undo the tail append after persistence fails; never discard a different or committed record. */
++	/** Revert the tail append after persistence fails, including any body cached by that attempt. */
+ 	rollbackAppend(id: string): void {
+ 		const record = this.records.at(-1);
+ 		if (record?.kind !== "entry" || record.metadata.id !== id)
+@@ -155,7 +161,7 @@ export class SessionEntryStore {
+ 		}
+ 	}
+ 
+-	private read(record: StoredSessionEntry): SessionEntry {
++	private read(record: StoredSessionEntry, cacheMiss: "retain" | "transient" = "retain"): SessionEntry {
+ 		if (record.body) return record.body;
+ 		const cached = this.cache.get(record);
+ 		if (cached) {
+@@ -188,7 +194,7 @@ export class SessionEntryStore {
+ 		if (!entry || entry.id !== record.metadata.id || entry.type !== expectedType) {
+ 			throw new Error(`Session entry changed on disk: ${record.metadata.id}`);
+ 		}
+-		this.remember(record, entry, length);
++		if (cacheMiss === "retain") this.remember(record, entry, length);
+ 		return entry;
+ 	}
+ 
+diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
+index 353e0a891..a90471d16 100644
+--- a/packages/coding-agent/src/core/session-manager.ts
++++ b/packages/coding-agent/src/core/session-manager.ts
+@@ -75,6 +75,7 @@ export type ReadonlySessionManager = Pick<
+ 	| "getLeafId"
+ 	| "getLeafEntry"
+ 	| "getEntry"
++	| "getEntryForScan"
+ 	| "getEntryMetadata"
+ 	| "getEntriesMetadata"
+ 	| "getBranchMetadata"
+@@ -1203,6 +1204,11 @@ export class SessionManager {
+ 		return this.store.getEntry(id);
+ 	}
+ 
++	/** Complete one-pass reads: cache hits are reused, but misses do not enter the interactive body cache. */
++	getEntryForScan(id: string): SessionEntry | undefined {
++		return this.store.getEntryForScan(id);
++	}
++
+ 	/** Small, body-free entry facts; metadata must not be used as model content. */
+ 	getEntryMetadata(id: string): SessionEntryMetadata | undefined {
+ 		return this.store.getMetadata(id);
+@@ -1353,6 +1359,8 @@ export class SessionManager {
+ 			roots: this.buildTree(this.getEntriesMetadata()),
+ 			readEntry: (id) => store.getEntry(id),
+ 			readMessagePreview: (id) => store.getTreeMessagePreview(id),
++			// Tree search scans bodies once; reuse the same store so hits keep identity and misses stay transient.
++			readEntryForScan: (id) => store.getEntryForScan(id),
+ 		};
+ 	}
+ 
+diff --git a/packages/coding-agent/test/session-manager/file-operations.test.ts b/packages/coding-agent/test/session-manager/file-operations.test.ts
+index fe7f58793..a37bf71bb 100644
+--- a/packages/coding-agent/test/session-manager/file-operations.test.ts
++++ b/packages/coding-agent/test/session-manager/file-operations.test.ts
+@@ -74,6 +74,60 @@ describe("loadEntriesFromFile", () => {
+ 		expect(preview.getEntry(old)).toMatchObject({ message: { content: "old 界🙂 evidence" } });
+ 	});
+ 
++	it("scan misses do not evict hot interactive bodies or enter the cache", () => {
++		const seed = SessionManager.create(tempDir, tempDir);
++		const hotId = seed.appendMessage(userMsg("hot interactive source"));
++		// Two serialized bodies exceed the 16MiB cache; ordinary admission would evict the hot entry.
++		const firstId = seed.appendCustomEntry("cold", { text: "x".repeat(9 * 1024 * 1024) });
++		const secondId = seed.appendCustomEntry("cold", { text: "界".repeat(3 * 1024 * 1024) });
++		const file = seed.getSessionFile();
++		if (!file) throw new Error("Expected session file");
++		const session = SessionManager.open(file);
++		const hot = session.getEntry(hotId);
++		expect(session.getEntryForScan(hotId)).toBe(hot);
++		const first = session.getEntryForScan(firstId);
++		expect(first).toMatchObject({ type: "custom", customType: "cold", data: { text: "x".repeat(9 * 1024 * 1024) } });
++		expect(session.getEntryForScan(secondId)).toMatchObject({ data: { text: "界".repeat(3 * 1024 * 1024) } });
++		expect(session.getEntry(hotId)).toBe(hot);
++		const retained = session.getEntry(firstId);
++		expect(retained).toEqual(first);
++		expect(retained).not.toBe(first);
++		expect(session.getEntryForScan(firstId)).toBe(retained);
++		session.getEntry(secondId);
++		expect(session.getEntry(hotId)).not.toBe(hot);
++	});
++
++	it("scan reads preserve in-memory identity and missing-entry behavior", () => {
++		const session = SessionManager.inMemory(tempDir);
++		const id = session.appendMessage(userMsg("complete in-memory body"));
++		expect(session.getEntryForScan(id)).toBe(session.getEntry(id));
++		expect(session.getEntryForScan("missing")).toBeUndefined();
++	});
++
++	it.each(["truncated", "changed", "invalid-json"])(
++		"scan reads propagate %s errors without substituting empty data",
++		(kind) => {
++			const seed = SessionManager.create(tempDir, tempDir);
++			const id = seed.appendMessage(userMsg("persisted evidence"));
++			const file = seed.getSessionFile();
++			if (!file) throw new Error("Expected session file");
++			const bytes = readFileSync(file, "utf8");
++			const session = SessionManager.open(file);
++			if (kind === "truncated") {
++				writeFileSync(file, "");
++				expect(() => session.getEntryForScan(id)).toThrow(/truncated/);
++			} else if (kind === "changed") {
++				const replacement = `${id.startsWith("0") ? "1" : "0"}${id.slice(1)}`;
++				writeFileSync(file, bytes.replace(`"id":"${id}"`, `"id":"${replacement}"`));
++				expect(() => session.getEntryForScan(id)).toThrow(/changed on disk/);
++			} else {
++				const bodyStart = bytes.indexOf("\n") + 1;
++				writeFileSync(file, `${bytes.slice(0, bodyStart)}!${bytes.slice(bodyStart + 1)}`);
++				expect(() => session.getEntryForScan(id)).toThrow(SyntaxError);
++			}
++		},
++	);
++
+ 	it("returns empty array for non-existent file", () => {
+ 		const entries = loadEntriesFromFile(join(tempDir, "nonexistent.jsonl"));
+ 		expect(entries).toEqual([]);
+diff --git a/packages/coding-agent/test/tree-selector.test.ts b/packages/coding-agent/test/tree-selector.test.ts
+index be465e272..c28652c34 100644
+--- a/packages/coding-agent/test/tree-selector.test.ts
++++ b/packages/coding-agent/test/tree-selector.test.ts
+@@ -1,3 +1,6 @@
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
+ import { stripVTControlCharacters } from "node:util";
+ import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+@@ -206,7 +209,8 @@ describe("TreeSelectorComponent", () => {
+ 			let clock = 0;
+ 			const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+ 			const read = source.readEntry;
+-			const reader = vi.spyOn(source, "readEntry").mockImplementation((id) => {
++			// Search reads through the scan reader; advance the clock there so the async path yields.
++			const reader = vi.spyOn(source, "readEntryForScan").mockImplementation((id) => {
+ 				clock += 100;
+ 				return read(id);
+ 			});
+@@ -247,9 +251,11 @@ describe("TreeSelectorComponent", () => {
+ 				expect(reader).toHaveBeenCalledTimes(stoppedAt);
+ 				expect(redraw).toHaveBeenCalledTimes(1);
+ 				const broken = session.getTreeSource();
+-				broken.readEntry = () => {
++				const unavailable = () => {
+ 					throw new Error("fixture body unavailable");
+ 				};
++				broken.readEntry = unavailable;
++				broken.readEntryForScan = unavailable;
+ 				const failed = new TreeSelectorComponent(
+ 					broken,
+ 					target,
+@@ -353,6 +359,115 @@ describe("TreeSelectorComponent", () => {
+ 		});
+ 	});
+ 
++	describe("disk-backed search keeps hot bodies", () => {
++		test("two cold custom messages are scanned without evicting or admitting bodies", async () => {
++			const directory = mkdtempSync(join(tmpdir(), "pi-tree-scan-"));
++			try {
++				const seed = SessionManager.create(directory, directory);
++				const hotId = seed.appendMessage({ role: "user", content: "hot context body", timestamp: 1 });
++				// Serialized bodies are about 9 MiB each: retaining both would evict the hot entry.
++				const firstCold = `first ${"x".repeat(9 * 1024 * 1024)}`;
++				const secondCold = `second ${"界".repeat(3 * 1024 * 1024)} tail-marker-second`;
++				const coldOne = seed.appendCustomMessageEntry("cold", firstCold, true);
++				const coldTwo = seed.appendCustomMessageEntry("cold", secondCold, true);
++				const file = seed.getSessionFile();
++				if (!file) throw new Error("Expected session file");
++
++				const run = async (query: string, userOnly: boolean) => {
++					const session = SessionManager.open(file);
++					const hot = session.getEntry(hotId);
++					const source = session.getTreeSource();
++					const scans: string[] = [];
++					const scanned = new Map<string, SessionEntry | undefined>();
++					const scan = source.readEntryForScan;
++					source.readEntryForScan = (id) => {
++						scans.push(id);
++						const entry = scan?.(id);
++						scanned.set(id, entry);
++						return entry;
++					};
++					const selector = new TreeSelectorComponent(
++						source,
++						coldTwo,
++						24,
++						() => {},
++						() => {},
++					);
++					if (userOnly) selector.handleInput("\x15");
++					selector.handleInput(query);
++					await new Promise<void>((resolve) => setImmediate(resolve));
++					const list = selector.getTreeList();
++					const matches = () => {
++						const ids: string[] = [];
++						for (let index = 0; index < 200; index++) {
++							const node = list.getSelectedReference();
++							if (node) ids.push(node.entry.id);
++							selector.handleInput("\x1b[B");
++						}
++						return new Set(ids);
++					};
++					const matched = query && !userOnly ? matches() : new Set<string>();
++					expect(session.getEntry(hotId)).toBe(hot);
++					return { session, hot, scans, scanned, matched, coldOne, coldTwo };
++				};
++
++				const none = await run("zzz-absent-token", false);
++				expect(none.matched.size).toBe(0);
++				expect(none.scans).toEqual(expect.arrayContaining([none.coldOne, none.coldTwo]));
++				expect(none.scanned.get(none.coldTwo)).toEqual(expect.objectContaining({ type: "custom_message" }));
++				// Cold scan bodies were not admitted: an ordinary read decodes a different object.
++				expect(none.session.getEntry(none.coldOne)).not.toBe(none.scanned.get(none.coldOne));
++
++				const second = await run("tail-marker-second", false);
++				expect([...second.matched]).toEqual([second.coldTwo]);
++				expect(second.scans).toEqual(expect.arrayContaining([second.coldOne, second.coldTwo]));
++
++				const hot = await run("hot context", false);
++				expect([...hot.matched]).toEqual([hotId]);
++				// Every default-filter search reads the cold candidates; the hot object keeps identity.
++				expect(hot.scans).toEqual(expect.arrayContaining([hot.coldOne, hot.coldTwo]));
++
++				const userOnly = await run("tail-marker-second", true);
++				expect(userOnly.scans).not.toContain(userOnly.coldOne);
++				expect(userOnly.scans).not.toContain(userOnly.coldTwo);
++			} finally {
++				rmSync(directory, { recursive: true, force: true });
++			}
++		});
++
++		test("legacy retaining search produces the same matches on disk-backed data", async () => {
++			const directory = mkdtempSync(join(tmpdir(), "pi-tree-legacy-"));
++			try {
++				const seed = SessionManager.create(directory, directory);
++				const userId = seed.appendMessage({ role: "user", content: "shared first", timestamp: 1 });
++				seed.appendCustomMessageEntry("cold", `alpha ${"y".repeat(2000)}`, true);
++				const target = seed.appendCustomMessageEntry("cold", "beta tail-marker-second", true);
++				const file = seed.getSessionFile();
++				if (!file) throw new Error("Expected session file");
++				const search = async (legacy: boolean) => {
++					const session = SessionManager.open(file);
++					const source = session.getTreeSource();
++					if (legacy) delete (source as { readEntryForScan?: unknown }).readEntryForScan;
++					const list = new TreeSelectorComponent(
++						source,
++						target,
++						24,
++						() => {},
++						() => {},
++					).getTreeList();
++					list.handleInput("tail-marker-second");
++					await new Promise<void>((resolve) => setImmediate(resolve));
++					return list.getSelectedReference()?.entry.id;
++				};
++				expect(await search(true)).toBe(target);
++				expect(await search(false)).toBe(target);
++				expect(userId).not.toBe(target);
++			} finally {
++				rmSync(directory, { recursive: true, force: true });
++			}
++		});
++	});
++
+ 	describe("initial selection with metadata entries", () => {
+ 		test("focuses nearest visible ancestor when currentLeafId is a model_change with sibling branch", () => {
+ 			// Tree structure:

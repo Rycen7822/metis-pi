@@ -1,7 +1,7 @@
-# Pi 1.6.0 SDK 补丁
+# Pi 1.6.1 SDK 补丁
 
-唯一基线：[Pi v1.6.0](https://github.com/earendil-works/pi/tree/v1.6.0)，提交
-`faac585884ae2c013a6b1400f3e9e77f10b34bac`。不支持旧版、预发布版或未来版本。
+唯一基线：[Pi v1.6.1](https://github.com/earendil-works/pi/tree/v1.6.1)，提交
+`ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe`。不支持旧版、预发布版或未来版本。
 上游 MIT 许可见 [LICENSE.upstream](LICENSE.upstream)。补丁随 Metis 的完整预编译 SDK 交付。
 
 ## 作用与边界
@@ -10,9 +10,9 @@
 | --- | --- |
 | `0000` | 正式 CLI bundler 解析实体 workspace，保留包 exports/subpath 条件，不依赖软链接。 |
 | `0001` | 只复用上一帧可见行的合成结果；组件 render、布局、滚动、选区和复制仍由 Pi 执行。 |
-| `0003` | 常驻历史元数据，JSONL 正文按需读取；同步迁移统计、恢复、选择、压缩等消费者。 |
-| `0004` | 树浏览使用元数据与有界预览；完整复制、分页、异步查询及取消保留原生语义。 |
-| `0005` | 一次性扫描复用缓存命中，但不准入冷正文，避免挤出交互热正文。 |
+| `0003` | 常驻历史元数据，JSONL 正文按需读取；同步迁移统计、恢复、选择、压缩等消费者。四类通知读取 `getNotices()`。 |
+| `0004` | 树浏览使用元数据与有界预览；搜索可选用瞬态 reader，旧来源回退保留读。完整复制、分页、异步查询及取消保留原生语义。 |
+| `0005` | 一次性扫描复用缓存命中，但不准入冷正文；原生树来源把瞬态读绑定到同一 store。 |
 | `0006` | 原生认证层区分登录归属与正常 token 刷新；重新登录、登出及外部凭据替换不继承归属。 |
 | `0007` | 摘要通过 `getDisplayHeader(message)` 返回标题/副行，技能通过 `getDisplayName(skillBlock)` 返回显示名；两状态共用原生渲染，正文和 transformer 不受装饰影响。 |
 | `0008` | 脚本可调用 `tool_search` 时收起 `searchTools()`；模型说明和错误提示同步，无网关时保留原生发现。 |
@@ -55,6 +55,18 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
   手动/自动压缩共用有效投影准备，旧 `branchEntries` 首次读取仍返回同轮完整数组，不是近期窗口或元数据。
   全量恢复可用 `getBranchAsync` 协作读取，连续记录复用同轮1MiB字节预读，不扩大正文LRU。
   来源失效或完整事件读取失败不得静默继续摘要。预览的冷正文仍依赖原文件，已捕获缓存保持旧值，不是长期脱离来源的完整副本。
+- JSONL 扫描器按 1 MiB 块和 UTF-8 字节偏移逐个记录解码：单条大行按已读片段线性追加，
+  不整段重扫，也不复制上游旧的字符串 `pending` 实现。压缩后的大尾部按迭代循环追加，
+  不使用 `push(...path.slice(...))`；200k 条记录的顺序、保留条目和压缩摘要由
+  `build-context.test.ts` 固定。
+- 树搜索把正文提取统一交给一个 search-only reader：`SessionTreeSource.readEntryForScan` 可选，
+  原生来源绑定同一 store 的 `getEntryForScan`，缺少该方法的三方来源回退到 `readEntry`。
+  只影响搜索正文提取（Bash command、`custom_message`、分支摘要、context edit）；
+  选中详情、复制、展开仍用保留读，普通消息预览继续走 `readMessagePreview`。
+  命中复用缓存身份，冷正文只出现在本次扫描结果中，不进 16 MiB 热 LRU。
+- 通知开关为四个独立键 `notices.cacheMisses/cacheWarming/compactionCosts/reasoningDrops`。
+  旧 `showCacheMissNotices` 只在加载时补齐未显式设置的键，显式 `notices.*` 优先，升级后写回会删除旧键。
+  历史 cache-miss 用消息 ID 查找，实时路径用会话元数据；查询通知状态不读取历史正文。
 - 历史格式、迁移、context edit、默认图片和持久化失败回滚合同不变。
 - CLI codemode每次最多128在途、8执行；输入8 Mi/单结果16 Mi/未确认传输32 Mi，单位为JSON字符，不是进程堆上限。
   执行slot保持到guest消费；ready队列不超过执行并发。累计调用不设128/256上限，独立库未配置execute和deterministic start不启用预算。
@@ -78,17 +90,17 @@ warming 继续委托 pi-ai 的决策与请求选项，保留 idle/streaming/off 
 
 ## 隔离重建
 
-Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.6.0 且已使用
+Linux/WSL、Node ≥22.19；Metis 依赖须为精确 1.6.1 且已使用
 `--ignore-scripts --bin-links=false` 准备。`SDK` 必须是新的私有目录。
 
 ```bash
 set -eu
 METIS=/absolute/path/to/metis-pi
-SDK=/absolute/path/to/isolated-pi-1.6.0
-PATCHES="$METIS/sdk-patches/pi-1.6.0"
-git clone --no-hardlinks --branch v1.6.0 https://github.com/earendil-works/pi.git "$SDK"
+SDK=/absolute/path/to/isolated-pi-1.6.1
+PATCHES="$METIS/sdk-patches/pi-1.6.1"
+git clone --no-hardlinks --branch v1.6.1 https://github.com/earendil-works/pi.git "$SDK"
 cd "$SDK"
-test "$(git rev-parse HEAD)" = faac585884ae2c013a6b1400f3e9e77f10b34bac
+test "$(git rev-parse HEAD)" = ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe
 npm ci --ignore-scripts --workspaces=false --bin-links=false --no-audit --no-fund
 npm install --no-save --package-lock=false --ignore-scripts --workspaces=false --bin-links=false \
   --no-audit --no-fund vitest@4.1.12 @xterm/headless@5.5.0 chalk@6.0.0 \
@@ -103,27 +115,33 @@ for patch in "$PATCHES"/*.patch; do
   git apply --check "$patch"
   git apply "$patch"
 done
-npm --prefix "$SDK" run check
+for check in pinned-deps runtime-deps ts-imports entry-graphs install-lock:coding-agent browser-smoke; do
+  npm run "check:$check"
+done
+node node_modules/typescript/bin/tsc --noEmit
+node node_modules/typescript/bin/tsc --noEmit -p packages/coding-agent/examples/tsconfig.json
 npm --prefix "$METIS" run build:pi-sdk -- "$SDK"
 npm --prefix "$METIS" run verify:pi-sdk
 ```
 
-准备脚本校验同版 SDK 与源码声明的工具链（TypeScript 7.0.2、Biome、Vitest），
+准备脚本校验同版 SDK 与源码声明的工具链（TypeScript 7.0.2、Biome 2.3.5、Vitest 4.1.12），
 复制真实发布依赖/模型数据，并生成普通文件形式的工具入口；自有源码的 dist 由正式构建覆盖。
-上述测试依赖版本来自上游 lock，覆盖完整仓库检查。教程 `@todo/app` 使用指回原源码的实体转发入口，
+上述测试依赖版本来自目标 lock，覆盖完整仓库检查。教程 `@todo/app` 使用指回原源码的实体转发入口，
 避免副本破坏相对引用或制造第二个模块实例；类型也由同一源码导出，不添加假声明或放宽检查。
+
+上面的检查保持源码不变。上游 `npm run check` 会先用 Biome 改写源码；如需检查格式，请在单独副本执行。
+构建目录必须与补丁重放结果逐文件一致。
 
 发布前运行受影响的历史、warming、树/IME、OAuth 与 TUI 原生回归。
 `build:pi-sdk` 核对官方 SHA，干净重放全部补丁并逐路径比对源码，再构建四个 SDK 包；
 归档包含 `coding-agent/docs/codemode.md`，使运行时指向的文档同步更新；独立沙箱和 bundled worker 均使用补丁后的规则。
-输出 `assets/pi-sdk/pi-1.6.0.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
-若 check 格式化改写源码，先同步补丁，再重新构建；不能沿用旧归档改名充当新版本。
+输出 `assets/pi-sdk/pi-1.6.1.tgz` 与 `src/pi-sdk/distribution.json`，prepack 校验两者和补丁身份。
 
 ## 生效与撤回
 
 安装只切换完整发行目录；已运行的进程需重启 Pi，`/reload` 不替换进程内 SDK。
-补丁身份以当前发行目录的 `metis-sdk.json` 为准，`pi --version` 仍为 `1.6.0`。
-原版 1.6.0 首次启动可准备补丁；依赖补丁接口的功能需重启后才注册，不维护第二套运行逻辑。
+补丁身份以当前发行目录的 `metis-sdk.json` 为准，`pi --version` 仍为 `1.6.1`。
+原版 1.6.1 首次启动可准备补丁；依赖补丁接口的功能需重启后才注册，不维护第二套运行逻辑。
 npm 脚本策略拦住 `postinstall` 时，会话入口仍会补装并提示重启；不自动修改 `allowScripts` 授权。
 
 撤回前暂停 Metis 安装/更新并禁用其 SDK 安装入口，避免自动重装；

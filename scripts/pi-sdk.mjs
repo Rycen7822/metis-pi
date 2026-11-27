@@ -4,8 +4,8 @@ import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "nod
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as tar from "tar";
-import { digest, readDistribution, sdkPackages, sdkRuntimePackages, sdkFiles, sdkVersion, sdkUpstreamCommit, sdkPatchCount,
-  verifiedArchive } from "../src/pi-sdk/artifact.mjs";
+import { digest, readDistribution, replaceSdkPayload, sdkPackageDir, sdkPackages, sdkRuntimePackages, sdkFiles, sdkVersion,
+  sdkUpstreamCommit, sdkPatchCount, verifiedArchive } from "../src/pi-sdk/artifact.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const patches = path.join(root, "sdk-patches", `pi-${sdkVersion}`);
@@ -91,28 +91,19 @@ async function packageSDK(sdk) {
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
 async function prepareSDK(distribution, archive) {
-  const targets = new Map();
   for (const name of sdkRuntimePackages) {
-    const directory = path.join(root, "node_modules/@earendil-works", `pi-${name}`);
-    const stat = await lstat(directory), manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
+    const directory = sdkPackageDir(root, name);
+    const stat = await lstat(directory);
     assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), `SDK dependencies must be physical: ${directory}`);
+    const manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
     assert.equal(manifest.name, `@earendil-works/pi-${name}`);
     assert.equal(manifest.version, distribution.piVersion, `SDK preparation requires Pi ${distribution.piVersion}`);
-    if (sdkPackages.includes(name)) targets.set(name, directory);
   }
   await mkdir(path.join(root, ".work"), { recursive: true });
   const staging = await mkdtemp(path.join(root, ".work/pi-sdk-prepare-"));
   try {
     await tar.x({ file: archive, cwd: staging, strict: true });
-    for (const [name, directory] of targets) {
-      await rm(path.join(directory, "dist"), { recursive: true, force: true });
-      await cp(path.join(staging, name, "dist"), path.join(directory, "dist"), { recursive: true });
-    }
-    for (const file of sdkFiles) {
-      const [name, ...parts] = file.split("/"), target = path.join(targets.get(name), ...parts);
-      await mkdir(path.dirname(target), { recursive: true });
-      await cp(path.join(staging, file), target);
-    }
+    await replaceSdkPayload(root, staging);
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
 if (process.argv[2] === "package" && process.argv[3]) await packageSDK(path.resolve(process.argv[3]));

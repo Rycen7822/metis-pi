@@ -15,7 +15,11 @@ import { mockWindowsSdkProcessList } from "../helpers/windows-sdk-process-list.m
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const run = promisify(execFile);
-async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0", windowsProcesses } = {}) {
+const releaseVersion = "1.6.1", releaseCommit = "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe";
+const futureVersion = "1.6.2", legacyVersion = "1.5.2", archiveName = `pi-${releaseVersion}.tgz`;
+const managedMarker = { kind: "pi-managed-install", schemaVersion: 1, layout: "releases-v1" };
+
+async function fixture(t, { version = releaseVersion, cliVersion = releaseVersion, windowsProcesses } = {}) {
   const work = path.join(root, ".work");
   await mkdir(work, { recursive: true });
   const dir = await mkdtemp(path.join(work, "sdk-install-"));
@@ -30,8 +34,8 @@ async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0", windowsProc
       JSON.stringify({ name: `@earendil-works/pi-${name}`, version }));
     await writeFile(path.join(sdkDir(source, name), "dist/owner.txt"), "original");
   }
-  await writeFile(path.join(managedRoot, "managed-install.json"),
-    JSON.stringify({ kind: "pi-managed-install", schemaVersion: 1, layout: "releases-v1" }));
+  const markerPath = path.join(managedRoot, "managed-install.json");
+  await writeFile(markerPath, JSON.stringify(managedMarker));
   await writeFile(path.join(managedRoot, "current-version"), `${version}\n`);
   const settings = path.join(dir, "agent/settings.json"), auth = path.join(dir, "agent/auth.json");
   await writeFile(settings, '{"model":"keep-model","packages":["keep-package"]}\n');
@@ -52,14 +56,15 @@ async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0", windowsProc
     let unpackedBytes = sdkFiles.length * Buffer.byteLength(label);
     for (const name of sdkPackages) unpackedBytes += Buffer.byteLength(label);
     unpackedBytes += Buffer.byteLength(`console.log(${JSON.stringify(cliVersion)});\n`);
-    const archive = path.join(pkg, "assets/pi-sdk/pi-1.6.0.tgz");
+    const archive = path.join(pkg, "assets/pi-sdk", archiveName);
     await mkdir(path.dirname(archive), { recursive: true });
     await tar.c({ file: archive, cwd: staging, gzip: true, portable: true },
       [...sdkPackages.map(name => `${name}/dist`), ...sdkFiles]);
     const bytes = await readFile(archive);
-    const manifest = { schemaVersion: 1, piVersion: "1.6.0", upstreamCommit: "faac585884ae2c013a6b1400f3e9e77f10b34bac",
-      patchSet: digest(label), patches: Array.from({ length: sdkPatchCount }, (_, index) => ({ file: `${index}.patch`, sha256: "0".repeat(64) })),
-      archive: { file: "pi-1.6.0.tgz", sha256: digest(bytes), bytes: bytes.length, unpackedBytes } };
+    const manifest = { schemaVersion: 1, piVersion: releaseVersion, upstreamCommit: releaseCommit,
+      patchSet: digest(label), patches: Array.from({ length: sdkPatchCount }, (_, index) => ({
+        file: `${index}.patch`, sha256: "0".repeat(64) })),
+      archive: { file: archiveName, sha256: digest(bytes), bytes: bytes.length, unpackedBytes } };
     await writeFile(path.join(pkg, "src/pi-sdk/distribution.json"), JSON.stringify(manifest));
     return { archive, manifest };
   }
@@ -71,7 +76,13 @@ async function fixture(t, { version = "1.6.0", cliVersion = "1.6.0", windowsProc
     assert.deepEqual(await Promise.all([readFile(settings), readFile(auth)]), saved);
     for (const name of sdkPackages) assert.equal(await readFile(path.join(sdkDir(source, name), "dist/owner.txt"), "utf8"), "original");
   };
-  return { dir, pkg, managedRoot, source, sdkDir, ensureSDK, active, preserved, payload };
+  // The root listing covers the update lock and activation temporaries; releases covers staging and new releases.
+  const snapshot = async () => ({
+    pointer: await readFile(path.join(managedRoot, "current-version"), "utf8"),
+    root: (await readdir(managedRoot)).sort(),
+    releases: (await readdir(path.join(managedRoot, "releases"))).sort(),
+  });
+  return { dir, pkg, managedRoot, source, sdkDir, ensureSDK, active, preserved, payload, markerPath, snapshot };
 }
 
 test("normal SDK install activates all packages together and retains source and user data", async t => {
@@ -84,8 +95,9 @@ test("normal SDK install activates all packages together and retains source and 
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(directory, name), "dist/owner.txt"), "utf8"), "new-sdk");
   for (const file of sdkFiles)
     assert.equal(await readFile(path.join(directory, "node_modules/@earendil-works", `pi-${file}`), "utf8"), "new-sdk");
-  assert.equal(JSON.parse(await readFile(path.join(directory, "metis-sdk.json"), "utf8")).previousRelease, "1.6.0");
-  if (process.platform !== "win32") assert.equal((await run(path.join(directory, "node_modules/.bin/pi"), ["--version"])).stdout.trim(), "1.6.0");
+  assert.equal(JSON.parse(await readFile(path.join(directory, "metis-sdk.json"), "utf8")).previousRelease, releaseVersion);
+  if (process.platform !== "win32") assert.equal((await run(path.join(directory, "node_modules/.bin/pi"), ["--version"]))
+    .stdout.trim(), releaseVersion);
   const again = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: installed.packageDir });
   assert.equal(again.status, "current");
   assert.equal(again.restartRequired, false);
@@ -97,7 +109,7 @@ test("project SDK preparation replaces all verified payloads and rejects mixed v
   const h = await fixture(t);
   await mkdir(path.join(h.pkg, "scripts"));
   await cp(path.join(root, "scripts/pi-sdk.mjs"), path.join(h.pkg, "scripts/pi-sdk.mjs"));
-  const patches = path.join(h.pkg, "sdk-patches/pi-1.6.0");
+  const patches = path.join(h.pkg, `sdk-patches/pi-${releaseVersion}`);
   await mkdir(patches, { recursive: true });
   const { manifest } = await h.payload();
   manifest.patches = await Promise.all(Array.from({ length: sdkPatchCount }, async (_, index) => {
@@ -123,8 +135,8 @@ test("project SDK preparation replaces all verified payloads and rejects mixed v
   for (const file of sdkFiles)
     assert.equal(await readFile(path.join(h.pkg, "node_modules/@earendil-works", `pi-${file}`), "utf8"), "new-sdk");
   const core = h.sdkDir(h.pkg, "agent-core");
-  await writeFile(path.join(core, "package.json"), JSON.stringify({ name: "@earendil-works/pi-agent-core", version: "1.5.2" }));
-  await assert.rejects(prepare(), /SDK preparation requires Pi 1\.6\.0/);
+  await writeFile(path.join(core, "package.json"), JSON.stringify({ name: "@earendil-works/pi-agent-core", version: legacyVersion }));
+  await assert.rejects(prepare(), new RegExp(`SDK preparation requires Pi ${releaseVersion.replaceAll(".", "\\.")}`));
   for (const name of sdkPackages)
     assert.equal(await readFile(path.join(h.sdkDir(h.pkg, name), "dist/owner.txt"), "utf8"), "before-rejected-prepare");
   await h.preserved();
@@ -137,7 +149,7 @@ test("package postinstall keeps only the immediate Metis rollback and leaves oth
   await h.payload("previous-sdk");
   await h.ensureSDK({ managedRoot: h.managedRoot });
   const previous = await h.active();
-  const unrelated = "metis-1.6.0-ffffffffffff-ffffffff";
+  const unrelated = `metis-${releaseVersion}-ffffffffffff-ffffffff`;
   await mkdir(path.join(releases, unrelated));
   await writeFile(path.join(releases, unrelated, "metis-sdk.json"), '{"schemaVersion":1}');
   await h.payload("updated-sdk");
@@ -164,7 +176,7 @@ test("package postinstall keeps only the immediate Metis rollback and leaves oth
   for (const name of sdkPackages) assert.equal(await readFile(path.join(h.sdkDir(active, name), "dist/owner.txt"), "utf8"), "updated-sdk");
   assert.equal(await readFile(path.join(h.sdkDir(path.join(releases, previous), "ai"), "dist/owner.txt"), "utf8"), "previous-sdk");
   assert.equal(JSON.parse(await readFile(path.join(active, "metis-sdk.json"), "utf8")).previousRelease, previous);
-  assert.deepEqual((await readdir(releases)).sort(), ["1.6.0", await h.active(), previous, unrelated].sort());
+  assert.deepEqual((await readdir(releases)).sort(), [releaseVersion, await h.active(), previous, unrelated].sort());
   await h.preserved();
 });
 
@@ -181,7 +193,7 @@ test("a running older release survives an upgrade and is retired on the next idl
     runningPackageDir: h.sdkDir(path.join(releases, oldest), "coding-agent") });
   const current = await h.active();
   assert.equal(installed.restartRequired, true);
-  assert.deepEqual((await readdir(releases)).sort(), ["1.6.0", current, previous, oldest].sort());
+  assert.deepEqual((await readdir(releases)).sort(), [releaseVersion, current, previous, oldest].sort());
 
   if (process.platform === "linux" || process.platform === "win32") {
     const worker = path.join(releases, oldest, "live.mjs");
@@ -203,7 +215,7 @@ test("a running older release survives an upgrade and is retired on the next idl
   const restarted = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: installed.packageDir });
   assert.equal(restarted.status, "current");
   assert.equal(restarted.cleanupWarning, undefined);
-  assert.deepEqual((await readdir(releases)).sort(), ["1.6.0", current, previous].sort());
+  assert.deepEqual((await readdir(releases)).sort(), [releaseVersion, current, previous].sort());
   await h.preserved();
 });
 
@@ -211,15 +223,15 @@ for (const failure of [
   "legacy-version", "future-version", "mixed-agent-core", "corrupt-archive", "bad-size", "bad-cli", "symlink-entry", "reserved-entry",
 ]) {
   test(`SDK installation failure (${failure}) leaves the previous runtime active`, async t => {
-    const version = failure === "legacy-version" ? "1.5.2" : failure === "future-version" ? "1.6.1" : "1.6.0";
-    const h = await fixture(t, { version, cliVersion: failure === "bad-cli" ? "wrong-version" : "1.6.0" });
+    const version = failure === "legacy-version" ? legacyVersion : failure === "future-version" ? futureVersion : releaseVersion;
+    const h = await fixture(t, { version, cliVersion: failure === "bad-cli" ? "wrong-version" : releaseVersion });
     const before = await h.active();
     if (failure === "mixed-agent-core") {
       const core = h.sdkDir(h.source, "agent-core");
-      await writeFile(path.join(core, "package.json"), JSON.stringify({ name: "@earendil-works/pi-agent-core", version: "1.5.2" }));
+      await writeFile(path.join(core, "package.json"), JSON.stringify({ name: "@earendil-works/pi-agent-core", version: legacyVersion }));
     }
     if (failure === "corrupt-archive" || failure === "bad-size") {
-      const archive = path.join(h.pkg, "assets/pi-sdk/pi-1.6.0.tgz"), bytes = await readFile(archive);
+      const archive = path.join(h.pkg, "assets/pi-sdk", archiveName), bytes = await readFile(archive);
       if (failure === "corrupt-archive") bytes[0] ^= 0xff;
       await writeFile(archive, failure === "bad-size" ? Buffer.concat([bytes, Buffer.from("extra")]) : bytes);
     } else if (failure === "symlink-entry" || failure === "reserved-entry") {
@@ -229,7 +241,7 @@ for (const failure of [
       header.encode();
       const archive = Buffer.concat([header.block, Buffer.alloc(1024)]);
       const { manifest } = await h.payload();
-      await writeFile(path.join(h.pkg, "assets/pi-sdk/pi-1.6.0.tgz"), archive);
+      await writeFile(path.join(h.pkg, "assets/pi-sdk", archiveName), archive);
       manifest.archive = { ...manifest.archive, bytes: archive.length, sha256: digest(archive) };
       await writeFile(path.join(h.pkg, "src/pi-sdk/distribution.json"), JSON.stringify(manifest));
     }
@@ -304,7 +316,7 @@ test("cleanup failure leaves the verified update active and can be retried", asy
   const retry = await h.ensureSDK({ managedRoot: h.managedRoot });
   assert.equal(retry.status, "current");
   assert.equal(retry.cleanupWarning, undefined);
-  assert.deepEqual((await readdir(path.dirname(h.source))).sort(), ["1.6.0", await h.active(), rollback].sort());
+  assert.deepEqual((await readdir(path.dirname(h.source))).sort(), [releaseVersion, await h.active(), rollback].sort());
   await h.preserved();
 });
 
@@ -336,8 +348,79 @@ test("embedded SDK sessions cannot patch an unrelated managed installation", asy
   const h = await fixture(t);
   const foreign = path.join(h.dir, "embedded-sdk");
   await mkdir(foreign);
+  await writeFile(h.markerPath, JSON.stringify({ ...managedMarker, entrypoint: { path: String.raw`C:\pi\pi.cmd` } }));
+  const before = await h.snapshot();
   const result = await h.ensureSDK({ managedRoot: h.managedRoot, runningPackageDir: foreign });
   assert.equal(result.status, "unmanaged");
-  assert.equal(await h.active(), "1.6.0");
+  assert.deepEqual(await h.snapshot(), before);
+  await h.preserved();
+});
+
+test("Windows launcher markers prevent install and cleanup outside Windows", { skip: process.platform === "win32" }, async t => {
+  const h = await fixture(t);
+  await h.ensureSDK({ managedRoot: h.managedRoot });
+  const obsolete = `metis-${releaseVersion}-000000000000-11111111`;
+  const directory = path.join(h.managedRoot, "releases", obsolete);
+  await mkdir(directory);
+  await writeFile(path.join(directory, "metis-sdk.json"), JSON.stringify({
+    schemaVersion: 1, piVersion: releaseVersion, patchSet: "0".repeat(64), archiveHash: "0".repeat(64),
+  }));
+  const before = await h.snapshot();
+  const drive = String.raw`C:\pi\pi.cmd`, unc = String.raw`\\server\share\pi.cmd`;
+
+  for (const [launcher, bom] of [[drive, ""], [unc, "\uFEFF"]]) {
+    await writeFile(h.markerPath, bom + JSON.stringify({ ...managedMarker, entrypoint: { path: launcher } }));
+    await assert.rejects(h.ensureSDK({ managedRoot: h.managedRoot }), /belongs to Windows.*update it from Windows/);
+    assert.deepEqual(await h.snapshot(), before, "even an already-current installation must skip cleanup");
+  }
+
+  await h.payload("pending");
+  await assert.rejects(h.ensureSDK({ managedRoot: h.managedRoot }), /belongs to Windows/);
+  assert.deepEqual(await h.snapshot(), before);
+  await h.preserved();
+
+  await writeFile(h.markerPath, JSON.stringify(managedMarker));
+  assert.equal((await h.ensureSDK({ managedRoot: h.managedRoot })).status, "installed");
+  assert.ok(!(await h.snapshot()).releases.includes(obsolete), "the same release is pruned by a valid update");
+});
+
+test("BOM-prefixed CRLF markers are accepted, including a native Windows launcher", async t => {
+  const h = await fixture(t);
+  const marker = process.platform === "win32"
+    ? { ...managedMarker, entrypoint: { path: String.raw`C:\pi\pi.cmd` } } : managedMarker;
+  await writeFile(h.markerPath, `\uFEFF${JSON.stringify(marker, null, 2).replaceAll("\n", "\r\n")}\r\n`);
+  assert.equal((await h.ensureSDK({ managedRoot: h.managedRoot })).status, "installed");
+  await h.preserved();
+});
+
+test("invalid or non-regular managed markers leave the managed installation untouched", async t => {
+  const h = await fixture(t);
+  const before = await h.snapshot();
+  const unsupported = /Unsupported Pi managed installation layout/;
+  for (const [body, expected] of [
+    ['{"kind":', SyntaxError],
+    [`\uFEFF\uFEFF${JSON.stringify(managedMarker)}`, SyntaxError],
+    [JSON.stringify({ ...managedMarker, kind: "other" }), unsupported],
+    [JSON.stringify({ ...managedMarker, schemaVersion: 2 }), unsupported],
+    [JSON.stringify({ ...managedMarker, layout: "releases-v2" }), unsupported],
+  ]) {
+    await writeFile(h.markerPath, body);
+    await assert.rejects(h.ensureSDK({ managedRoot: h.managedRoot }), expected);
+    assert.deepEqual(await h.snapshot(), before);
+  }
+  await rm(h.markerPath);
+  await mkdir(h.markerPath);
+  await assert.rejects(h.ensureSDK({ managedRoot: h.managedRoot }), /Expected a regular file/);
+  assert.deepEqual(await h.snapshot(), before);
+  await h.preserved();
+});
+
+test("BOM tolerance stays limited to the managed-install marker", async t => {
+  const h = await fixture(t);
+  const manifest = path.join(h.sdkDir(h.source, "coding-agent"), "package.json");
+  await writeFile(manifest, `\uFEFF${await readFile(manifest, "utf8")}`);
+  const before = await h.snapshot();
+  await assert.rejects(h.ensureSDK({ managedRoot: h.managedRoot }), SyntaxError);
+  assert.deepEqual(await h.snapshot(), before);
   await h.preserved();
 });

@@ -267,7 +267,7 @@ class SdkTransport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
             node=str(root/'node'); Path(node).touch(); Path(node).chmod(0o755)
-            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.6.0"}')
+            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.6.1"}')
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli'); cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
@@ -284,7 +284,7 @@ class SdkTransport(unittest.TestCase):
             cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             argv=[sys.executable,str(cli),'--mode','rpc']
-            for version in ('1.6.0','1.6.0+build.5','1.6.0+sha.abcdef'):
+            for version in ('1.6.1','1.6.1+build.5','1.6.1+sha.abcdef'):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):
                     self.assertEqual(managed_command(argv,sdk_path=str(sdk)),
@@ -293,15 +293,24 @@ class SdkTransport(unittest.TestCase):
             # compatibility matrix and no implicit permission for unknown ones.
             for version in (
                 None, False, 152, [], {}, '', 'unknown', '0.85.1', '1.3.0', '1.4.0', '1.5.0', '1.5.1', '1.5.2',
-                '1.6.0-rc.1', '1.6.1', '2.0.0', '01.6.0', '1.06.0', '1.6.00', '1.6.0+build..5', '1.6.0+.',
+                '1.6.0', '1.6.1-rc.1', '1.6.2', '2.0.0', '01.6.1', '1.06.1', '1.6.10', '1.6.1+build..5', '1.6.1+.',
+                '1.6.1+build_5',
             ):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 with self.subTest(version=version):
                     with self.assertRaises(AgentError) as error:
                         managed_command(argv,sdk_path=str(sdk))
                     self.assertEqual(error.exception.code,'unsupported_pi_version')
-            # A different package that happens to carry 1.6.0 is still not the Pi SDK.
-            manifest.write_text(json.dumps({'name':'@example/not-pi','version':'1.6.0'}))
+            # A different package that happens to carry 1.6.1 is still not the Pi SDK.
+            manifest.write_text(json.dumps({'name':'@example/not-pi','version':'1.6.1'}))
             with self.assertRaises(AgentError) as foreign:
                 managed_command(argv,sdk_path=str(sdk))
             self.assertEqual(foreign.exception.code,'unsupported_pi_version')
+
+    def test_native_sdk_command_admits_the_installed_host_release(self):
+        from metis_subagent.worker import managed_command
+        sdk=REPO_ROOT/'node_modules/@earendil-works/pi-coding-agent/dist/index.js'
+        self.assertTrue(sdk.is_file(),f'install the host dependencies first: {sdk}')
+        argv=[sys.executable,str(sdk),'--mode','rpc']
+        self.assertEqual(managed_command(argv,sdk_path=str(sdk)),
+                         [argv[0],str(WORKER_ROOT/'pi-sdk.mjs'),str(sdk),'--mode','rpc'])

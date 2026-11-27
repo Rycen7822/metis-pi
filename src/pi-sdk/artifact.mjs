@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const sdkVersion = "1.6.0";
-export const sdkUpstreamCommit = "faac585884ae2c013a6b1400f3e9e77f10b34bac";
+export const sdkVersion = "1.6.1";
+export const sdkUpstreamCommit = "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe";
 export const sdkPatchCount = 32;
 export const sdkPackages = ["ai", "tui", "codemode", "coding-agent"];
 export const sdkRuntimePackages = [...sdkPackages, "agent-core", "mcp", "schema", "telemetry"];
 export const sdkFiles = ["coding-agent/docs/codemode.md"];
+export const sdkPackageDir = (root, name) => join(root, "node_modules", "@earendil-works", `pi-${name}`);
 export const digest = value => createHash("sha256").update(value).digest("hex");
 const hex = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 
@@ -29,4 +31,19 @@ export async function verifiedArchive(distribution) {
     throw new Error("Metis Pi SDK archive size/type mismatch");
   if (digest(await readFile(path)) !== distribution.archive.sha256) throw new Error("Metis Pi SDK archive checksum mismatch");
   return path;
+}
+
+/** Replace the extracted SDK payload in a prepared package tree. The caller owns validation and activation. */
+export async function replaceSdkPayload(root, payload) {
+  for (const name of sdkPackages) {
+    const target = join(sdkPackageDir(root, name), "dist");
+    await rm(target, { recursive: true, force: true });
+    await cp(join(payload, name, "dist"), target, { recursive: true });
+  }
+  for (const file of sdkFiles) {
+    const [name, ...parts] = file.split("/");
+    const target = join(sdkPackageDir(root, name), ...parts);
+    await mkdir(dirname(target), { recursive: true });
+    await cp(join(payload, file), target);
+  }
 }

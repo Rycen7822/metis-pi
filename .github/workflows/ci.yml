@@ -61,7 +61,7 @@ jobs:
           console.log(duplicate ? 'Matching mergeable PR covers this push; skipping duplicate tests.' : 'Full push validation required.');
           NODE
   validation:
-    name: Pi 1.6.0 · ${{ matrix.os }} · ${{ matrix.lane.name }}
+    name: Pi 1.6.1 · ${{ matrix.os }} · ${{ matrix.lane.name }}
     needs: admission
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:
@@ -150,7 +150,7 @@ jobs:
         env:
           PI_BIN: ${{ github.workspace }}/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
   test:
-    name: Pi 1.6.0 · ${{ matrix.os }}
+    name: Pi 1.6.1 · ${{ matrix.os }}
     needs: [admission, validation]
     if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     strategy:

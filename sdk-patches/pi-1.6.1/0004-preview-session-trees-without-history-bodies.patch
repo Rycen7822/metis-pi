@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/core/session-entry-metadata.ts b/packages/coding-agent/src/core/session-entry-metadata.ts
-index 37a2e469a..8269222d8 100644
+index 37a2e469a2fb47c1cf7577c9cbe48000ec408bcb..8269222d8cc6c5804ba89406bdf0e60e3a94ae66 100644
 --- a/packages/coding-agent/src/core/session-entry-metadata.ts
 +++ b/packages/coding-agent/src/core/session-entry-metadata.ts
 @@ -42,7 +42,7 @@ export type SessionEntryMetadata = Readonly<
@@ -27,7 +27,7 @@ index 37a2e469a..8269222d8 100644
  					stopReason: entry.message.stopReason,
  					timestamp: entry.message.timestamp,
 diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
-index f8c91d5de..2fad08e78 100644
+index f8c91d5de66918c3b3ec509f1c3da7f87ba14acf..2fad08e78868c56ebdd532c5cbea62de901d0aa4 100644
 --- a/packages/coding-agent/src/core/session-entry-store.ts
 +++ b/packages/coding-agent/src/core/session-entry-store.ts
 @@ -1,6 +1,7 @@
@@ -71,10 +71,10 @@ index f8c91d5de..2fad08e78 100644
  		const entries: SessionEntryMetadata[] = [];
  		for (const record of this.records) if (record.kind === "entry") entries.push(record.metadata);
 diff --git a/packages/coding-agent/src/core/session-manager.ts b/packages/coding-agent/src/core/session-manager.ts
-index 366f1ca1c..7abbda030 100644
+index 1b4c7886c7e66dc5faa46d411834f81344f371a0..353e0a891f32789f4a8c2b5e2636086d33692b0d 100644
 --- a/packages/coding-agent/src/core/session-manager.ts
 +++ b/packages/coding-agent/src/core/session-manager.ts
-@@ -37,6 +37,7 @@ import {
+@@ -36,6 +36,7 @@ import {
  import type { SessionEntryMetadata } from "./session-entry-metadata.ts";
  import { SessionEntryStore } from "./session-entry-store.ts";
  import { parseSessionEntryLine, scanSessionFile } from "./session-file-reader.ts";
@@ -82,7 +82,7 @@ index 366f1ca1c..7abbda030 100644
  
  export type { SessionEntryMetadata, SessionMessageMetadata } from "./session-entry-metadata.ts";
  export const CURRENT_SESSION_VERSION = 3;
-@@ -86,9 +87,17 @@ export type ReadonlySessionManager = Pick<
+@@ -85,9 +86,22 @@ export type ReadonlySessionManager = Pick<
  	| "getHeader"
  	| "getEntries"
  	| "getTree"
@@ -95,12 +95,17 @@ index 366f1ca1c..7abbda030 100644
 +	roots: SessionTreeNode<SessionEntryMetadata>[];
 +	readEntry(id: string): SessionEntry | undefined;
 +	readMessagePreview(id: string): SessionTreeMessagePreview | undefined;
++	/**
++	 * Search-only read for one-pass body extraction. Native sources reuse cache hits but keep misses
++	 * transient, so a scan cannot evict interactive bodies; older sources fall back to readEntry.
++	 */
++	readEntryForScan?(id: string): SessionEntry | undefined;
 +}
 +
  function createSessionId(): string {
  	return uuidv7();
  }
-@@ -1329,9 +1338,23 @@ export class SessionManager {
+@@ -1330,9 +1344,23 @@ export class SessionManager {
  	 * Orphaned entries (broken parent chain) are also returned as roots.
  	 */
  	getTree(): SessionTreeNode[] {
@@ -127,7 +132,7 @@ index 366f1ca1c..7abbda030 100644
  
  		// Create nodes with resolved labels
  		for (const entry of entries) {
-@@ -1358,7 +1381,7 @@ export class SessionManager {
+@@ -1359,7 +1387,7 @@ export class SessionManager {
  
  		// Sort children by timestamp (oldest first, newest at bottom)
  		// Use iterative approach to avoid stack overflow on deep trees
@@ -138,7 +143,7 @@ index 366f1ca1c..7abbda030 100644
  			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
 diff --git a/packages/coding-agent/src/core/session-tree-preview.ts b/packages/coding-agent/src/core/session-tree-preview.ts
 new file mode 100644
-index 000000000..04be69b89
+index 0000000000000000000000000000000000000000..04be69b894d4526c28ad142f9a6d520ae39373e9
 --- /dev/null
 +++ b/packages/coding-agent/src/core/session-tree-preview.ts
 @@ -0,0 +1,51 @@
@@ -194,7 +199,7 @@ index 000000000..04be69b89
 +	return result;
 +}
 diff --git a/packages/coding-agent/src/core/session-types.ts b/packages/coding-agent/src/core/session-types.ts
-index 69fa9a85d..c9e82da53 100644
+index 69fa9a85d45e7af694a1ffd1e1e71944dd89a4b9..c9e82da5359991903aa89542749d1102c6b435af 100644
 --- a/packages/coding-agent/src/core/session-types.ts
 +++ b/packages/coding-agent/src/core/session-types.ts
 @@ -167,9 +167,9 @@ export type SessionEntry =
@@ -211,7 +216,7 @@ index 69fa9a85d..c9e82da53 100644
  	label?: string;
  	/** Timestamp of the latest label change for this entry, if any */
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 2cb036112..2765ed799 100644
+index 2cb0361128f21370cdd2ab32f9344a218365eab8..2765ed799663408bbb75fb821473a364a7343091 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
 @@ -310,6 +310,7 @@ export {
@@ -223,7 +228,7 @@ index 2cb036112..2765ed799 100644
  	type ThinkingLevelChangeEntry,
  } from "./core/session-manager.ts";
 diff --git a/packages/coding-agent/src/modes/interactive/components/tree-selector.ts b/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
-index 1a9d4b1f1..82482b254 100644
+index 1a9d4b1f1146997a169212e9727cd3b2fbd0deb0..803e2a662ebb55639f28b59b2740d4bf2c723a23 100644
 --- a/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/tree-selector.ts
 @@ -1,3 +1,4 @@
@@ -273,7 +278,7 @@ index 1a9d4b1f1..82482b254 100644
  }
  
  class TreeList implements Component {
-@@ -115,6 +131,14 @@ class TreeList implements Component {
+@@ -115,6 +131,16 @@ class TreeList implements Component {
  	private filterMode: FilterMode = "default";
  	private searchQuery = "";
  	private toolCallMap: Map<string, ToolCallInfo> = new Map();
@@ -281,6 +286,8 @@ index 1a9d4b1f1..82482b254 100644
 +	private entryReader: (id: string) => SessionEntry | undefined;
 +	private messagePreviews = new Map<string, SessionTreeMessagePreview>();
 +	private messagePreviewReader?: (id: string) => SessionTreeMessagePreview | undefined;
++	/** Search-only body reader; a missing source method keeps the retaining reader for older sources. */
++	private scanEntryReader: (id: string) => SessionEntry | undefined;
 +	private filterVersion = 0;
 +	private searching = false;
 +	private searchError: string | undefined;
@@ -288,7 +295,7 @@ index 1a9d4b1f1..82482b254 100644
  	private multipleRoots = false;
  	private showLabelTimestamps = false;
  	private activePathIds: Set<string> = new Set();
-@@ -129,17 +153,33 @@ class TreeList implements Component {
+@@ -129,17 +155,35 @@ class TreeList implements Component {
  	public onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
  
  	constructor(
@@ -309,9 +316,11 @@ index 1a9d4b1f1..82482b254 100644
 +				stack.push(...node.children);
 +			}
 +			this.entryReader = (id) => this.legacyNodes.get(id)?.entry;
++			this.scanEntryReader = this.entryReader;
 +			roots = tree;
 +		} else {
 +			this.entryReader = (id) => tree.readEntry(id);
++			this.scanEntryReader = tree.readEntryForScan ? (id) => tree.readEntryForScan?.(id) : this.entryReader;
 +			this.messagePreviewReader = (id) => tree.readMessagePreview(id);
 +			roots = tree.roots;
 +		}
@@ -325,7 +334,7 @@ index 1a9d4b1f1..82482b254 100644
  		this.buildActivePath();
  		this.applyFilter();
  
-@@ -254,18 +294,11 @@ class TreeList implements Component {
+@@ -254,18 +298,11 @@ class TreeList implements Component {
  		while (stack.length > 0) {
  			const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] = stack.pop()!;
  
@@ -348,7 +357,7 @@ index 1a9d4b1f1..82482b254 100644
  			}
  
  			result.push({ node, indent, showConnector, isLast, gutters, isVirtualRootChild });
-@@ -331,6 +364,7 @@ class TreeList implements Component {
+@@ -331,6 +368,7 @@ class TreeList implements Component {
  	}
  
  	private applyFilter(): void {
@@ -356,7 +365,7 @@ index 1a9d4b1f1..82482b254 100644
  		// Update lastSelectedId only when we have a valid selection (non-empty list)
  		// This preserves the selection when switching through empty filter results
  		if (this.filteredNodes.length > 0) {
-@@ -339,7 +373,7 @@ class TreeList implements Component {
+@@ -339,7 +377,7 @@ class TreeList implements Component {
  
  		const searchTokens = this.searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
  
@@ -365,7 +374,7 @@ index 1a9d4b1f1..82482b254 100644
  			const entry = flatNode.node.entry;
  			if (entry.type === "usage") return false;
  			const isCurrentLeaf = entry.id === this.currentLeafId;
-@@ -347,8 +381,8 @@ class TreeList implements Component {
+@@ -347,8 +385,8 @@ class TreeList implements Component {
  			// Skip assistant messages with only tool calls (no text) unless error/aborted
  			// Always show current leaf so active position is visible
  			if (entry.type === "message" && entry.message.role === "assistant" && !isCurrentLeaf) {
@@ -376,7 +385,7 @@ index 1a9d4b1f1..82482b254 100644
  				const isErrorOrAborted = msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
  				// Only hide if no text AND not an error/aborted message
  				if (!hasText && !isErrorOrAborted) {
-@@ -392,15 +426,59 @@ class TreeList implements Component {
+@@ -392,15 +430,59 @@ class TreeList implements Component {
  
  			if (!passesFilter) return false;
  
@@ -442,12 +451,20 @@ index 1a9d4b1f1..82482b254 100644
  		// Filter out descendants of folded nodes.
  		if (this.foldedNodes.size > 0) {
  			const skipSet = new Set<string>();
-@@ -561,6 +639,28 @@ class TreeList implements Component {
+@@ -561,7 +643,35 @@ class TreeList implements Component {
  		this.visibleChildrenMap = visibleChildren;
  	}
  
+-	/** Get searchable text content from a node */
 +	private readEntry(id: string): SessionEntry {
 +		const entry = this.entryReader(id);
++		if (!entry) throw new Error(`Session tree entry is unavailable: ${id}`);
++		return entry;
++	}
++
++	/** One-pass reads reuse a transient reader when available so search cannot evict interactive bodies. */
++	private readEntryForSearch(id: string): SessionEntry {
++		const entry = this.scanEntryReader(id);
 +		if (!entry) throw new Error(`Session tree entry is unavailable: ${id}`);
 +		return entry;
 +	}
@@ -468,10 +485,10 @@ index 1a9d4b1f1..82482b254 100644
 +		return preview;
 +	}
 +
- 	/** Get searchable text content from a node */
  	private getSearchableText(node: SessionTreeNode): string {
  		const entry = node.entry;
-@@ -574,30 +674,34 @@ class TreeList implements Component {
+ 		const parts: string[] = [];
+@@ -574,30 +684,34 @@ class TreeList implements Component {
  			case "message": {
  				const msg = entry.message;
  				parts.push(msg.role);
@@ -482,7 +499,7 @@ index 1a9d4b1f1..82482b254 100644
  				if (msg.role === "bashExecution") {
 -					const bashMsg = msg as { command?: string };
 -					if (bashMsg.command) parts.push(bashMsg.command);
-+					const body = this.readEntry(entry.id);
++					const body = this.readEntryForSearch(entry.id);
 +					if (body.type !== "message" || body.message.role !== "bashExecution") {
 +						throw new Error(`Session tree command changed: ${entry.id}`);
 +					}
@@ -497,7 +514,7 @@ index 1a9d4b1f1..82482b254 100644
 -				} else {
 -					parts.push(this.extractContent(entry.content));
 -				}
-+				const body = this.readEntry(entry.id);
++				const body = this.readEntryForSearch(entry.id);
 +				if (body.type !== "custom_message") throw new Error(`Session tree custom message changed: ${entry.id}`);
 +				parts.push(
 +					entry.customType,
@@ -511,7 +528,7 @@ index 1a9d4b1f1..82482b254 100644
 -			case "branch_summary":
 -				parts.push("branch summary", entry.summary);
 +			case "branch_summary": {
-+				const body = this.readEntry(entry.id);
++				const body = this.readEntryForSearch(entry.id);
 +				if (body.type !== "branch_summary") throw new Error(`Session tree summary changed: ${entry.id}`);
 +				parts.push("branch summary", body.summary);
  				break;
@@ -519,14 +536,14 @@ index 1a9d4b1f1..82482b254 100644
  			case "session_info":
  				parts.push("title");
  				if (entry.name) parts.push(entry.name);
-@@ -611,9 +715,12 @@ class TreeList implements Component {
+@@ -611,9 +725,12 @@ class TreeList implements Component {
  			case "custom":
  				parts.push("custom", entry.customType);
  				break;
 -			case "context_edit":
 -				parts.push("context edit", entry.replacement === null ? "omit" : "replace", entry.targetId);
 +			case "context_edit": {
-+				const body = this.readEntry(entry.id);
++				const body = this.readEntryForSearch(entry.id);
 +				if (body.type !== "context_edit") throw new Error(`Session tree context edit changed: ${entry.id}`);
 +				parts.push("context edit", body.replacement === null ? "omit" : "replace", entry.targetId);
  				break;
@@ -534,7 +551,7 @@ index 1a9d4b1f1..82482b254 100644
  			case "label":
  				parts.push("label", entry.label ?? "");
  				break;
-@@ -628,12 +735,36 @@ class TreeList implements Component {
+@@ -628,12 +745,36 @@ class TreeList implements Component {
  		return this.searchQuery;
  	}
  
@@ -573,7 +590,7 @@ index 1a9d4b1f1..82482b254 100644
  		this.onCopy?.(node ? this.getEntryCopyText(node) : undefined);
  	}
  
-@@ -673,7 +804,8 @@ class TreeList implements Component {
+@@ -673,7 +814,8 @@ class TreeList implements Component {
  		const lines: string[] = [];
  
  		if (this.filteredNodes.length === 0) {
@@ -583,7 +600,7 @@ index 1a9d4b1f1..82482b254 100644
  			lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.getStatusLabels()}`), width));
  			return lines;
  		}
-@@ -774,7 +906,7 @@ class TreeList implements Component {
+@@ -774,7 +916,7 @@ class TreeList implements Component {
  	}
  
  	private getEntryDisplayText(node: SessionTreeNode, isSelected: boolean): string {
@@ -592,7 +609,7 @@ index 1a9d4b1f1..82482b254 100644
  		let result: string;
  
  		const normalize = (s: string) => s.replace(/[\n\t]/g, " ").trim();
-@@ -804,7 +936,14 @@ class TreeList implements Component {
+@@ -804,7 +946,14 @@ class TreeList implements Component {
  					const toolMsg = msg as { toolCallId?: string; toolName?: string };
  					const toolCall = toolMsg.toolCallId ? this.toolCallMap.get(toolMsg.toolCallId) : undefined;
  					if (toolCall) {
@@ -608,7 +625,7 @@ index 1a9d4b1f1..82482b254 100644
  					} else {
  						result = theme.fg("muted", `[${toolMsg.toolName ?? "tool"}]`);
  					}
-@@ -888,24 +1027,11 @@ class TreeList implements Component {
+@@ -888,24 +1037,11 @@ class TreeList implements Component {
  	}
  
  	private extractContent(content: unknown): string {
@@ -635,7 +652,7 @@ index 1a9d4b1f1..82482b254 100644
  		let text: string | undefined;
  
  		switch (entry.type) {
-@@ -913,14 +1039,14 @@ class TreeList implements Component {
+@@ -913,14 +1049,14 @@ class TreeList implements Component {
  				if (entry.message.role === "bashExecution") {
  					text = entry.message.command;
  				} else if ("content" in entry.message) {
@@ -652,7 +669,7 @@ index 1a9d4b1f1..82482b254 100644
  				break;
  			case "compaction":
  				text = entry.summary;
-@@ -933,19 +1059,6 @@ class TreeList implements Component {
+@@ -933,19 +1069,6 @@ class TreeList implements Component {
  		return text?.trim() ? text : undefined;
  	}
  
@@ -672,7 +689,7 @@ index 1a9d4b1f1..82482b254 100644
  	private formatToolCall(name: string, args: Record<string, unknown>): string {
  		const shortenPath = (p: string): string => shortenHomePath(p, process.env.HOME || process.env.USERPROFILE || "");
  
-@@ -1353,7 +1466,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
+@@ -1353,7 +1476,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
  	}
  
  	constructor(
@@ -681,7 +698,7 @@ index 1a9d4b1f1..82482b254 100644
  		currentLeafId: string | null,
  		terminalHeight: number,
  		onSelect: (entryId: string) => void,
-@@ -1361,15 +1474,29 @@ export class TreeSelectorComponent extends Container implements Focusable {
+@@ -1361,15 +1484,29 @@ export class TreeSelectorComponent extends Container implements Focusable {
  		onLabelChange?: (entryId: string, label: string | undefined) => void,
  		initialSelectedId?: string,
  		initialFilterMode?: FilterMode,
@@ -714,7 +731,7 @@ index 1a9d4b1f1..82482b254 100644
  		this.treeList.onCopy = (text) => this.onCopy?.(text);
  		this.treeList.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
  		this.searchLine = new SearchLine(this.treeList);
-@@ -1391,8 +1518,8 @@ export class TreeSelectorComponent extends Container implements Focusable {
+@@ -1391,8 +1528,8 @@ export class TreeSelectorComponent extends Container implements Focusable {
  		this.addChild(new Spacer(1));
  		this.addChild(new DynamicBorder());
  
@@ -726,10 +743,10 @@ index 1a9d4b1f1..82482b254 100644
  	}
  
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index cb06be959..1be8ab969 100644
+index 2f73d296c7a4ccd8d50a645cc48ab2f64ddb94d4..3465673ffd6778c239608d722a56cdb2e12872bf 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -5805,11 +5805,11 @@ export class InteractiveMode {
+@@ -5815,11 +5815,11 @@ export class InteractiveMode {
  	}
  
  	private showTreeSelector(initialSelectedId?: string): void {
@@ -743,7 +760,7 @@ index cb06be959..1be8ab969 100644
  			this.showStatus("No entries in session");
  			return;
  		}
-@@ -5936,6 +5936,7 @@ export class InteractiveMode {
+@@ -5946,6 +5946,7 @@ export class InteractiveMode {
  				},
  				initialSelectedId,
  				initialFilterMode,
@@ -752,7 +769,7 @@ index cb06be959..1be8ab969 100644
  			selector.onCopy = async (text) => {
  				if (!text) {
 diff --git a/packages/coding-agent/test/session-manager/tree-traversal.test.ts b/packages/coding-agent/test/session-manager/tree-traversal.test.ts
-index 50980f700..5de02adda 100644
+index 50980f700c091ea9fa42104a3e981d12f0b09b7a..5de02addaeed02d6c03e6b1adce35d8e298f76b8 100644
 --- a/packages/coding-agent/test/session-manager/tree-traversal.test.ts
 +++ b/packages/coding-agent/test/session-manager/tree-traversal.test.ts
 @@ -173,6 +173,29 @@ describe("SessionManager append and tree traversal", () => {
@@ -786,7 +803,7 @@ index 50980f700..5de02adda 100644
  		it("returns empty array for empty session", () => {
  			const session = SessionManager.inMemory();
 diff --git a/packages/coding-agent/test/tree-selector.test.ts b/packages/coding-agent/test/tree-selector.test.ts
-index 06d1ee541..33d2a6b09 100644
+index 06d1ee541c56aa51d1b3039a36b7520952beb2c1..be465e272b074a437eb0d90e95a52c7cf75f1190 100644
 --- a/packages/coding-agent/test/tree-selector.test.ts
 +++ b/packages/coding-agent/test/tree-selector.test.ts
 @@ -1,12 +1,13 @@
@@ -809,7 +826,7 @@ index 06d1ee541..33d2a6b09 100644
  } from "../src/core/session-manager.ts";
  import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
  import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-@@ -126,6 +127,150 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
+@@ -126,6 +127,232 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
  }
  
  describe("TreeSelectorComponent", () => {
@@ -957,6 +974,88 @@ index 06d1ee541..33d2a6b09 100644
 +			}
 +		});
 +	});
++
++	describe("search-time body reads", () => {
++		test("search uses the optional scan reader while details and copy keep the retaining reader", () => {
++			const session = SessionManager.inMemory();
++			const hotId = session.appendMessage({ role: "user", content: "hot interactive context", timestamp: 1 });
++			const coldId = session.appendCustomMessageEntry("cold", "cold body with tail-marker", true);
++			const native = session.getTreeSource();
++			const read = native.readEntry;
++			const retained = vi.spyOn(native, "readEntry");
++			const scanned = vi.fn(read);
++			const source = { ...native, readEntry: retained, readEntryForScan: scanned };
++			const selector = new TreeSelectorComponent(
++				source,
++				coldId,
++				24,
++				() => {},
++				() => {},
++			);
++			selector.handleInput("tail-marker");
++
++			const list = selector.getTreeList();
++			expect(list.getSelectedReference()?.entry.id).toBe(coldId);
++			expect(scanned.mock.calls.map(([id]) => id)).toContain(coldId);
++			expect(retained.mock.calls.map(([id]) => id)).not.toContain(coldId);
++
++			let copied: string | undefined;
++			selector.onCopy = (value) => {
++				copied = value;
++			};
++			selector.handleInput("\x18");
++			expect(copied).toBe("cold body with tail-marker");
++			expect(retained.mock.calls.map(([id]) => id)).toContain(coldId);
++			expect(list.getSelectedNode()?.entry).toEqual(session.getEntry(coldId));
++			expect(hotId).not.toBe(coldId);
++		});
++
++		test("falls back to the retaining reader when a source has no scan reader", () => {
++			const session = SessionManager.inMemory();
++			session.appendMessage({ role: "user", content: "hot interactive context", timestamp: 1 });
++			const target = session.appendCustomMessageEntry("cold", "legacy fallback target", true);
++			const source = session.getTreeSource();
++			delete (source as { readEntryForScan?: unknown }).readEntryForScan;
++			const reader = vi.spyOn(source, "readEntry");
++			const selector = new TreeSelectorComponent(
++				source,
++				target,
++				24,
++				() => {},
++				() => {},
++			);
++			selector.handleInput("fallback");
++			expect(selector.getTreeList().getSelectedReference()?.entry.id).toBe(target);
++			expect(reader.mock.calls.map(([id]) => id)).toContain(target);
++		});
++
++		test("user-only filtering skips custom message bodies in both search paths", async () => {
++			for (const requestRender of [undefined, () => {}]) {
++				const session = SessionManager.inMemory();
++				const userId = session.appendMessage({ role: "user", content: "user only target", timestamp: 1 });
++				session.appendCustomMessageEntry("cold", "cold body tail-marker", true);
++				const native = session.getTreeSource();
++				const scanned = vi.fn(native.readEntry);
++				const source = { ...native, readEntryForScan: scanned };
++				const selector = new TreeSelectorComponent(
++					source,
++					userId,
++					24,
++					() => {},
++					() => {},
++					undefined,
++					undefined,
++					undefined,
++					requestRender,
++				);
++				selector.handleInput("\x15");
++				await new Promise<void>((resolve) => setImmediate(resolve));
++				expect(selector.getTreeList().getSelectedReference()?.entry.id).toBe(userId);
++				expect(scanned).not.toHaveBeenCalled();
++			}
++		});
++	});
++
  	describe("initial selection with metadata entries", () => {
  		test("focuses nearest visible ancestor when currentLeafId is a model_change with sibling branch", () => {
  			// Tree structure:

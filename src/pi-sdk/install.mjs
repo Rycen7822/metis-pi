@@ -7,21 +7,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
 import * as tar from "tar";
-import { readDistribution, sdkPackages, sdkRuntimePackages, sdkFiles, verifiedArchive } from "./artifact.mjs";
+import { readDistribution, replaceSdkPayload, sdkPackageDir, sdkPackages, sdkRuntimePackages, sdkFiles, verifiedArchive } from "./artifact.mjs";
 import { pruneReleases } from "./retention.mjs";
 
 const run = promisify(execFile);
-const packageDir = (release, name) => path.join(release, "node_modules", "@earendil-works", `pi-${name}`);
 const validRelease = value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(value);
 const inside = (root, target) => {
   const relative = path.relative(root, target);
   return !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`);
 };
 
-async function regularJSON(file) {
+async function regularJSON(file, { stripBom = false } = {}) {
   const stat = await lstat(file);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Expected a regular file: ${file}`);
-  return JSON.parse(await readFile(file, "utf8"));
+  const text = await readFile(file, "utf8");
+  return JSON.parse(stripBom && text.startsWith("\uFEFF") ? text.slice(1) : text);
 }
 
 async function sourceRelease(root, version) {
@@ -32,7 +32,7 @@ async function sourceRelease(root, version) {
   const directory = path.join(root, "releases", name);
   if (await realpath(directory) !== directory) throw new Error("Managed Pi releases must use physical directories");
   for (const pkg of sdkRuntimePackages) {
-    const manifest = await regularJSON(path.join(packageDir(directory, pkg), "package.json"));
+    const manifest = await regularJSON(path.join(sdkPackageDir(directory, pkg), "package.json"));
     if (manifest.name !== `@earendil-works/pi-${pkg}` || manifest.version !== version)
       throw new Error(`Metis SDK requires Pi ${version}; found ${manifest.name} ${manifest.version}`);
   }
@@ -122,7 +122,7 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
   const root = path.resolve(managedRoot ?? process.env.PI_MANAGED_INSTALL_ROOT ?? inferredRoot
     ?? path.join(process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent"), "install"));
   let marker;
-  try { marker = await regularJSON(path.join(root, "managed-install.json")); }
+  try { marker = await regularJSON(path.join(root, "managed-install.json"), { stripBom: true }); }
   catch (error) { if (error.code === "ENOENT" && !managedRoot && !process.env.PI_MANAGED_INSTALL_ROOT)
     return { status: "unmanaged", restartRequired: false }; throw error; }
   if (marker.kind !== "pi-managed-install" || marker.schemaVersion !== 1 || marker.layout !== "releases-v1")
@@ -132,6 +132,11 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
   const running = runningPackageDir ? await realpath(runningPackageDir) : undefined;
   if (running && !inside(releases, running))
     return { status: "unmanaged", restartRequired: false };
+  // Match Pi's launcher marker before taking the update lock or pruning releases.
+  const entrypoint = marker.entrypoint?.path;
+  if (process.platform !== "win32" && typeof entrypoint === "string" && /^(?:[A-Za-z]:\\|\\\\)/.test(entrypoint)) {
+    throw new Error("This managed Pi installation belongs to Windows; update it from Windows or install Pi separately for this platform.");
+  }
   const distribution = await readDistribution();
   // Same lock as Pi's native self-updater; re-read the active release only after acquiring it.
   const releaseLock = await lockfile.lock(path.join(canonical, "update"), {
@@ -152,18 +157,8 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
       await mkdir(payload);
       await unpack(archive, payload, distribution.archive.unpackedBytes);
       await copyRelease(source.directory, candidate);
-      for (const pkg of sdkPackages) {
-        const target = path.join(packageDir(candidate, pkg), "dist");
-        await rm(target, { recursive: true, force: true });
-        await cp(path.join(payload, pkg, "dist"), target, { recursive: true });
-      }
-      for (const file of sdkFiles) {
-        const [pkg, ...parts] = file.split("/");
-        const target = path.join(packageDir(candidate, pkg), ...parts);
-        await mkdir(path.dirname(target), { recursive: true });
-        await cp(path.join(payload, file), target);
-      }
-      const cli = path.join(packageDir(candidate, "coding-agent"), "dist", "bundle", "cli.js");
+      await replaceSdkPayload(candidate, payload);
+      const cli = path.join(sdkPackageDir(candidate, "coding-agent"), "dist", "bundle", "cli.js");
       const result = await run(process.execPath, [cli, "--version"], { timeout: 30_000, windowsHide: true });
       if (result.stdout.trim() !== distribution.piVersion) throw new Error("Patched Pi CLI version verification failed");
       await writeFile(path.join(candidate, "metis-sdk.json"), JSON.stringify({ schemaVersion: 1,
@@ -186,7 +181,7 @@ export async function ensureSDK({ managedRoot, runningPackageDir } = {}) {
       try { await pruneReleases(releases, { active, previous, runningRelease }); }
       catch (error) { cleanupWarning = `Old Metis SDK releases could not be fully cleaned up: ${error.message}`; }
     }
-    const currentPackage = packageDir(path.join(releases, active), "coding-agent");
+    const currentPackage = sdkPackageDir(path.join(releases, active), "coding-agent");
     return { status: activated ? "installed" : "current",
       restartRequired: Boolean(running && path.relative(running, currentPackage)),
       packageDir: currentPackage, patches: distribution.patches.length, ...(cleanupWarning ? { cleanupWarning } : {}) };

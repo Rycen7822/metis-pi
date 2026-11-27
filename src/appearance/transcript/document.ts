@@ -115,9 +115,9 @@ export class ConversationDocument {
       if (message.role === "bashExecution") {
         const bash = new Core.BashExecutionComponent(message.command, this.options.ui, message.excludeFromContext, pad);
         if (message.output) bash.appendOutput(message.output);
-        // Like the native CLI, this display consumes only the truncation flag, not a rebuilt output receipt.
+        // Like the native CLI, this display rebuilds the truncation note from the record, not from an output receipt.
         const truncation = (message.truncated ? { truncated: true } : undefined) as Parameters<Core.BashExecutionComponent["setComplete"]>[2];
-        bash.setComplete(message.exitCode, message.cancelled, truncation, message.fullOutputPath);
+        bash.setComplete(message.exitCode, message.cancelled, truncation, message.fullOutputPath, message.fullOutputError);
         row = bash;
       } else if (message.role === "compactionSummary" || message.role === "branchSummary") {
         box.addChild(new Spacer(1));
