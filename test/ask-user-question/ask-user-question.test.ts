@@ -1,4 +1,4 @@
-import { createMockPi } from "@juicesharp/rpiv-test-utils";
+import { createMockPi } from "./support/index.ts";
 import { describe, expect, it } from "vitest";
 import {
 	buildItemsForQuestion,

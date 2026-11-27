@@ -1,5 +1,5 @@
 import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
-import { makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "../support/index.ts";
 import { describe, expect, it } from "vitest";
 
 const theme = makeTheme() as unknown as Theme;

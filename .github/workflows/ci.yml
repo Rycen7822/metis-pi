@@ -85,6 +85,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.lane.name == 'Root 1'
+        with:
+          bun-version: '1.4.0'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

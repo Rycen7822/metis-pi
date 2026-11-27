@@ -1,7 +1,7 @@
 import type { QuestionParams } from "../../src/ask-user-question/tool/types.ts";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createMockPi } from "@juicesharp/rpiv-test-utils";
+import { createMockPi } from "./support/index.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "../../src/ask-user-question/ask-user-question.ts";
 import type { QuestionnaireSessionConfig } from "../../src/ask-user-question/state/questionnaire-session.ts";

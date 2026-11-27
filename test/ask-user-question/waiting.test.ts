@@ -1,5 +1,5 @@
 import { getKeybindings } from "@earendil-works/pi-tui";
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
+import { createMockCtx, createMockPi } from "./support/index.ts";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { buildQuestionnaireResponse, registerAskUserQuestionTool } from "../../src/ask-user-question/ask-user-question.ts";
 import { ASK_USER_BLOCKED_EVENT } from "../../src/ask-user-question/events.ts";

@@ -1,4 +1,4 @@
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
+import { createMockCtx, createMockPi } from "./support/index.ts";
 import { describe, expect, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";

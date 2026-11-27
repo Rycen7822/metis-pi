@@ -1,7 +1,7 @@
 import { makeQuestion } from "../../../support/test-fixtures.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "../../../support/index.ts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let markdownConstructed = 0;

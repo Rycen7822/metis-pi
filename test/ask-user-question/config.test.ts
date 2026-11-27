@@ -84,7 +84,7 @@ describe("resolveCollapseKey", () => {
 });
 
 describe("loadConfig", () => {
-	// Each Vitest worker uses a disposable global agent directory.
+	// The test setup gives each file a disposable global agent directory.
 	const configPath = join(process.env.PI_CODING_AGENT_DIR!, "metis-pi.toml");
 
 	// Neither the production agent directory nor personal JSON is touched.

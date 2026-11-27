@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "../../support/index.ts";
 import { describe, expect, it, vi } from "vitest";
 import { TabBar, type TabBarProps } from "../../../../src/ask-user-question/view/components/tab-bar.ts";
 import * as i18n from "../../../../src/ask-user-question/state/i18n-bridge.ts";

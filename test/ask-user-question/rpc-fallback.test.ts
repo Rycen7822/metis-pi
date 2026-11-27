@@ -1,5 +1,5 @@
 import type { QuestionParams } from "../../src/ask-user-question/tool/types.ts";
-import { createMockCtx, createMockPi, mockStdout } from "@juicesharp/rpiv-test-utils";
+import { createMockCtx, createMockPi, mockStdout } from "./support/index.ts";
 import { describe, expect, it, vi } from "vitest";
 import { BEL, registerAskUserQuestionTool } from "../../src/ask-user-question/ask-user-question.ts";
 

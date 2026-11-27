@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Key, matchesKey, visibleWidth, type TUI } from "@earendil-works/pi-tui";
-import { makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "../support/index.ts";
 import { describe, expect, it, vi } from "vitest";
 import { buildQuestionnaireResponse } from "../../../src/ask-user-question/tool/response-envelope.ts";
 import type { QuestionnaireResult, QuestionParams } from "../../../src/ask-user-question/tool/types.ts";

@@ -1,5 +1,5 @@
 import { CURSOR_MARKER, getKeybindings } from "@earendil-works/pi-tui";
-import { createMockPi } from "@juicesharp/rpiv-test-utils";
+import { createMockPi } from "./support/index.ts";
 import { describe, expect, it } from "vitest";
 import { Value } from "typebox/value";
 import { registerAskUserQuestionTool } from "../../src/ask-user-question/ask-user-question.ts";

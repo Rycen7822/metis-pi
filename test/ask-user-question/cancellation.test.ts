@@ -1,4 +1,4 @@
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
+import { createMockCtx, createMockPi } from "./support/index.ts";
 import { describe, expect, it, vi } from "vitest";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { registerAskUserQuestionTool } from "../../src/ask-user-question/ask-user-question.ts";

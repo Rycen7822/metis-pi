@@ -8,7 +8,8 @@ npm run prepare:pi-sdk
 npm run prepare:subagents
 ```
 
-`prepare:pi-sdk` 将仓库的 SDK 归档装入本项目的依赖，安装范围限于本项目。Python 测试的依赖见 [requirements.txt](https://github.com/Rycen7822/metis-pi/blob/main/test/subagents/requirements.txt)；子代理运行时只使用标准库。
+`prepare:pi-sdk` 将仓库的 SDK 归档装入本项目的依赖，安装范围限于本项目。
+运行问卷测试、`npm test` 或 `npm run verify` 需把 Bun 1.4.0 加入 `PATH`；仍使用 Node/npm 安装依赖。Python 测试的依赖见 [requirements.txt](https://github.com/Rycen7822/metis-pi/blob/main/test/subagents/requirements.txt)；子代理运行时只使用标准库。
 
 ## 选择检查
 
@@ -25,16 +26,18 @@ npm run prepare:subagents
 | 实际终端交互 | `npm run test:pty:strict`；开发中可用 `npm run test:pty -- --journey=E3` 跑单个场景。 |
 | Condense 状态模型 | `npm run test:formal`，需要 Java 与 TLC。见[模型说明](https://github.com/Rycen7822/metis-pi/blob/main/test/formal/README.md)。 |
 
-`test/core/` 放纯逻辑与渲染规则，`test/contract/` 放真实宿主和扩展入口契约；存储、协议与资源生命周期分在 `test/io/`、`test/protocol/` 和 `test/resource/`。LSP、子代理及形式化验证有专门目录。共享夹具放 `test/helpers/`，专用替身就近放在套件内。问卷 Vitest 与私有夹具放 `test/ask-user-question/`；真实 Pi 问卷契约仍放 `test/contract/`。
+`test/core/` 放纯逻辑与渲染规则，`test/contract/` 放真实宿主和扩展入口契约；存储、协议与资源生命周期分在 `test/io/`、`test/protocol/` 和 `test/resource/`。LSP、子代理及形式化验证有专门目录。共享夹具放 `test/helpers/`，专用替身就近放在套件内。问卷测试与私有夹具放 `test/ask-user-question/`；真实 Pi 问卷契约仍放 `test/contract/`。
 
 Web Access 的测试留在 `src/pi-web-access/test/`，由独立命令运行，以保留 Web 工作目录和隔离预加载。修改 Web 源码后先运行 `npm run build:web-access`，再运行 `npm run test:web-access`；测试直接消费两份现有 bundle，Linux CI 核对重建产物与提交一致。
 
-`npm test` 运行根 Node 测试和问卷 Vitest；`npm run verify` 额外运行 Web 与 pytest。Cargo、TLC 和 PTY 使用各自的专用命令。
+`npm test` 运行根 Node 测试及问卷套件；`npm run verify` 额外运行 Web 与 pytest。Cargo、TLC 和 PTY 使用各自的专用命令。
+问卷中经验证可由 Bun 运行的文件列在 [Bun 清单](../config/bun/ask-files.json)，其余和新增文件默认由 Vitest 运行。
+两边复用原有测试和隔离 setup；依赖 Vitest 模块 mock、异步假时钟，或遇到 Bun Unicode 行为差异的用例保留在 Vitest。
 CI 的 Ubuntu、Windows 矩阵并行运行类型检查、lint、根测试、Web Access 和 pytest；两项平台检查要求整个矩阵通过。
 CI 还运行 Linux 严格 PTY 和 Neural Search engine 的 Rust 库测试。原生工具、语义 CLI 和形式化验证各有独立入口；
 [语义搜索基准](../benchmarks/semantic/README.md)独立于产品套件。
 
-CI 用 Node 原生分片分别跑根测试和 Web Access；问卷 Vitest 只在根测试的第一片执行。
+CI 用 Node 原生分片分别跑根测试和 Web Access；问卷套件只在根测试的第一片执行，CI 也只在该分片安装 Bun。
 本地可用 `npm test -- --test-shard=1/2` 或 `npm run test:web-access -- --test-shard=2/2` 复跑。
 子代理的 pytest 用 xdist 的四个 worker 和 `worksteal`，缓存在 `.work/test-cache/subagents/`。
 一次性测试和结果放 `.work/`，与正式套件分开。
@@ -51,7 +54,7 @@ PTY 检查使用真实 Pi CLI、tmux、离线提供商和测试剪贴板，E1 �
 | 什么时候跑 | 命令 | 检查什么 |
 | --- | --- | --- |
 | 修改 TypeScript 源码、公开类型、依赖声明或 `tsconfig` | `npm run check` | 用 `tsc` 检查核心、执行模块、Condense、插件和扩展入口的类型契约。只改 Condense 等单一模块时，可先用 `npm run check:condense` 快速反馈。 |
-| 修改 TypeScript 测试、测试夹具，或改变测试依赖的接口 | `npm run check:test` | 用 `tsc` 检查 `test/**/*.mts`、问卷 Vitest 测试及其夹具，仅执行类型检查。 |
+| 修改 TypeScript 测试、测试夹具，或改变测试依赖的接口 | `npm run check:test` | 用 `tsc` 检查 `test/**/*.mts`、问卷测试及其夹具，仅执行类型检查。 |
 | 修改源码或问卷用例中的 TypeScript，尤其是 Promise、事件回调或后台任务 | `npm run lint:types` | 用 Oxlint `--type-aware` 和 `tsrs` 检查类型正确但用法容易出错的代码。默认扫描 `src/`、`extensions/` 和 `test/ask-user-question/`；JavaScript 由其他 lint 规则处理。 |
 
 开发中可以先定向检查改过的文件，例如 `npm run lint:types -- extensions/mcp.ts`。CI 会运行全范围 lint；跨模块接口改动需运行 `npm run check`。
@@ -68,7 +71,7 @@ PTY 检查使用真实 Pi CLI、tmux、离线提供商和测试剪贴板，E1 �
 
 ### 测试同步规则
 
-修改测试的等待、轮询或定时逻辑时，运行 `npm run lint:tests`。该检查独立于类型信息。CI 用 [Landmines](https://github.com/interfere-inc/landmines) 拦截对 spy 或请求记录的无信号轮询，问卷 Vitest 测试另禁止固定休眠。优先等待操作、回调信号或假时钟。外部进程可就绪条件进行有界检查；真实计时测试可等待时间经过。保留故障超时和协议边界的离线替身。规则范围限于此处列出的项目约定。
+修改测试的等待、轮询或定时逻辑时，运行 `npm run lint:tests`。该检查独立于类型信息。CI 用 [Landmines](https://github.com/interfere-inc/landmines) 拦截对 spy 或请求记录的无信号轮询，问卷测试另禁止固定休眠。优先等待操作、回调信号或假时钟。外部进程可就绪条件进行有界检查；真实计时测试可等待时间经过。保留故障超时和协议边界的离线替身。规则范围限于此处列出的项目约定。
 
 ### 源码注释基线
 

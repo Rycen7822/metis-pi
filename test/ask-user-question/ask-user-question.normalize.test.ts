@@ -1,4 +1,4 @@
-import { createMockCtx, createMockPi, makeTheme, makeTui } from "@juicesharp/rpiv-test-utils";
+import { createMockCtx, createMockPi, makeTheme, makeTui } from "./support/index.ts";
 import { describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "../../src/ask-user-question/ask-user-question.ts";
 

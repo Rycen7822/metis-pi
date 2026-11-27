@@ -1,4 +1,4 @@
-import { createMockCtx, createMockPi, mockStdout } from "@juicesharp/rpiv-test-utils";
+import { createMockCtx, createMockPi, mockStdout } from "./support/index.ts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QuestionParams, QuestionnaireResult } from "../../src/ask-user-question/tool/types.ts";
 
