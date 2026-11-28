@@ -134,13 +134,17 @@
     {
       "file": "0033-avoid-full-history-on-live-cache-notices.patch",
       "sha256": "64a6532c34e4ae0b26549196889af97ad318f4aa087b14af55ddccbfaac47528"
+    },
+    {
+      "file": "0034-share-session-metadata-strings.patch",
+      "sha256": "b1fb42ccaba40dc25c681cc49fa94a5574fd176aa3b63f60d50cc23f571311ea"
     }
   ],
-  "patchSet": "fe341512fed114b54614c7cc7760d2e8a3d04480dfba6771053038b2fb0976da",
+  "patchSet": "757b843f8f320eff407a20a1903c51a8c367ee8f2c9898ec1111991504e7e195",
   "archive": {
     "file": "pi-1.7.0.tgz",
-    "sha256": "ddb105b94d73194e1e1a24af96fc40b49b12dd9c22a389e941868ae535fa5a69",
-    "bytes": 6210692,
-    "unpackedBytes": 27664918
+    "sha256": "df7d6a1e8dbf5080fb2176167af10cf234a641dc3b1fef0cc6fb094ce180b52e",
+    "bytes": 6211887,
+    "unpackedBytes": 27668009
   }
 }

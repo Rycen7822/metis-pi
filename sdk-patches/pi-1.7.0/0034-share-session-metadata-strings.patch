@@ -1,0 +1,161 @@
+diff --git a/packages/coding-agent/src/core/session-entry-store.ts b/packages/coding-agent/src/core/session-entry-store.ts
+--- a/packages/coding-agent/src/core/session-entry-store.ts
++++ b/packages/coding-agent/src/core/session-entry-store.ts
+@@ -10,6 +10,8 @@
+ const MAX_CACHED_SESSION_ENTRY_BYTES = 16 * 1024 * 1024;
+ // Reuse one bounded workspace for ordinary reads instead of churning native Buffer allocations per record.
+ const MAX_REUSED_ENTRY_READ_BYTES = 1024 * 1024;
++const MAX_SHARED_METADATA_STRINGS = 512;
++const MAX_SHARED_METADATA_STRING_LENGTH = 128;
+ 
+ interface StoredSessionEntry {
+ 	kind: "entry";
+@@ -48,11 +50,29 @@
+ 	static open(path: string): SessionEntryStore {
+ 		const store = new SessionEntryStore();
+ 		store.path = path;
+-		scanSessionFile(path, (entry, location) => store.add(entry, location));
++		// Share the small vocabulary during replay without retaining a pool after the scan.
++		const vocabulary = new Map<string, string>();
++		const share = <T extends string | undefined>(value: T): T => {
++			if (
++				typeof value !== "string" ||
++				value.length > MAX_SHARED_METADATA_STRING_LENGTH ||
++				vocabulary.size >= MAX_SHARED_METADATA_STRINGS
++			)
++				return value;
++			const existing = vocabulary.get(value);
++			if (existing !== undefined) return existing as T; // Map keys and values are the same string.
++			vocabulary.set(value, value);
++			return value;
++		};
++		scanSessionFile(path, (entry, location) => store.add(entry, location, share));
+ 		return store;
+ 	}
+ 
+-	private add(entry: FileEntry, location?: SessionEntryLocation): void {
++	private add(
++		entry: FileEntry,
++		location?: SessionEntryLocation,
++		share?: <T extends string | undefined>(value: T) => T,
++	): void {
+ 		if (entry.type === "session") {
+ 			this.records.push({ kind: "header", header: entry });
+ 			return;
+@@ -60,7 +80,7 @@
+ 		const treePreview = entry.type === "message" ? createSessionTreeMessagePreview(entry.message) : undefined;
+ 		const record: StoredSessionEntry = {
+ 			kind: "entry",
+-			metadata: toSessionEntryMetadata(entry, treePreview?.toolCalls.length),
++			metadata: toSessionEntryMetadata(entry, treePreview?.toolCalls.length, share),
+ 			...(treePreview ? { treePreview } : {}),
+ 			location,
+ 			...(location ? {} : { body: entry }),
+diff --git a/packages/coding-agent/src/core/session-entry-metadata.ts b/packages/coding-agent/src/core/session-entry-metadata.ts
+--- a/packages/coding-agent/src/core/session-entry-metadata.ts
++++ b/packages/coding-agent/src/core/session-entry-metadata.ts
+@@ -42,7 +42,11 @@
+ 	| (SessionEntryBase & { type: "unknown"; sourceType: string })
+ >;
+ 
+-export function toSessionEntryMetadata(entry: SessionEntry, knownToolCallCount?: number): SessionEntryMetadata {
++export function toSessionEntryMetadata(
++	entry: SessionEntry,
++	knownToolCallCount?: number,
++	share: <T extends string | undefined>(value: T) => T = (value) => value,
++): SessionEntryMetadata {
+ 	const base = { id: entry.id, parentId: entry.parentId, timestamp: entry.timestamp };
+ 	const sourceType = entry.type;
+ 	switch (entry.type) {
+@@ -51,10 +55,10 @@
+ 			if (entry.message.role === "assistant") {
+ 				message = {
+ 					role: entry.message.role,
+-					api: entry.message.api,
+-					provider: entry.message.provider,
+-					model: entry.message.model,
+-					responseModel: entry.message.responseModel,
++					api: share(entry.message.api),
++					provider: share(entry.message.provider),
++					model: share(entry.message.model),
++					responseModel: share(entry.message.responseModel),
+ 					responseId: entry.message.responseId,
+ 					toolCallCount:
+ 						knownToolCallCount ??
+@@ -75,14 +79,14 @@
+ 		case "thinking_level_change":
+ 			return { ...base, type: entry.type, thinkingLevel: entry.thinkingLevel };
+ 		case "model_change":
+-			return { ...base, type: entry.type, provider: entry.provider, modelId: entry.modelId };
++			return { ...base, type: entry.type, provider: share(entry.provider), modelId: share(entry.modelId) };
+ 		case "usage":
+ 			return {
+ 				...base,
+ 				type: entry.type,
+ 				kind: entry.kind,
+-				provider: entry.provider,
+-				model: entry.model,
++				provider: share(entry.provider),
++				model: share(entry.model),
+ 				usage: entry.usage,
+ 			};
+ 		case "compaction":
+@@ -97,9 +101,9 @@
+ 		case "branch_summary":
+ 			return { ...base, type: entry.type, fromId: entry.fromId, usage: entry.usage, fromHook: entry.fromHook };
+ 		case "custom":
+-			return { ...base, type: entry.type, customType: entry.customType };
++			return { ...base, type: entry.type, customType: share(entry.customType) };
+ 		case "custom_message":
+-			return { ...base, type: entry.type, customType: entry.customType, display: entry.display };
++			return { ...base, type: entry.type, customType: share(entry.customType), display: entry.display };
+ 		case "context_edit":
+ 			return { ...base, type: entry.type, targetId: entry.targetId };
+ 		case "label":
+diff --git a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+--- a/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
++++ b/packages/coding-agent/test/session-manager/lazy-body-cache.test.ts
+@@ -3,7 +3,7 @@
+ import { join } from "node:path";
+ import { afterEach, beforeEach, describe, expect, it } from "vitest";
+ import { SessionManager } from "../../src/core/session-manager.ts";
+-import { userMsg } from "../utilities.ts";
++import { assistantMsg, userMsg } from "../utilities.ts";
+ 
+ describe("persisted session body cache", () => {
+ 	let directory: string;
+@@ -32,6 +32,34 @@
+ 		expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
+ 	});
+ 
++	it("opens history with repeated names and older assistant rows with incomplete model fields", () => {
++		const seed = SessionManager.create(directory, directory);
++		const user = seed.appendMessage(userMsg("start"));
++		const first = seed.appendMessage(assistantMsg("first"));
++		const second = seed.appendMessage(assistantMsg("second"));
++		const note = seed.appendCustomEntry("short-vocabulary", { evidence: "body" });
++		const file = seed.getSessionFile()!;
++		const legacy = {
++			id: "legacy",
++			parentId: note,
++			type: "message",
++			timestamp: new Date().toISOString(),
++			message: { ...assistantMsg("older transcript"), provider: undefined, responseModel: null },
++		};
++		const original = readFileSync(file, "utf8") + JSON.stringify(legacy) + "\n";
++		writeFileSync(file, original);
++
++		const restored = SessionManager.open(file, directory);
++		expect(restored.getEntriesMetadata().map((entry) => entry.id)).toEqual([user, first, second, note, legacy.id]);
++		for (const id of [first, second, note]) {
++			expect(restored.getEntryMetadata(id)).toEqual(seed.getEntryMetadata(id));
++			expect(restored.getEntry(id)).toEqual(seed.getEntry(id));
++		}
++		expect(restored.getEntryMetadata(legacy.id)).toMatchObject({ message: { responseModel: null } });
++		expect(restored.getEntry(legacy.id)).toEqual(JSON.parse(JSON.stringify(legacy)));
++		expect(readFileSync(file, "utf8")).toBe(original);
++	});
++
+ 	it("keeps scoped and full model provenance consistent after edits, compaction, and a branch change", async () => {
+ 		const seed = SessionManager.create(directory, directory);
+ 		seed.appendMessage({ role: "system", content: "original prompt", timestamp: 1 });

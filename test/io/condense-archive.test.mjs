@@ -6,6 +6,9 @@ import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { captureBatch } from "../../src/condense/batch-capture.ts";
+import { pruneMessages } from "../../src/condense/pruner.ts";
+import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
+import { modelNamed } from "../helpers/native-provider.mjs";
 import { archiveBatches, blobPathFor, spillOversizedBatch } from "../../src/condense/spill.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { ExecOutputArchive } from "../../src/execution/exec/output-archive.ts";
@@ -98,6 +101,66 @@ test("cold directory preserves historical refs without retaining or loading payl
   assert.equal(f.indexer.getRecord("reused@5").resultText, second.resultText);
   assert.deepEqual(f.indexer.getRecordsForId("reused").map(call => call.resultTimestamp), [3, 5],
     "repeated archive entries do not duplicate or reorder occurrences");
+});
+
+test("spill previews survive publication and reload without replacing a reused live occurrence", async t => {
+  const dir = temporaryDirectory(t, "condense-preview-");
+  const sm = SessionManager.create(dir, dir), f = queryFixture([], sm);
+  const raw = "ARCHIVED α😀\n".repeat(120), other = "STILL LIVE";
+  const batch = {
+    turnIndex: 1, timestamp: 1, assistantText: "",
+    toolCalls: [record("reused", raw, 3), record("reused", other, 6), record("related", "related output", 9)],
+  };
+  const messages = [
+    assistantToolCall(modelNamed("gpt-6-astra"), "reused", "read"),
+    { ...toolResult("reused", "read", raw), timestamp: 3 },
+    assistantToolCall(modelNamed("gpt-6-astra"), "reused", "read"),
+    { ...toolResult("reused", "read", other), timestamp: 6 },
+  ];
+  const [covered, , related] = await archiveBatches([batch], {
+    indexer: f.indexer, sessionDir: dir, sessionId: sm.getSessionId(), spillThreshold: 1,
+    spillPreviewBytes: 30, appendEntry: (type, data) => sm.appendCustomEntry(type, data),
+  });
+  assert.equal(pruneMessages(messages, f.indexer).messages, messages);
+
+  const previews = t.mock.method(sm, "getEntryForScan");
+  sm.appendCustomMessageEntry("context-prune-summary", "archived work", false, { toolCallRefs: [covered, related] });
+  f.indexer.syncSummaryEntries(f.ctx);
+  assert.ok(previews.mock.callCount() <= 1, "publishing two occurrences in one journal must not re-decode it");
+  previews.mock.resetCalls();
+  const projected = pruneMessages(messages, f.indexer).messages;
+  assert.match(projected[1].content[0].text, /ARCHIVED α😀/);
+  assert.ok(projected[1].content[0].text.includes(covered.shortId));
+  assert.equal(projected[3], messages[3]);
+  assert.deepEqual(pruneMessages(messages, f.indexer).messages, projected);
+  assert.equal(previews.mock.callCount(), 0, "published previews need no repeated archive read");
+  previews.mock.restore();
+
+  const reloaded = queryFixture([], SessionManager.open(sm.getSessionFile(), dir));
+  assert.deepEqual(pruneMessages(messages, reloaded.indexer).messages, projected);
+  const recalled = (await reloaded.run({ toolCallIds: [covered.shortId] })).details.results[0];
+  assert.equal(recalled.text, raw);
+  assert.equal(recalled.complete, true);
+});
+
+test("a missing indexed occurrence cannot publish a spill stub for a reused ID", async t => {
+  const f = queryFixture([record("reused", "", 3, {
+    archiveOnly: true, spillPath: "unavailable.txt", spillBytes: 48, resultPreview: "remembered preview",
+  })]);
+  const sm = f.ctx.sessionManager, archive = sm.getLeafId();
+  const read = sm.getEntryForScan.bind(sm);
+  const original = read(archive);
+  t.mock.method(sm, "getEntryForScan", id => id !== archive ? read(id) : {
+    ...original, data: { toolCalls: [record("reused", "", 6)] },
+  });
+  const ref = { shortId: "t7", toolCallId: "reused", resultTimestamp: 3 };
+  sm.appendCustomMessageEntry("context-prune-summary", "archived work", false, { toolCallRefs: [ref] });
+  f.indexer.syncSummaryEntries(f.ctx);
+
+  const raw = { ...toolResult("reused", "read", "raw evidence"), timestamp: 3 };
+  const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "reused", "read"), raw];
+  assert.equal(pruneMessages(messages, f.indexer).messages[1], raw);
+  await assert.rejects(f.run({ toolCallIds: [ref.shortId] }), /Execution archive record unavailable: reused@3/);
 });
 
 test("a modern occurrence disables the legacy bare-ID shortcut after reload", () => {

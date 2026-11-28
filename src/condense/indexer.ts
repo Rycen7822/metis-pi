@@ -48,17 +48,23 @@ function projectionEvidence(record: ToolCallRecord): ProjectionEvidence {
   const { toolName, archiveOnly, metadataUnavailable, spillPath, spillBytes, archiveComplete, archiveSource } = record;
   const argumentPath = typeof record.args?.path === "string" ? record.args.path : undefined;
   return { toolName, archiveOnly, metadataUnavailable, argumentPath, spillPath, spillBytes, archiveComplete, archiveSource,
-    resultPreview: spillPath ? record.resultPreview : undefined };
+    resultPreview: spillPath ? record.resultPreview ?? undefined : undefined };
 }
 
-type StoredRecord = DirectoryMetadata & ProjectionEvidence & {
+// null identifies a cold preview; undefined means the archive never had one.
+type StoredRecord = DirectoryMetadata & Omit<ProjectionEvidence, "resultPreview"> & {
   argsPreview: string;
   entryId: string;
   position: number;
   activated?: boolean;
-};
+} & ({ resultPreview?: string } | { resultPreview: null });
 type IndexedRecord = { record: ToolCallRecord } | StoredRecord;
 type RecordReader = ExtensionContext["sessionManager"];
+
+function archivedOccurrence(records: ToolCallRecord[] | undefined, position: number, key: string): ToolCallRecord | undefined {
+  const record = records?.[position];
+  return record && occKey(record.toolCallId, record.resultTimestamp) === key ? record : undefined;
+}
 
 export class ToolCallIndexer {
   /** Persisted payloads stay in the session store; only legacy aliases without index entries need full fallback records. */
@@ -186,8 +192,10 @@ export class ToolCallIndexer {
       const { entryId, position, dedupSource } = source;
       const hash = record.contentHash
         ?? (!record.spillPath || dedupSource ? hashToolResult(record.toolName, record.resultText) : undefined);
+      const evidence = projectionEvidence(record);
+      const resultPreview = record.archiveOnly && evidence.resultPreview !== undefined ? null : evidence.resultPreview;
       this.index.set(key, {
-        ...directoryMetadata(record), ...projectionEvidence(record), entryId, position,
+        ...directoryMetadata(record), ...evidence, entryId, position, resultPreview,
         argsPreview: argumentPreview(record.args),
         contentHash: record.spillPath ? record.contentHash : hash,
       });
@@ -237,7 +245,27 @@ export class ToolCallIndexer {
   /** Stub and protection facts for an exact occurrence, with no archive body read. */
   getProjectionEvidence(key: string): ProjectionEvidence | undefined {
     const item = this.index.get(key);
-    return item && ("record" in item ? projectionEvidence(item.record) : item);
+    if (!item) return undefined;
+    if ("record" in item) return projectionEvidence(item.record);
+    return item.resultPreview === null ? { ...item, resultPreview: undefined } : item;
+  }
+
+  /** Only recoverable occurrences can be used to prepare replacements. */
+  getCandidateStubEvidence(keys: readonly string[]): Map<string, ToolStubEvidence> {
+    const previews = this.readColdPreviews(keys);
+    const candidates = new Map<string, ToolStubEvidence>();
+    for (const key of keys) {
+      const item = this.index.get(key);
+      if (!item) continue;
+      const evidence = "record" in item ? projectionEvidence(item.record) : item;
+      if (evidence.metadataUnavailable || evidence.archiveComplete === false) continue;
+      if (evidence.resultPreview !== null) candidates.set(key, evidence);
+      else {
+        const resultPreview = previews.get(key);
+        if (resultPreview !== undefined) candidates.set(key, { ...evidence, resultPreview });
+      }
+    }
+    return candidates;
   }
 
   /** Directory/parent selection must not load archived argument or result bodies. */
@@ -313,13 +341,39 @@ export class ToolCallIndexer {
     const item = this.index.get(resolved);
     if (!item) return undefined;
     if ("record" in item) return item.record;
-    const entry = this.sourceReader?.getEntryForScan(item.entryId);
-    const record = entry?.type === "custom" && entry.customType === CUSTOM_TYPE_INDEX
-      ? (entry.data as IndexEntryData)?.toolCalls?.[item.position] : undefined;
-    if (!record || occKey(record.toolCallId, record.resultTimestamp) !== resolved) {
+    const record = archivedOccurrence(this.readArchiveBatch(item.entryId), item.position, resolved);
+    if (!record) {
       throw new Error(`Execution archive record unavailable: ${resolved}`);
     }
     return item.activated ? { ...record, archiveOnly: false } : record;
+  }
+
+  private readArchiveBatch(entryId: string): ToolCallRecord[] | undefined {
+    const entry = this.sourceReader?.getEntryForScan(entryId);
+    return entry?.type === "custom" && entry.customType === CUSTOM_TYPE_INDEX
+      ? (entry.data as IndexEntryData)?.toolCalls : undefined;
+  }
+
+  private readColdPreviews(keys: readonly string[]): Map<string, string> {
+    // A journal can hold many occurrences; decode each source at most once per operation.
+    const byEntry = new Map<string, Array<{ key: string; position: number }>>();
+    for (const key of keys) {
+      const item = this.index.get(key);
+      if (!item || "record" in item || item.resultPreview !== null) continue;
+      const positions = byEntry.get(item.entryId);
+      const ref = { key, position: item.position };
+      if (positions) positions.push(ref);
+      else byEntry.set(item.entryId, [ref]);
+    }
+    const previews = new Map<string, string>();
+    for (const [entryId, positions] of byEntry) {
+      const records = this.readArchiveBatch(entryId);
+      for (const { key, position } of positions) {
+        const preview = archivedOccurrence(records, position, key)?.resultPreview;
+        if (typeof preview === "string") previews.set(key, preview);
+      }
+    }
+    return previews;
   }
 
   lookupToolCalls(toolCallIds: string[]): ToolCallRecord[] {
@@ -474,14 +528,19 @@ export class ToolCallIndexer {
 
   private registerSummaryBody(toolCallIds: string[], text: string): void {
     if (!text || toolCallIds.length === 0) return;
+    const previews = this.readColdPreviews(toolCallIds);
     this.summaryBodies.push({ toolCallIds, text });
     for (const key of toolCallIds) {
       const item = this.index.get(key);
       if (!item) continue;
       const record = "record" in item ? item.record : item;
       if (!record.archiveOnly) continue;
-      this.index.set(key, "record" in item ? { record: { ...item.record, archiveOnly: false } }
-        : { ...item, archiveOnly: false, activated: true });
+      if ("record" in item) this.index.set(key, { record: { ...item.record, archiveOnly: false } });
+      else {
+        const resultPreview = item.resultPreview === null ? previews.get(key) ?? null : item.resultPreview;
+        if (resultPreview === null) continue;
+        this.index.set(key, { ...item, archiveOnly: false, activated: true, resultPreview });
+      }
       const hash = "record" in item
         ? item.record.contentHash ?? (!item.record.spillPath ? hashToolResult(item.record.toolName, item.record.resultText) : undefined)
         : item.contentHash;

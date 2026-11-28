@@ -775,21 +775,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       assertValid: () => signal.throwIfAborted() });
     signal.throwIfAborted();
     const replacements = new Map(
-      batch.toolCalls.map((call, i) => [
-        occKey(call.toolCallId, call.resultTimestamp),
-        { call, ref: refs[i]!.shortId, record: indexer.getProjectionEvidence(occKey(call.toolCallId, call.resultTimestamp)) },
-      ]),
+      batch.toolCalls.map((call, i) => [occKey(call.toolCallId, call.resultTimestamp), { call, ref: refs[i]!.shortId }]),
     );
     const before = visible.filter(
       (message): message is Extract<NativeProjection["messages"][number], { role: "toolResult" }> =>
         message.role === "toolResult" && replacements.has(occKey(message.toolCallId, message.timestamp)),
     );
-    if (
-      [...replacements.values()].some(
-        ({ record }) => !record || record.metadataUnavailable || record.archiveComplete === false,
-      )
-    )
-      return unavailable("replacement");
     if (
       before.length !== batch.toolCalls.length ||
       before.some(
@@ -800,9 +791,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       return unavailable("replacement");
     if (batch.toolCalls.some((call) => call.nestedProtected || protectionPredicate(call.toolName, call.args)))
       return unavailable("replacement");
-    const stubs = before.map((message: any) => {
-      const replacement = replacements.get(occKey(message.toolCallId, message.timestamp))!;
-      return toolResultStub(message, replacement.record, replacement.ref);
+    const evidence = indexer.getCandidateStubEvidence([...replacements.keys()]);
+    if (evidence.size !== replacements.size) return unavailable("replacement");
+    const stubs = before.map(message => {
+      const key = occKey(message.toolCallId, message.timestamp);
+      return toolResultStub(message, evidence.get(key), replacements.get(key)!.ref);
     });
     const timestamp = Date.now();
     const render = (text: string, deterministic = false) => ({ role: "custom" as const, customType: CUSTOM_TYPE_SUMMARY,
@@ -1150,8 +1143,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
                 assertValid: () => signal.throwIfAborted(),
               });
               const message = dedupVisible?.get(key);
-              const archived = indexer.getProjectionEvidence(key);
-              const counts = message && archived && !archived.metadataUnavailable && archived.archiveComplete !== false
+              const archived = message && indexer.getCandidateStubEvidence([key]).get(key);
+              const counts = message && archived
                 && await tokenEstimator.measureRewrite([message], [toolResultStub(message, archived, refs[0]!.shortId)], signal);
               assertCurrent(version);
               signal.throwIfAborted(); assertPendingOwnership();
