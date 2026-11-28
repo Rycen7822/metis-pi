@@ -2464,25 +2464,31 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return { projection, changedToolIds, editedToolIds, editedSummaries };
   }
 
-  function indexChainProjection(messages: any[]) {
-    return { messages, resolve: createRangeResolver(messages),
-      summaries: messages.filter(message => message.customType === CUSTOM_TYPE_SUMMARY) };
-  }
-
-  function sharedShape(before: ReturnType<typeof indexChainProjection>, views: SingleChainCompressionEntry[]): string {
-    // Pi omits system messages from the context hook, but source validation still checks the full range.
-    const middle: typeof before.messages = [];
-    for (const view of views) {
-      const range = before.resolve(view);
-      if (!range) continue;
-      for (let i = range.startIndex; i <= range.endIndex; i++) {
-        const message = before.messages[i];
-        if (message.role !== "system") middle.push(message);
-      }
-    }
-    const keys = new Set(views.flatMap(view => view.droppedOccurrenceKeys ?? []));
-    const summaries = before.summaries.filter(message => perBatchSummaryOverlapsDropped(message, keys, new Set()));
-    return projectionFingerprint([views, middle, summaries, currentConfig.value.chainCompression]);
+  // Each verdict compares against a local projection with only single-chain rewrites.
+  // Fingerprint what Pi's context hook can see; member authorization still checks the full source.
+  function sharedRenderBaseline(input: any[], ctx: ExtensionContext, source: ReturnType<typeof readSourceEdits>,
+    singles: SingleChainCompressionEntry[], chainFloor?: number) {
+    const { messages } = projectContext(input, ctx.model?.api, { ctx, source, chainViews: singles, probe: true, chainFloor });
+    const resolve = createRangeResolver(messages);
+    const summaries = messages.filter(message => message.customType === CUSTOM_TYPE_SUMMARY);
+    return {
+      messages,
+      shape(views: SingleChainCompressionEntry[]) {
+        const visible: typeof messages = [];
+        const keys = new Set<string>();
+        for (const view of views) {
+          for (const key of view.droppedOccurrenceKeys ?? []) keys.add(key);
+          const range = resolve(view);
+          if (!range) continue;
+          for (let i = range.startIndex; i <= range.endIndex; i++) {
+            const message = messages[i];
+            if (message.role !== "system") visible.push(message);
+          }
+        }
+        const overlapping = summaries.filter(message => perBatchSummaryOverlapsDropped(message, keys));
+        return projectionFingerprint([views, visible, overlapping, currentConfig.value.chainCompression]);
+      },
+    };
   }
 
   function singleSummaryCurrent(entry: SingleChainCompressionEntry, ctx?: ExtensionContext): boolean {
@@ -2516,27 +2522,24 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   function currentChainViews(messages: any[], ctx?: ExtensionContext,
     source?: ReturnType<typeof readSourceEdits>): SingleChainCompressionEntry[] {
     const entries = indexer.getChainEntries();
-    const shared = ctx ? entries.filter((entry): entry is SharedChainCompressionEntry =>
-      isSharedChain(entry) && !!sharedValidations.get(entry.blockId)?.hasGain) : [];
+    const shared = ctx ? entries.flatMap(entry => {
+      if (!isSharedChain(entry)) return [];
+      const validation = sharedValidations.get(entry.blockId);
+      return validation?.hasGain ? [{ entry, shape: validation.shape }] : [];
+    }) : [];
     if (shared.length === 0 && !entries.some(entry => !isSharedChain(entry))) return [];
     source ??= ctx && readSourceEdits(ctx);
     const raw = source?.projection.messages ?? messages;
     const analysis = analyzeChains(raw, source);
     const singles = singleCandidates(entries, analysis, ctx);
-    if (!ctx || shared.length === 0) return singles;
-    let before: ReturnType<typeof indexChainProjection> | undefined;
-    // This synchronous tree owns one source view. Awaiting writers must obtain
-    // a fresh view before checking whether their result can be published.
-    return singles.concat(
-      shared.flatMap((entry) => {
-        const validation = sharedValidations.get(entry.blockId);
-        if (!validation?.hasGain) return [];
-        const views = sharedCandidates(entry, raw, ctx, analysis);
-        if (!views.length) return [];
-        before ??= indexChainProjection(projectContext(messages, ctx.model?.api, { ctx, source, chainViews: singles, probe: true }).messages);
-        return validation.shape === sharedShape(before, views) ? views : [];
-      }),
-    );
+    if (!ctx || !source || shared.length === 0) return singles;
+    let before: ReturnType<typeof sharedRenderBaseline> | undefined;
+    return singles.concat(shared.flatMap(({ entry, shape }) => {
+      const views = sharedCandidates(entry, raw, ctx, analysis);
+      if (!views.length) return [];
+      before ??= sharedRenderBaseline(messages, ctx, source, singles);
+      return before.shape(views) === shape ? views : [];
+    }));
   }
 
   const maintainChains = (ctx: ExtensionContext, prepared?: PreparedProjection,
@@ -2618,19 +2621,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Revalidate published shapes after edits, recovery or reload, without rewriting their records.
       const entries = indexer.getChainEntries();
       const singles = singleCandidates(entries, analysis, ctx);
-      // Every shared entry compares against the same single-chain projection.
-      // Keep this baseline local to this pass; source checks after awaits still
-      // reject any changed session before an approval can be published.
-      let singleBaseline: ReturnType<typeof indexChainProjection> | undefined;
+      // Reuse the pass-local baseline; the source guard after measurement still owns publication.
+      let singleBaseline: ReturnType<typeof sharedRenderBaseline> | undefined;
       for (const entry of entries.filter(isSharedChain)) {
         assertValid();
         const views = sharedCandidates(entry, raw, ctx, analysis);
         if (!views.length) { sharedValidations.delete(entry.blockId); continue; }
-        const baseline = singleBaseline ??= indexChainProjection(projectContext(raw, ctx.model?.api,
-          { ctx, source: sourceView, chainViews: singles, probe: true }).messages);
-        const before = baseline.messages;
+        const baseline = singleBaseline ??= sharedRenderBaseline(raw, ctx, sourceView, singles);
         if (ctx.mode === "tui" && frozenSource) await cooperate();
-        const shape = sharedShape(baseline, views);
+        const shape = baseline.shape(views);
         if (sharedValidations.get(entry.blockId)?.shape === shape) continue;
         sharedValidations.delete(entry.blockId);
         const source = frozenSource ?? captureSharedSource(raw);
@@ -2638,7 +2637,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const after = projectContext(raw, ctx.model?.api,
           { ctx, source: sourceView, chainViews: singles.concat(views), probe: true }).messages;
         if (ctx.mode === "tui") await cooperate();
-        const counts = await tokenEstimator.compare(before, after, signal);
+        const counts = await tokenEstimator.compare(baseline.messages, after, signal);
         assertValid();
         if (!counts) continue; // A failed measurement is retryable, not a negative verdict.
         const hasGain = counts.piBefore > counts.piAfter && counts.proxyDelta > 0;
@@ -2759,9 +2758,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (source !== projectionFingerprint(measuredSource.messages)) return;
         const starts = new Set(views.map(view => view.startUserTimestamp));
         if (indexer.getChainEntries().flatMap(chainMembers).some(member => starts.has(member.startUserTimestamp))) return;
-        const plain = projectContext(raw, ctx.model?.api,
-          { ctx, source: currentSource, chainViews: singles, probe: true, chainFloor: floor }).messages;
-        return { entry, counts, prefix, context, shape: sharedShape(indexChainProjection(plain), views) };
+        const renderBaseline = sharedRenderBaseline(raw, ctx, currentSource, singles, floor);
+        return { entry, counts, prefix, context, shape: renderBaseline.shape(views) };
       };
       for (const plan of independent) {
         const suffix = plans.slice(plans.indexOf(plan)).map(item => item.chain);

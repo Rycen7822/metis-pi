@@ -289,6 +289,21 @@ export default [
     ],
   },
   {
+    module: 'SharedChainRequest',
+    constants: { Fault: 'none' },
+    invariants: ['SummaryDelivered', 'NoStaleSummary', 'ConversationPreserved', 'SystemPreserved'],
+    properties: ['EventuallySent'],
+    cases: [
+      { name: 'next-request' },
+      ...[
+        ['full-fingerprint', 'SummaryDelivered'],
+        ['visible-only-source', 'NoStaleSummary'],
+        ['drop-tail', 'ConversationPreserved'],
+        ['drop-system', 'SystemPreserved'],
+      ].map(([Fault, invariant]) => ({ name: Fault, constants: { Fault }, expect: { invariant } })),
+    ],
+  },
+  {
     module: 'SharedRetryWork',
     constants: { Cycles: 6, GuardRejected: false, GuardPublish: true, IndexActiveBlocks: true, CacheVerdict: true,
       HasGain: false, MutateDuringCount: false },

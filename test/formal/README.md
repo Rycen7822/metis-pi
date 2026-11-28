@@ -41,6 +41,7 @@ Java/JAR 缺失、解析失败、超时、检查未完成或指定性质未命�
 | LayeredCycles | 多代参数、工具、共享摘要和 Native 裁剪交错；来源、保护和摘要变化 | `runtime.ts`、`argument-history.ts`、`pruner.ts` |
 | RecoveryCycles | 重复 ID 的独立参数和引用；持久化失败、恢复与旧缺口退出活动窗口 | `indexer.ts`、`runtime.ts`、`frontier.ts` |
 | RenderAdmission | 容量等待期间重验已发布视图，新压缩在等待解除后进行 | `runtime.ts`、`occ.ts` |
+| SharedChainRequest | 完整来源校验与钩子可见指纹分离；首个请求保留有效摘要、系统状态与后续消息 | `runtime.ts`、Pi 的 `context` 钩子 |
 | SharedRetryWork | 同一无收益候选复用判断；有收益时执行最终来源校验 | `runtime.ts` |
 | NativeAuthorization | Native 完成或取消后的首次请求等待本地视图就绪 | `runtime.ts` |
 | ActiveRanges | 同一投影的范围索引、唯一锚点、内容证明与最终来源校验 | `chain-range-prune.ts`、`runtime.ts` |
@@ -86,6 +87,7 @@ Java/JAR 缺失、解析失败、超时、检查未完成或指定性质未命�
 | LayeredCycles | 最多六代、每代两个成员，假定归档成功。四层的 24 种顺序用于状态探索；实际 pipeline 顺序、gain、source 和 summary 由实现侧验证。 |
 | RecoveryCycles | 分开探索归档、摘要、处理位置的失败及四个崩溃点。目录存在时原文仍然保留；`obsolete-gap-need-not-block` 验证错误期待的反例。外部删除已发布归档属于运行维护范围。 |
 | RenderAdmission / SharedRetryWork | 从有效共享视图或同一候选开始，Native 互斥由其他模型检查。历史元数据遍历的实际 CPU、内存与 UI 帧延迟由性能测试评估。 |
+| SharedChainRequest | 从一个已发布且有收益的共享块开始，允许一次正文或链内系统状态编辑。摘要替换和系统重放是符号操作；成员选择由 ActiveRanges / BodyCoverage 覆盖，请求边界由 `test/contract/condense-pipeline.test.mjs` 补充。 |
 | NativeAuthorization | 假定存活成员仍有收益且计数可用。Native 结束触发重验；取消保留仍成立的证明。真实 `session_start` 与 Native 事件序列由实现测试覆盖。 |
 | ActiveRanges / BodyCoverage | 统计符号行查找；范围索引只在同一同步视图有效。未覆盖原文继续保留，旧摘要合并与派生输入重放由实现测试覆盖。 |
 | VerdictEpoch | epoch 是模型辅助身份。模型身份独立于 shape，切换模型时清空旧判断。 |

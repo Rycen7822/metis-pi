@@ -26,13 +26,13 @@ function summaryRefs(msg: any): { toolCallId: string; resultTimestamp?: number }
  */
 export function perBatchSummaryOverlapsDropped(
   msg: any,
-  droppedOccKeys: Set<string>,
-  droppedBareIds: Set<string>,
+  droppedOccKeys: ReadonlySet<string>,
+  droppedBareIds?: ReadonlySet<string>,
 ): boolean {
   return summaryRefs(msg).some((r) =>
     r.resultTimestamp !== undefined
       ? droppedOccKeys.has(occKey(r.toolCallId, r.resultTimestamp))
-      : droppedBareIds.has(bareToolCallId(r.toolCallId)),
+      : droppedBareIds?.has(bareToolCallId(r.toolCallId)) === true,
   );
 }
 

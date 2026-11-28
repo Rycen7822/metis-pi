@@ -2157,6 +2157,7 @@ test("published shared chains reach the next Pi request without dropping system 
   await f.waitMaintenance();
   const block = f.sm.getBranch().find((e) => e.customType === "context-prune-chain").data;
   assert.equal(block.members.length, 2);
+  f.sm.appendMessage({ role: "user", content: "After publication", timestamp: f.nextTimestamp() });
   f.sm.appendMessage({ role: "user", content: "Next request", timestamp: f.nextTimestamp() });
   const project = () => runner.emitContext(f.sm.buildSessionProjection().messages);
   const projected = await project();
@@ -2165,6 +2166,7 @@ test("published shared chains reach the next Pi request without dropping system 
   assert.deepEqual(groups.map(m => m.metisDerived.blockId), [block.blockId]);
   assert.ok(!projected.some(m => m.role === "toolResult" && (m.toolCallId === "member-0" || m.toolCallId === "member-1")));
   assert.deepEqual(projected[0], { ...initialSystem, sections: { task: "Updated instructions" }, toolsAdded: [tool] });
+  assert.deepEqual(projected.slice(-2).map(m => m.content), ["After publication", "Next request"]);
   const settingsPath = join(f.dir, "metis-pi.toml");
   const settings = parseMetisConfig(readFileSync(settingsPath, "utf8"));
   settings.contextPrune.chainCompression.enabled = false;
