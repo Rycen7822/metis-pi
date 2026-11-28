@@ -346,6 +346,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   let continuationsUntilAudit = 0;
   let completionReportGoalId: string | undefined;
   let requestInvalidated = false;
+  let freshContinuationPending = false;
   let owed: { token: string; goalId: string; revision: number; input: number; session: string } | undefined;
   let editGrant: { token: string; goalId: string; session: string } | undefined;
   function agentEditToken(ctx: ExtensionContext): string | null {
@@ -366,14 +367,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
   const stopOccFinished = pi.events.on(METIS_EVENTS.occFinished, (event) => {
     if (!isOccFinished(event)) return;
-    if (!owed) return;
-    if (event.cancelled) {
-      clearOwed();
-      return;
-    }
-    // Pi defers this command until settled handlers return. At execution it
-    // can see user input that was invisibly queued during maintenance.
-    pi.sendUserMessage(`/goal __continue_${owed.token}`, { expandPromptTemplates: true });
+    if (event.cancelled) clearOwed();
+    else dispatchDeferredContinuation();
   });
   const stopCheckpointCancellation = pi.events.on(METIS_EVENTS.checkpointRequestCancelled, () => {
     requestInvalidated = true;
@@ -427,7 +422,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     persist("edit");
     showGoalMessage(`Goal ${statusLabel(state.current!.status)}\n\n${goalSummary(state.snapshot()!)}`);
     updateStatus(ctx);
-    if (state.current?.status === "active") queueContinuation(ctx);
+    if (state.current?.status === "active") requestFreshContinuation(ctx);
   }
 
   function controlGoal(action: GoalControlAction, ctx: ExtensionContext): void {
@@ -444,7 +439,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     persist("status");
     showGoalMessage(`Goal ${status}\n\n${goalSummary(state.snapshot()!)}`);
     updateStatus(ctx);
-    if (status === "active") queueContinuation(ctx);
+    if (status === "active") requestFreshContinuation(ctx);
   }
 
   function stopStatusTimer(): void {
@@ -471,7 +466,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   function persist(action: PersistedGoalState["action"]): void {
     if (action === "set" || action === "edit" || action === "clear") continuationsUntilAudit = 0;
-    if (action !== "account" || state.current?.status !== "active") editGrant = undefined;
+    if (action !== "account" || state.current?.status !== "active") {
+      editGrant = undefined;
+      freshContinuationPending = false;
+    }
     if (action !== "account") {
       state.clearOpenAISafetyRecovery();
       revision++;
@@ -549,8 +547,38 @@ export default function goalExtension(pi: ExtensionAPI) {
     }
   }
 
+  function requestFreshContinuation(ctx: ExtensionContext): void {
+    if (ctx.isIdle()) queueContinuation(ctx);
+    else freshContinuationPending = true;
+  }
+
+  function flushFreshContinuation(ctx: ExtensionContext): void {
+    if (!freshContinuationPending) return;
+    freshContinuationPending = false;
+    if (deferContinuation(ctx)) dispatchDeferredContinuation();
+  }
+
+  function deferContinuation(ctx: ExtensionContext): boolean {
+    if (state.current?.status !== "active" || ctx.hasPendingMessages() || state.continuationQueued) return false;
+    owed = {
+      token: randomUUID(),
+      goalId: state.current.id,
+      revision,
+      input: inputGeneration,
+      session: ctx.sessionManager.getSessionId(),
+    };
+    state.continuationQueued = true;
+    return true;
+  }
+
+  function dispatchDeferredContinuation(): void {
+    // Pi defers commands issued during settlement until all settled handlers return.
+    if (owed) pi.sendUserMessage(`/goal __continue_${owed.token}`, { expandPromptTemplates: true });
+  }
+
   function reconstructState(ctx: ExtensionContext): void {
     continuationsUntilAudit = 0;
+    freshContinuationPending = false;
     revision++;
     editGrant = undefined;
     viewAbort?.abort();
@@ -566,9 +594,15 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
   pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
-  // The next continuation may no longer have the last full audit in its prefix.
-  pi.on("session_compact", () => { continuationsUntilAudit = 0; });
+  pi.on("session_compact", (event, ctx) => {
+    continuationsUntilAudit = 0;
+    if (event.reason === "manual") flushFreshContinuation(ctx);
+  });
+  pi.on("session_compact_failed", (event, ctx) => {
+    if (event.reason === "manual" && freshContinuationPending) controlGoal("pause", ctx);
+  });
   pi.on("session_shutdown", async () => {
+    freshContinuationPending = false;
     revision++;
     editGrant = undefined;
     viewAbort?.abort();
@@ -606,11 +640,12 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     };
   });
 
-  pi.on("agent_start", async (_event, _ctx) => {
+  pi.on("agent_start", async () => {
     pendingError = undefined;
     inAgentTurn = true;
     requestInvalidated = false;
     if (state.advanceOpenAISafetyRecoveryRequest(OPENAI_SAFETY_REQUEST_WINDOW)) persist("account");
+    clearOwed();
     state.startTurn();
   });
 
@@ -633,7 +668,10 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     // This cancellation rejected a stale request before transport. It is not
     // a user abort or exhausted provider retry; an explicit retry builds a
     // fresh context through every owner rather than queuing a competing turn.
-    if (cancelledRequest) return;
+    if (cancelledRequest) {
+      freshContinuationPending = false;
+      return;
+    }
 
     if (state.current.status !== "active") return;
 
@@ -647,22 +685,15 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     if (lastAssistant?.stopReason === "aborted") {
       if (state.clearOpenAISafetyRecovery()) persist("account");
       if (await pauseAfterAbort(ctx)) return;
+      freshContinuationPending = true;
     } else if (state.finishOpenAISafetyRecoveryWindow(OPENAI_SAFETY_REQUEST_WINDOW)) {
       persist("account");
     }
 
     const maintenance: OccStatusRequest = { deferGoal: false };
     pi.events.emit(METIS_EVENTS.occStatus, maintenance);
-    if (maintenance.deferGoal && !ctx.hasPendingMessages() && !state.continuationQueued) {
-      owed = {
-        token: randomUUID(),
-        goalId: state.current.id,
-        revision,
-        input: inputGeneration,
-        session: ctx.sessionManager.getSessionId(),
-      };
-      state.continuationQueued = true;
-    } else queueContinuation(ctx);
+    if (maintenance.deferGoal && deferContinuation(ctx)) freshContinuationPending = false;
+    else if (!freshContinuationPending) queueContinuation(ctx);
   });
 
   async function pauseAfterAbort(ctx: ExtensionContext): Promise<boolean> {
@@ -740,20 +771,21 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
   pi.on("agent_settled", async (event, ctx) => {
     const error = pendingError;
     pendingError = undefined;
-    if (!error || state.current?.status !== "active") return;
-    // Pi can represent startup cancellation as an error before the provider
-    // runs. Settlement's abort flag distinguishes it from exhausted recovery.
-    if (event.aborted) {
+    if (state.current?.status !== "active") return;
+    if (error) {
+      if (!event.aborted) {
+        freshContinuationPending = false;
+        if (autoCompactOnOpenAISafetyRefusal && isOpenAICybersecurityRefusal(error)) recoverFromOpenAISafety(ctx);
+        else stopGoalAfterError(ctx, goalStopStatusForAssistantError(error),
+          "Pi finished error recovery without a successful response, so automatic continuation was stopped.");
+        return;
+      }
+      // Pi can report an aborted startup as an error even when no model request was made.
       if (state.clearOpenAISafetyRecovery()) persist("account");
-      if (!await pauseAfterAbort(ctx)) queueContinuation(ctx);
-      return;
+      if (await pauseAfterAbort(ctx)) return;
+      freshContinuationPending = true;
     }
-    if (autoCompactOnOpenAISafetyRefusal && isOpenAICybersecurityRefusal(error)) {
-      recoverFromOpenAISafety(ctx);
-      return;
-    }
-    stopGoalAfterError(ctx, goalStopStatusForAssistantError(error),
-      "Pi finished error recovery without a successful response, so automatic continuation was stopped.");
+    flushFreshContinuation(ctx);
   });
 
   const projectMessages = <T>(messages: T[]): T[] => {
@@ -791,6 +823,8 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
       if (trimmed.startsWith("__continue_")) {
         const ticket = owed;
         if (!ticket || trimmed !== `__continue_${ticket.token}`) return;
+        if (!ctx.isIdle()) await ctx.waitForIdle();
+        if (owed !== ticket) return;
         clearOwed();
         if (
           ticket.session !== ctx.sessionManager.getSessionId() ||
@@ -907,7 +941,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
       persist("set");
       showGoalMessage(`Goal active\n\n${goalSummary(state.current!)}`);
       updateStatus(ctx);
-      queueContinuation(ctx);
+      requestFreshContinuation(ctx);
     },
   });
 
@@ -980,6 +1014,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
         default:
           throw new Error("goal action must be get, create, edit, or update");
       }
+      if (inAgentTurn && (params.action === "create" || params.action === "edit")) freshContinuationPending = true;
       const complete = params.action === "update" && params.status === "complete";
       updateStatus(ctx);
       if (complete && inAgentTurn) completionReportGoalId = state.current!.id;

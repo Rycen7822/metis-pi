@@ -208,6 +208,48 @@ test(`custom Goal creation and resume preserve goal and policy through tool step
   assert.deepEqual(h.errors, []);
 });
 
+test("resuming Goal during an unrelated prompt starts a fresh run and keeps pursuing it", { timeout: 15_000 }, async t => {
+  const pauses = [0, 1].map(() => ({ entered: Promise.withResolvers(), release: Promise.withResolvers() }));
+  let turns = 0;
+  const h = await host(t, false, false, false, { goal: true, factories: [pi => {
+    pi.on("turn_end", async () => {
+      const pause = pauses[turns++];
+      if (!pause) return;
+      pause.entered.resolve();
+      await pause.release.promise;
+    });
+  }] });
+  t.after(() => { for (const pause of pauses) pause.release.resolve(); });
+  h.setReply(count => count === 4 ? toolCall("goal", { action: "update", status: "complete" }) : undefined);
+
+  await h.session.prompt("/goal RESUME_WHILE_BUSY");
+  await pauses[0].entered.promise;
+  try { await h.session.prompt("/goal pause"); }
+  finally { pauses[0].release.resolve(); }
+  await h.session.waitForIdle();
+  assert.equal(goalSnapshot(h).status, "paused");
+
+  const run = h.session.prompt("Handle a separate request first.");
+  await pauses[1].entered.promise;
+  try {
+    assert.match(systemText(h.calls[1]), /Thread goal status: paused/);
+    await h.session.prompt("/goal resume");
+    assert.equal(goalSnapshot(h).status, "active");
+    assert.equal(h.calls.length, 2, "resuming does not interrupt the separate request");
+  } finally {
+    pauses[1].release.resolve();
+  }
+  await run;
+  await h.session.waitForIdle();
+  assert.deepEqual(h.errors, []);
+  assert.equal(h.calls.length, 5, "a normal reply to the resumed goal does not stop its next continuation");
+  assert.ok(!systemText(h.calls[2]).includes("Thread goal status: paused"), "the resumed request no longer says Goal is paused");
+  assert.match(systemText(h.calls[2]), /RESUME_WHILE_BUSY/);
+  assert.ok(h.calls[2].context.messages.some(message =>
+    message.role === "user" && JSON.stringify(message.content).includes("RESUME_WHILE_BUSY")), "the request contains the goal continuation");
+  assert.equal(goalSnapshot(h).status, "complete");
+});
+
 test("custom startup coalesces pending messages and consumes nextTurn exactly once", { timeout: 15_000 }, async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
   let starts = 0;
