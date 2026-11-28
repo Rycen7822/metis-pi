@@ -143,10 +143,13 @@ export default function subagents(pi: ExtensionAPI) {
     await owner?.settled(ctx, true);
   });
   pi.registerCommand("metis-subagents", {
-    description: "Subagent status; stop <agent>; continue <agent> <task>; answer <agent>",
+    description: "Subagent status; stop, continue, answer, or confirm cleanup",
     getArgumentCompletions: commandChoices(prefix => {
-      const action = /^(stop|continue|answer) /.exec(prefix)?.[1];
-      return action ? (owner?.getCommandTargets(action) ?? []).map(id => `${action} ${id}`) : ["stop", "continue", "answer"];
+      const actions = ["stop", "continue", "answer", "confirm-cleanup"];
+      const [action] = prefix.split(" ");
+      return prefix.includes(" ") && actions.includes(action)
+        ? (owner?.getCommandTargets(action) ?? []).map(id => `${action} ${id}`)
+        : actions;
     }),
     handler: async (args, ctx) => {
       if (!owner || blocked) {

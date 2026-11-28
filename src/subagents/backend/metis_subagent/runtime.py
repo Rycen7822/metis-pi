@@ -4,7 +4,6 @@ read projections in views.py; this module owns ledger state transitions."""
 from __future__ import annotations
 import asyncio
 from weakref import WeakValueDictionary
-import contextlib
 import json
 import os
 from pathlib import Path
@@ -124,16 +123,27 @@ class Runtime:
         self.store.agent_update(w.agent["id"], cleanup=cleanup)
         return cleanup
 
+    def parkable_worker(self, a):
+        if not a or a["state"] != "idle":
+            return None
+        w = self.workers.get(a["id"])
+        if not w or w.generation != a["generation"] or w.closed or w.stopping or w.tainted or w.run.id or w.run.ui:
+            return None
+        return w
+
     def evictable(self):
-        """Settled residents that LRU capacity eviction may park; a pending
-        question, active run or unverified worker is never a candidate."""
-        out=[]
-        for aid,w in self.workers.items():
-            if w.closed or w.stopping or w.tainted or w.run.id or w.run.ui: continue
-            a=self.store.one('SELECT * FROM agents WHERE id=?',(aid,))
-            if not a or a['generation']!=w.generation or a['state']!='idle': continue
-            out.append((w.last_activity or 0,aid,w,a))
-        return sorted(out)
+        candidates = []
+        for aid in self.workers:
+            a = self.store.one("SELECT * FROM agents WHERE id=?", (aid,))
+            w = self.parkable_worker(a)
+            if w:
+                candidates.append((w.last_activity or 0, aid, w, a))
+        return sorted(candidates)
+
+    async def park_worker(self, a, w, reason):
+        cleanup = (await self.interrupt(a))["cleanup"]
+        self.event(w, "evicted", {"reason": reason, "cleanup": cleanup})
+        return cleanup
 
     async def ensure_capacity(self, incoming):
         """Park the least recently active settled agent before refusing a boot.
@@ -178,22 +188,8 @@ class Runtime:
                 continue
             try:
                 fresh = self.store.agent(a["scope"], eaid)
-                if (
-                    self.workers.get(eaid) is not w
-                    or w.closed
-                    or w.stopping
-                    or w.tainted
-                    or w.run.id
-                    or w.run.ui
-                    or fresh["state"] != "idle"
-                    or fresh["generation"] != w.generation
-                ):
-                    continue
-                cleanup = (await self.interrupt(fresh))["cleanup"]
-                self.event(w, "evicted", {"reason": "capacity", "cleanup": cleanup})
-                if cleanup != "verified":
-                    self.store.agent_update(eaid, state="orphaned", cleanup=cleanup)
-                    self.notify()
+                if self.parkable_worker(fresh) is w:
+                    await self.park_worker(fresh, w, "capacity")
             finally:
                 lock.release()
 
@@ -213,7 +209,7 @@ class Runtime:
         proc=w=None
         try:
             proc=await worker.start_guard(directory,spec,guard_env,
-                lambda:self.store.agent_update(aid,state='starting',generation=generation,cleanup='pending'))
+                lambda: self.store.agent_update(aid, state="starting", generation=generation, cleanup="pending", pid=None, identity=None))
             self.store.agent_update(aid,pid=proc.pid,identity=process_identity(proc.pid))
             w=self.make_worker(self.store.agent(a['scope'],aid),proc)
             self.workers[aid]=w
@@ -299,14 +295,11 @@ class Runtime:
         )
         # A wait reservation is not delivery; pending attention survives restart.
         for a in self.store.all("SELECT * FROM agents"):
-            verdict = ownership(self.home / "agents" / a["id"], a)
-            if a["state"] in RESIDENT_AGENT_STATES:
-                # Only a verified-gone owner clears the agent: this daemon cannot
-                # reattach a live writer's pipes, so it stays an orphan either way.
-                gone = verdict["status"] == "gone"
-                self.store.agent_update(
-                    a["id"], state="dormant" if gone else "orphaned", cleanup="verified" if gone else "unknown"
-                )
+            resident = a["state"] in RESIDENT_AGENT_STATES
+            if resident or a["cleanup"] == "unknown":
+                # A new daemon cannot inherit live workers or their pipes.
+                if not self.recover_cleanup(a) and resident:
+                    self.store.agent_update(a["id"], state="orphaned", cleanup="unknown")
             for r in self.store.all(
                 "SELECT * FROM runs WHERE agent_id=? AND state IN ('running','starting','needs_input','stopping','queued')",
                 (a["id"],),
@@ -528,7 +521,23 @@ class Runtime:
             self.store.execute("UPDATE runs SET state='running' WHERE id=? AND state='needs_input'", (w.run.id,))
         self.notify()
 
-    def assert_writer_exclusive(self, aid, cwd):
+    def recover_cleanup(self, a):
+        """Release a stale lease without signalling processes or replaying work."""
+        aid = a["id"]
+        verdict = ownership(self.home / "agents" / aid, a)
+        if verdict["status"] != "gone":
+            return False
+        self.store.agent_update(aid, state="dormant", current_run=None, cleanup="verified")
+        return True
+
+    def refresh_quarantine(self, a):
+        w = self.workers.get(a["id"])
+        if a["cleanup"] == "unknown" and (not w or w.closed) and self.recover_cleanup(a):
+            self.notify()
+            return self.store.agent(a["scope"], a["id"])
+        return a
+
+    def overlapping_writer(self, aid, cwd):
         """Only one managed writer may own a cwd subtree at a time (a read label
         strips mutation builtins; it is not OS confinement)."""
         states = RESIDENT_AGENT_STATES
@@ -539,50 +548,41 @@ class Runtime:
                 continue
             left, right = Path(cwd), Path(other["cwd"])
             if left.is_relative_to(right) or right.is_relative_to(left):
-                raise AgentError(
-                    "writer_conflict",
-                    "Another managed writer owns an overlapping cwd; close it or use read access",
-                    agent_id=other["id"],
-                )
+                return other
+        return None
 
     async def admit_writer(self, aid, cwd):
-        while True:
+        while (other := self.overlapping_writer(aid, cwd)) is not None:
+            victim = other["id"]
+            conflict = AgentError(
+                "writer_conflict",
+                "Another managed writer owns an overlapping cwd; let it finish, stop it, or use read access",
+                agent_id=victim,
+            )
+            if other["cleanup"] != "unknown" and other["state"] not in {"idle", "stopping"}:
+                raise conflict
+            lock = self.agent_locks[victim]
             try:
-                self.assert_writer_exclusive(aid, cwd)
-                return
-            except AgentError as conflict:
-                victim = conflict.details.get("agent_id")
-                if conflict.code != "writer_conflict" or not victim:
-                    raise
-                candidate = next((c for c in self.evictable() if c[1] == victim), None)
-                if not candidate:
-                    raise
-                lock = self.agent_locks[victim]
-                try:
-                    await asyncio.wait_for(lock.acquire(), EVICT_LOCK_TIMEOUT)
-                except asyncio.TimeoutError:
+                await asyncio.wait_for(lock.acquire(), EVICT_LOCK_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise conflict from None
+            try:
+                current = self.refresh_quarantine(self.store.agent(other["scope"], victim))
+                if current["state"] not in RESIDENT_AGENT_STATES and current["cleanup"] != "unknown":
+                    continue
+                w = self.parkable_worker(current)
+                if not w or await self.park_worker(current, w, "writer_replacement") != "verified":
                     raise conflict
-                try:
-                    candidate = next((c for c in self.evictable() if c[1] == victim), None)
-                    if not candidate:
-                        raise conflict
-                    _, _, w, a = candidate
-                    cleanup = (await self.interrupt(a))["cleanup"]
-                    self.event(w, "evicted", {"reason": "writer_replacement", "cleanup": cleanup})
-                    if cleanup != "verified":
-                        self.store.agent_update(victim, state="orphaned", cleanup=cleanup)
-                        raise conflict
-                finally:
-                    lock.release()
+            finally:
+                lock.release()
 
     def require_worker(self, a):
         w = self.workers.get(a["id"])
         if not w or w.closed or w.tainted:
             if a["state"] == "orphaned" or a["cleanup"] == "unknown" or (w and w.tainted):
                 message = (
-                    "Pi worker cleanup is unverified; use subagents_inspect_agent to check its state, then "
-                    "close/reap it with the CLI close command using the parent session state "
-                    "directory (--home)"
+                    "Pi worker cleanup is unverified. Inspect the agent and use stop to reap a verified owner; "
+                    "if that fails, an operator can confirm inspected cleanup with /metis-subagents confirm-cleanup."
                 )
             elif a["state"] == "crashed":
                 message = (
@@ -600,6 +600,7 @@ class Runtime:
         return w
 
     async def ensure_loaded(self, a, reason, wake=True):
+        a = self.refresh_quarantine(a)
         w = self.workers.get(a["id"])
         if not w or w.closed or w.tainted:
             if not wake or a["state"] not in {"dormant", "closed"} or a["cleanup"] != "verified" or (w and w.tainted):
@@ -761,9 +762,11 @@ class Runtime:
                     and proof.get("generation") == w.generation
                     and proof.get("descendants_cleanup") == "verified"
                 )
-                self.store.agent_update(
-                    a["id"], state="crashed", current_run=None, cleanup="verified" if verified else "unknown"
-                )
+                if a["state"] == "orphaned":
+                    state = "dormant" if verified else "orphaned"
+                else:
+                    state = "crashed"
+                self.store.agent_update(a["id"], state=state, current_run=None, cleanup="verified" if verified else "unknown")
             self.notify()
 
     async def interrupt(
@@ -780,42 +783,47 @@ class Runtime:
             self.store.finish(w.run.id, terminal, w.run.last_text, reason, w.run.usage)
             self.event(w, "run_terminal", {"state": terminal})
         w.run.finish()
-        self.store.agent_update(a["id"], state="dormant", current_run=None, cleanup=cleanup)
+        state = "dormant" if cleanup == "verified" else "orphaned"
+        self.store.agent_update(a["id"], state=state, current_run=None, cleanup=cleanup)
         self.notify()
-        return {"agent_id": a["id"], "state": "dormant", "cleanup": cleanup, "process_retained": False}
+        return {"agent_id": a["id"], "state": state, "cleanup": cleanup, "process_retained": False}
 
     async def soft_interrupt(self, a):
-        previous = views.agent_status(self.store, a)
+        result = {
+            "agent_id": a["id"], "previous_status": views.agent_status(self.store, a), "runtime_retained": False
+        }
         w = self.workers.get(a["id"])
         if not w or w.closed:
-            return {"agent_id": a["id"], "previous_status": previous, "runtime_retained": False}
+            if a["cleanup"] == "unknown":
+                stopped = await self.close_agent(a, {})
+                if stopped["cleanup"] != "verified":
+                    raise AgentError("cleanup_unconfirmed", "Stop could not verify process cleanup")
+            return result
         if w.tainted or w.stopping or w.proc.returncode is not None:
-            raise AgentError("worker_unavailable", "Worker is settling or tainted; close/reap before reusing it")
-        if not w.run.id:
-            return {"agent_id": a["id"], "previous_status": previous, "runtime_retained": True}
-        rid = w.run.id
-        w.stopping = True
-        w.run.cancelled = True
-        self.store.agent_update(a["id"], state="stopping")
-        self.cancel_queued(a["id"], "Cancelled because the active task was interrupted")
-        try:
-            verdict = await w.rpc("abort", runId=rid)
-            if verdict.get("runId") != rid or verdict.get("taskExited") is not True or w.proc.returncode is not None:
-                raise AgentError("abort_unconfirmed", "Managed task exit was not confirmed")
-        except AgentError:
-            stopped = await self.interrupt(a)
-            if stopped["cleanup"] != "verified":
-                self.store.agent_update(a["id"], state="orphaned")
-                raise AgentError("cleanup_unconfirmed", "Interrupt fallback could not verify process cleanup")
-            return {
-                "agent_id": a["id"],
-                "previous_status": previous,
-                "runtime_retained": False,
-                "forced": True,
-                "run_id": rid,
-            }
-        self.finish_idle_run(w, "interrupted", "Explicit task interruption; filesystem effects may be partial")
-        return {"agent_id": a["id"], "previous_status": previous, "runtime_retained": True, "run_id": rid}
+            raise AgentError("worker_unavailable", "Worker shutdown is still settling; inspect its state before retrying")
+        writer = json.loads(a["launch"]).get("access") == "write"
+        if w.run.id:
+            rid = w.run.id
+            result["run_id"] = rid
+            w.stopping = True
+            w.run.cancelled = True
+            self.store.agent_update(a["id"], state="stopping")
+            self.cancel_queued(a["id"], "Cancelled because the active task was interrupted")
+            try:
+                verdict = await w.rpc("abort", runId=rid)
+                if verdict.get("runId") != rid or verdict.get("taskExited") is not True or w.proc.returncode is not None:
+                    raise AgentError("abort_unconfirmed", "Managed task exit was not confirmed")
+            except AgentError:
+                result["forced"] = True
+        if writer or result.get("forced"):
+            # A live write profile can still run extension callbacks/descendants
+            # after its task has stopped. Park before yielding the workspace.
+            if (await self.interrupt(a))["cleanup"] != "verified":
+                raise AgentError("cleanup_unconfirmed", "Stop could not verify process cleanup")
+            return result
+        if w.run.id:
+            self.finish_idle_run(w, "interrupted", "Explicit task interruption; filesystem effects may be partial")
+        return {**result, "runtime_retained": True}
 
     async def dispatch(self, op, p, source=None):
         if op == "ping":
@@ -929,7 +937,11 @@ class Runtime:
     async def mutate(self, op, p, source=None):
         if op == "spawn":
             return await self.spawn_agent(p)
-        aid = self.store.resolve_agent(p["scope"], label(p.get("agent_id"), "agent_id"))["id"]
+        target = label(p.get("agent_id"), "agent_id")
+        if op == "close" and "confirm_cleanup" in p:
+            aid = self.store.agent(p["scope"], target)["id"]
+        else:
+            aid = self.store.resolve_agent(p["scope"], target)["id"]
         async with self.agent_locks[aid]:
             a = self.store.agent(p["scope"], aid)
             if op == "interrupt":
@@ -1038,26 +1050,28 @@ class Runtime:
         }
 
     async def close_agent(self, a, p):
-        aid, sid = a["id"], a["scope"]
+        aid = a["id"]
+        directory = self.home / "agents" / aid
         w = self.workers.get(aid)
         if "confirm_cleanup" in p:
+            if a["cleanup"] != "unknown":
+                raise AgentError("ownership_unknown", "This generation is not awaiting cleanup confirmation")
             if w and not w.closed:
                 raise AgentError(
                     "ownership_unknown",
                     "Worker is still resident; close it normally before confirming inspected descendants",
                 )
-            cleanup = worker.confirm_cleanup(self.home / "agents" / aid, a, p["confirm_cleanup"])
+            cleanup = worker.confirm_cleanup(directory, a, p["confirm_cleanup"])
         elif w and not w.closed:
             cleanup = (await self.interrupt(a))["cleanup"]
         else:
-            cleanup = await reap_orphan(self.home / "agents" / aid, a)
-        self.store.agent_update(
-            aid, state="closed" if cleanup == "verified" else "orphaned", current_run=None, cleanup=cleanup
-        )
+            cleanup = await reap_orphan(directory, a)
+        state = "closed" if cleanup == "verified" else "orphaned"
+        self.store.agent_update(aid, state=state, current_run=None, cleanup=cleanup)
         self.notify()
         return {
             "agent_id": aid,
-            "state": "closed" if cleanup == "verified" else "orphaned",
+            "state": state,
             "cleanup": cleanup,
             "session_retained": True,
         }
@@ -1096,8 +1110,9 @@ class Runtime:
                 "scope": sid,
                 "already_running": True,
             }
+        a = self.refresh_quarantine(a)
         if a["state"] == "orphaned" or a["cleanup"] == "unknown":
-            raise AgentError("orphaned_worker", "Close/reap the orphan before respawn; old pipes cannot be reattached")
+            raise AgentError("orphaned_worker", "Stop the orphan before respawn; old pipes cannot be reattached")
         w = await self._boot_worker(a)
         rid = None
         if p.get("message"):
@@ -1233,14 +1248,9 @@ class Runtime:
             if stamp is None or time.monotonic() - stamp < self.config["resident_idle_timeout_seconds"]:
                 continue
             async with self.agent_locks[aid]:
-                if w.idle_since != stamp or not any(c[2] is w for c in self.evictable()):
-                    continue
-                if time.monotonic() - stamp < self.config["resident_idle_timeout_seconds"]:
-                    continue
-                cleanup = (await self.interrupt(self.store.agent(a["scope"], aid)))["cleanup"]
-                self.event(w, "evicted", {"reason": "resident_idle", "cleanup": cleanup})
-                if cleanup != "verified":
-                    self.store.agent_update(aid, state="orphaned", cleanup=cleanup)
+                fresh = self.store.agent(a["scope"], aid)
+                if w.idle_since == stamp and self.parkable_worker(fresh) is w:
+                    await self.park_worker(fresh, w, "resident_idle")
 
     async def check_idle(self):
         await self.park_expired()
@@ -1277,15 +1287,17 @@ class Runtime:
     async def shutdown(self):
         self.closing = True
         for w in list(self.workers.values()):
-            if not w.closed:
-                a = self.store.agent(w.agent["scope"], w.agent["id"])
-                async with self.agent_locks[a["id"]]:
-                    try:
-                        await self.interrupt(a)
-                    except Exception:
-                        with contextlib.suppress(Exception):
-                            await self.terminate_worker(w)
-                    self.store.agent_update(a["id"], state="dormant", current_run=None)
+            aid = w.agent["id"]
+            async with self.agent_locks[aid]:
+                if w.closed or self.workers.get(aid) is not w:
+                    continue
+                a = self.store.agent(w.agent["scope"], aid)
+                try:
+                    await self.interrupt(a)
+                except AgentError:
+                    cleanup = await self.terminate_worker(w)
+                    state = "dormant" if cleanup == "verified" else "orphaned"
+                    self.store.agent_update(aid, state=state, current_run=None)
         tasks = list(self.background)
         for t in tasks:
             if not t.done():

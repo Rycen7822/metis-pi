@@ -443,6 +443,27 @@ test("a successful explicit answer resumes the same synchronization policy as ot
   assert.ok(f.operations.some(row => row.op === "subagents_answer_agent"));
 });
 
+test("manual cleanup requires the inspected generation and interactive confirmation", async t => {
+  const target = "pi_old";
+  const f = fixture(t, async (op, _params, signal) => {
+    if (op === "pi_watch") return heldWatch(signal);
+    if (op === "subagents_inspect_agent") return { agent: { id: target, generation: 2, cleanup: "unknown" } };
+    return {};
+  });
+  f.ctx.hasUI = true;
+  let consent = false;
+  f.ctx.ui.confirm = async () => consent;
+  await assert.rejects(f.owner.command("confirm-cleanup pi_old 1", f.ctx), /current generation/);
+  await f.owner.command("confirm-cleanup pi_old 2", f.ctx);
+  assert.equal(f.operations.filter(({ op }) => op === "pi_confirm_cleanup").length, 0);
+  consent = true;
+  await f.owner.command("confirm-cleanup pi_old 2", f.ctx);
+  const calls = f.operations.filter(({ op }) => op === "pi_confirm_cleanup");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].params.confirm_cleanup, 2);
+  assert.equal(calls[0].params.agent_id, target);
+});
+
 test("watch delivery queued behind a failing boundary cannot bypass the automatic gate", async t => {
   let finishWatch, rejectClaim, claims = 0;
   const f = fixture(t, async op => {

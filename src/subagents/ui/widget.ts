@@ -3,7 +3,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface WidgetAgent {
-  id: string; name: string; state: string; started?: number;
+  id: string; name: string; state: string; cleanup?: string; started?: number;
   active_tools?: string[]; tool_uses?: number; total_tokens?: number; thinking?: boolean;
 }
 
@@ -20,7 +20,8 @@ const ACTIONS: Record<string, string> = {
   edit: "editing", write: "writing", apply_patch: "applying patch", grep: "searching", find: "finding files", ls: "listing",
 };
 
-export const activeAgents = (agents: WidgetAgent[]) => agents.filter(agent => ACTIVE.has(agent.state));
+export const isActiveAgent = (agent: WidgetAgent) => ACTIVE.has(agent.state);
+export const activeAgents = (agents: WidgetAgent[]) => agents.filter(isActiveAgent);
 
 /** Live rows and their mouse targets come from the same rendered snapshot. */
 export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: (id: string) => void, animation = true) {

@@ -457,9 +457,8 @@ TOOLS = [
         "subagents_interrupt_agent",
         "soft_interrupt",
         (
-            "Interrupt the task and preserve its session. Normally retains the runtime; "
-            "uncooperative activity requires verified process termination. Idle/unloaded "
-            "agents are unchanged."
+            "Interrupt the task and preserve its session. Write agents are parked after verified cleanup; "
+            "read agents normally retain their runtime. Can also reap a verifiable orphan."
         ),
         {**AGENT, **REQ},
         ["agent_id", "request_id"],

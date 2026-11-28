@@ -122,6 +122,10 @@ async def serve_pi(home):
                     definition = NATIVE_BY_NAME[op]
                     validate(p, definition["inputSchema"])
                     op = definition["_op"]
+                elif op == "pi_confirm_cleanup":
+                    if "confirm_cleanup" not in p:
+                        raise AgentError("invalid_argument", "Cleanup confirmation requires an inspected generation")
+                    op = "close"
                 elif op not in HOST_OPS:
                     raise AgentError("unknown_operation", "Unknown native Pi operation")
                 p = {**p, "scope": scope}

@@ -15,7 +15,7 @@ import time
 from .paths import SURFACE_EXTENSION, WORKER_DIR
 from . import locks
 from .common import (BASE_ENV_KEYS, IS_WINDOWS, MAX_FRAME, AgentError, atomic_json, crop, dumps,
-    group_members, live_identity, new_id, now, private_dir, python_executable, read_frame)
+    group_members, live_identity, new_id, now, owner_from_previous_boot, private_dir, python_executable, read_frame)
 if IS_WINDOWS:
     from . import windows
 
@@ -390,33 +390,29 @@ def publish_job_cleanup(directory: Path, generation):
 
 
 def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
-    """The one owner-record verdict for reaping, reconciliation and terminate:
-    'gone' | 'live' | 'unknown'. A missing or unreadable record proves nothing
-    about the old writer, so only a positively dead leader with no surviving
-    process group is gone, and only positively matched identities are live."""
+    """Check the same owner evidence for reaping, reconciliation and termination."""
     try:
         record = json.loads((directory / "owner.json").read_text())
     except FileNotFoundError:
-        record = None
+        if a.get("cleanup") == "verified" and not a.get("pid"):
+            return {"status": "gone", "reason": "No child was ever launched for this agent", "record": None}
+        # The guard writes its record before forking Pi. The starting ledger
+        # can still identify a guard that died before publishing that record.
+        # A running or quarantined generation must not lose its cleanup
+        # requirement merely because its record went missing.
+        pid = a.get("pid")
+        if a.get("cleanup") == "pending" and pid and live_identity(pid, a.get("identity")) is False and members(pid) == []:
+            return {"status": "gone", "reason": "Launch guard is gone and no process group remains", "record": None}
+        return {"status": "unknown", "reason": "Owner record missing; manual process inspection required", "record": None}
     except (ValueError, OSError):
-        record = {"spawning": True}
-    if record is None:
-        if not a.get("pid"):
-            if a.get("cleanup") != "pending":
-                return {"status": "gone", "reason": "No child was ever launched for this agent", "record": None}
-            return {
-                "status": "unknown",
-                "reason": "Owner record missing and the launch may have forked; manual process inspection required",
-                "record": None,
-            }
-        survivors = members(a["pid"])
-        if live_identity(a["pid"], a.get("identity")) is False and survivors == []:
-            return {"status": "gone", "reason": "Verified leader is dead and no process group remains", "record": None}
-        return {
-            "status": "unknown",
-            "reason": "Owner record missing; manual process inspection required",
-            "record": None,
-        }
+        record = None
+    if not isinstance(record, dict):
+        return {"status": "unknown", "reason": "Cannot read the recorded process owner", "record": None}
+    generation = record.get("generation")
+    if generation is not None and generation != a["generation"]:
+        return {"status": "unknown", "reason": "Owner record belongs to a different generation", "record": record}
+    if generation is not None and owner_from_previous_boot(record):
+        return {"status": "gone", "reason": "Owner belonged to a previous Linux boot", "record": record}
     matches = {k: live_identity(record.get(k + "_pid"), record.get(k + "_identity")) for k in ("guard", "pi")}
     if IS_WINDOWS and all(v is False for v in matches.values()) and (
         record.get("spawning") or record.get("descendants_cleanup") == "pending"

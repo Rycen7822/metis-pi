@@ -16,7 +16,7 @@ import {
 import { isDaemonIdle, RuntimeError, SubagentClient } from "./client.ts";
 import type { RuntimePackage } from "./runtime-package.ts";
 import { SubagentViewer, type AgentInspection } from "../ui/viewer.ts";
-import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
+import { activeAgents, cleanLabel as cleanName, isActiveAgent, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
 import type { AppearanceConfig } from "../../appearance/config.ts";
 import { requestEmbeddedPresentation } from "../../appearance/transcript/embedded.ts";
 import { installSamplingMailbox } from "./sampling.ts";
@@ -685,14 +685,41 @@ export class SubagentSession {
   }
   getCommandTargets(action: string): string[] {
     if (!this.valid()) return [];
-    const agents = action === "stop" ? activeAgents(this.agents)
-      : action === "answer" ? this.agents.filter(agent => agent.state === "needs_input")
+    if (action === "stop") {
+      return this.agents.filter(agent => isActiveAgent(agent) || agent.state === "idle" || agent.cleanup === "unknown").map(agent => agent.id);
+    }
+    const agents = action === "answer" ? this.agents.filter(agent => agent.state === "needs_input")
+      : action === "confirm-cleanup" ? this.agents.filter(agent => agent.cleanup === "unknown")
       : this.agents;
     return agents.map(agent => agent.id);
   }
   async command(args: string, ctx: ExtensionContext) {
     this.update(ctx);
     const [operation, target, ...message] = args.trim().split(/\s+/);
+    if (operation === "confirm-cleanup") {
+      const [generationArg] = message;
+      const generation = Number(generationArg);
+      if (!ctx.hasUI || !target || message.length !== 1 || !/^[1-9]\d*$/.test(generationArg) || !Number.isSafeInteger(generation)) {
+        throw new Error("In an interactive Pi session, use confirm-cleanup <agent ID> <inspected generation>");
+      }
+      const snapshot = await this.client.call("subagents_inspect_agent", { agent_id: target, limit: 1 }, undefined, { consume: false });
+      if (!this.valid()) return;
+      const agent = snapshot.agent as { id: string; generation: number; cleanup?: string };
+      if (agent.id !== target || agent.generation !== generation || agent.cleanup !== "unknown") {
+        throw new Error("Cleanup confirmation requires the exact ID and current generation of an unverified agent");
+      }
+      const confirmed = await ctx.ui.confirm(
+        `Confirm cleanup for ${cleanName(target)} (generation ${generation})?`,
+        "Continue only if you verified that the old worker and all its descendants have already exited.",
+      );
+      if (!confirmed || !this.valid()) return;
+      await this.client.call("pi_confirm_cleanup", {
+        agent_id: target, request_id: randomUUID(), confirm_cleanup: generation,
+      });
+      this.resume(true);
+      if (this.valid()) ctx.ui.notify(`${cleanName(target)}: cleanup verified`, "info");
+      return;
+    }
     if (target && (operation === "stop" || (operation === "continue" && message.length))) {
       const result = await this.execute(
         operation === "stop" ? "subagents_interrupt_agent" : "subagents_followup_task",
@@ -789,7 +816,7 @@ export class SubagentSession {
     if (ctx.mode !== "tui") { ctx.ui.notify(entries.join("\n"), "info"); return; }
     const selected = await ctx.ui.select(`Subagents · ${snapshot.total}${snapshot.omitted ? ` · ${snapshot.omitted} more not shown` : ""}`, entries);
     const agent = agents[entries.indexOf(selected ?? "")];
-    if (agent) await this.openViewer(agent.id, activeAgents([agent]).length ? undefined : agent);
+    if (agent) await this.openViewer(agent.id, isActiveAgent(agent) ? undefined : agent);
   }
   async close() {
     if (this.closed) return;

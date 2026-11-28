@@ -206,6 +206,8 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
                     value = {'scope':'scope_output', 'cwd':str(self.home)}
                 elif op == 'list':
                     value = {'blob':'x'*30000}
+                elif op == 'close':
+                    value = frame['params']
                 else:
                     value = {}
                 writer.write((dumps({'ok':True, 'result':value})+'\n').encode())
@@ -256,6 +258,16 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
         response = await self.receive()
         self.assertEqual(response['id'], rid)
         return response
+
+    async def test_cleanup_confirmation_is_private_scoped_and_requires_generation(self):
+        target = {'agent_id': 'pi_old', 'request_id': 'confirm-1'}
+        missing = await self.rpc('pi_confirm_cleanup', target)
+        self.assertEqual(missing['error']['code'], 'invalid_argument')
+        self.assertEqual((await self.rpc('close', target))['error']['code'], 'unknown_operation')
+        foreign = await self.rpc('pi_confirm_cleanup', {**target, 'confirm_cleanup': 1, 'scope': 'foreign'})
+        self.assertEqual(foreign['error']['code'], 'scope_mismatch')
+        confirmed = await self.rpc('pi_confirm_cleanup', {**target, 'confirm_cleanup': 1})
+        self.assertEqual(confirmed['result'], {**target, 'confirm_cleanup': 1, 'scope': 'scope_output'})
 
     async def test_stdout_backpressure_does_not_block_stdin_eof(self):
         output=self.host.stdout._transport
@@ -576,7 +588,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.request( "list", {"scope": sid}))["total"], 1)
 
 
-    async def test_live_orphan_requires_close_before_respawn(self):
+    async def test_stop_reaps_a_verified_live_orphan_before_respawn(self):
         self.command.append('--hold-eof')
         sid = await self.open_scope()
         a = await self.spawn(sid, "delay=30|orphan")
@@ -590,8 +602,10 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
                 "respawn", {"scope": sid, "agent_id": a["agent_id"], "request_id": "unsafe-respawn"}
             )
         self.assertEqual(cm.exception.code, "orphaned_worker")
-        closed = await self.request( "close", {"scope": sid, "agent_id": a["agent_id"], "request_id": "reap"})
-        self.assertEqual(closed["cleanup"], "verified")
+        stopped = await self.request("soft_interrupt", {"scope": sid, "agent_id": a["agent_id"], "request_id": "reap"})
+        self.assertFalse(stopped["runtime_retained"])
+        snapshot = await self.request("inspect", {"scope": sid, "agent_id": a["agent_id"]})
+        self.assertEqual((snapshot["agent"]["state"], snapshot["agent"]["cleanup"]), ("closed", "verified"))
         revived = await self.request(
             "respawn",
             {"scope": sid, "agent_id": a["agent_id"], "request_id": "revive", "message": "recovered"},
@@ -1089,7 +1103,7 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_v2_cooperative_interrupt_retains_pid_and_accepts_new_task(self):
         self.write_config(PI_MOCK_STREAM_MS='"10000"',PI_MOCK_SLOW_FIRST='"1"',PI_MOCK_ABORT_SIGNAL='"1"')
-        scope,a,path=await self.start_case()
+        scope,a,path=await self.start_case(access='read')
         await self.wait_marker(path,'PI_MOCK_REPLY 1')
         before=(await self.call('inspect',{'scope':scope,'agent_id':a['agent_id']}))['agent']
         owner_path=self.home/'agents'/a['agent_id']/'owner.json'
@@ -1104,6 +1118,22 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         done=await self.call('wait',{'scope':scope,'run_ids':[b['run_id']],'timeout_seconds':8})
         self.assertEqual(done['runs'][0]['state'],'completed',done)
 
+
+    async def test_sdk_stop_releases_write_directory_and_keeps_saved_run(self):
+        self.write_config(PI_MOCK_ASK_PARENT='"1"')
+        scope,a,_=await self.start_case()
+        first=await self.call('wait', {'scope':scope, 'run_ids':[a['run_id']], 'timeout_seconds':8})
+        self.assertEqual(first['reason'],'needs_input')
+        stopped=await self.call('soft_interrupt', {'scope':scope, 'agent_id':a['agent_id'], 'request_id':'stop-writer'})
+        self.assertFalse(stopped['runtime_retained'])
+        snapshot=await self.call('inspect', {'scope':scope, 'agent_id':a['agent_id']})
+        self.assertEqual((snapshot['agent']['state'],snapshot['agent']['cleanup']),('dormant','verified'))
+        saved=await self.call('result', {'scope':scope, 'run_id':a['run_id']})
+        self.assertEqual(saved['run']['state'],'interrupted')
+        other=await self.call('spawn', {'scope':scope, 'access':'write', 'task':'replacement', 'request_id':'writer-2'})
+        waiting=await self.call('wait', {'scope':scope, 'run_ids':[other['run_id']], 'timeout_seconds':8})
+        self.assertEqual(waiting['reason'],'needs_input')
+        await self.call('soft_interrupt', {'scope':scope, 'agent_id':other['agent_id'], 'request_id':'stop-writer-2'})
 
     async def test_v2_idle_message_persists_across_unload_without_a_model_turn(self):
         self.write_config(PI_MOCK_WIRE='"1"',PI_MOCK_THINKING='"1"')
@@ -1127,7 +1157,7 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_v2_parent_question_interrupt_retains_runtime_and_rejects_old_answer(self):
         self.write_config(PI_MOCK_ASK_PARENT='"1"')
-        scope,a,path=await self.start_case()
+        scope,a,path=await self.start_case(access='read')
         waiting=await self.call('wait',{'scope':scope,'run_ids':[a['run_id']],'timeout_seconds':8})
         self.assertEqual(waiting['reason'],'needs_input')
         stopped=await self.call('soft_interrupt',{'scope':scope,'agent_id':a['agent_id'],'request_id':'stop'})
@@ -1175,7 +1205,7 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         release=self.root/'release-late-ui'
         self.write_config(PI_MOCK_STREAM_MS='"10000"',PI_MOCK_ABORT_SIGNAL='"1"',
                           PI_MOCK_LATE_UI_RELEASE=json.dumps(str(release)))
-        scope,a,path=await self.start_case()
+        scope,a,path=await self.start_case(access='read')
         await self.wait_marker(path,'PI_MOCK_REPLY 1')
         stopped=await self.call('soft_interrupt',{'scope':scope,'agent_id':a['agent_id'],'request_id':'stop'})
         self.assertTrue(stopped['runtime_retained'])
@@ -1218,10 +1248,10 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r['state'] for r in inspected['receipts'] if r['id']==sent['receipt_id']],['consumed'])
 
 
-    async def start_case(self,task='FIRST'):
+    async def start_case(self,task='FIRST',*,access='write'):
         await self.initialize()
         scope=(await self.call('scope_open',{'cwd':str(self.workspace)}))['scope']
-        a=await self.call('spawn',{'scope':scope,'cwd':str(self.workspace),'access':'write',
+        a=await self.call('spawn',{'scope':scope,'cwd':str(self.workspace),'access':access,
             'task':task,'request_id':'spawn'})
         return scope,a,self.home/'agents'/a['agent_id']/'stderr.log'
 

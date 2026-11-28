@@ -173,6 +173,30 @@ def socket_path(home: Path) -> Path:
     private_dir(base)
     return base / (hashlib.sha256(str(home).encode()).hexdigest()[:20] + ".sock")
 
+def linux_boot_id() -> str | None:
+    if sys.platform != "linux":
+        return None
+    try:
+        return str(uuid.UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip()))
+    except (OSError, ValueError):
+        return None
+
+
+def owner_from_previous_boot(record: dict) -> bool:
+    """A recorded Linux owner cannot have descendants in a different boot."""
+    guard = record.get("guard_identity")
+    if not isinstance(guard, str) or not isinstance(record.get("guard_pid"), int) or record["guard_pid"] <= 0:
+        return False
+    boot, _, start = guard.partition(":")
+    if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot) or not start.isdecimal():
+        return False
+    pi = record.get("pi_identity")
+    if pi is not None and (not isinstance(pi, str) or not pi.startswith(boot + ":") or not pi[len(boot) + 1:].isdecimal()):
+        return False
+    current = linux_boot_id()
+    return current is not None and boot != current
+
+
 def process_identity(pid: int) -> str | None:
     if IS_WINDOWS:
         try:
@@ -183,8 +207,8 @@ def process_identity(pid: int) -> str | None:
         raw = Path(f"/proc/{pid}/stat").read_text()
         rest = raw[raw.rfind(")")+2:].split()
         if rest[0] == "Z": return None
-        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-        return boot + ":" + rest[19]
+        boot = linux_boot_id()
+        return f"{boot}:{rest[19]}" if boot else "unknown"
     except (FileNotFoundError, ProcessLookupError):
         return None
     except (OSError, IndexError):

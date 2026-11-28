@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from metis_subagent.common import IS_WINDOWS, atomic_json, live_identity, process_identity
+from metis_subagent.common import IS_WINDOWS, atomic_json, live_identity, owner_from_previous_boot, process_identity
 from metis_subagent import locks
 
 
@@ -26,6 +26,8 @@ def check_previous(owner_path: Path):
     if not owner_path.exists():
         return
     old = json.loads(owner_path.read_text(encoding="utf-8"))
+    if owner_from_previous_boot(old):
+        return
     if old.get("spawning"):
         raise RuntimeError("Previous writer launch is unverified; manual reconciliation required")
     if old.get("descendants_cleanup", "verified") != "verified":

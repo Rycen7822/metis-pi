@@ -55,6 +55,27 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.result(b['run_id']))['text'],'Completed: replacement')
 
 
+    async def test_stopping_writer_parks_it_and_preserves_its_session(self):
+        for task in ('delay=30|first', 'settled'):
+            with self.subTest(task=task):
+                first = await self.spawn(task, access='write')
+                aid = first['agent_id']
+                if task == 'settled':
+                    await self.wait(first['run_id'])
+                stopped = await self.mutation('soft_interrupt', aid)
+                self.assertFalse(stopped['runtime_retained'])
+                self.assertNotIn('forced', stopped)
+                self.assertEqual((await self.result(first['run_id']))['run']['state'],
+                                 'completed' if task == 'settled' else 'interrupted')
+                other = await self.spawn(access='write')
+                self.assertEqual((await self.wait(other['run_id']))['runs'][0]['state'], 'completed')
+                await self.mutation('soft_interrupt', other['agent_id'])
+                resumed = await self.mutation('followup', aid, message='resumed')
+                await self.wait(resumed['run_id'])
+                self.assertEqual((await self.result(resumed['run_id']))['text'], 'Completed: resumed')
+                self.assertEqual(self.rt.store.agent(self.scope, aid)['generation'], 2)
+                await self.mutation('soft_interrupt', aid)
+
     async def test_abort_rejection_falls_back_to_verified_termination(self):
         self.command.append('--reject-abort')
         a=await self.spawn('delay=1|first')

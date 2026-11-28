@@ -147,7 +147,8 @@ jobs:
           SUBAGENT_PI_LIVE_PI: '1'
         run: >-
           node scripts/python.mjs -m pytest -q test/subagents/test_transport.py
-          -k sdk_default_and_reader_complete_tool_roundtrip -o cache_dir=.work/test-cache/subagents-sdk
+          -k "sdk_default_and_reader_complete_tool_roundtrip or sdk_stop_releases_write_directory"
+          -o cache_dir=.work/test-cache/subagents-sdk
       - name: Ensure tmux is available
         if: runner.os == 'Linux' && matrix.lane.name == 'Checks'
         run: |

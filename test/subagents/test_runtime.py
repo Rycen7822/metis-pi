@@ -891,20 +891,19 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         original = worker.terminate
 
         async def unknown(directory, current):
-            cleanup = await original(directory, current)
-            return "unknown" if current.agent["id"] == first["agent_id"] else cleanup
+            if current.agent["id"] == first["agent_id"]:
+                return "unknown"  # No signal was authorized; the old worker is still resident.
+            return await original(directory, current)
 
         with m.patch("metis_subagent.runtime.terminate", unknown):
             third = await self.spawn("simple")
-        await self.wait(third["run_id"])
+        self.assertEqual((await self.wait(third["run_id"]))["runs"][0]["state"], "completed")
         event = json.loads(self.events(first["agent_id"], "evicted")[0]["payload"])
         self.assertEqual((event["reason"], event["cleanup"]), ("capacity", "unknown"))
-        # worker_exited re-judges cleanup from the real process group afterwards,
-        # so the agent must at least not be left parked as a clean dormant agent.
-        parked = self.rt.store.agent(self.scope, first["agent_id"])
-        self.assertIn(parked["state"], {"orphaned", "crashed"})
-        self.assertNotEqual((parked["state"], parked["cleanup"]), ("dormant", "verified"))
-        self.assertEqual(self.rt.store.agent(self.scope, second["agent_id"])["state"], "idle")
+        quarantined = self.rt.store.agent(self.scope, first["agent_id"])
+        self.assertEqual((quarantined["state"], quarantined["cleanup"]), ("orphaned", "unknown"))
+        parked = self.rt.store.agent(self.scope, second["agent_id"])
+        self.assertEqual((parked["state"], parked["cleanup"]), ("dormant", "verified"))
         self.assertEqual(len([w for w in self.rt.workers.values() if not w.closed]), 2)
 
     async def test_reader_failure_after_interrupt_keeps_the_terminal_state(self):
@@ -1391,24 +1390,33 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.wait(sent["run_id"])
         self.assertIn("after close", (await self.result(sent["run_id"]))["text"])
 
-    async def test_send_never_auto_wakes_an_unverified_stop(self):
+    async def test_send_waits_for_verified_cleanup_before_waking_the_session(self):
         s = await self.spawn("simple")
         await self.wait(s["run_id"])
+        aid = s["agent_id"]
+        owner_path = self.home / "agents" / aid / "owner.json"
         original = worker.terminate
+        proof = None
 
-        async def unknown(directory, current):
-            await original(directory, current)
+        async def missing_receipt(directory, current):
+            nonlocal proof
+            self.assertEqual(await original(directory, current), "verified")
+            proof = json.loads(owner_path.read_text())
+            owner_path.write_text("{unreadable receipt")
             return "unknown"
 
-        with m.patch("metis_subagent.runtime.terminate", unknown):
-            stopped = await self.mutation("interrupt", s["agent_id"])
+        with m.patch("metis_subagent.runtime.terminate", missing_receipt):
+            stopped = await self.mutation("interrupt", aid)
         self.assertEqual(stopped["cleanup"], "unknown")
+        await self.until(lambda: aid not in self.rt.workers)
         with self.assertRaises(AgentError) as cm:
-            await self.mutation("send", s["agent_id"], mode="send", message="must not boot")
+            await self.mutation("send", aid, mode="send", message="must not boot")
         self.assertEqual(cm.exception.code, "worker_unavailable")
-        self.assertIn("cleanup is unverified", cm.exception.message)
-        self.assertIn("CLI close", cm.exception.message)
-        self.assertEqual(self.rt.store.agent(self.scope, s["agent_id"])["generation"], 1)
+        self.assertEqual(self.rt.store.agent(self.scope, aid)["generation"], 1)
+        owner_path.write_text(json.dumps(proof))
+        resumed = await self.mutation("send", aid, mode="send", message="after cleanup")
+        await self.wait(resumed["run_id"])
+        self.assertEqual((await self.result(resumed["run_id"]))["text"], "Completed: after cleanup")
 
     async def test_steer_still_requires_a_live_worker_and_never_wakes(self):
         s = await self.spawn("simple")
@@ -1501,10 +1509,12 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await self.mutation("respawn", s["agent_id"], message="replace")
         self.assertEqual(cm.exception.code, "worker_alive")
 
-    async def test_crash_not_completed(self):
-        s = await self.spawn("CRASH")
-        r = await self.wait(s["run_id"])
-        self.assertEqual(r["runs"][0]["state"], "crashed")
+    async def test_crashed_writer_releases_directory_after_guard_cleanup(self):
+        crashed = await self.spawn("CRASH", access="write")
+        result = await self.wait(crashed["run_id"])
+        self.assertEqual(result["runs"][0]["state"], "crashed")
+        replacement = await self.spawn(access="write")
+        self.assertEqual((await self.wait(replacement["run_id"]))["runs"][0]["state"], "completed")
 
     async def test_event_retention_survives_short_worker_generations(self):
         s = await self.spawn()
@@ -1553,12 +1563,13 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipIf(sys.platform == 'win32', 'needs SIGKILL and /proc identity checks')
     async def test_killed_guard_cannot_claim_verified_cleanup(self):
-        s = await self.spawn("SPAWN_DETACHED_CHILD")
+        s = await self.spawn("SPAWN_DETACHED_CHILD", access="write")
         aid = s["agent_id"]
         w = self.rt.workers[aid]
         events = await self.until(lambda: self.events(aid, "tool_execution_start"))
         child = json.loads(events[0]["payload"])["args"]["pid"]
-        owner = json.loads((self.home / "agents" / aid / "owner.json").read_text())
+        owner_path = self.home / "agents" / aid / "owner.json"
+        owner = json.loads(owner_path.read_text())
         identities = {pid: process_identity(pid) for pid in (owner["pi_pid"], child)}
         try:
             with self.assertRaises(AgentError) as alive:
@@ -1568,12 +1579,30 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await self.until(lambda: self.rt.store.run(self.scope, s["run_id"])["state"] == "crashed", timeout=4)
             self.assertEqual(self.rt.store.agent(self.scope, aid)["cleanup"], "unknown")
             self.assertIsNotNone(process_identity(child))
+            with self.assertRaises(AgentError) as competing:
+                await self.spawn(access="write")
+            self.assertEqual(competing.exception.code, "writer_conflict")
             with self.assertRaises(AgentError) as blocked:
                 await self.mutation("respawn", aid)
             self.assertEqual(blocked.exception.code, "orphaned_worker")
+
+            # Losing the receipt is not cleanup evidence, even after the old
+            # process group is empty: the detached child is still alive.
+            guard = owner["guard_pid"]
+            if identities[owner["pi_pid"]] and process_identity(owner["pi_pid"]) == identities[owner["pi_pid"]]:
+                os.kill(owner["pi_pid"], signal.SIGKILL)
+            await self.until(lambda: group_members(guard) == [] and aid not in self.rt.workers)
+            self.assertIsNotNone(process_identity(child))
+            owner_path.unlink()
+            try:
+                with self.assertRaises(AgentError) as missing:
+                    await self.spawn(access="write")
+                self.assertEqual(missing.exception.code, "writer_conflict")
+            finally:
+                owner_path.write_text(json.dumps(owner))
         finally:
             for pid, identity in identities.items():
-                if process_identity(pid) == identity:
+                if identity and process_identity(pid) == identity:
                     os.kill(pid, signal.SIGKILL)
             await self.until(lambda: all(process_identity(pid) is None for pid in identities))
         with self.assertRaises(AgentError) as stale:
@@ -1585,6 +1614,30 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(confirmed["cleanup_confirmation"]["by"], "operator")
         revived = await self.mutation("respawn", aid)
         self.assertEqual(revived["generation"], owner["generation"] + 1)
+
+    @unittest.skipIf(sys.platform == "win32", "Linux boot identity")
+    async def test_previous_boot_writer_can_be_replaced_and_resumed(self):
+        first = await self.spawn(access="write")
+        aid = first["agent_id"]
+        await self.wait(first["run_id"])
+        await self.mutation("close", aid)
+        directory = self.home / "agents" / aid
+        owner_path = directory / "owner.json"
+        owner = json.loads(owner_path.read_text())
+        previous_boot = "a5dcbea1-a225-4f2d-b3cf-a6a086a2e177"
+        for name in ("guard_identity", "pi_identity"):
+            owner[name] = previous_boot + ":" + owner[name].split(":")[1]
+        owner["descendants_cleanup"] = "pending"
+        owner_path.write_text(json.dumps(owner))
+        self.rt.store.agent_update(aid, state="orphaned", cleanup="unknown")
+
+        replacement = await self.spawn(access="write")
+        self.assertEqual((await self.wait(replacement["run_id"]))["runs"][0]["state"], "completed")
+        await self.mutation("close", replacement["agent_id"])
+        resumed = await self.mutation("followup", aid, message="after reboot")
+        self.assertEqual((await self.wait(resumed["run_id"]))["runs"][0]["state"], "completed")
+        self.assertEqual((await self.result(resumed["run_id"]))["text"], "Completed: after reboot")
+        self.assertEqual(self.rt.store.agent(self.scope, aid)["generation"], 2)
 
     async def test_needs_input_and_explicit_answer(self):
         s = await self.spawn("UI_CONFIRM")
@@ -1943,7 +1996,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
 
 
-def seed_owner_row(owner=None, *, pid=None, identity=None, state="running", cleanup="pending"):
+def seed_owner_row(owner=None, *, pid=None, identity=None, state="running", cleanup="pending", generation=0):
     """Seed one old worker ledger row and its optional guard owner record."""
     tmp = tempfile.TemporaryDirectory(prefix="restart-owner-")
     home = Path(tmp.name) / "state"
@@ -1959,8 +2012,8 @@ def seed_owner_row(owner=None, *, pid=None, identity=None, state="running", clea
     store = Store(home)
     store.execute("INSERT INTO scopes(id,cwd,label,created) VALUES(?,?,?,?)", ("s1", str(ws), "t", 1.0))
     store.execute(
-        "INSERT INTO agents(id,scope,name,cwd,state,session_file,launch,created,updated,pid,identity,cleanup) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO agents(id,scope,name,cwd,state,session_file,launch,created,updated,pid,identity,cleanup,generation) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "pi_seed",
             "s1",
@@ -1974,6 +2027,7 @@ def seed_owner_row(owner=None, *, pid=None, identity=None, state="running", clea
             pid,
             identity,
             cleanup,
+            generation,
         ),
     )
     store.close()
@@ -2033,11 +2087,15 @@ class RestartOwnershipVerdict(unittest.TestCase):
         # cleanup='pending' is set before the fork, so a missing record cannot
         # prove the child never started.
         tmp,home=seed_owner_row(pid=None,identity=None)
-        rt=Runtime(home)
-        row=rt.store.one('SELECT * FROM agents WHERE id=?',('pi_seed',))
-        self.assertEqual((row['state'],row['cleanup']),('orphaned','unknown'))
-        rt.store.close()
-        tmp.cleanup()
+        with tmp:
+            # Losing the daemon a second time is not new evidence of cleanup.
+            for _ in range(2):
+                rt = Runtime(home)
+                try:
+                    row = rt.store.agent("s1", "pi_seed")
+                    self.assertEqual((row["state"], row["cleanup"]), ("orphaned", "unknown"))
+                finally:
+                    rt.store.close()
 
 class ReconcileAndReapAgree(unittest.TestCase):
     """Crash reconciliation and orphan reaping must reach the same verdict on the
@@ -2053,6 +2111,26 @@ class ReconcileAndReapAgree(unittest.TestCase):
         self.assertEqual(cm.exception.code,'ownership_unknown')
         rt.store.close()
         tmp.cleanup()
+
+    @unittest.skipIf(sys.platform == "win32", "Linux boot identity")
+    def test_reconcile_releases_only_the_matching_previous_boot_generation(self):
+        old = {
+            "guard_pid": 999999,
+            "guard_identity": "a5dcbea1-a225-4f2d-b3cf-a6a086a2e177:123",
+            "generation": 1,
+            "spawning": True,
+            "descendants_cleanup": "pending",
+        }
+        for generation, expected in ((1, ("dormant", "verified")), (2, ("crashed", "unknown"))):
+            with self.subTest(generation=generation):
+                tmp, home = seed_owner_row(old, state="crashed", cleanup="unknown", generation=generation)
+                with tmp:
+                    rt = Runtime(home)
+                    try:
+                        row = rt.store.agent("s1", "pi_seed")
+                        self.assertEqual((row["state"], row["cleanup"]), expected)
+                    finally:
+                        rt.store.close()
 
     def test_both_paths_clear_a_verified_gone_owner(self):
         tmp,home=seed_owner_row({'guard_pid':999999,'guard_identity':'boot:gone',
