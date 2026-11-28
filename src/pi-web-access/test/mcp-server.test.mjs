@@ -318,7 +318,6 @@ test("built pi-web-access-mcp bin runs the real tools over stdio without Pi pack
 	await client.close();
 	// StdioClientTransport sends SIGTERM only if the child is still running 2s after stdin ends.
 	assert.ok(Date.now() - closeStarted < 1900, "server did not exit when stdin closed");
-	// Any non-JSON-RPC stdout line would surface as a transport parse error.
 	assert.deepEqual(bin.transportErrors, [], bin.stderr());
 });
 

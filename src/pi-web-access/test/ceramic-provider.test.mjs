@@ -53,7 +53,6 @@ test("Ceramic posts the query with a Bearer key and maps nested results", () => 
 	assert.equal(output.captured.url, "https://api.ceramic.ai/search");
 	assert.equal(output.captured.method, "POST");
 	assert.equal(output.captured.headers.Authorization, "Bearer ceramic-key");
-	// Ordinary searches retain the native count and description budget.
 	assert.deepEqual(output.captured.body, { query: "node release", maxResults: 20, maxDescriptionLength: 1000 });
 	const [paper, untitled, ...rest] = output.result.results;
 	assert.equal(paper.title, "Paper");

@@ -10,7 +10,6 @@ test("custom summary instructions are appended to the Requirements section", asy
 	assert.ok(prompt.includes("- List EVERY source URL found."));
 	assert.ok(prompt.includes("- Preserve all concrete figures verbatim."));
 	assert.ok(prompt.indexOf("- List EVERY source URL found.") < prompt.indexOf("<search_results>"));
-	// Default guardrails stay in place; instructions are additive, not a replacement.
 	assert.ok(prompt.includes("- Do not invent sources or claims."));
 	assert.ok(prompt.includes("- If evidence is weak or conflicting, say so explicitly."));
 });

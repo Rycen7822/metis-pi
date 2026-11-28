@@ -22,7 +22,6 @@ if (process.env.PCX_PTY_SKIP_WHEEL === "1") throw new Error("PTY verification ca
 if (selected.has("E1")) execFileSync("git", ["--version"], { stdio: "ignore" });
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pcx-pty-"));
-// Setup below opens files and a server before the main scenario's try/finally.
 // Keep the isolated directory owned even if bootstrap fails early.
 process.once("exit", () => fs.rmSync(ROOT, { recursive: true, force: true }));
 const HOME_DIR = path.join(ROOT, "home");

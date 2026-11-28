@@ -61,7 +61,6 @@ Reload ==
   /\ view' = RegFor(leaf)
   /\ UNCHANGED <<leaf, cursor, last>>
 
-\* First page of a selection; the cursor records the resolved contents.
 Mint(tok) ==
   /\ tok \in Tokens
   /\ Matching(view, tok) # {}

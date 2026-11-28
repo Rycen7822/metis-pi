@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import baseline from "./recall-comments.json" with { type: "json" };
+import baseline from "./approved-comments.json" with { type: "json" };
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const digest = value => createHash("sha256").update(value.replaceAll("\r\n", "\n").trim()).digest("hex");
@@ -24,7 +24,7 @@ export default {
               else context.report({ loc: comment.loc, message: `Unapproved comment (${hash}). Remove it or review it for the keep list.` });
             }
             for (const hash of approved) {
-              context.report({ node, message: `Remove unused approval ${hash} from recall-comments.json.` });
+              context.report({ node, message: `Remove unused approval ${hash} from approved-comments.json.` });
             }
           },
         };

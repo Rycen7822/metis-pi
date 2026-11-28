@@ -270,7 +270,6 @@ export class DialogView implements StatefulView<DialogProps> {
 		container.addChild(border());
 		for (const c of strategy.footerRows(state)) container.addChild(c);
 
-		// BodyResidualSpacer moved out of Container — handled in render().
 		return container;
 	}
 }

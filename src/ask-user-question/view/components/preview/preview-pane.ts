@@ -117,7 +117,6 @@ export class PreviewPane implements StatefulView<PreviewPaneProps>, Component {
 
 	render(width: number): string[] {
 		if (this.question.multiSelect === true) return this.optionListView.render(width);
-		// Spec: hide the preview pane entirely when no option carries a `preview`.
 		if (!this.previewBlock.hasAnyPreview()) return this.optionListView.render(width);
 		// `inputMode` (typing on the "other" custom-answer row): the preview is irrelevant —
 		// the row sits at index `options.length`, out of bounds for any option's preview — so
@@ -262,7 +261,6 @@ export class PreviewPane implements StatefulView<PreviewPaneProps>, Component {
 			mode === "side-by-side"
 				? Math.max(optionsHeight, maxPreviewBlock)
 				: optionsHeight + (maxPreviewBlock > 0 ? STACKED_GAP_ROWS + maxPreviewBlock : 0);
-		// A fitted body never exceeds the allowance, whichever option is focused.
 		return this.rowAllowance === undefined ? max : Math.min(max, this.rowAllowance);
 	}
 

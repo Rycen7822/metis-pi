@@ -45,7 +45,6 @@ describe("Dialog overflow — no clipping when terminal is tall enough", () => {
 			makeConfig({ getTerminalRows: () => 50, getBodyHeight: () => 6, getCurrentBodyHeight: () => 1 }),
 		);
 		const lines = dlg.render(80);
-		// With termRows=50, dialog fits easily. Residual spacer rows should be present.
 		const hintIdx = lines.findIndex((l) => l.includes(HINT_PART_ENTER));
 		expect(hintIdx).toBeGreaterThan(0);
 		const tail = lines.slice(hintIdx + 1);
@@ -166,7 +165,6 @@ describe("Dialog overflow — submit tab", () => {
 		);
 		const lines = dlg.render(80);
 		const joined = lines.join("\n");
-		// With top-anchored scroll on submit, the REVIEW heading should be visible.
 		expect(joined).toContain(REVIEW_HEADING);
 	});
 
@@ -224,7 +222,6 @@ describe("Dialog overflow — indicator content", () => {
 		expect(stripAnsi(lines[4])).toBe("Q1?");
 		expect(stripAnsi(lines[6])).toBe("↑");
 		expect(stripAnsi(lines[10])).toBe("↓");
-		// No combined glyph when there's room for two separate indicators.
 		expect(lines.some((l) => stripAnsi(l) === "↕")).toBe(false);
 	});
 
@@ -277,7 +274,6 @@ describe("Dialog overflow — centering with non-trivial focusedItemRowRange", (
 		);
 		const lines = dlg.render(80);
 		expect(lines.length).toBeLessThanOrEqual(14);
-		// Focused item content should be visible in the middle region (between indicators).
 		expect(lines.slice(4, 9).some((l) => l.includes("<LINE>"))).toBe(true);
 	});
 

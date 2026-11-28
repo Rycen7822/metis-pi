@@ -137,7 +137,6 @@ function fallbackSourceLabel(url: string | undefined, index: number): string {
 		const hostname = url ? new URL(url).hostname : "";
 		if (hostname) return hostname;
 	} catch {
-		// Invalid URLs use the generic label.
 	}
 	return `Source ${index + 1}`;
 }

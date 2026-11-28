@@ -166,7 +166,6 @@ export class LspClient {
   }
 
   async diagnostics(uri: string) {
-    // Only pull if the server advertised it; otherwise use push diagnostics.
     if (!this.#serverCapabilities.diagnosticProvider) {
       return this.#publications.wait(
         uri,

@@ -364,7 +364,6 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
   for (const visual of capped) {
     const styled = `${DIM_ON}${gutter}${INTENSITY_RESET}${visual.text}`;
     if (visual.sourceLineIndex === -1 && visual !== gutterRows[0]) {
-      // Ellipsis row: a visible hint; the hidden lines behind it are a gap.
       pushGapRow(styled);
     } else {
       lines.push(styled);

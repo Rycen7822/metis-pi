@@ -79,7 +79,6 @@ describe("MultiSelectView.render", () => {
 		m.setProps(makeProps(q, { optionIndex: 1, focused: false }));
 		const blurred = m.render(80);
 		const rawBlurred = blurred.map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
-		// No row may begin with `❯ ` when the pane is blurred.
 		for (const l of rawBlurred) expect(l.startsWith("❯ ")).toBe(false);
 
 		m.setProps(makeProps(q, { optionIndex: 1, focused: true }));
@@ -346,7 +345,6 @@ describe("MultiSelectView.focusedItemRowRange", () => {
 		});
 		const [start, end] = view.focusedItemRowRange(80);
 		const rendered = view.render(80);
-		// Row at start should contain B
 		expect(rendered[start]).toContain("B");
 		// end is exclusive; last row of B's range is end-1
 		expect(end).toBeLessThanOrEqual(rendered.length);

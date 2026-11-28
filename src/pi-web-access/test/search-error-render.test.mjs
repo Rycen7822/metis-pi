@@ -17,9 +17,6 @@ import { test } from "node:test";
 import initializeExtension from "../index.ts";
 import { buildSearchErrorPlan } from "../render-search-error.ts";
 
-// --- fixture: a stale cancel with partial results, mirroring the user's report
-// ("Search curation cancelled (stale)" with 2/3 queries done, one errored,
-//  browser never connected). ---
 const staleCancel = {
 	error: "Search curation cancelled (stale).",
 	cancelled: true,
@@ -37,7 +34,6 @@ test("cancel/error path is NOT a dead-end single line: expanded plan has >1 line
 	const plan = buildSearchErrorPlan(staleCancel);
 	assert.notEqual(plan, null, "a cancelled result must produce a plan, not null");
 	const expanded = plan.expanded.join("\n");
-	// The dead-end was exactly ONE line. Pin that the expanded view is rich.
 	assert.ok(plan.expanded.length > 1, `expanded must be >1 line, got ${plan.expanded.length}`);
 	assert.match(expanded, /Search curation cancelled \(stale\)/);
 });
@@ -46,7 +42,6 @@ test("expanded plan surfaces the diagnostics that were previously discarded", ()
 	const plan = buildSearchErrorPlan(staleCancel);
 	const expanded = plan.expanded.join("\n");
 	assert.match(expanded, /cancel reason\s*:\s*stale/);
-	// browser state — the #1 stale cause, previously invisible
 	assert.match(expanded, /browser\s*:\s*never connected/);
 	assert.match(expanded, /queries started\s*:\s*3/);
 	assert.match(expanded, /queries done\s*:\s*2/);
@@ -61,16 +56,12 @@ test("collapsed view is a short summary WITH a ctrl+o expand hint (Ctrl+O now do
 	const collapsed = plan.collapsed.join("\n");
 	assert.match(collapsed, /2\/3 queries completed/);
 	assert.match(collapsed, /browser never connected/);
-	// THE fix signal: an expand hint exists (the old single-line return had none,
-	// so Ctrl+O did nothing). Mutation: dropping the hint fails here.
 	assert.equal(typeof plan.expandHint, "string");
 	assert.match(plan.expandHint, /ctrl\+o to expand/i, "expand hint must mention ctrl+o");
 	assert.match(plan.expandHint, /\d+ more lines/);
 });
 
 test("plain (non-cancel) error stays a clean single line — no diagnostic noise", () => {
-	// A bare argument error has nothing to diagnose; it must NOT sprout fake
-	// "browser: unknown" diagnostics. Guards the gating logic in the module.
 	const plan = buildSearchErrorPlan({ error: "No query provided" });
 	assert.notEqual(plan, null);
 	assert.equal(plan.expanded.length, 1, "plain error must be a single line");

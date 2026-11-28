@@ -8,6 +8,7 @@
   "overrides": [
     {
       "files": [
+        "extensions/**/*.ts",
         "src/pi-session-recall/context.ts", "src/pi-session-recall/input-budget.ts",
         "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/window.ts"
       ],

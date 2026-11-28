@@ -127,8 +127,6 @@ const testOutput = [
   "pass 93",
   "fail 0",
 ].join("\n");
-// --- 0.6.0: serial exploration grouping - 8 image reads across separate
-// tool-call-only assistant messages, replayed through TranscriptState.
 const GROUP_IMAGES = [
   "all_results.png.png",
   "shampoo_results.png.png",

@@ -15,12 +15,6 @@ import {
   ThinkingPeekComponent, ThinkingClickableComponent, ThinkingHeaderComponent,
 } from "../src/presentation/components/transcript-components.ts";
 
-/**
- * The terminal's color capability cannot change mid-session, so resolve it once
- * per process: every render path (separator, thinking rail, thought summary
- * painter, composer surface) then shares one context instead of re-probing the
- * host on each frame.
- */
 let cachedColorLevel: ReturnType<typeof resolveColorContext> | undefined;
 function colorLevelOnce(): ReturnType<typeof resolveColorContext> {
   return (cachedColorLevel ??= resolveColorContext({ terminalTrueColor: Tui.getCapabilities().trueColor === true }));
@@ -40,7 +34,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   if (!hasMetisHostSDK()) return;
   const prototype = Pi.ToolExecutionComponent.prototype;
   const colorLevel = colorLevelOnce();
-  // Resolve host Tui capabilities here; the surface painters use one color context.
   const surface = makeSurfaceOps(
     colorLevel,
     (text) => `\x1b[38;2;${CODEX_CYAN_RGB}m${text}\x1b[39m`,

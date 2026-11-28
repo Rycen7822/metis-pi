@@ -75,7 +75,7 @@ PTY 检查使用真实 Pi CLI、tmux、离线提供商和测试剪贴板，E1 �
 
 ### 源码注释基线
 
-`lint:comments` 只检查 Recall Query 的 `context.ts`、`input-budget.ts`、`session-recall.ts` 和 `window.ts`。新增或改写的注释限于许可、必要的工具指令、对外契约和可核实的外部约束，并按 lint 提示更新 [保留清单](../config/lint/recall-comments.json)。删除注释时同时删除对应条目；每个条目只允许在该文件中出现一处。实现取舍见 [架构决策](decisions.md)。
+`lint:comments` 检查 `extensions/` 下的 TypeScript 入口，以及 Recall Query 的 `context.ts`、`input-budget.ts`、`session-recall.ts` 和 `window.ts`。新增或改写的注释限于许可、必要的工具指令、对外契约和可核实的外部约束，并按 lint 提示更新 [保留清单](../config/lint/approved-comments.json)。删除注释时同时删除对应的批准记录；同一条注释的每次出现都要有对应记录。实现取舍见 [架构决策](decisions.md)。
 
 ## 重建 Pi SDK
 

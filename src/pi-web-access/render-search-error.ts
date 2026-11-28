@@ -84,9 +84,6 @@ export function buildSearchErrorPlan(details: SearchErrorDetails | undefined | n
 		return { expanded: [headline], collapsed: [], expandHint: null };
 	}
 
-	// --- diagnostics block (expanded): curator/cancel-specific only. For non-cancel
-	// errors (fetch_content/get_search_content) there is no browser or
-	// query-curation state to report, so we skip this block and show only Details. ---
 	const expanded: string[] = [headline, ""];
 
 	if (details.cancelled === true || queries.length > 0) {

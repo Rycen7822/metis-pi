@@ -206,7 +206,6 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
       }
       if (!surface) return accent("─".repeat(Math.max(0, width)));
       if (hiddenLineCount > 0) {
-        // Scroll indicator must survive the redesign (dim, on-surface).
         return surface.paintRow(` ${surface.paintGlyph(`↑ ${hiddenLineCount} more`, "dim")} `, width);
       }
       return surface.paintRow("", width);

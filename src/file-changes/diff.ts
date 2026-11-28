@@ -1,4 +1,3 @@
-// Bounded file snapshots and byte-verified line diffs shared by execution and UI.
 import * as fs from "node:fs";
 import { isUtf8 } from "node:buffer";
 export type DiffRowKind = "add" | "remove" | "context" | "separator" | "metadata";
@@ -222,7 +221,6 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
       x -= 1;
       y -= 1;
     }
-    // Backtracking already knows both original coordinates; only restore order.
     ops.push(...middle.reverse());
   }
   let oldLine = endBefore;

@@ -139,7 +139,6 @@ describe("ask_user_question — factory driver (real pi-tui keybindings)", () =>
 		expect(collapsedLines).toHaveLength(1);
 		expect(collapsedLines[0]).toContain("Ctrl+] to expand");
 		expect(collapsedLines[0]).toContain("Esc to cancel");
-		// Expand returns the same multi-row shape as before the round-trip (idempotent toggle).
 		expect(expandedLineCount).toBeGreaterThan(1);
 		expect(reExpandedLineCount).toBe(expandedLineCount);
 	});

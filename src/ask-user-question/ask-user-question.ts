@@ -473,7 +473,6 @@ export function registerAskUserQuestionTool(
 				});
 			}
 
-			// Emit event for external listeners (e.g., notification plugins)
 			emitAskUserPromptEvent(pi, typed);
 
 			// Pi's RPC UI supports native select/input, not custom TUI components.

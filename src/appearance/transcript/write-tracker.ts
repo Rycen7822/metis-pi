@@ -1,4 +1,3 @@
-// Session-owned observation of builtin write lifecycle events.
 import { snapshotFile, computeWriteDiff, type WriteSnapshot, type WriteDiff } from "../../file-changes/diff.ts";
 
 /**

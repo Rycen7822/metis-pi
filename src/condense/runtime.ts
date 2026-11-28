@@ -137,7 +137,6 @@ function policyFingerprint(config: ContextPruneConfig): string {
 export function createCondenseRuntime(pi: ExtensionAPI) {
   const jsonSizes = createJsonSizeMeasurer();
   const contextMetrics = new ContextMetricsReader();
-  // Shared mutable config reference — updated by /pruner commands
   const currentConfig: { value: ContextPruneConfig } = {
     value: { ...DEFAULT_CONFIG },
   };
@@ -909,7 +908,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertCurrent(version);
         (appendEntry ?? pi.appendEntry)(CUSTOM_TYPE_FLUSH_METRICS, entry);
       } catch {
-        // non-fatal: observability must never fail the flush
       }
     };
 
@@ -1062,7 +1060,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "empty" };
       }
 
-      // Bail out before resetting the queue hint.
       if (options.signal?.aborted) {
         outcome = "aborted";
         failureReason = "aborted";

@@ -36,7 +36,7 @@
     "check:entries": "node node_modules/tsc-native/bin/tsc -p tsconfig.json",
     "check:test": "node node_modules/tsc-native/bin/tsc -p config/typescript/test.json",
     "lint:tests": "node node_modules/oxlint/bin/oxlint test src/pi-web-access/test",
-    "lint:comments": "node node_modules/oxlint/bin/oxlint src/pi-session-recall",
+    "lint:comments": "node node_modules/oxlint/bin/oxlint extensions src/pi-session-recall",
     "lint:types": "node scripts/lint-types.mjs",
     "verify": "npm run build:plugins && npm run prepare:subagents && npm run check && npm run check:test && npm test && npm run test:plugins && npm run test:subagents",
     "preview": "node --experimental-strip-types scripts/preview.mjs",

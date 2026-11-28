@@ -560,7 +560,6 @@ export function registerCommands(
             return;
           }
 
-          // Capture the pending queue first so we can pre-build the widget rows.
           let batches: CapturedBatch[];
           try {
             batches = capturePendingBatches(ctx);
@@ -765,8 +764,6 @@ export function registerCommands(
           break;
         }
 
-        // Bare form shows current state; `on`/`off` flip and persist;
-        // `status` is an explicit synonym for bare.
         case "dedup": {
           const arg = (subArgs[0] ?? "").toLowerCase();
           const dedupField = scalarRow("dedupByContentHash");

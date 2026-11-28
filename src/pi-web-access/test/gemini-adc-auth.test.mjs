@@ -84,7 +84,6 @@ test("Gemini ADC availability requires geminiAuth adc, project, location, and an
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-adc-avail-"));
 	await writeFile(join(root, "metis-pi.toml"), stringify({ webAccess: { geminiAuth: "adc", geminiProject: "p", geminiLocation: "l" } }) + "\n", "utf8");
 
-	// ADC file does not exist yet -> not available.
 	const child = runChild(`
 		const { isGeminiApiAvailable } = await import(${JSON.stringify(geminiApiModuleUrl)});
 		const adc = await import(${JSON.stringify(geminiAdcModuleUrl)});

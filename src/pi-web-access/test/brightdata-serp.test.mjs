@@ -244,8 +244,6 @@ test("a malformed zone is rejected before the request instead of becoming an opa
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.fetchCalls, 0);
-	// The error names the setting that is wrong, quotes what it found, and says
-	// which zone type is required.
 	assert.match(output.error, /brightdataSerpZone in .*metis-pi\.toml must be a zone name/);
 	assert.match(output.error, /https:\/\/not-a-zone\//);
 	assert.match(output.error, /must be of Bright Data type `serp`/);
@@ -708,7 +706,6 @@ test("no error path prints the API token, at any site that quotes foreign text",
 	// undici's, rethrown with only the credential removed.
 	for (const index of [0, 1, 2]) assert.match(output.messages[index], /for zone pi_serp/, labels[index]);
 	assert.doesNotMatch(output.messages[3], /pi_serp/);
-	// The log line is the fourth place the token could escape.
 	for (const logged of output.logged) {
 		if (logged !== null) assert.doesNotMatch(logged, new RegExp(token));
 	}
@@ -880,7 +877,6 @@ test("each request carries a 60-second timeout composed with the caller's signal
 	// One timeout per request, at the documented 60 seconds, created per call rather
 	// than shared — a module-level signal would expire 60 s after import.
 	assert.deepEqual(output.requested, [60_000, 60_000]);
-	// With no caller signal the request still carries the timeout signal.
 	assert.deepEqual(output.withoutCaller, { isSignal: true, aborted: false });
 	// With one, the signal fetch receives is the composition: aborting the caller's
 	// aborts the request's.
@@ -951,7 +947,6 @@ test("an unparseable config file throws without echoing its contents", async () 
 	assert.match(output.error, /^Failed to parse .*web-search\.json: not valid JSON$/);
 	assert.doesNotMatch(output.error, /bd-planted-token-1234/);
 	assert.equal(output.fetchCalls, 0);
-	// Availability stays a total predicate on a config file it cannot read.
 	assert.equal(output.availabilityError, null);
 	assert.equal(output.available, false);
 
@@ -1039,7 +1034,6 @@ test("site: operators, filter normalization and an unknown recency window", asyn
 	assert.equal(child.status, 0, child.stderr);
 	const sent = JSON.parse(child.stdout.trim());
 	assert.equal(sent[0].q, "q site:github.com");
-	// An exclude with no include is still expressed to the engine.
 	assert.equal(sent[1].q, "q -site:example.com");
 	// A URL is reduced to its host, case is folded, duplicates collapse, and values
 	// that are not domains are dropped rather than smuggled into the query.

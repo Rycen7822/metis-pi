@@ -572,7 +572,6 @@ export default function (pi: ExtensionAPI) {
 						"Start fresh",
 					]);
 					if (choice === "Continue previous conversation") {
-						// Dispose session so it's recreated with fresh main context on next submit
 						await disposeSideSession();
 						setOverlayStatus("Continuing BTW thread.");
 						await ensureOverlay(ctx);

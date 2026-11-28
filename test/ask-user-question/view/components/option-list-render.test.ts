@@ -90,10 +90,6 @@ describe("OptionListView.render — visible window", () => {
 });
 
 describe("OptionListView.render — inline input when kind:'other' + focused", () => {
-	// `lineCountForInputRow` collapses the rendered output into just the inline-input
-	// row(s). Useful when asserting wrap behavior — the cursor row may now span
-	// multiple lines, but we want to ignore unrelated rows (e.g. scrollInfo) when
-	// computing how many wrapped lines the input produced.
 	const inlineInputLines = (lines: readonly string[]): string[] =>
 		lines.filter((l) => l.includes(CURSOR_MARKER) || /[a-z0-9]/.test(l));
 
@@ -210,8 +206,6 @@ describe("OptionListView.render — inline input when kind:'other' + focused", (
 	});
 
 	it("renders cursor at end-of-buffer when no offset is set (default fallback)", () => {
-		// When setInputCursorOffset is never called, cursor defaults to end-of-buffer
-		// (identical to pre-fix behavior).
 		const s = new OptionListView({ items: [{ kind: "other", label: "pick" }], maxVisible: 1, theme: identityTheme });
 
 		s.setProps({ selectedIndex: 0, focused: true, inputBuffer: "this input is long enough that it definitely wraps across multiple lines" });
@@ -229,8 +223,6 @@ describe("OptionListView.render — inline input when kind:'other' + focused", (
 		s.setProps({ selectedIndex: 0, focused: true, inputBuffer: "a".repeat(60) });
 		const lines = s.render(20);
 		expect(lines[0]?.startsWith("❯ 1. ")).toBe(true);
-		// Continuation lines must NOT carry a numbered prefix and must start with the
-		// same column-count of leading whitespace as the rowPrefix.
 		for (let i = 1; i < lines.length; i++) {
 			const line = lines[i] ?? "";
 			expect(line).not.toContain("❯");
@@ -305,7 +297,6 @@ describe("OptionListView.render — cursor position via inputCursorOffset props"
 		const lines = s.render(narrowWidth);
 		expect(lines[0]).toContain(`abc${cursorOn("d")}efghij`);
 		expect(lines[0]).toContain(CURSOR_MARKER);
-		// Every line must respect width invariant
 		for (const l of lines) {
 			expect(visibleWidth(l)).toBeLessThanOrEqual(narrowWidth);
 		}
@@ -351,7 +342,6 @@ describe("OptionListView.render — cursor position via inputCursorOffset props"
 		s.setProps({ selectedIndex: 0, focused: true, inputBuffer: "this is a very long input that will wrap", inputCursorOffset: 5 });
 		const width = 20;
 		const lines = s.render(width);
-		// Cursor at position 5 in a long string → cursor appears on the first wrapped line
 		expect(lines[0]).toContain(CURSOR_MARKER);
 		for (const l of lines) {
 			expect(visibleWidth(l)).toBeLessThanOrEqual(width);
@@ -388,9 +378,6 @@ describe("OptionListView.render — description block", () => {
 	});
 });
 
-// `setConfirmedIndex` powers the "✔ on previously-chosen row" indicator when the user
-// navigates back to a tab they already answered. Pointer (`❯`) stays with the live cursor;
-// the confirmed row gets the same accent+bold styling as the active row plus a trailing ` ✔`.
 const markedTheme: OptionListTheme = {
 	selectedText: (t) => `<S>${t}</S>`,
 	description: (t) => t,

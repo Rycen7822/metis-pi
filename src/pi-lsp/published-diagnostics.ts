@@ -38,7 +38,6 @@ export class PublishedDiagnostics {
     uri: string,
     fallback?: { afterVersion: number; diagnostics: LspDiagnostic[]; waitMs: number },
   ) {
-    // See PUBLISHED_DIAGNOSTICS_SETTLE_MS. Bounded by #timeoutMs.
     const key = documentKey(uri);
     return new Promise<LspDiagnostic[]>((resolve, reject) => {
       let settleTimer: NodeJS.Timeout | undefined;

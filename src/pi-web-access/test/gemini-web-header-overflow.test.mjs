@@ -86,7 +86,6 @@ test("dedicated agent fetches oversized-header responses the pi-style global dis
 			},
 		);
 
-		// Fix: the dedicated agent returns the same response without error.
 		const geminiFetch = createGeminiFetch(undici);
 		const res = await geminiFetch(url);
 		assert.equal(res.status, 200);

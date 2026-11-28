@@ -84,8 +84,6 @@ describe("routeKey — nav", () => {
 			inputValue: "",
 		});
 	});
-	// With the chat row gone, UP/DOWN wrap within [option0 … optionLast] via wrapTab.
-	// DOWN at the last item wraps to 0; UP at the first item wraps to the last.
 	it("DOWN at the last item wraps to 0 (no chat row, wrapTab clamp)", () => {
 		// makeRuntime default items length === 3 (questions[0].options)
 		expect(routeKey(sentinel(KEY.DOWN), makeState({ optionIndex: 2 }), makeRuntime())).toEqual({
@@ -273,7 +271,6 @@ describe("routeKey — multiSelect free-text ('Type something.')", () => {
 			{ label: "Tests", description: "T" },
 		],
 	});
-	// Post-Phase-2 items: 3 options + other + next.
 	const items: QuestionRow[] = [
 		{ kind: "option", label: "FE" },
 		{ kind: "option", label: "BE" },

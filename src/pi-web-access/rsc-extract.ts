@@ -74,7 +74,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
     }
   }
 
-  // Extract markdown from nodes, resolving refs on the fly
   type Node = unknown;
   const visitedRefs = new Set<string>();
 
@@ -85,7 +84,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
     if (node === null || node === undefined) return "";
 
     if (typeof node === "string") {
-      // Check if it's a reference like "$L30"
       const refMatch = node.match(/^\$L([0-9a-f]+)$/i);
       if (refMatch) {
         const refId = refMatch[1];
@@ -113,7 +111,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
 
       if (skipTags.includes(tag)) return "";
 
-      // Component ref like $L25
       if (tag.startsWith("$L")) {
         const refId = tag.slice(2);
         if (visitedRefs.has(refId)) return "";
@@ -293,7 +290,6 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
     }
   }
 
-  // Fallback: try other chunks
   const contentParts: { order: number; text: string }[] = [];
 
   for (const [id] of chunkMap) {

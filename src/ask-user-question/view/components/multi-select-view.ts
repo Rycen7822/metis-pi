@@ -128,7 +128,6 @@ export class MultiSelectView implements StatefulView<MultiSelectViewProps> {
 			if (!opt || !row) continue;
 			const start = build.lines.length;
 			const pointer = row.active ? this.theme.fg("accent", ACTIVE_POINTER) : INACTIVE_POINTER;
-			// Checked and active rows share the accent hue, matching the dialog's selection rhythm.
 			const box = row.checked ? this.theme.fg("accent", CHECKED) : this.theme.fg("muted", UNCHECKED);
 			const number = String(i + 1).padStart(numberWidth, " ");
 			const prefix = `${pointer}${number}${NUMBER_SEPARATOR}${box}${BOX_LABEL_GAP}`;

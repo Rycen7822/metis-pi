@@ -160,7 +160,6 @@ test("loadSsrfAllowRanges returns trimmed, non-empty CIDR strings for a valid ar
 
 test("loadSsrfAllowRanges returns [] when the config file is missing", async () => {
 	const { root, agentDir } = await makeConfigDir("pi-ssrf-missing-");
-	// Intentionally do not write metis-pi.toml.
 	const result = runLoad(envFor(root, agentDir));
 	assert.equal(result.ok, true, result.error);
 	assert.deepEqual(result.ranges, []);

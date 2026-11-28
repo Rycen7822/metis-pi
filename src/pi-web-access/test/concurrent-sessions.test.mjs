@@ -81,7 +81,6 @@ test("one session starting or ending leaves another session's stored results in 
 	const responseId = (await a.call("fetch_content", { url: "https://93.184.216.34/alpha" })).details.responseId;
 	assert.ok(responseId);
 
-	// Another conversation starts and ends while the first is mid-turn.
 	const b = startInstance();
 	await b.emit("session_start");
 	await b.emit("session_shutdown");
@@ -104,7 +103,6 @@ test("a session's end releases only its own results, and its journal restores th
 	assert.equal(getResult(fromA), null);
 	assert.ok(getResult(fromB));
 
-	// The next turn of the first conversation is a new instance over the same journal.
 	const again = startInstance([...a.entries]);
 	await again.emit("session_start");
 	assert.match(await retrieve(again, fromA), /Beta content/);

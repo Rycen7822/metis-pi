@@ -184,7 +184,6 @@ def raw_handle(handle):
     return handle if isinstance(handle, wintypes.HANDLE) else wintypes.HANDLE(handle)
 
 
-# --- Process identity ---------------------------------------------------------
 
 def _open_process(pid, access=SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION):
     handle = kernel32.OpenProcess(access, False, int(pid))
@@ -229,7 +228,6 @@ def handle_identity(handle):
     return f"win:{created:016x}" if created else "unknown"
 
 
-# --- Token SIDs ---------------------------------------------------------------
 
 def _sid_string(sid):
     text = ctypes.c_wchar_p()
@@ -333,7 +331,6 @@ def private_security_attributes():
     return attributes, descriptor
 
 
-# --- Files --------------------------------------------------------------------
 
 def _create_private_directory(path):
     """Create ONE new directory with its final DACL already in place.
@@ -422,7 +419,6 @@ def atomic_write(path: Path, data: bytes):
         tmp.unlink(missing_ok=True)
 
 
-# --- Job object ---------------------------------------------------------------
 
 def job_name(pid):
     """Deterministic: the daemon resolves a guard's job from its PID alone."""
@@ -519,7 +515,6 @@ def terminate_job(pid, exit_code):
         kernel32.CloseHandle(handle)
 
 
-# --- Local IPC pipe -----------------------------------------------------------
 
 def pipe_handle(raw):
     """The handle type the Windows proactor can register and close itself."""

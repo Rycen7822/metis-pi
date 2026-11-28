@@ -8,6 +8,18 @@ Working 行的布局与动效参考 Codex 的 `status_indicator_widget.rs`。动
 
 **实现与测试：** [`working.ts`](../src/appearance/chrome/working.ts)、[`install.ts`](../src/appearance/chrome/install.ts)、[`transcript-components.ts`](../src/presentation/components/transcript-components.ts)、[`working.test.mts`](../test/core/working.test.mts)。
 
+## 工具行保留 Pi 的原生组件树
+
+Pi 在工具行构造时根据 shell 选择子组件。Appearance 保留这一步的原生选择，等首次渲染时再切换到自绘；禁用或卸载就能回到原生渲染，不用重排子组件、鼠标区域或改写图片处理。
+
+**实现与测试：** [`tool-host-adapter.ts`](../src/appearance/tool-host-adapter.ts)、[`adapter.test.mjs`](../test/contract/adapter.test.mjs)。
+
+## 终端渲染共享颜色能力
+
+Appearance 首次安装时解析并缓存终端颜色能力；编辑器边框、转录分隔线和思考提示共用同一结果。这样各渲染路径不会对同一终端做出不同选择，重绘也不会反复探测宿主。
+
+**实现：** [`extensions/appearance.ts`](../extensions/appearance.ts)。
+
 ## Recall Query 先保留会话首尾
 
 会话超预算时，先给开头的设置和结尾的结果预留空间，再按问题匹配挑选中段。首尾预留让模型同时看到原始约束和最终决定，关键词排名负责中段选择。首尾较大的消息按预算截段，并标记截段和遗漏；最终请求再校验预算。

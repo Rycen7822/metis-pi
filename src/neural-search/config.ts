@@ -69,7 +69,6 @@ function readNeuralSnapshot(agentDir: string) {
       throw new Error(`${label}.semantic.idleTimeoutSeconds must be a TOML integer, not a float or string.`);
     }
   }
-  // Boolean fields and semantic budget were validated; database fields follow.
   const config = { ...value, semantic: { cacheBudgetMiB: budget, idleTimeoutSeconds: idle } } as NeuralSearchConfig;
   for (const key of Object.keys(DATABASES) as (keyof typeof DATABASES)[]) {
     const raw = value[key] ?? path.join("metis", "neural-search", DATABASES[key]);

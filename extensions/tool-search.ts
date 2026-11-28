@@ -1,4 +1,3 @@
-// Metis-owned unified tool discovery; ranking and detail contract live in src/tool-discovery/.
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { OWNED_TOOL_SEARCH_ENTRY } from "../src/presentation/tool-source.mjs";
 import { catalogNotice, snapshot, type CatalogSnapshot } from "../src/tool-discovery/context.ts";

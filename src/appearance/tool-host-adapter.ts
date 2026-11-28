@@ -289,10 +289,6 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       if (renderers) {
         if (key === "getCallRenderer") return renderers.renderCall;
         if (key === "getResultRenderer") return renderers.renderResult;
-        // IMPORTANT: leave the constructor's child tree in its STOCK default-shell
-        // form. Activate self-shell only at first render, then populate it below.
-        // This makes disabling/unloading revert without splicing children, moving
-        // mouse regions, or rewriting Pi's image handling.
         if (typeof this === "object" && this !== null && displayed.get(this)) return "self";
       }
       return original.call(this);

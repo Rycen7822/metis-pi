@@ -1203,7 +1203,6 @@ export default function (pi: ExtensionAPI, options: {
 				statusLine += theme.fg("muted", " (content ready)");
 			}
 
-			// Build expanded lines first so collapsed view can reference total count
 			const lines = [statusLine];
 			if (details?.summary?.text) {
 				lines.push("");
