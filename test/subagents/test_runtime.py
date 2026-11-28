@@ -799,6 +799,51 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await host.dispatch("pi_view", params, {"parent": {**source["parent"], "lease": "lease_stale"}})
         self.assertEqual(stale.exception.code, "parent_stale")
 
+    async def test_pi_view_opens_at_recent_history_and_follows_complete_appends(self):
+        started = await self.spawn()
+        await self.wait(started["run_id"])
+        a = self.rt.store.agent(self.scope, started["agent_id"])
+        path = Path(a["session_file"])
+        bind(self.rt.store, self.scope, self.source)
+        host = PiNotifications(self.rt.store, self.rt.workers.get, self.rt.changed)
+        params = {"scope": self.scope, "agent_id": a["id"]}
+
+        def row(entry_id, text):
+            entry = {"type": "message", "id": entry_id, "message": {"role": "user", "content": text}}
+            return (json.dumps(entry, ensure_ascii=False) + "\n").encode()
+
+        old = b"".join(row(f"old-{i}", "旧" * 18_000) for i in range(20))
+        recent = row("recent", "最新完整消息")
+        pending = row("appended", "后续完整消息")
+        complete = old + recent
+        path.write_bytes(complete + pending[:-2])
+
+        first = await host.dispatch("pi_view", params, self.source)
+        self.assertEqual(first["messages"][-1], {
+            "id": "recent", "message": {"role": "user", "content": "最新完整消息"},
+        })
+        self.assertTrue(first["history_pruned"])
+        self.assertFalse(first["has_more"], "the initial view must not replay old pages or wait on a partial line")
+        self.assertEqual(first["next_cursor"], len(complete))
+        self.assertLess(len(first["messages"]), 21)
+        self.assertNotIn("appended", [entry["id"] for entry in first["messages"]])
+        forward = {**params, "after": first["next_cursor"]}
+        self.assertEqual((await host.dispatch("pi_view", forward, self.source))["messages"], [])
+        with path.open("ab") as stream:
+            stream.write(pending[-2:])
+        update = await host.dispatch("pi_view", forward, self.source)
+        self.assertEqual([entry["id"] for entry in update["messages"]], ["appended"])
+        self.assertEqual(update["next_cursor"], len(complete) + len(pending))
+        self.assertFalse(update["has_more"])
+        self.assertEqual((await host.dispatch("pi_view", {**params, "after": 0}, self.source))["messages"][0]["id"], "old-0")
+
+        path.write_bytes(recent)
+        reset = await host.dispatch("pi_view", forward, self.source)
+        self.assertTrue(reset["reset"])
+        reopened = await host.dispatch("pi_view", params, self.source)
+        self.assertEqual([entry["id"] for entry in reopened["messages"]], ["recent"])
+        self.assertFalse(reopened["history_pruned"])
+
     async def test_pi_watch_keeps_old_active_agents_and_wakes_for_tool_activity(self):
         started = await self.spawn("delay=120|old active task")
         a = self.rt.store.agent(self.scope, started["agent_id"])

@@ -10,6 +10,10 @@ import time
 from .common import TERMINAL, DEFAULT_WAIT_SECONDS, AgentError, crop, dumps, identifier, integer, label
 
 
+VIEW_PAGE_BYTES = 256 * 1024
+VIEW_TAIL_BYTES = 2 * VIEW_PAGE_BYTES
+
+
 def model_settings(a):
     spec = json.loads(a["launch"])
     return {k: spec[k] for k in ("resolved_model", "thinking", "available_thinking") if k in spec}
@@ -48,15 +52,16 @@ def brief_run(r):
 
 
 def conversation(store, worker_for, p):
-    """Private Pi UI projection; reasoning never enters public inspect events."""
+    """Private Pi transcript: no cursor opens the tail; an explicit cursor reads forward."""
     a = store.resolve_agent(p["scope"], label(p.get("agent_id"), "agent_id"))
-    after = integer(p.get("after", 0), "after", 0, 2**53 - 1)
+    after = integer(p["after"], "after", 0, 2**53 - 1) if "after" in p else None
+    latest = after is None
     launch = json.loads(a["launch"])
     run = store.run(p["scope"], a["current_run"]) if a["current_run"] else store.latest_run(a["id"])
     result = {
         "agent": {**brief_agent(a, worker_for(a["id"])), "access": launch["access"]},
         "messages": [],
-        "next_cursor": after,
+        "next_cursor": after if after is not None else 0,
         "has_more": False,
         "session_file": a["session_file"],
         "history_pruned": False,
@@ -64,28 +69,28 @@ def conversation(store, worker_for, p):
     }
     if run:
         result["run"] = brief_run({**run, "name": a["name"]})
+    limit = VIEW_TAIL_BYTES if latest else VIEW_PAGE_BYTES
     try:
         with Path(a["session_file"]).open("rb") as stream:
             size = stream.seek(0, 2)
-            if after > size:
-                after = 0
+            start = max(0, size - limit) if after is None else after
+            if start > size:
                 result.update(reset=True, next_cursor=0)
-            stream.seek(max(0, after - 1))
-            continued = bool(after and stream.read(1) != b"\n")
-            stream.seek(after)
-            raw = stream.read(262144)
+                return result
+            stream.seek(max(0, start - 1))
+            continued = start > 0 and stream.read(1) != b"\n"
+            raw = stream.read(size - start if latest else limit)
     except FileNotFoundError:
         return result
+    result["history_pruned"] = latest and start > 0
     end = raw.rfind(b"\n") + 1
     if not end:
-        if len(raw) == 262144:
-            result.update(next_cursor=after + len(raw), has_more=True, history_pruned=True)
+        if len(raw) == limit:
+            result.update(next_cursor=start + len(raw), has_more=not latest, history_pruned=True)
         return result
-    lines = raw[:end].split(b"\n")[:-1]
-    if continued:
-        lines = lines[1:]
-        result["history_pruned"] = True
-    for line in lines:
+    first = raw.index(b"\n") + 1 if continued else 0
+    result["history_pruned"] |= continued
+    for line in raw[first:end].split(b"\n")[:-1]:
         try:
             entry = json.loads(line)
         except (ValueError, UnicodeDecodeError):
@@ -110,7 +115,7 @@ def conversation(store, worker_for, p):
         }
         display["content"] = content
         result["messages"].append({"id": entry.get("id"), "message": display})
-    result.update(next_cursor=after + end, has_more=len(raw) == 262144 and after + end < size)
+    result.update(next_cursor=start + end, has_more=not latest and len(raw) == limit and start + end < size)
     return result
 
 

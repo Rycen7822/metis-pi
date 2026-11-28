@@ -50,7 +50,7 @@ interface ViewerOptions {
   keys: KeybindingsManager;
   done(value: undefined): void;
   abort: AbortController;
-  inspect(agentId: string, after: number, signal: AbortSignal): Promise<AgentInspection>;
+  inspect(agentId: string, after: number | undefined, signal: AbortSignal): Promise<AgentInspection>;
   appearance: AppearanceConfig;
   agentSource(): ViewerAgent[];
   live: boolean;
@@ -61,7 +61,7 @@ interface AgentView {
   content: ViewerContent;
   snapshot?: Pick<AgentInspection, "agent" | "run">;
   file: string;
-  cursor: number;
+  cursor?: number;
   truncated: boolean;
   error: string;
   viewport: ScrollView;
@@ -144,7 +144,7 @@ export class SubagentViewer implements Component {
         document: content.document,
         footer: { render: width => [truncateToWidth(this.footer(), width, "…")], invalidate() {} },
       });
-      view = { content, root: viewport.root, viewport: viewport.transcript, file: "", cursor: 0, truncated: false, error: "" };
+      view = { content, root: viewport.root, viewport: viewport.transcript, file: "", truncated: false, error: "" };
     }
     this.views.set(id, view);
     if (this.views.size > MAX_CACHED_VIEWS) {
@@ -181,13 +181,17 @@ export class SubagentViewer implements Component {
     try {
       const snapshot = await this.options.inspect(this.agentId, view.cursor, controller.signal);
       if (!current() || !this.syncAgents() || !current()) return;
-      if (snapshot.reset || (view.file && view.file !== snapshot.session_file)) {
-        view.content.dispose(); view.viewport.scrollToEnd(); view.truncated = false;
-        view.cursor = 0; view.file = snapshot.session_file; more = true; return;
-      }
+      const reset = snapshot.reset || (view.file !== "" && view.file !== snapshot.session_file);
       view.file = snapshot.session_file;
+      view.cursor = reset ? undefined : snapshot.next_cursor;
+      more = reset || snapshot.has_more;
+      if (reset) {
+        view.content.dispose();
+        view.viewport.scrollToEnd();
+        view.truncated = false;
+        return;
+      }
       view.snapshot = { agent: snapshot.agent, run: snapshot.run };
-      view.cursor = snapshot.next_cursor; more = snapshot.has_more;
       if (snapshot.agent.name) this.agents.set(this.agentId, { ...this.agents.get(this.agentId)!, name: snapshot.agent.name });
       if (snapshot.history_pruned) view.truncated = true;
       view.content.setToolRenderers(snapshot.tool_renderers ?? {});

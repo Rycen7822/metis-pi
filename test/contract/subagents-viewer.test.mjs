@@ -62,7 +62,7 @@ function popup(t, options = {}) {
   const calls = [], closes = [];
   const inspect = options.inspect ?? (async (agentId, after) => {
     const name = agents().find(agent => agent.id === agentId)?.name ?? agentId;
-    return inspection(agentId, after === 0
+    return inspection(agentId, after === undefined
       ? options.messages?.[agentId] ?? [textMessage(`CONTENT_${agentId}`)] : [], {
       agent: { name, state: "running" },
     });
@@ -546,8 +546,8 @@ test("finished tabs disappear, selection moves to an active agent, and an empty 
   const lateReader = deferred();
   const { viewer, rows, calls, closes } = popup(t, {
     agents: () => agents,
-    inspect: async (agentId, after) => agentId === "reader" && after > 0
-      ? lateReader.promise : inspection(agentId, after === 0 ? [textMessage(`ACTIVE_${agentId}`)] : []),
+    inspect: async (agentId, after) => agentId === "reader" && after !== undefined
+      ? lateReader.promise : inspection(agentId, after === undefined ? [textMessage(`ACTIVE_${agentId}`)] : []),
   });
   await nextTurn();
   assert.match(rows()[0], /\[reader\].*writer/);
@@ -582,6 +582,78 @@ test("finished tabs disappear, selection moves to an active agent, and an empty 
   assert.equal(calls.length, stoppedCalls, "empty active lists cannot rearm polling");
 });
 
+test("opening and reopening a live popup displays the recent transcript before following new output", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { tui, terminal } = altScreen(100, 36);
+  terminal.hideCursor = () => terminal.write("\u001b[?25l");
+  terminal.showCursor = () => terminal.write("\u001b[?25h");
+  tui.setLayoutRoot(container());
+  let latest = "LATEST_ON_OPEN";
+  const inspect = async (id, after) => {
+    if (after === undefined) {
+      const messages = Array.from({ length: 30 }, (_, i) => textMessage(`RECENT_LINE_${i}`));
+      return inspection(id, [...messages, textMessage(latest)], { next_cursor: 9000, history_pruned: true });
+    }
+    if (after === 0) return inspection(id, [textMessage("STALE_HISTORY")], { has_more: true });
+    if (after === 9000) return inspection(id, [textMessage("LIVE_APPEND")], { next_cursor: 9100 });
+    return inspection(id, [], { next_cursor: after });
+  };
+  const screen = () => { tui.doRender(); return screenLines(tui).join("\n"); };
+  const open = async () => {
+    const fixture = popup(t, { tui, inspect });
+    const overlay = tui.showOverlay(fixture.viewer, { anchor: "center", width: "90%", maxHeight: "70%" });
+    t.after(() => overlay.hide());
+    await nextTurn();
+    return { ...fixture, overlay };
+  };
+  const first = await open();
+  assert.match(screen(), /LATEST_ON_OPEN/);
+  assert.doesNotMatch(screen(), /STALE_HISTORY|RECENT_LINE_0\b/);
+  t.mock.timers.tick(50); await nextTurn();
+  assert.equal(first.calls.length, 1, "opening does not schedule old pages");
+  t.mock.timers.tick(950); await nextTurn();
+  assert.equal(first.calls.at(-1).after, 9000);
+  assert.match(screen(), /LIVE_APPEND/);
+  tui.handleTerminalInput("\u001b[H");
+  assert.match(screen(), /RECENT_LINE_0\b/);
+  assert.doesNotMatch(screen(), /LIVE_APPEND/);
+  tui.handleTerminalInput("q");
+  assert.deepEqual(first.closes, [undefined]);
+  first.overlay.hide();
+
+  latest = "LATEST_ON_REOPEN";
+  await open();
+  assert.match(screen(), /LATEST_ON_REOPEN/);
+  assert.doesNotMatch(screen(), /STALE_HISTORY|RECENT_LINE_0\b/);
+});
+
+test("a rewritten subagent transcript reopens at the new tail instead of replaying from zero", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let rewritten = false;
+  const { viewer, rows, calls } = popup(t, {
+    inspect: async (id, after) => {
+      if (after === undefined) {
+        const text = rewritten ? "REPLACEMENT_TAIL" : Array.from({ length: 100 }, (_, i) => `ORIGINAL_LINE_${i}`).join("\n\n");
+        return inspection(id, [textMessage(text)], { next_cursor: rewritten ? 200 : 1000 });
+      }
+      if (after === 1000) {
+        rewritten = true;
+        return inspection(id, [], { reset: true, next_cursor: 0 });
+      }
+      return inspection(id, [textMessage("UNEXPECTED_REPLAY")]);
+    },
+  });
+  await nextTurn();
+  assert.match(rows().join("\n"), /ORIGINAL_LINE_99/);
+  viewer.handleInput("\u001b[H");
+  assert.match(rows().join("\n"), /ORIGINAL_LINE_0\b/);
+  t.mock.timers.tick(1000); await nextTurn();
+  t.mock.timers.tick(50); await nextTurn();
+  assert.deepEqual(calls.map(call => call.after), [undefined, 1000, undefined]);
+  assert.match(rows().join("\n"), /REPLACEMENT_TAIL/);
+  assert.doesNotMatch(rows().join("\n"), /ORIGINAL_LINE_|UNEXPECTED_REPLAY/);
+});
+
 test("saved sessions remain readable without live polling; empty live lists still close", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const agents = () => [{ id: "reader", name: "reader", state: "dormant" }];
@@ -593,17 +665,14 @@ test("saved sessions remain readable without live polling; empty live lists stil
   viewer.handleInput("\t");
   assert.deepEqual(closes, [undefined], "an empty viewer cannot be reopened by cycling");
   const saved = popup(t, { agents, live: false, inspect: async (_id, after) => inspection("reader",
-    [textMessage(after === 0 ? "SAVED_FIRST_PAGE" : "SAVED_LAST_PAGE")], {
-      agent: agents()[0], next_cursor: after + 1, has_more: after === 0,
+    [textMessage(after === undefined ? "SAVED_TAIL" : "UNEXPECTED_READ")], {
+      agent: agents()[0], next_cursor: 4000,
     }) });
   await nextTurn();
-  t.mock.timers.tick(50); await nextTurn();
-  assert.ok(saved.rows().some(row => row.includes("SAVED_FIRST_PAGE")));
-  assert.ok(saved.rows().some(row => row.includes("SAVED_LAST_PAGE")));
+  assert.match(saved.rows().join("\n"), /SAVED_TAIL/);
   assert.deepEqual(saved.closes, []);
-  assert.equal(saved.calls.length, 2, "all saved pages are readable");
   t.mock.timers.tick(2_000); await nextTurn();
-  assert.equal(saved.calls.length, 2, "a saved transcript does not keep waking the backend");
+  assert.deepEqual(saved.calls.map(call => call.after), [undefined], "a saved transcript opens at the tail and does not poll");
 });
 
 test("overflow arrows navigate tabs and keyboard selection remains visible", async t => {
@@ -678,13 +747,13 @@ test("recent tab state is retained but traversing nine agents evicts an old tran
   viewer.handleInput("\u001b[D");
   await nextTurn();
   assert.ok(rows().some(row => row.includes("agent7_LINE_1 ")), "a recent tab retains its scrolled viewport");
-  assert.equal(calls.filter(call => call.agentId === "agent7").at(-1).after, 1, "recent history is not fetched again from zero");
+  assert.equal(calls.filter(call => call.agentId === "agent7").at(-1).after, 1, "a cached tab continues from its own cursor");
   for (let i = 0; i < 7; i++) {
     viewer.handleInput("\u001b[D");
     await nextTurn();
   }
   assert.match(rows()[0], /\[agent0\]/);
-  assert.equal(calls.filter(call => call.agentId === "agent0").at(-1).after, 0, "evicted history restarts with its own initial cursor");
+  assert.equal(calls.filter(call => call.agentId === "agent0").at(-1).after, undefined, "an evicted tab reopens at the tail");
   assert.ok(rows().some(row => row.includes("agent0_LINE_50")), "evicted scroll state resets instead of keeping unlimited hidden views");
 });
 
@@ -694,12 +763,12 @@ for (const outcome of ["response", "error"]) {
     const old = deferred();
     const { viewer, rows, clickText, calls } = popup(t, {
       inspect: (agentId, after) => agentId === "reader" ? old.promise : Promise.resolve(
-        inspection(agentId, after === 0 ? [textMessage("CURRENT_WRITER")] : []),
+        inspection(agentId, after === undefined ? [textMessage("CURRENT_WRITER")] : []),
       ),
     });
     const oldCall = calls[0];
     assert.equal(oldCall.agentId, "reader");
-    assert.equal(oldCall.after, 0);
+    assert.equal(oldCall.after, undefined);
     assert.ok(oldCall.signal instanceof AbortSignal);
     assert.equal(oldCall.signal.aborted, false);
     clickText("writer", 90, { header: true });
@@ -735,7 +804,7 @@ test("returning to the same tab still isolates an older cancelled inspection gen
   const { viewer, rows, clickText, calls } = popup(t, {
     inspect: (agentId, after) => {
       if (agentId === "reader" && ++readerRequests === 1) return old.promise;
-      return Promise.resolve(inspection(agentId, after === 0 ? [textMessage(`FRESH_${agentId}`)] : []));
+      return Promise.resolve(inspection(agentId, after === undefined ? [textMessage(`FRESH_${agentId}`)] : []));
     },
   });
   clickText("writer", 90, { header: true });

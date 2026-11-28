@@ -24,7 +24,10 @@ Metis 子代理在独立的 Pi 会话中执行任务。每个父会话有自己�
 | `subagents_send_message` | 保存备注；空闲的子代理保持原状态。 |
 | `subagents_interrupt_agent` | 中断当前任务；写代理停驻后释放目录写入资格，历史和已有修改不受影响。 |
 
-`/metis-subagents` 列出子代理。全屏可打开只读转录，也可点击活动子代理直接查看。用 `/metis-subagents stop <agent>`、`continue <agent> <task>` 或 `answer <agent>` 操作任务。结果投递由收据确认，转录查看仅供检查。
+`/metis-subagents` 列出子代理。全屏可打开只读转录，也可点击活动子代理直接查看。弹窗打开时定位到最近已写入的内容，不会从头回放。
+活动会话在末尾时继续跟随新输出；向上查看后可按 End 回到末尾。更早的历史可能不在弹窗内。
+
+用 `/metis-subagents stop <agent>`、`continue <agent> <task>` 或 `answer <agent>` 操作任务。结果投递由收据确认，转录查看仅供检查。
 
 `completed` 标记执行结束，验收需检查产物；若 `has_more` 为 true，继续读取结果分页。投递、重试与升级规则见 [生命周期](lifecycle.md)。
 
