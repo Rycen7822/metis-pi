@@ -120,6 +120,7 @@ async function host(t, converted, reverse = false, wholePackage = false, lifecyc
       .map(name => join(root, "extensions", name)).sort(),
   );
   await session.bindExtensions({ onError: (e) => errors.push(e),
+    commandContextActions: { waitForIdle: () => session.waitForIdle() },
     ...(lifecycle.ui ? { uiContext: { ...session.extensionRunner.getUIContext() } } : {}),
   });
   let reply;
@@ -208,36 +209,40 @@ test(`custom Goal creation and resume preserve goal and policy through tool step
   assert.deepEqual(h.errors, []);
 });
 
+function holdBoundary(t) {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  t.after(release.resolve);
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    hold() { entered.resolve(); return release.promise; },
+  };
+}
+
 test("resuming Goal during an unrelated prompt starts a fresh run and keeps pursuing it", { timeout: 15_000 }, async t => {
-  const pauses = [0, 1].map(() => ({ entered: Promise.withResolvers(), release: Promise.withResolvers() }));
-  let turns = 0;
+  const initial = holdBoundary(t), ordinary = holdBoundary(t);
+  const boundaries = [initial, ordinary];
   const h = await host(t, false, false, false, { goal: true, factories: [pi => {
-    pi.on("turn_end", async () => {
-      const pause = pauses[turns++];
-      if (!pause) return;
-      pause.entered.resolve();
-      await pause.release.promise;
-    });
+    pi.on("turn_end", () => boundaries.shift()?.hold());
   }] });
-  t.after(() => { for (const pause of pauses) pause.release.resolve(); });
   h.setReply(count => count === 4 ? toolCall("goal", { action: "update", status: "complete" }) : undefined);
 
   await h.session.prompt("/goal RESUME_WHILE_BUSY");
-  await pauses[0].entered.promise;
+  await initial.entered;
   try { await h.session.prompt("/goal pause"); }
-  finally { pauses[0].release.resolve(); }
+  finally { initial.release(); }
   await h.session.waitForIdle();
   assert.equal(goalSnapshot(h).status, "paused");
 
   const run = h.session.prompt("Handle a separate request first.");
-  await pauses[1].entered.promise;
+  await ordinary.entered;
   try {
     assert.match(systemText(h.calls[1]), /Thread goal status: paused/);
     await h.session.prompt("/goal resume");
     assert.equal(goalSnapshot(h).status, "active");
     assert.equal(h.calls.length, 2, "resuming does not interrupt the separate request");
   } finally {
-    pauses[1].release.resolve();
+    ordinary.release();
   }
   await run;
   await h.session.waitForIdle();
@@ -249,6 +254,56 @@ test("resuming Goal during an unrelated prompt starts a fresh run and keeps purs
     message.role === "user" && JSON.stringify(message.content).includes("RESUME_WHILE_BUSY")), "the request contains the goal continuation");
   assert.equal(goalSnapshot(h).status, "complete");
 });
+
+for (const cancel of [true, false]) {
+  test(`Goal resume ${cancel ? "survives cancelled tree navigation" : "does not follow a successful branch switch"}`,
+    { timeout: 15_000 }, async t => {
+      const tree = holdBoundary(t);
+      const h = await host(t, false, false, false, { goal: true, factories: [pi => {
+        pi.on("session_before_tree", async () => {
+          await tree.hold();
+          if (cancel) return { cancel: true };
+        });
+      }] });
+      await h.session.prompt("A turn before the Goal.");
+      const otherBranch = h.sm.getLeafId();
+      assert.ok(otherBranch);
+      h.setReply(count => count === 2 || count === 4 ? toolCall("goal", { action: "update", status: "complete" }) : undefined);
+      await h.session.prompt("/goal TREE_RESUME_OBJECTIVE");
+      await h.session.waitForIdle();
+      await h.session.prompt("/goal pause");
+      const originalGoal = goalSnapshot(h);
+      assert.equal(originalGoal.status, "paused");
+      assert.equal(h.calls.length, 3);
+
+      const resumedRun = Promise.withResolvers();
+      t.after(h.session.subscribe(event => {
+        if (event.type === "agent_settled" && h.calls.length > 3) resumedRun.resolve();
+      }));
+      const navigation = h.session.navigateTree(otherBranch);
+      await tree.entered;
+      try {
+        await h.session.prompt("/goal resume");
+        assert.equal(h.calls.length, 3, "no request starts while navigation is pending");
+      } finally {
+        tree.release();
+      }
+      assert.equal((await navigation).cancelled, cancel);
+      if (cancel) await resumedRun.promise;
+      await h.session.waitForIdle();
+      assert.deepEqual(h.errors, []);
+      if (cancel) {
+        assert.equal(h.calls.length, 5, "the resumed Goal gets a model request after cancellation");
+        assert.match(systemText(h.calls[3]), /TREE_RESUME_OBJECTIVE/);
+        const resumed = goalSnapshot(h);
+        assert.equal(resumed.id, originalGoal.id);
+        assert.equal(resumed.status, "complete");
+      } else {
+        assert.equal(h.calls.length, 3, "the old branch must not trigger a request on the new branch");
+        assert.equal(goalSnapshot(h), null);
+      }
+    });
+}
 
 test("custom startup coalesces pending messages and consumes nextTurn exactly once", { timeout: 15_000 }, async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers();

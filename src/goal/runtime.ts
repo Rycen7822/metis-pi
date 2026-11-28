@@ -346,34 +346,34 @@ export default function goalExtension(pi: ExtensionAPI) {
   let continuationsUntilAudit = 0;
   let completionReportGoalId: string | undefined;
   let requestInvalidated = false;
-  let freshContinuationPending = false;
-  let owed: { token: string; goalId: string; revision: number; input: number; session: string } | undefined;
+  const continuationTicket = () => `__continue_${randomUUID()}` as const;
+  let nextContinuation: "fresh" | ReturnType<typeof continuationTicket> | undefined;
+  let treeIdleTicket: ReturnType<typeof continuationTicket> | undefined;
   let editGrant: { token: string; goalId: string; session: string } | undefined;
   function agentEditToken(ctx: ExtensionContext): string | null {
     return state.current?.status === "active" && editGrant?.goalId === state.current.id
       && editGrant.session === ctx.sessionManager.getSessionId() ? editGrant.token : null;
   }
-  const clearOwed = () => {
-    if (owed) state.continuationQueued = false;
-    owed = undefined;
+  const clearDeferredContinuation = () => {
+    if (nextContinuation !== "fresh") nextContinuation = undefined;
   };
   pi.on("input", () => {
     inputGeneration++;
-    clearOwed();
+    clearDeferredContinuation();
   });
   const stopGoalSnapshot = pi.events.on(METIS_EVENTS.goalSnapshot, (request) => {
     if (!isGoalSnapshotRequest(request)) return;
     request.snapshot = state.snapshot();
   });
   const stopOccFinished = pi.events.on(METIS_EVENTS.occFinished, (event) => {
-    if (!isOccFinished(event)) return;
-    if (event.cancelled) clearOwed();
-    else dispatchDeferredContinuation();
+    if (!isOccFinished(event) || !nextContinuation || nextContinuation === "fresh") return;
+    if (event.cancelled) nextContinuation = undefined;
+    else waitForContinuation(nextContinuation);
   });
   const stopCheckpointCancellation = pi.events.on(METIS_EVENTS.checkpointRequestCancelled, () => {
     requestInvalidated = true;
     pendingError = undefined;
-    clearOwed();
+    clearDeferredContinuation();
   });
 
   // Local patch (not upstream): keep the footer status fresh once a second so the
@@ -468,12 +468,11 @@ export default function goalExtension(pi: ExtensionAPI) {
     if (action === "set" || action === "edit" || action === "clear") continuationsUntilAudit = 0;
     if (action !== "account" || state.current?.status !== "active") {
       editGrant = undefined;
-      freshContinuationPending = false;
+      nextContinuation = undefined;
     }
     if (action !== "account") {
       state.clearOpenAISafetyRecovery();
       revision++;
-      clearOwed();
       pendingError = undefined;
       completionReportGoalId = undefined;
     }
@@ -525,10 +524,13 @@ export default function goalExtension(pi: ExtensionAPI) {
     );
   }
 
+  function continuationAvailable(ctx: ExtensionContext): boolean {
+    return !state.continuationQueued && (!nextContinuation || nextContinuation === "fresh") && !ctx.hasPendingMessages();
+  }
+
   function queueContinuation(ctx: ExtensionContext): void {
     const snapshot = state.snapshot();
-    if (!snapshot || snapshot.status !== "active") return;
-    if (state.continuationQueued || ctx.hasPendingMessages()) return;
+    if (snapshot?.status !== "active" || !continuationAvailable(ctx)) return;
 
     state.continuationQueued = true;
     const fullAudit = continuationsUntilAudit === 0;
@@ -549,41 +551,34 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   function requestFreshContinuation(ctx: ExtensionContext): void {
     if (ctx.isIdle()) queueContinuation(ctx);
-    else freshContinuationPending = true;
+    else nextContinuation = "fresh";
   }
 
   function flushFreshContinuation(ctx: ExtensionContext): void {
-    if (!freshContinuationPending) return;
-    freshContinuationPending = false;
-    if (deferContinuation(ctx)) dispatchDeferredContinuation();
+    if (nextContinuation !== "fresh") return;
+    nextContinuation = undefined;
+    const ticket = reserveContinuation(ctx);
+    if (ticket) waitForContinuation(ticket);
   }
 
-  function deferContinuation(ctx: ExtensionContext): boolean {
-    if (state.current?.status !== "active" || ctx.hasPendingMessages() || state.continuationQueued) return false;
-    owed = {
-      token: randomUUID(),
-      goalId: state.current.id,
-      revision,
-      input: inputGeneration,
-      session: ctx.sessionManager.getSessionId(),
-    };
-    state.continuationQueued = true;
-    return true;
+  function reserveContinuation(ctx: ExtensionContext) {
+    if (state.current?.status !== "active" || !continuationAvailable(ctx)) return;
+    return (nextContinuation = continuationTicket());
   }
 
-  function dispatchDeferredContinuation(): void {
+  function waitForContinuation(ticket: ReturnType<typeof continuationTicket>): void {
     // Pi defers commands issued during settlement until all settled handlers return.
-    if (owed) pi.sendUserMessage(`/goal __continue_${owed.token}`, { expandPromptTemplates: true });
+    pi.sendUserMessage(`/goal ${ticket}`, { expandPromptTemplates: true });
   }
 
   function reconstructState(ctx: ExtensionContext): void {
     continuationsUntilAudit = 0;
-    freshContinuationPending = false;
+    nextContinuation = undefined;
+    treeIdleTicket = undefined;
     revision++;
     editGrant = undefined;
     viewAbort?.abort();
     stopStatusTimer();
-    clearOwed();
     pendingError = undefined;
     inAgentTurn = false;
     completionReportGoalId = undefined;
@@ -593,23 +588,28 @@ export default function goalExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
+  pi.on("session_before_tree", () => {
+    // Pi emits session_tree only on success. Wait outside the hook so cancellation also gets an idle boundary.
+    treeIdleTicket = continuationTicket();
+    waitForContinuation(treeIdleTicket);
+  });
   pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
   pi.on("session_compact", (event, ctx) => {
     continuationsUntilAudit = 0;
     if (event.reason === "manual") flushFreshContinuation(ctx);
   });
   pi.on("session_compact_failed", (event, ctx) => {
-    if (event.reason === "manual" && freshContinuationPending) controlGoal("pause", ctx);
+    if (event.reason === "manual" && nextContinuation === "fresh") controlGoal("pause", ctx);
   });
   pi.on("session_shutdown", async () => {
-    freshContinuationPending = false;
+    nextContinuation = undefined;
+    treeIdleTicket = undefined;
     revision++;
     editGrant = undefined;
     viewAbort?.abort();
     goalCtx = undefined;
     stopGoalOpen();
     stopStatusTimer();
-    clearOwed();
     pendingError = undefined;
     stopGoalSnapshot();
     stopGoalProjection();
@@ -645,7 +645,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     inAgentTurn = true;
     requestInvalidated = false;
     if (state.advanceOpenAISafetyRecoveryRequest(OPENAI_SAFETY_REQUEST_WINDOW)) persist("account");
-    clearOwed();
+    clearDeferredContinuation();
     state.startTurn();
   });
 
@@ -669,7 +669,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     // a user abort or exhausted provider retry; an explicit retry builds a
     // fresh context through every owner rather than queuing a competing turn.
     if (cancelledRequest) {
-      freshContinuationPending = false;
+      nextContinuation = undefined;
       return;
     }
 
@@ -685,15 +685,15 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     if (lastAssistant?.stopReason === "aborted") {
       if (state.clearOpenAISafetyRecovery()) persist("account");
       if (await pauseAfterAbort(ctx)) return;
-      freshContinuationPending = true;
+      nextContinuation = "fresh";
     } else if (state.finishOpenAISafetyRecoveryWindow(OPENAI_SAFETY_REQUEST_WINDOW)) {
       persist("account");
     }
 
     const maintenance: OccStatusRequest = { deferGoal: false };
     pi.events.emit(METIS_EVENTS.occStatus, maintenance);
-    if (maintenance.deferGoal && deferContinuation(ctx)) freshContinuationPending = false;
-    else if (!freshContinuationPending) queueContinuation(ctx);
+    if (maintenance.deferGoal && reserveContinuation(ctx)) return;
+    if (nextContinuation !== "fresh") queueContinuation(ctx);
   });
 
   async function pauseAfterAbort(ctx: ExtensionContext): Promise<boolean> {
@@ -728,7 +728,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     }
 
     persist("account");
-    clearOwed();
+    clearDeferredContinuation();
     const goalId = goal.id, expectedRevision = revision, expectedInput = inputGeneration;
     const isCurrent = () => state.current?.id === goalId && state.current.status === "active"
       && revision === expectedRevision && inputGeneration === expectedInput;
@@ -774,7 +774,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     if (state.current?.status !== "active") return;
     if (error) {
       if (!event.aborted) {
-        freshContinuationPending = false;
+        nextContinuation = undefined;
         if (autoCompactOnOpenAISafetyRefusal && isOpenAICybersecurityRefusal(error)) recoverFromOpenAISafety(ctx);
         else stopGoalAfterError(ctx, goalStopStatusForAssistantError(error),
           "Pi finished error recovery without a successful response, so automatic continuation was stopped.");
@@ -783,7 +783,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
       // Pi can report an aborted startup as an error even when no model request was made.
       if (state.clearOpenAISafetyRecovery()) persist("account");
       if (await pauseAfterAbort(ctx)) return;
-      freshContinuationPending = true;
+      nextContinuation = "fresh";
     }
     flushFreshContinuation(ctx);
   });
@@ -821,21 +821,14 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (trimmed.startsWith("__continue_")) {
-        const ticket = owed;
-        if (!ticket || trimmed !== `__continue_${ticket.token}`) return;
+        if (trimmed !== treeIdleTicket && trimmed !== nextContinuation) return;
         if (!ctx.isIdle()) await ctx.waitForIdle();
-        if (owed !== ticket) return;
-        clearOwed();
-        if (
-          ticket.session !== ctx.sessionManager.getSessionId() ||
-          ticket.goalId !== state.current?.id ||
-          ticket.revision !== revision ||
-          ticket.input !== inputGeneration ||
-          state.current.status !== "active" ||
-          !ctx.isIdle() ||
-          ctx.hasPendingMessages()
-        )
-          return;
+        if (trimmed === treeIdleTicket) {
+          treeIdleTicket = undefined;
+          if (nextContinuation !== "fresh" || !ctx.isIdle()) return;
+        } else if (trimmed !== nextContinuation) return;
+        nextContinuation = undefined;
+        if (!ctx.isIdle()) return;
         queueContinuation(ctx);
         await ctx.waitForIdle();
         return;
@@ -859,7 +852,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
           if (ctx.mode === "tui") ctx.ui.notify(notice, "warning");
           else showGoalMessage(notice);
         } else {
-          clearOwed();
+          clearDeferredContinuation();
           editGrant = { token: randomUUID(), goalId: state.current.id, session: ctx.sessionManager.getSessionId() };
           pi.sendMessage({
             customType: EDIT_AUTHORIZATION_MESSAGE_TYPE,
@@ -1014,7 +1007,7 @@ Tokens remaining: ${snapshot.tokenBudget === undefined ? "unbounded" : Math.max(
         default:
           throw new Error("goal action must be get, create, edit, or update");
       }
-      if (inAgentTurn && (params.action === "create" || params.action === "edit")) freshContinuationPending = true;
+      if (inAgentTurn && (params.action === "create" || params.action === "edit")) nextContinuation = "fresh";
       const complete = params.action === "update" && params.status === "complete";
       updateStatus(ctx);
       if (complete && inAgentTurn) completionReportGoalId = state.current!.id;
