@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-Pi 的 Codex 风格转录界面与工作流扩展。**Metis 仅适配 Pi 1.7.0**，需要 Node.js **22.19.0+**。
+Pi 的 Codex 风格转录界面与工作流扩展。**Metis 0.25.0 仅适配 Pi 1.7.0**，需要 Node.js **22.19.0+**。
 
 ## 安装
 
